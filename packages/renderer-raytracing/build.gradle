@@ -134,10 +134,12 @@ def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
             RetainedLightRecordData: ["BYTE_SIZE = 80", "putInt(0, type())",
                     "putFloat(8, rangeMeters())", "putFloat(16, positionOrDirection().x())",
                     "putFloat(64, radiometry().x())"],
-            NeeAtStateData: ["BYTE_SIZE = 88", "putLong(0, lightTableAddress())",
-                    "putLong(32, pixelFeedbackAddress())", "putInt(40, lightCount())",
-                    "putInt(64, tileSize())", "putInt(72, candidateCount())",
-                    "putFloat(80, metersPerSceneUnit())", "putInt(84, frameIndex())"],
+            NeeAtStateData: ["BYTE_SIZE = 104", "putLong(0, lightTableAddress())",
+                    "putLong(32, pixelFeedbackAddress())", "putLong(40, proxyIndexAddress())",
+                    "putInt(48, lightCount())", "putInt(72, tileSize())",
+                    "putInt(80, candidateCount())", "putFloat(88, metersPerSceneUnit())",
+                    "putInt(92, frameIndex())", "putFloat(96, powerTotal())",
+                    "putFloat(100, localToGlobalRatio())"],
             PackedPathSegmentData: ["BYTE_SIZE = 48", "putFloat(0, ro().x())",
                     "putInt(12, rd())", "putInt(44, nextRecord())"]
     ]
@@ -242,27 +244,28 @@ def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
                 "RETAINED_LIGHT_PARALLELOGRAM", "RETAINED_LIGHT_SPOT", "RETAINED_LIGHT_DISTANT",
                 "distance * state.metersPerSceneUnit > light.rangeMeters",
                 "neeAtSampleGlobal", "neeAtSampleLocal", "neeAtLocalPdf",
-                "radianceOverShapePdf", "neeAtWriteFeedback", "neeAtSaturatingAdd",
+                "radianceOverShapePdf", "neeAtWriteFeedback", "pixelFeedback[pixelIndex] = event",
+                "(pixel + jitter) % (tileCount * tileSize)",
                 "neeAtProposalPdf", "candidateCount / 2u", "NEE_AT_PROPOSAL_SCREEN_MIXTURE"
         ].findAll { !samplerSource.contains(it) }
         required += [
                 "1u, 2u, 1u, ray, shadow", "evaluateBsdf(query)",
-                "frame[0].frameIndex", "dot(input.geometricNormal, selected.direction)",
+                "inout uint seed", "dot(input.geometricNormal, selected.direction)",
                 "weightSum / (float(candidateCount) * selectedTarget)",
+                "incomingFeedbackThroughput * estimator",
                 "neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex, feedback)",
                 "emission * retainedEmissionMis(payload, record, input.position)",
                 "payload.previousNeeProposalMode"
         ].findAll { !hitSource.contains(it) }
         required += [
                 "state.localSlotCount", "state.tileSize * state.tileSize",
-                "previousToCurrent", "currentToPrevious", "InterlockedAdd(localMasses[slot], event.y)",
+                "previousToCurrent", "InterlockedAdd(localMasses[slot], 1u)",
+                "InterlockedAdd(counts[currentLight], 1u)", "+ paddedExtent - jitter) % paddedExtent",
                 "GroupMemoryBarrierWithGroupSync", "uint2(localLights[slot], localScan[slot])",
                 "globalPowerSums[lane]", "chunk += 64u", "globalScanNext[lane]",
                 "index + 1u == state.lightCount ? 1.0"
         ].findAll { !bakeSource.contains(it) }
-        if (bakeSource.contains("previousMotionIndex") || bakeSource.contains("previousDepthIndex")) {
-            required += "same-screen-tile history without stale guide reprojection"
-        }
+        if (samplerSource.contains("InterlockedCompareExchange")) required += "no tracing-path CAS feedback"
         if (!worldSource.contains("records[worldInstanceCustomIndex() + GeometryIndex()]")) {
             required += "worldInstanceCustomIndex() + GeometryIndex()"
         }

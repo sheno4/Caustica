@@ -490,11 +490,14 @@ public final class RtFrameRenderer {
             SceneOrigin lightingOrigin = snapshot.sceneOrigin();
             boolean lightingHistoryContinuous = mvHasPrev && lastLightingFrame + 1L == frameCounter
                     && Objects.equals(lastLightingOrigin, lightingOrigin) && !isLightingCameraCut(snapshot);
+            boolean localLightingHistoryContinuous = lightingHistoryContinuous
+                    && isLightingCameraStationary(snapshot);
             if (!lightingHistoryContinuous) {
                 rayReconstruction.resetHistory();
             }
             updateMotion(snapshot);
-            recordFrame(context, active, nativeColorImage, snapshot, lightingHistoryContinuous);
+            recordFrame(context, active, nativeColorImage, snapshot, lightingHistoryContinuous,
+                    localLightingHistoryContinuous);
             lastLightingFrame = frameCounter;
             lastLightingOrigin = lightingOrigin;
             if (!loggedActive) {
@@ -640,12 +643,23 @@ public final class RtFrameRenderer {
         return forwardDot < 0.70710677f || projectionCut || distanceMetersSquared > 64.0;
     }
 
+    private boolean isLightingCameraStationary(FrameSnapshot snapshot) {
+        double dx = snapshot.cameraX() - mvPrevCamX;
+        double dy = snapshot.cameraY() - mvPrevCamY;
+        double dz = snapshot.cameraZ() - mvPrevCamZ;
+        return dx * dx + dy * dy + dz * dz <= 1.0e-12
+                && frameProjection.equals(historyProjection, 1.0e-6f)
+                && frameViewRotation.equals(historyViewRotation, 1.0e-6f)
+                && !snapshot.proceduralSurfaceAnimationEnabled();
+    }
+
     private static float relativeDifference(float first, float second) {
         return Math.abs(first - second) / Math.max(Math.max(Math.abs(first), Math.abs(second)), 1.0e-6f);
     }
 
     private void recordFrame(VulkanDeviceContext ctx, RtProgramBackend.Published program, long nativeColorImage,
-                             FrameSnapshot snapshot, boolean lightingHistoryContinuous) {
+                             FrameSnapshot snapshot, boolean lightingHistoryContinuous,
+                             boolean localLightingHistoryContinuous) {
         long dstImage = nativeColorImage;
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
@@ -738,7 +752,7 @@ public final class RtFrameRenderer {
                 lighting = scenes.prepareLighting(entryScene,
                         new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
                                 frameCounter, (float) snapshot.metersPerWorldUnit(),
-                                lightingHistoryContinuous), cmd, graphicsUse);
+                                lightingHistoryContinuous, localLightingHistoryContinuous), cmd, graphicsUse);
             }
             boolean lightingFinished = false;
             try {

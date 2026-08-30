@@ -35,6 +35,7 @@ public void runRetainedIndirect<TComposition : IComposition,
 
             WorldPayload payload = {};
             payload.hitDistance = -1.0;
+            payload.feedbackThroughput = throughput;
             payload.volumeAbsorption = state.absorption;
             payload.volumeIor = state.volumeIor;
             payload.previousPosition = state.origin;

@@ -20,12 +20,11 @@ final class RtNeeAtPlanTest {
 
         RtNeeAtPlan.Plan plan = RtNeeAtPlan.build(current, previous, 1.0);
 
-        assertArrayEquals(new int[]{2, RtNeeAtPlan.NO_LIGHT, 0}, plan.currentToPrevious());
         assertArrayEquals(new int[]{2, RtNeeAtPlan.NO_LIGHT, 0}, plan.previousToCurrent());
         var packed = plan.pack().order(ByteOrder.nativeOrder());
         assertEquals(2, packed.getInt(0));
-        assertEquals(2, packed.getInt(4));
-        assertEquals(RtNeeAtPlan.NO_LIGHT, packed.getInt(12));
+        assertTrue(packed.getFloat(4) > 0.0f);
+        assertEquals(RtNeeAtPlan.NO_LIGHT, packed.getInt(8));
     }
 
     @Test
@@ -52,6 +51,23 @@ final class RtNeeAtPlanTest {
         double expectedSolidAngle = 2.0 * Math.PI * (1.0 - Math.cos(halfAngle));
         assertEquals(expectedSolidAngle, RtNeeAtPlan.samplingPower(circularSpot, 1.0), 1.0e-6);
         assertEquals(1.0, RtNeeAtPlan.DISTANT_REFERENCE_AREA_M2);
+    }
+
+    @Test
+    void powerTotalAccumulatesInDoublePrecision() {
+        // Naive float accumulation stalls once the running sum dwarfs each addend, which would make
+        // the GPU's power-based prior sum to well under one across a large light set.
+        float[] power = new float[100_000];
+        power[0] = 1.0e8f;
+        java.util.Arrays.fill(power, 1, power.length, 1.0f);
+
+        float naive = 0.0f;
+        for (float value : power) naive += value;
+
+        // At 1e8 a float step is 8, so every unit addend rounds away and the naive sum never moves.
+        assertEquals(1.0e8f, naive);
+        assertEquals(100_099_999.0, RtNeeAtPlan.powerTotal(power), 8.0);
+        assertEquals(0.0f, RtNeeAtPlan.powerTotal(new float[0]));
     }
 
     @Test

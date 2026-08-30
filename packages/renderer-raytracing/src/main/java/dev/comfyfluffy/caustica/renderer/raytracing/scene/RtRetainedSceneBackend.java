@@ -67,7 +67,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         current.graphicsUse.mark(graphicsUse);
         SceneContent content = current.content.get(scene);
         var input = new RtNeeAtBackend.FrameInput(frame.width(), frame.height(), frame.frameIndex(),
-                frame.metersPerSceneUnit(), frame.historyContinuous());
+                frame.metersPerSceneUnit(), frame.historyContinuous(), frame.localHistoryContinuous());
         return new PreparedLighting(neeAt.prepare(scene, content.lights(), input,
                 commandBuffer, graphicsUse));
     }
@@ -702,7 +702,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     public record LightingFrame(int width, int height, long frameIndex, float metersPerSceneUnit,
-                                boolean historyContinuous) { }
+                                boolean historyContinuous, boolean localHistoryContinuous) { }
 
     public static final class PreparedLighting {
         private final RtNeeAtBackend.Prepared delegate;

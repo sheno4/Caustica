@@ -52,12 +52,17 @@ public struct RetainedLightRecord {
     public float4 radiometry;
 };
 
+// `globalDistributionAddress` holds one uint2 per light plus a trailing summary entry at index
+// `lightCount`: `.x` is the light's sampling proxy count, `.y` its base offset into the proxy array,
+// and the summary entry's `.y` is the total proxy count. Proxy counts ARE the global pdf numerator,
+// so quantization and clamping stay consistent between sampling and pdf evaluation by construction.
 public struct NeeAtState {
     public uint64_t lightTableAddress;
     public uint64_t globalDistributionAddress;
     public uint64_t localDistributionAddress;
     public uint64_t lightFeedbackAddress;
     public uint64_t pixelFeedbackAddress;
+    public uint64_t proxyIndexAddress;
     public uint lightCount;
     public uint priorLightCount;
     public uint extentWidth;
@@ -70,9 +75,33 @@ public struct NeeAtState {
     public uint flags;
     public float metersPerSceneUnit;
     public uint frameIndex;
+    // Sum of every light's physical sampling power, summed on the host in double precision so the
+    // GPU never needs a reduction to normalize the power-based prior.
+    public float powerTotal;
+    // Fraction of NEE candidates drawn from the screen-space tile distribution rather than the
+    // global one. 0 disables local sampling; at least one global candidate is always kept.
+    public float localToGlobalRatio;
 };
 
 public static const uint NEE_AT_ENVIRONMENT_EMITTERS_SAMPLED = 2u;
+public static const uint NEE_AT_LOCAL_HISTORY_VALID = 1u;
+// Average sampling proxies per light. Sets the quantization floor of the global distribution: a
+// light's pdf resolution is 1/(lightCount * this). Mirrored by RtNeeAtBackend.PROXY_RATIO, which
+// sizes the proxy buffer.
+public static const uint NEE_AT_PROXY_RATIO = 12u;
+// Weight of last frame's usage feedback against the power-based prior in the global distribution.
+// Below 1 always, so newly important lights are still reachable before any feedback exists.
+public static const float NEE_AT_GLOBAL_FEEDBACK_WEIGHT = 0.75;
+
+// Single definition shared by the sampler and the baker: tile jitter is derived from it on both
+// sides, and the two must agree exactly or sampling and baking address different tiles.
+public uint neeAtHash(uint value) {
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
 
 public ConstPtr<NeeAtState> neeAtState(uint64_t address) {
     return (ConstPtr<NeeAtState>)address;

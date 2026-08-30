@@ -14,11 +14,9 @@ import path_queue_types;
 
 float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool allowLocal,
                               float3 currentMediumAbsorption, float currentMediumIor,
-                              bool currentMediumActive) {
+                              bool currentMediumActive, float3 feedbackThroughput,
+                              inout uint seed) {
     uint2 pixel = DispatchRaysIndex().xy;
-    ConstPtr<WorldPush> frame = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
-    uint seed = pixel.x ^ (pixel.y * 0x9e3779b9u) ^ (PrimitiveIndex() * 0x85ebca6bu)
-            ^ (InstanceID() * 0xc2b2ae35u) ^ (frame[0].frameIndex * 0x27d4eb2du);
     SurfaceClosure closure = surfaceClosure(material, input.geometricNormal);
     NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
     uint candidateCount = clamp(state.candidateCount, 1u, 8u);
@@ -39,7 +37,7 @@ float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool 
         BsdfEvaluation evaluation = evaluateBsdf(query);
         float3 contribution = evaluation.value * cosine * light.radianceOverShapePdf;
         if (light.linkedEmitter && light.shapePdf > 0.0) {
-            float lightPdf = light.proposalPdf * light.shapePdf;
+            float lightPdf = neeAtLightMisPdf(light.proposalPdf, light.shapePdf, candidateCount);
             contribution *= lightPdf / max(lightPdf + evaluation.pdf, 1.0e-20);
         }
         float target = max(dot(max(contribution, float3(0.0)),
@@ -54,6 +52,8 @@ float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool 
     }
     if (!selected.valid || selectedTarget <= 0.0 || weightSum <= 0.0) return float3(0.0);
     float3 estimator = selectedContribution * (weightSum / (float(candidateCount) * selectedTarget));
+    float3 incomingFeedbackThroughput = feedbackThroughput
+            * exp(-currentMediumAbsorption * max(RayTCurrent(), 0.0));
 
     WorldPayload shadow = {};
     shadow.radiance = float3(1.0);
@@ -76,7 +76,7 @@ float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool 
             WORLD_RAY_MASK_SECONDARY, 1u, 2u, 1u, ray, shadow);
     if (shadow.hitDistance >= 0.0 || !any(shadow.radiance > 0.0)) return float3(0.0);
     estimator *= shadow.radiance;
-    float feedback = dot(max(estimator, float3(0.0)),
+    float feedback = dot(max(incomingFeedbackThroughput * estimator, float3(0.0)),
             float3(0.27222872, 0.67408177, 0.05368952));
     neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex, feedback);
     return estimator;
@@ -240,11 +240,14 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     float3 emission = max(surface.emission_color, float3(0.0))
             * max(surface.emission_luminance, 0.0);
     if (any(emission > 0.0)) payload.pathFlags |= WORLD_PATH_EMISSIVE;
-    payload.radiance = emission * retainedEmissionMis(payload, record, input.position)
-            + retainedDirectLighting(surface, input,
+    uint pathSeed = payload.seed;
+    float3 directLighting = retainedDirectLighting(surface, input,
                     payload.currentNeeProposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE,
                     payload.volumeAbsorption, payload.volumeIor,
-                    (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u);
+                    (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u,
+                    payload.feedbackThroughput, pathSeed);
+    payload.seed = pathSeed;
+    payload.radiance = emission * retainedEmissionMis(payload, record, input.position) + directLighting;
     retainedWriteContinuation<TComposition>(payload, record, input, surface, closure);
 }
 

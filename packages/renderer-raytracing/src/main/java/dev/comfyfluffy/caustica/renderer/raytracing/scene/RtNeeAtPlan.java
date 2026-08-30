@@ -21,26 +21,30 @@ final class RtNeeAtPlan {
         if (!(metersPerSceneUnit > 0.0) || !Double.isFinite(metersPerSceneUnit)) {
             throw new IllegalArgumentException("metersPerSceneUnit must be finite and positive");
         }
-        Map<Long, Integer> previousIndices = new HashMap<>();
-        for (int index = 0; index < previous.size(); index++) {
-            previousIndices.put(previous.get(index).identity(), index);
-        }
         Map<Long, Integer> currentIndices = new HashMap<>();
         for (int index = 0; index < current.size(); index++) {
             currentIndices.put(current.get(index).identity(), index);
         }
-        int[] currentToPrevious = new int[current.size()];
         float[] power = new float[current.size()];
         for (int index = 0; index < current.size(); index++) {
             var light = current.get(index);
-            currentToPrevious[index] = previousIndices.getOrDefault(light.identity(), NO_LIGHT);
             power[index] = samplingPower(light.descriptor(), metersPerSceneUnit);
         }
         int[] previousToCurrent = new int[previous.size()];
         for (int index = 0; index < previous.size(); index++) {
             previousToCurrent[index] = currentIndices.getOrDefault(previous.get(index).identity(), NO_LIGHT);
         }
-        return new Plan(currentToPrevious, previousToCurrent, power);
+        return new Plan(previousToCurrent, power);
+    }
+
+    /**
+     * Sum of every light's sampling power, accumulated in double precision so the GPU can normalize
+     * the power-based prior with a single divide instead of a reduction over the light table.
+     */
+    static float powerTotal(float[] power) {
+        double total = 0.0;
+        for (float value : power) total += value;
+        return (float) total;
     }
 
     static float samplingPower(LightDescriptor descriptor, double metersPerSceneUnit) {
@@ -74,19 +78,17 @@ final class RtNeeAtPlan {
         return (float) Math.clamp(value, 1.0e-8, 1.0e30);
     }
 
-    record Plan(int[] currentToPrevious, int[] previousToCurrent, float[] power) {
+    record Plan(int[] previousToCurrent, float[] power) {
         Plan {
-            currentToPrevious = currentToPrevious.clone();
             previousToCurrent = previousToCurrent.clone();
             power = power.clone();
         }
 
         ByteBuffer pack() {
-            int count = Math.max(currentToPrevious.length, previousToCurrent.length);
-            ByteBuffer result = ByteBuffer.allocate(Math.multiplyExact(count, 3 * Integer.BYTES))
+            int count = Math.max(previousToCurrent.length, power.length);
+            ByteBuffer result = ByteBuffer.allocate(Math.multiplyExact(count, 2 * Integer.BYTES))
                     .order(ByteOrder.nativeOrder());
             for (int index = 0; index < count; index++) {
-                result.putInt(index < currentToPrevious.length ? currentToPrevious[index] : NO_LIGHT);
                 result.putInt(index < previousToCurrent.length ? previousToCurrent[index] : NO_LIGHT);
                 result.putFloat(index < power.length ? power[index] : 0.0f);
             }

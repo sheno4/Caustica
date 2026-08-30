@@ -30,6 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class WorldShaderCompilerTest {
     private static final ShaderSource BUILTINS = ShaderSource.classpath(WorldShaderCompilerTest.class,
             "/caustica/shaders/builtin", "surface", "sky");
+    private static final byte[] SPIRV_DEBUG_INFO_IMPORT =
+            "NonSemantic.Shader.DebugInfo.100\0".getBytes(StandardCharsets.US_ASCII);
     private static final ShaderDataType<Object> DATA = ShaderDataType.create("test-data");
     private static final ShaderDataType<Object> BINDING = ShaderDataType.create("test-binding");
     private static final ShaderDataType<Object> INSTANCE = ShaderDataType.create("test-instance");
@@ -83,7 +85,9 @@ final class WorldShaderCompilerTest {
             assertFalse(compiler.composition().rootSource().contains("SurfaceModifier"));
             assertSpirv(compiler.compileClosestHit());
             assertSpirv(compiler.compileRadianceAnyHit());
+            assertSpirv(compiler.compileShadowAnyHit());
             assertSpirv(compiler.compileSkyMiss());
+            assertSpirv(compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
             assertSpirv(compiler.compilePrimary());
             byte[] ordinary = compiler.compileIndirect(false);
             byte[] reordered = compiler.compileIndirect(true);
@@ -145,7 +149,9 @@ final class WorldShaderCompilerTest {
         assertTrue(closest.contains("payload.pathFlags |= WORLD_PATH_EMISSIVE"));
         assertFalse(primary.contains("specularMotionGuide)[pixel] = motion"));
 
-        assertTrue(lights.contains("pixelIndex * 2u + 1u"));
+        assertTrue(lights.contains("pixelFeedback[pixelIndex] = event"));
+        assertFalse(lights.contains("InterlockedCompareExchange"));
+        assertTrue(bake.contains("InterlockedAdd(counts[slot], 1u)"));
         assertTrue(lights.contains("dot(fromLight, forward) < cos(light.axisU.w)"));
         assertFalse(lights.contains("RETAINED_LIGHT_POINT"));
         assertFalse(lights.contains("tan(light.axisU.w)"));
@@ -155,18 +161,20 @@ final class WorldShaderCompilerTest {
         assertFalse(bake.contains("previousDepthIndex"));
         assertTrue(bake.contains("GroupMemoryBarrierWithGroupSync"));
         assertTrue(bake.contains("uint2(localLights[slot], localScan[slot])"));
-        assertTrue(bake.contains("globalPowerSums[lane]"));
+        assertTrue(bake.contains("blockScan[lane]"));
         assertTrue(bake.contains("chunk += 64u"));
-        assertTrue(bake.contains("globalScanNext[lane]"));
+        assertTrue(bake.contains("blockScanNext[lane]"));
         assertFalse(bake.contains("if (dispatchIndex == 0u) bakeGlobal"));
-        assertTrue(bake.contains("permutedLocal = (local + jitter) % state.tileSize"));
-        assertTrue(bake.contains("bool inExtent = pixel.x < state.extentWidth"));
+        assertTrue(bake.contains("+ paddedExtent - jitter) % paddedExtent"));
+        assertTrue(lights.contains("(pixel + jitter) % (tileCount * tileSize)"));
         assertTrue(lights.contains("while (low < high)"));
         assertTrue(lights.contains("neeAtLocalAvailable(state, pixel)"));
         assertTrue(closest.contains("volumeIor = max(volume.indexOfRefraction, 1.0)"));
         assertTrue(closest.contains("shadow.pathFlags = WORLD_PATH_SHADOW"));
         assertTrue(closest.contains("WORLD_RAY_MASK_SECONDARY, 1u, 2u, 1u"));
         assertTrue(closest.contains("shadow.volumeIor = currentMediumIor"));
+        assertTrue(closest.contains("incomingFeedbackThroughput * estimator"));
+        assertTrue(core.contains("payload.feedbackThroughput = throughput"));
         assertTrue(lights.contains("isfinite(contribution)"));
         assertTrue(shadow.contains("evaluateBoundaryLighting"));
         assertTrue(shadow.contains("IgnoreHit()"));
@@ -190,6 +198,17 @@ final class WorldShaderCompilerTest {
     private static void assertSpirv(byte[] spirv) {
         assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
         assertTrue(spirv.length > 256);
+        assertTrue(contains(spirv, SPIRV_DEBUG_INFO_IMPORT),
+                "SPIR-V must embed NonSemantic.Shader.DebugInfo.100");
+    }
+
+    private static boolean contains(byte[] contents, byte[] expected) {
+        for (int offset = 0; offset <= contents.length - expected.length; offset++) {
+            int index = 0;
+            while (index < expected.length && contents[offset + index] == expected[index]) index++;
+            if (index == expected.length) return true;
+        }
+        return false;
     }
 
     private static void assertVulkan14(Path output, byte[] spirv) throws Exception {

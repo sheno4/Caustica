@@ -20,9 +20,13 @@ import org.gradle.process.ExecOperations
 
 import javax.inject.Inject
 import java.nio.file.Path
+import java.nio.charset.StandardCharsets
 
 /** Compiles selected Slang entry-point sources to validated Vulkan SPIR-V. */
 abstract class CompileSlangShaders extends DefaultTask {
+    private static final byte[] SPIRV_DEBUG_INFO_IMPORT =
+            "NonSemantic.Shader.DebugInfo.100\u0000".getBytes(StandardCharsets.US_ASCII)
+
     @InputDirectory @PathSensitive(PathSensitivity.RELATIVE)
     abstract DirectoryProperty getSourceDirectory()
 
@@ -102,10 +106,11 @@ abstract class CompileSlangShaders extends DefaultTask {
                 commandLine([slangc.get(), source.absolutePath, "-target", "spirv"]
                         + descriptorHeapOptions + [
                         "-profile", spirvProfile.get(), "-matrix-layout-column-major",
-                        "-warnings-as-errors", "all", "-warnings-disable", "41012", "-g"]
+                        "-warnings-as-errors", "all", "-warnings-disable", "41012", "-g2"]
                         + includes + ["-o", output.absolutePath])
             }
             execOps.exec { commandLine spirvVal.get(), "--target-env", vulkanTarget.get(), output.absolutePath }
+            requireDebugInfo(output)
             if (descriptorHeapNative.get()) {
                 String relativeSource = sourceRoot.toPath().relativize(source.toPath()).toString().replace('\\', '/')
                 DescriptorHeapSpirv.validate(output, mappedDescriptorBindingSources.get().contains(relativeSource))
@@ -140,6 +145,23 @@ abstract class CompileSlangShaders extends DefaultTask {
     static String outputBase(File root, File source) {
         String relative = root.toPath().relativize(source.toPath()).toString().replace('\\', '/')
         relative.endsWith(".slang") ? relative.substring(0, relative.length() - 6) : relative
+    }
+
+    static void requireDebugInfo(File spirv) {
+        byte[] contents = spirv.bytes
+        boolean found = false
+        for (int offset = 0; offset <= contents.length - SPIRV_DEBUG_INFO_IMPORT.length && !found; offset++) {
+            found = true
+            for (int index = 0; index < SPIRV_DEBUG_INFO_IMPORT.length; index++) {
+                if (contents[offset + index] != SPIRV_DEBUG_INFO_IMPORT[index]) {
+                    found = false
+                    break
+                }
+            }
+        }
+        if (!found) {
+            throw new GradleException("compiled shader is missing SPIR-V debug information: ${spirv}")
+        }
     }
 
     static List<File> directoryTree(File root) {

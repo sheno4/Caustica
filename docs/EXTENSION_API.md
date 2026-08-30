@@ -147,10 +147,11 @@ remapping, tiled histogram layout, proposal mixture, candidate RIS estimator, an
 The repository tests those local contracts rather than comparing private implementation details or golden
 output from another renderer.
 
-Each scene has persistent double buffers containing a global discrete distribution and tiled local histograms
-derived from previous-frame light and pixel feedback. The shader combines global and local proposal PDFs,
-selects candidate samples with RIS, and reports reverse-MIS feedback for the next update. Point lights are absent
-because no producer justified a fourth physical shape.
+Each scene has persistent double buffers containing per-pixel feedback reservoirs, a global discrete
+distribution, and jittered tiled local histograms. The baker turns each previous-frame reservoir into one global
+light vote and uses screen-space feedback for local histograms only while the camera history is stationary. The
+shader combines global and local proposal PDFs, selects candidate samples with RIS, and preserves the matching
+reverse-MIS state for emissive hits. Point lights are absent because no producer justified a fourth physical shape.
 
 CPU property tests cover global distribution normalization and CDF boundaries, local histogram probing and
 address ranges, history validity and identity continuity, and agreement with the shader's constants and branch

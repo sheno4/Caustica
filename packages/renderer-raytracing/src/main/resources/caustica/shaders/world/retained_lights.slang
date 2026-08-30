@@ -6,11 +6,13 @@ import world_common;
 public static const uint RETAINED_LIGHT_PARALLELOGRAM = 0u;
 public static const uint RETAINED_LIGHT_SPOT = 1u;
 public static const uint RETAINED_LIGHT_DISTANT = 2u;
-public static const uint NEE_AT_HISTORY_VALID = 1u;
 public static const uint NEE_AT_NO_LIGHT = 0xffffffffu;
 public static const uint RETAINED_LIGHT_LINKED_EMITTER = 1u;
 public static const uint NEE_AT_PROPOSAL_GLOBAL = 0u;
 public static const uint NEE_AT_PROPOSAL_SCREEN_MIXTURE = 1u;
+// Ceiling on a pixel reservoir's running weight. Keeps the float total finite when a pixel sees an
+// extremely bright light across many vertices; the reservoir stays well defined at the ceiling.
+public static const float NEE_AT_MAX_FEEDBACK_WEIGHT = 1.0e12;
 
 public struct DirectLightSample {
     public float3 direction;
@@ -24,11 +26,7 @@ public struct DirectLightSample {
 };
 
 public uint retainedLightHash(uint value) {
-    value ^= value >> 16u;
-    value *= 0x7feb352du;
-    value ^= value >> 15u;
-    value *= 0x846ca68bu;
-    return value ^ (value >> 16u);
+    return neeAtHash(value);
 }
 
 public float retainedLightRandom(inout uint state) {
@@ -49,26 +47,51 @@ public DirectLightSample invalidDirectLight() {
     return sample;
 }
 
+uint neeAtProxyTotal(NeeAtState state) {
+    ConstPtr<uint2> entries = (ConstPtr<uint2>)state.globalDistributionAddress;
+    return entries[state.lightCount].y;
+}
+
 float neeAtGlobalPdf(NeeAtState state, uint lightIndex) {
-    ConstPtr<float2> entries = (ConstPtr<float2>)state.globalDistributionAddress;
-    return lightIndex < state.lightCount ? entries[lightIndex].x : 0.0;
+    if (lightIndex >= state.lightCount) return 0.0;
+    uint total = neeAtProxyTotal(state);
+    if (total == 0u) return 0.0;
+    ConstPtr<uint2> entries = (ConstPtr<uint2>)state.globalDistributionAddress;
+    return float(entries[lightIndex].x) / float(total);
+}
+
+// Number of candidates drawn from the local distribution; the rest come from the global one. Keeping
+// at least one global candidate is what guarantees every light stays reachable from every pixel.
+public uint neeAtLocalCandidateCount(NeeAtState state, uint candidateCount) {
+    float ratio = clamp(state.localToGlobalRatio, 0.0, 1.0);
+    return min(uint(float(candidateCount - 1u) * ratio + 0.75), candidateCount - 1u);
+}
+
+// Density the light-sampling technique must report when weighted against BSDF sampling. NEE draws
+// `candidateCount` candidates per shading point, so its effective density is that many times the
+// single-draw proposal density. Both MIS directions route through here so they cannot disagree.
+public float neeAtLightMisPdf(float proposalPdf, float shapePdf, uint candidateCount) {
+    return proposalPdf * shapePdf * float(max(candidateCount, 1u));
 }
 
 uint neeAtTileIndex(NeeAtState state, uint2 pixel) {
-    uint2 tile = min(pixel / max(state.tileSize, 1u),
-            uint2(max(state.tileCountX, 1u) - 1u, max(state.tileCountY, 1u) - 1u));
+    uint tileSize = max(state.tileSize, 1u);
+    uint2 jitter = uint2(retainedLightHash(state.frameIndex * 2u) % tileSize,
+            retainedLightHash(state.frameIndex * 2u + 1u) % tileSize);
+    uint2 tileCount = uint2(max(state.tileCountX, 1u), max(state.tileCountY, 1u));
+    uint2 tile = ((pixel + jitter) % (tileCount * tileSize)) / tileSize;
     return tile.y * state.tileCountX + tile.x;
 }
 
 bool neeAtLocalAvailable(NeeAtState state, uint2 pixel) {
-    if ((state.flags & NEE_AT_HISTORY_VALID) == 0u || state.localSlotCount == 0u) return false;
+    if ((state.flags & NEE_AT_LOCAL_HISTORY_VALID) == 0u || state.localSlotCount == 0u) return false;
     ConstPtr<uint2> entries = (ConstPtr<uint2>)state.localDistributionAddress;
     uint base = neeAtTileIndex(state, pixel) * state.localSlotCount;
     return entries[base + state.localSlotCount - 1u].y != 0u;
 }
 
 float neeAtLocalPdf(NeeAtState state, uint2 pixel, uint lightIndex) {
-    if ((state.flags & NEE_AT_HISTORY_VALID) == 0u || state.localSlotCount == 0u) return 0.0;
+    if ((state.flags & NEE_AT_LOCAL_HISTORY_VALID) == 0u || state.localSlotCount == 0u) return 0.0;
     ConstPtr<uint2> entries = (ConstPtr<uint2>)state.localDistributionAddress;
     uint base = neeAtTileIndex(state, pixel) * state.localSlotCount;
     uint total = entries[base + state.localSlotCount - 1u].y;
@@ -86,16 +109,13 @@ float neeAtLocalPdf(NeeAtState state, uint2 pixel, uint lightIndex) {
     return 0.0;
 }
 
+// One indexed load: the proxy array already encodes the distribution, so there is no search and no
+// divergence between lanes drawing different lights.
 uint neeAtSampleGlobal(NeeAtState state, float randomValue) {
-    ConstPtr<float2> entries = (ConstPtr<float2>)state.globalDistributionAddress;
-    uint low = 0u;
-    uint high = state.lightCount;
-    while (low < high) {
-        uint middle = low + (high - low) / 2u;
-        if (randomValue <= entries[middle].y) high = middle;
-        else low = middle + 1u;
-    }
-    return min(low, state.lightCount - 1u);
+    uint total = neeAtProxyTotal(state);
+    if (total == 0u) return NEE_AT_NO_LIGHT;
+    ConstPtr<uint> proxies = (ConstPtr<uint>)state.proxyIndexAddress;
+    return proxies[min(uint(randomValue * float(total)), total - 1u)];
 }
 
 uint neeAtSampleLocal(NeeAtState state, uint2 pixel, float randomValue) {
@@ -186,7 +206,7 @@ DirectLightSample sampleRetainedLightIndex(NeeAtState state, uint lightIndex,
 float neeAtProposalPdf(NeeAtState state, uint2 pixel, uint lightIndex,
                        uint candidateCount, bool allowLocal) {
     bool localAvailable = allowLocal && neeAtLocalAvailable(state, pixel);
-    uint localDrawCount = localAvailable ? candidateCount / 2u : 0u;
+    uint localDrawCount = localAvailable ? neeAtLocalCandidateCount(state, candidateCount) : 0u;
     float localFraction = float(localDrawCount) / float(candidateCount);
     float globalFraction = float(candidateCount - localDrawCount) / float(candidateCount);
     return globalFraction * neeAtGlobalPdf(state, lightIndex)
@@ -208,9 +228,11 @@ public float neeAtReverseParallelogramPdf(WorldBindingRoots roots, uint2 pixel, 
     float area = 4.0 * length(cross(light.axisU.xyz, light.axisV.xyz));
     float emitterCosine = dot(normalize(cross(light.axisU.xyz, light.axisV.xyz)), -direction);
     if (emitterCosine <= 0.0) return 0.0;
-    return neeAtProposalPdf(state, pixel, lightIndex, max(candidateCount, 1u),
-            proposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE)
-            * distanceSquared / max(emitterCosine * area, 1.0e-20);
+    uint candidates = max(candidateCount, 1u);
+    float proposalPdf = neeAtProposalPdf(state, pixel, lightIndex, candidates,
+            proposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE);
+    float shapePdf = distanceSquared / max(emitterCosine * area, 1.0e-20);
+    return neeAtLightMisPdf(proposalPdf, shapePdf, candidates);
 }
 
 public DirectLightSample sampleRetainedLight(WorldBindingRoots roots, float3 position, uint2 pixel,
@@ -219,7 +241,9 @@ public DirectLightSample sampleRetainedLight(WorldBindingRoots roots, float3 pos
     NeeAtState state = neeAtState(roots.neeAtStateAddress)[0];
     if (state.lightCount == 0u) return invalidDirectLight();
     bool localAvailable = allowLocal && neeAtLocalAvailable(state, pixel);
-    bool drawLocal = localAvailable && (candidate & 1u) != 0u;
+    uint globalDrawCount = candidateCount
+            - (localAvailable ? neeAtLocalCandidateCount(state, candidateCount) : 0u);
+    bool drawLocal = candidate >= globalDrawCount;
     uint lightIndex = drawLocal
             ? neeAtSampleLocal(state, pixel, retainedLightRandom(seed))
             : neeAtSampleGlobal(state, retainedLightRandom(seed));
@@ -231,32 +255,29 @@ public DirectLightSample sampleRetainedLight(WorldBindingRoots roots, float3 pos
     return sample;
 }
 
-uint neeAtSaturatingAdd(DevicePtr<uint> values, uint index, uint increment) {
-    uint observed = values[index];
-    for (;;) {
-        uint desired = observed + min(increment, 0xffffffffu - observed);
-        uint original;
-        InterlockedCompareExchange(values[index], observed, desired, original);
-        if (original == observed) return observed;
-        observed = original;
-    }
-}
-
 public void neeAtWriteFeedback(WorldBindingRoots roots, uint2 pixel, uint lightIndex,
                                float contribution) {
     NeeAtState state = neeAtState(roots.neeAtStateAddress)[0];
     if (lightIndex >= state.lightCount || pixel.x >= state.extentWidth || pixel.y >= state.extentHeight) return;
-    DevicePtr<uint> lightFeedback = (DevicePtr<uint>)state.lightFeedbackAddress;
-    float finiteContribution = isfinite(contribution) ? max(contribution, 0.0) : 0.0;
-    uint fixedWeight = max(1u, uint(min(finiteContribution * 256.0 + 0.5, 65535.0)));
-    neeAtSaturatingAdd(lightFeedback, lightIndex, fixedWeight);
+    if (!isfinite(contribution) || contribution <= 0.0) return;
+    // Bias towards globally improbable lights: without it a light that is weak globally but dominant
+    // in this tile rarely wins its pixel reservoir, and the local distribution converges to a copy of
+    // the global one instead of complementing it.
+    float globalPdf = neeAtGlobalPdf(state, lightIndex);
+    float weight = globalPdf > 0.0 ? contribution / pow(globalPdf, 0.65) : contribution;
+    if (!isfinite(weight) || weight <= 0.0) return;
+    weight = min(weight, NEE_AT_MAX_FEEDBACK_WEIGHT);
 
     uint pixelIndex = pixel.y * state.extentWidth + pixel.x;
-    DevicePtr<uint> pixelWords = (DevicePtr<uint>)state.pixelFeedbackAddress;
-    uint previousTotal = neeAtSaturatingAdd(pixelWords, pixelIndex * 2u + 1u, fixedWeight);
-    uint total = previousTotal + min(fixedWeight, 0xffffffffu - previousTotal);
-    uint selectionSeed = retainedLightHash(pixelIndex ^ state.frameIndex ^ lightIndex ^ previousTotal);
-    if (retainedLightRandom(selectionSeed) * float(total) <= float(fixedWeight)) {
-        pixelWords[pixelIndex * 2u] = lightIndex;
-    }
+    DevicePtr<uint2> pixelFeedback = (DevicePtr<uint2>)state.pixelFeedbackAddress;
+    // Weighted reservoir sampling over the vertices that lit this pixel. One ray-generation thread
+    // owns each pixel and the tracing passes that reach this are separated by a barrier, so the
+    // read-modify-write needs no atomics. `.y` carries the running weight as raw float bits, which a
+    // zero-filled buffer reads back as 0.0.
+    uint2 event = pixelFeedback[pixelIndex];
+    float total = min(asfloat(event.y) + weight, NEE_AT_MAX_FEEDBACK_WEIGHT);
+    uint selectionSeed = retainedLightHash(pixelIndex ^ state.frameIndex ^ lightIndex ^ event.y) | 1u;
+    if (retainedLightRandom(selectionSeed) * total <= weight) event.x = lightIndex;
+    event.y = asuint(total);
+    pixelFeedback[pixelIndex] = event;
 }

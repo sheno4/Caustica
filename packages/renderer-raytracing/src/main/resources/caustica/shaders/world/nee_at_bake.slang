@@ -4,7 +4,6 @@ import world_common;
 import caustica_resources;
 
 struct NeeAtPlanRecord {
-    uint currentToPrevious;
     uint previousToCurrent;
     float power;
 };
@@ -12,90 +11,143 @@ struct NeeAtPlanRecord {
 public struct NeeAtBakePush {
     public uint64_t stateAddress;
     public uint64_t planAddress;
-    public uint64_t previousLightFeedbackAddress;
     public uint64_t previousPixelFeedbackAddress;
+    public uint64_t blockSumAddress;
     public uint phase;
     public uint historyValid;
 };
 
-uint neeAtBakeHash(uint value) {
-    value ^= value >> 16u;
-    value *= 0x7feb352du;
-    value ^= value >> 15u;
-    value *= 0x846ca68bu;
-    return value ^ (value >> 16u);
-}
-
 groupshared uint localLights[128];
 groupshared uint localMasses[128];
 groupshared uint localScan[128];
-groupshared float globalPowerSums[64];
-groupshared float globalFeedbackSums[64];
-groupshared float globalScan[64];
-groupshared float globalScanNext[64];
-groupshared float globalCarry;
+groupshared uint blockScan[64];
+groupshared uint blockScanNext[64];
+groupshared uint blockCarry;
 
-void bakeGlobal(NeeAtState state, uint lane) {
-    ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
-    ConstPtr<uint> previousFeedback =
-            (ConstPtr<uint>)neeAtBakePush.previousLightFeedbackAddress;
-    DevicePtr<uint> currentFeedback = (DevicePtr<uint>)state.lightFeedbackAddress;
-    DevicePtr<float2> distribution = (DevicePtr<float2>)state.globalDistributionAddress;
-    float lanePower = 0.0;
-    float laneFeedback = 0.0;
-    for (uint index = lane; index < state.lightCount; index += 64u) {
-        lanePower += plan[index].power;
-        uint previous = plan[index].currentToPrevious;
-        if (neeAtBakePush.historyValid != 0u && previous < state.priorLightCount) {
-            laneFeedback += float(previousFeedback[previous]);
-        }
+uint neeAtBlockCount(NeeAtState state) {
+    return (state.lightCount + 63u) / 64u;
+}
+
+// Number of pixels that contributed a usable light pick last frame. Pixels without one were counted
+// into the slot past the last light, so this needs no second reduction over the per-light counts.
+float neeAtFeedbackTotal(NeeAtState state) {
+    if (neeAtBakePush.historyValid == 0u) return 0.0;
+    ConstPtr<uint> counts = (ConstPtr<uint>)state.lightFeedbackAddress;
+    float pixels = float(state.extentWidth) * float(state.extentHeight);
+    return max(pixels - float(counts[state.lightCount]), 0.0);
+}
+
+void collectGlobalFeedback(NeeAtState state, uint pixelIndex) {
+    uint pixelCount = state.extentWidth * state.extentHeight;
+    if (pixelIndex >= pixelCount) return;
+    ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
+    uint2 event = feedback[pixelIndex];
+    uint slot = state.lightCount;
+    if (asfloat(event.y) > 0.0 && event.x < state.priorLightCount) {
+        ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
+        uint mapped = plan[event.x].previousToCurrent;
+        if (mapped < state.lightCount) slot = mapped;
     }
-    globalPowerSums[lane] = lanePower;
-    globalFeedbackSums[lane] = laneFeedback;
+    DevicePtr<uint> counts = (DevicePtr<uint>)state.lightFeedbackAddress;
+    InterlockedAdd(counts[slot], 1u);
+}
+
+// One thread per light: turn the blended prior into a sampling proxy count, and reduce each block's
+// counts so the next pass can turn block totals into base offsets.
+void computeProxyCounts(NeeAtState state, uint group, uint lane, uint lightIndex) {
+    DevicePtr<uint2> distribution = (DevicePtr<uint2>)state.globalDistributionAddress;
+    DevicePtr<uint> blockSums = (DevicePtr<uint>)neeAtBakePush.blockSumAddress;
+    ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
+    ConstPtr<uint> feedback = (ConstPtr<uint>)state.lightFeedbackAddress;
+    float feedbackTotal = neeAtFeedbackTotal(state);
+    uint count = 0u;
+    if (lightIndex < state.lightCount) {
+        float prior = plan[lightIndex].power / max(state.powerTotal, 1.0e-20);
+        float historic = feedbackTotal > 0.0 ? float(feedback[lightIndex]) / feedbackTotal : prior;
+        float pdf = clamp(lerp(prior, historic, NEE_AT_GLOBAL_FEEDBACK_WEIGHT), 0.0, 1.0);
+        // The proxy buffer holds NEE_AT_PROXY_RATIO entries per light and the sampler indexes it by
+        // the total published below, so the total must not exceed that however the arithmetic
+        // rounds. Two entries per light of headroom cover it: one for rounding each count up, one
+        // for the pdf sum landing slightly above 1 after per-light divisions. The floor of one proxy
+        // keeps every light reachable however small its share rounds.
+        float budget = float(state.lightCount * (NEE_AT_PROXY_RATIO - 2u));
+        count = max(1u, uint(ceil(budget * pdf)));
+        distribution[lightIndex] = uint2(count, 0u);
+    }
+    blockScan[lane] = count;
     GroupMemoryBarrierWithGroupSync();
     for (uint offset = 32u; offset > 0u; offset >>= 1u) {
-        if (lane < offset) {
-            globalPowerSums[lane] += globalPowerSums[lane + offset];
-            globalFeedbackSums[lane] += globalFeedbackSums[lane + offset];
-        }
+        if (lane < offset) blockScan[lane] += blockScan[lane + offset];
         GroupMemoryBarrierWithGroupSync();
     }
-    float powerTotal = globalPowerSums[0];
-    float feedbackTotal = globalFeedbackSums[0];
-    if (lane == 0u) globalCarry = 0.0;
+    if (lane == 0u) blockSums[group] = blockScan[0];
+}
+
+// Single group: exclusive scan of the per-block totals, chunked 64 at a time. The grand total is the
+// proxy count, published in the summary entry past the last light.
+void scanBlockBases(NeeAtState state, uint lane) {
+    DevicePtr<uint> blockSums = (DevicePtr<uint>)neeAtBakePush.blockSumAddress;
+    DevicePtr<uint2> distribution = (DevicePtr<uint2>)state.globalDistributionAddress;
+    uint blocks = neeAtBlockCount(state);
+    if (lane == 0u) blockCarry = 0u;
     GroupMemoryBarrierWithGroupSync();
-    for (uint chunk = 0u; chunk < state.lightCount; chunk += 64u) {
+    for (uint chunk = 0u; chunk < blocks; chunk += 64u) {
         uint index = chunk + lane;
-        float pdf = 0.0;
-        if (index < state.lightCount) {
-            float prior = plan[index].power / max(powerTotal, 1.0e-20);
-            float historic = prior;
-            uint previous = plan[index].currentToPrevious;
-            if (neeAtBakePush.historyValid != 0u && feedbackTotal > 0.0) {
-                historic = previous < state.priorLightCount
-                        ? float(previousFeedback[previous]) / feedbackTotal : 0.0;
-            }
-            pdf = lerp(prior, historic, 0.75);
-        }
-        globalScan[lane] = pdf;
+        uint value = index < blocks ? blockSums[index] : 0u;
+        blockScan[lane] = value;
         GroupMemoryBarrierWithGroupSync();
         for (uint offset = 1u; offset < 64u; offset <<= 1u) {
-            globalScanNext[lane] = globalScan[lane]
-                    + (lane >= offset ? globalScan[lane - offset] : 0.0);
+            blockScanNext[lane] = blockScan[lane]
+                    + (lane >= offset ? blockScan[lane - offset] : 0u);
             GroupMemoryBarrierWithGroupSync();
-            globalScan[lane] = globalScanNext[lane];
+            blockScan[lane] = blockScanNext[lane];
             GroupMemoryBarrierWithGroupSync();
         }
-        float chunkBase = globalCarry;
-        if (index < state.lightCount) {
-            float cdf = index + 1u == state.lightCount ? 1.0 : chunkBase + globalScan[lane];
-            distribution[index] = float2(pdf, cdf);
-            currentFeedback[index] = 0u;
-        }
+        uint chunkBase = blockCarry;
+        if (index < blocks) blockSums[index] = chunkBase + blockScan[lane] - value;
         GroupMemoryBarrierWithGroupSync();
-        if (lane == 0u) globalCarry = chunkBase + globalScan[63];
+        if (lane == 0u) blockCarry = chunkBase + blockScan[63];
         GroupMemoryBarrierWithGroupSync();
     }
+    if (lane == 0u) distribution[state.lightCount] = uint2(0u, blockCarry);
+}
+
+// One thread per light: rescan the block locally and add the block's base to get each light's own
+// base offset into the proxy array.
+void computeProxyBases(NeeAtState state, uint group, uint lane, uint lightIndex) {
+    DevicePtr<uint2> distribution = (DevicePtr<uint2>)state.globalDistributionAddress;
+    ConstPtr<uint> blockSums = (ConstPtr<uint>)neeAtBakePush.blockSumAddress;
+    uint count = lightIndex < state.lightCount ? distribution[lightIndex].x : 0u;
+    blockScan[lane] = count;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint offset = 1u; offset < 64u; offset <<= 1u) {
+        blockScanNext[lane] = blockScan[lane] + (lane >= offset ? blockScan[lane - offset] : 0u);
+        GroupMemoryBarrierWithGroupSync();
+        blockScan[lane] = blockScanNext[lane];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (lightIndex < state.lightCount) {
+        distribution[lightIndex] = uint2(count, blockSums[group] + blockScan[lane] - count);
+    }
+}
+
+// One thread per proxy rather than per light: a light holding most of the distribution would
+// otherwise serialize thousands of writes onto a single lane.
+void fillProxies(NeeAtState state, uint proxy) {
+    ConstPtr<uint2> distribution = (ConstPtr<uint2>)state.globalDistributionAddress;
+    uint total = distribution[state.lightCount].y;
+    if (proxy >= total) return;
+    // Bases strictly increase because every light holds at least one proxy, so the owner is the last
+    // light whose base is at or below this proxy.
+    uint low = 0u;
+    uint high = state.lightCount - 1u;
+    while (low < high) {
+        uint middle = low + (high - low + 1u) / 2u;
+        if (distribution[middle].y <= proxy) low = middle;
+        else high = middle - 1u;
+    }
+    DevicePtr<uint> proxies = (DevicePtr<uint>)state.proxyIndexAddress;
+    proxies[proxy] = low;
 }
 
 void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
@@ -108,28 +160,27 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
     }
     GroupMemoryBarrierWithGroupSync();
     uint2 tile = uint2(tileIndex % state.tileCountX, tileIndex / state.tileCountX);
-    uint2 jitter = uint2(neeAtBakeHash(state.frameIndex * 2u) % state.tileSize,
-            neeAtBakeHash(state.frameIndex * 2u + 1u) % state.tileSize);
+    uint2 jitter = uint2(neeAtHash(state.frameIndex * 2u) % state.tileSize,
+            neeAtHash(state.frameIndex * 2u + 1u) % state.tileSize);
     ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
     ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
-    uint pixelCount = state.extentWidth * state.extentHeight;
-    if (neeAtBakePush.historyValid != 0u && state.priorLightCount != 0u
+    if ((state.flags & NEE_AT_LOCAL_HISTORY_VALID) != 0u && state.priorLightCount != 0u
             && lane < state.tileSize * state.tileSize) {
         uint2 local = uint2(lane % state.tileSize, lane / state.tileSize);
-        uint2 permutedLocal = (local + jitter) % state.tileSize;
-        uint2 pixel = tile * state.tileSize + permutedLocal;
+        uint2 paddedExtent = uint2(state.tileCountX, state.tileCountY) * state.tileSize;
+        uint2 pixel = (tile * state.tileSize + local + paddedExtent - jitter) % paddedExtent;
         bool inExtent = pixel.x < state.extentWidth && pixel.y < state.extentHeight;
-        uint sourceIndex = inExtent ? pixel.y * state.extentWidth + pixel.x : pixelCount;
-        uint2 event = inExtent ? feedback[sourceIndex] : uint2(0u);
-        if (event.y != 0u && event.x < state.priorLightCount) {
+        uint2 event = uint2(0u);
+        if (inExtent) event = feedback[pixel.y * state.extentWidth + pixel.x];
+        if (asfloat(event.y) > 0.0 && event.x < state.priorLightCount) {
             uint currentLight = plan[event.x].previousToCurrent;
             if (currentLight < state.lightCount) {
-                uint slot = neeAtBakeHash(currentLight) % state.localSlotCount;
+                uint slot = neeAtHash(currentLight) % state.localSlotCount;
                 for (uint probe = 0u; probe < state.localSlotCount; probe++) {
                     uint observed;
                     InterlockedCompareExchange(localLights[slot], 0xffffffffu, currentLight, observed);
                     if (observed == 0xffffffffu || observed == currentLight) {
-                        InterlockedAdd(localMasses[slot], event.y);
+                        InterlockedAdd(localMasses[slot], 1u);
                         break;
                     }
                     slot = (slot + 1u) % state.localSlotCount;
@@ -159,22 +210,21 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
     }
 }
 
-void clearPixelFeedback(NeeAtState state, uint pixelIndex) {
-    uint count = state.extentWidth * state.extentHeight;
-    if (pixelIndex >= count) return;
-    DevicePtr<uint2> pixels = (DevicePtr<uint2>)state.pixelFeedbackAddress;
-    pixels[pixelIndex] = uint2(0u);
-}
-
 [[vk::push_constant]] public NeeAtBakePush neeAtBakePush;
 
 public void runNeeAtBake(uint groupIndex, uint lane, uint dispatchIndex) {
     NeeAtState state = ((ConstPtr<NeeAtState>)neeAtBakePush.stateAddress)[0];
     if (neeAtBakePush.phase == 0u) {
-        if (groupIndex == 0u) bakeGlobal(state, lane);
+        collectGlobalFeedback(state, dispatchIndex);
     } else if (neeAtBakePush.phase == 1u) {
-        bakeLocal(state, groupIndex, lane);
+        computeProxyCounts(state, groupIndex, lane, dispatchIndex);
+    } else if (neeAtBakePush.phase == 2u) {
+        if (groupIndex == 0u) scanBlockBases(state, lane);
+    } else if (neeAtBakePush.phase == 3u) {
+        computeProxyBases(state, groupIndex, lane, dispatchIndex);
+    } else if (neeAtBakePush.phase == 4u) {
+        fillProxies(state, dispatchIndex);
     } else {
-        clearPixelFeedback(state, dispatchIndex);
+        bakeLocal(state, groupIndex, lane);
     }
 }

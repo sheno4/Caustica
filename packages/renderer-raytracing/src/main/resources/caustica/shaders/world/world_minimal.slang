@@ -10,6 +10,7 @@ import caustica_coverage;
 public struct WorldPayload {
     public float3 radiance;
     public float hitDistance;
+    public float3 feedbackThroughput;
     public float3 volumeAbsorption;
     public float volumeIor;
     public float3 previousPosition;

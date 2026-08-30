@@ -11,7 +11,8 @@ import retained_path_queue;
 import path_queue_types;
 
 uint primarySeed(uint2 pixel, uint frameIndex) {
-    return retainedLightHash(pixel.x ^ (pixel.y * 0x9e3779b9u) ^ (frameIndex * 0x85ebca6bu));
+    uint seed = retainedLightHash(pixel.x ^ (pixel.y * 0x9e3779b9u) ^ (frameIndex * 0x85ebca6bu));
+    return seed != 0u ? seed : 0xa511e9b3u;
 }
 
 VolumeProperties initialVolumeProperties<TComposition : IComposition>(float3 position, WorldPush frame) {
@@ -134,6 +135,7 @@ public void runPrimary<TComposition : IComposition>() {
     float3 absorption = initialVolume.absorptionCoefficient;
     WorldPayload payload = {};
     payload.hitDistance = -1.0;
+    payload.feedbackThroughput = float3(1.0);
     payload.volumeAbsorption = absorption;
     payload.volumeIor = initialVolume.indexOfRefraction;
     payload.previousPosition = ray.Origin;

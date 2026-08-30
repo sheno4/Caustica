@@ -119,9 +119,9 @@ The public light set is one-sided parallelogram radiance in cd/m², circular-spo
 distant normal illuminance in lux. `LightDescriptor.Parallelogram` names the geometry actually sampled by the
 GPU: two non-collinear half-axis spans need not be perpendicular, which is required for skewed emissive faces
 such as transformed lava surfaces. Calling this shape a rectangle would impose a false public invariant. The
-ray tracer consumes all three through persistent per-scene double buffers: a global
-discrete distribution, tiled local histograms derived from previous-frame light and pixel feedback, mixture
-proposal PDFs, candidate RIS, and reverse MIS. CPU property coverage checks global normalization and boundary
+  ray tracer consumes all three through persistent per-scene double buffers: per-pixel feedback reservoirs, a
+  global discrete distribution, jittered local histograms enabled for stationary screen-space history, mixture
+  proposal PDFs, candidate RIS, and reverse MIS. CPU property coverage checks global normalization and boundary
 ownership, local histogram probing/addressing, history validity and identity continuity, and agreement with
 shader constants and branch edges. This is static algorithmic evidence, not a live lighting result.
 

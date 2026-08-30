@@ -16,49 +16,67 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtNeeAtPropertiesTest {
     private static final int TILE_SIZE = 8;
     private static final int LOCAL_SLOTS = 128;
+    private static final int PROXY_RATIO = 12;
+    private static final float LOCAL_TO_GLOBAL_RATIO = 0.65f;
+    private static final float GLOBAL_FEEDBACK_WEIGHT = 0.75f;
     private static final int NO_LIGHT = 0xffff_ffff;
 
     @Test
-    void globalBakeAlwaysProducesANormalizedMonotoneCdf() {
+    void proxyCountsStayInBudgetKeepEveryLightReachableAndTrackTheBlendedPdf() {
         Random random = new Random(0x4e45452d41544cL);
         for (int lightCount : new int[]{1, 2, 3, 63, 64, 65, 127, 128, 129, 257}) {
             float[] power = new float[lightCount];
-            int[] currentToPrevious = new int[lightCount];
-            int[] previousFeedback = new int[lightCount + 7];
+            int[] feedback = new int[lightCount];
+            int contributingPixels = 0;
             for (int index = 0; index < lightCount; index++) {
                 power[index] = Math.scalb(0.5f + random.nextFloat(), random.nextInt(-8, 9));
-                currentToPrevious[index] = index % 5 == 0 ? NO_LIGHT : index;
-                previousFeedback[index] = random.nextInt(0, 1_000_000);
+                feedback[index] = random.nextInt(0, 4096);
+                contributingPixels += feedback[index];
             }
 
-            GlobalDistribution distribution = bakeGlobal(power, currentToPrevious,
-                    previousFeedback, true);
+            GlobalDistribution distribution = bakeGlobal(power, feedback, contributingPixels);
 
+            // The proxy buffer is sized for exactly this budget, so exceeding it would corrupt memory.
+            assertTrue(distribution.total <= (long) lightCount * PROXY_RATIO);
             double pdfTotal = 0.0;
-            float previousCdf = 0.0f;
+            int expectedBase = 0;
             for (int index = 0; index < lightCount; index++) {
-                assertTrue(Float.isFinite(distribution.pdf[index]));
-                assertTrue(distribution.pdf[index] >= 0.0f);
-                assertTrue(distribution.cdf[index] >= previousCdf);
-                assertTrue(distribution.cdf[index] <= 1.00001f);
-                pdfTotal += distribution.pdf[index];
-                previousCdf = distribution.cdf[index];
+                // Bases must strictly increase for the fill pass's binary search to find the owner.
+                assertTrue(distribution.count[index] >= 1);
+                assertEquals(expectedBase, distribution.base[index]);
+                expectedBase += distribution.count[index];
+                pdfTotal += (double) distribution.count[index] / distribution.total;
             }
-            assertEquals(1.0, pdfTotal, 2.0e-5);
-            assertEquals(1.0f, distribution.cdf[lightCount - 1]);
+            assertEquals(distribution.total, expectedBase);
+            // Proxy counts are the pdf numerator, so the distribution normalizes by construction.
+            assertEquals(1.0, pdfTotal, 1.0e-9);
         }
     }
 
     @Test
-    void globalBinarySearchOwnsExactCdfBoundaryOnTheLowerEntry() {
-        float[] cdf = {0.2f, 0.5f, 1.0f};
+    void everyProxyResolvesToTheLightThatOwnsIt() {
+        float[] power = {8.0f, 0.25f, 1.0f, 4.0f, 0.5f};
+        GlobalDistribution distribution = bakeGlobal(power, new int[power.length], 0);
 
-        assertEquals(0, sampleGlobal(cdf, 0.0f));
-        assertEquals(0, sampleGlobal(cdf, 0.2f));
-        assertEquals(1, sampleGlobal(cdf, Math.nextUp(0.2f)));
-        assertEquals(1, sampleGlobal(cdf, 0.5f));
-        assertEquals(2, sampleGlobal(cdf, Math.nextUp(0.5f)));
-        assertEquals(2, sampleGlobal(cdf, 1.0f));
+        for (int proxy = 0; proxy < distribution.total; proxy++) {
+            int owner = proxyOwner(distribution.base, power.length, proxy);
+            assertTrue(proxy >= distribution.base[owner]);
+            assertTrue(proxy < distribution.base[owner] + distribution.count[owner]);
+        }
+    }
+
+    @Test
+    void candidateSplitAlwaysKeepsAtLeastOneGlobalDraw() {
+        assertEquals(5, localCandidateCount(LOCAL_TO_GLOBAL_RATIO, 8));
+        assertEquals(0, localCandidateCount(0.0f, 8));
+        assertEquals(7, localCandidateCount(1.0f, 8));
+        assertEquals(0, localCandidateCount(1.0f, 1));
+        for (int candidates = 1; candidates <= 8; candidates++) {
+            for (float ratio : new float[]{0.0f, 0.25f, LOCAL_TO_GLOBAL_RATIO, 0.95f, 1.0f}) {
+                int local = localCandidateCount(ratio, candidates);
+                assertTrue(local >= 0 && local < candidates);
+            }
+        }
     }
 
     @Test
@@ -86,9 +104,11 @@ final class RtNeeAtPropertiesTest {
                 long entryCount = (long) tileCountX * tileCountY * LOCAL_SLOTS;
                 for (int y : new int[]{0, height - 1, height, Integer.MAX_VALUE}) {
                     for (int x : new int[]{0, width - 1, width, Integer.MAX_VALUE}) {
-                        long base = tileBase(x, y, tileCountX, tileCountY);
-                        assertTrue(base >= 0);
-                        assertTrue(base + LOCAL_SLOTS - 1 < entryCount);
+                        for (int frame : new int[]{0, 1, 42, Integer.MAX_VALUE}) {
+                            long base = tileBase(x, y, frame, tileCountX, tileCountY);
+                            assertTrue(base >= 0);
+                            assertTrue(base + LOCAL_SLOTS - 1 < entryCount);
+                        }
                     }
                 }
             }
@@ -103,8 +123,25 @@ final class RtNeeAtPropertiesTest {
     }
 
     @Test
+    void jitteredTileLookupAndBakeAddressingAreInverse() {
+        for (int width = 1; width <= 17; width++) {
+            int paddedWidth = divideRoundUp(width, TILE_SIZE) * TILE_SIZE;
+            for (int frame : new int[]{0, 1, 42, Integer.MAX_VALUE}) {
+                int jitter = Integer.remainderUnsigned(hash(frame * 2), TILE_SIZE);
+                for (int pixel = 0; pixel < width; pixel++) {
+                    int shifted = (pixel + jitter) % paddedWidth;
+                    int tile = shifted / TILE_SIZE;
+                    int local = shifted % TILE_SIZE;
+                    int bakedPixel = (tile * TILE_SIZE + local + paddedWidth - jitter) % paddedWidth;
+                    assertEquals(pixel, bakedPixel);
+                }
+            }
+        }
+    }
+
+    @Test
     void historyRequiresIdentityContinuityWithoutResetResizeOrFrameGap() {
-        var next = new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, true);
+        var next = new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, true, true);
 
         assertTrue(RtNeeAtBackend.historyValid(next, true, 41, 1920, 1080));
         assertFalse(RtNeeAtBackend.historyValid(next, false, 41, 1920, 1080));
@@ -112,7 +149,7 @@ final class RtNeeAtPropertiesTest {
         assertFalse(RtNeeAtBackend.historyValid(next, true, 41, 1280, 1080));
         assertFalse(RtNeeAtBackend.historyValid(next, true, 41, 1920, 720));
         assertFalse(RtNeeAtBackend.historyValid(
-                new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, false),
+                new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, false, false),
                 true, 41, 1920, 1080));
     }
 
@@ -159,63 +196,95 @@ final class RtNeeAtPropertiesTest {
     void cpuReferenceIsPinnedToSlangConstantsAndBranchEdges() throws IOException {
         String lights = shader("retained_lights.slang");
         String bake = shader("nee_at_bake.slang");
+        String common = shader("world_common.slang");
+        String closest = shader("closest_hit.slang");
 
         assertEquals(TILE_SIZE, RtNeeAtBackend.TILE_SIZE);
         assertEquals(LOCAL_SLOTS, RtNeeAtBackend.LOCAL_SLOTS);
+        assertEquals(PROXY_RATIO, RtNeeAtBackend.PROXY_RATIO);
+        assertEquals(LOCAL_TO_GLOBAL_RATIO, RtNeeAtBackend.LOCAL_TO_GLOBAL_RATIO);
+        assertEquals(1, RtNeeAtBackend.LOCAL_HISTORY_VALID);
         assertEquals(NO_LIGHT, RtNeeAtPlan.NO_LIGHT);
+        assertTrue(common.contains("NEE_AT_LOCAL_HISTORY_VALID = 1u"));
+        assertTrue(common.contains("NEE_AT_PROXY_RATIO = " + PROXY_RATIO + "u"));
+        assertTrue(common.contains("NEE_AT_GLOBAL_FEEDBACK_WEIGHT = " + GLOBAL_FEEDBACK_WEIGHT));
         assertTrue(lights.contains("NEE_AT_NO_LIGHT = 0xffffffffu"));
-        assertTrue(lights.contains("if (randomValue <= entries[middle].y) high = middle"));
+
+        // Tile jitter is derived from this hash on both the sampling and baking sides; if the two
+        // modules ever grew separate copies they could drift and silently address different tiles.
+        // Pinning the mixing constants to world_common alone is what rules that out.
+        assertTrue(common.contains("public uint neeAtHash(uint value)"));
+        assertTrue(common.contains("value *= 0x7feb352du"));
+        assertTrue(common.contains("value *= 0x846ca68bu"));
+        assertTrue(lights.contains("return neeAtHash(value)"));
+        assertFalse(lights.contains("value *= 0x7feb352du"));
+        assertFalse(bake.contains("value *= 0x7feb352du"));
+        assertTrue(bake.contains("neeAtHash(state.frameIndex * 2u)"));
+
+        // Global sampling is a single indexed proxy load, not a search over a cumulative table.
+        assertTrue(lights.contains("proxies[min(uint(randomValue * float(total)), total - 1u)]"));
+        assertFalse(lights.contains("if (randomValue <= entries[middle].y) high = middle"));
+        assertTrue(bake.contains("count = max(1u, uint(ceil(budget * pdf)))"));
+        assertTrue(bake.contains("distribution[middle].y <= proxy"));
+        assertTrue(bake.contains("NEE_AT_PROXY_RATIO - 2u"));
+
         assertTrue(lights.contains("if (float(entries[base + middle].y) > target) high = middle"));
         assertTrue(lights.contains("uint base = neeAtTileIndex(state, pixel) * state.localSlotCount"));
         assertTrue(lights.contains("uint slot = retainedLightHash(lightIndex) % state.localSlotCount"));
+        assertFalse(lights.contains("InterlockedCompareExchange"));
+
+        // Both MIS directions must scale the light density by the candidate count identically.
+        assertTrue(lights.contains("public float neeAtLightMisPdf(float proposalPdf, float shapePdf, uint candidateCount)"));
+        assertTrue(lights.contains("return neeAtLightMisPdf(proposalPdf, shapePdf, candidates)"));
+        assertTrue(closest.contains("neeAtLightMisPdf(light.proposalPdf, light.shapePdf, candidateCount)"));
+
+        // Feedback is a float reservoir biased against the global pdf, not a fixed-point counter.
+        assertTrue(lights.contains("pow(globalPdf, 0.65)"));
+        assertTrue(lights.contains("event.y = asuint(total)"));
+        assertFalse(lights.contains("65535.0"));
+
         assertTrue(bake.contains("groupshared uint localLights[128]"));
         assertTrue(bake.contains("groupshared uint localMasses[128]"));
-        assertTrue(bake.contains("groupshared float globalPowerSums[64]"));
-        assertTrue(bake.contains("value *= 0x7feb352du"));
-        assertTrue(bake.contains("value *= 0x846ca68bu"));
-        assertTrue(bake.contains("index + 1u == state.lightCount ? 1.0"));
         assertTrue(bake.contains("uint base = tileIndex * state.localSlotCount"));
-        assertTrue(bake.contains("currentLight = plan[event.x].previousToCurrent"));
+        assertTrue(bake.contains("uint mapped = plan[event.x].previousToCurrent"));
+        assertTrue(bake.contains("InterlockedAdd(counts[slot], 1u)"));
+        assertTrue(bake.contains("+ paddedExtent - jitter) % paddedExtent"));
     }
 
-    private static GlobalDistribution bakeGlobal(float[] power, int[] currentToPrevious,
-                                                   int[] previousFeedback, boolean historyValid) {
-        float powerTotal = 0.0f;
-        float feedbackTotal = 0.0f;
-        for (int index = 0; index < power.length; index++) {
-            powerTotal += power[index];
-            int previous = currentToPrevious[index];
-            if (historyValid && Integer.compareUnsigned(previous, previousFeedback.length) < 0) {
-                feedbackTotal += previousFeedback[previous];
-            }
-        }
-        float[] pdf = new float[power.length];
-        float[] cdf = new float[power.length];
-        float carry = 0.0f;
-        for (int index = 0; index < power.length; index++) {
+    private static GlobalDistribution bakeGlobal(float[] power, int[] feedback,
+                                                 int contributingPixels) {
+        int lightCount = power.length;
+        float powerTotal = RtNeeAtPlan.powerTotal(power);
+        float feedbackTotal = contributingPixels;
+        float budget = (float) (lightCount * (PROXY_RATIO - 2));
+        int[] count = new int[lightCount];
+        int[] base = new int[lightCount];
+        int running = 0;
+        for (int index = 0; index < lightCount; index++) {
             float prior = power[index] / Math.max(powerTotal, 1.0e-20f);
-            float historic = prior;
-            int previous = currentToPrevious[index];
-            if (historyValid && feedbackTotal > 0.0f) {
-                historic = Integer.compareUnsigned(previous, previousFeedback.length) < 0
-                        ? previousFeedback[previous] / feedbackTotal : 0.0f;
-            }
-            pdf[index] = prior + (historic - prior) * 0.75f;
-            carry += pdf[index];
-            cdf[index] = index + 1 == power.length ? 1.0f : carry;
+            float historic = feedbackTotal > 0.0f ? feedback[index] / feedbackTotal : prior;
+            float pdf = Math.clamp(prior + (historic - prior) * GLOBAL_FEEDBACK_WEIGHT, 0.0f, 1.0f);
+            count[index] = Math.max(1, (int) Math.ceil(budget * pdf));
+            base[index] = running;
+            running += count[index];
         }
-        return new GlobalDistribution(pdf, cdf);
+        return new GlobalDistribution(count, base, running);
     }
 
-    private static int sampleGlobal(float[] cdf, float randomValue) {
+    private static int proxyOwner(int[] base, int lightCount, int proxy) {
         int low = 0;
-        int high = cdf.length;
+        int high = lightCount - 1;
         while (low < high) {
-            int middle = low + (high - low) / 2;
-            if (randomValue <= cdf[middle]) high = middle;
-            else low = middle + 1;
+            int middle = low + (high - low + 1) / 2;
+            if (base[middle] <= proxy) low = middle;
+            else high = middle - 1;
         }
-        return Math.min(low, cdf.length - 1);
+        return low;
+    }
+
+    private static int localCandidateCount(float ratio, int candidateCount) {
+        return Math.min((int) ((candidateCount - 1) * Math.clamp(ratio, 0.0f, 1.0f) + 0.75f),
+                candidateCount - 1);
     }
 
     private static int sampleLocal(int[] lights, long[] cdf, float randomValue) {
@@ -266,9 +335,13 @@ final class RtNeeAtPropertiesTest {
         return 0.0;
     }
 
-    private static long tileBase(int pixelX, int pixelY, int tileCountX, int tileCountY) {
-        int tileX = Math.min(Integer.divideUnsigned(pixelX, TILE_SIZE), tileCountX - 1);
-        int tileY = Math.min(Integer.divideUnsigned(pixelY, TILE_SIZE), tileCountY - 1);
+    private static long tileBase(int pixelX, int pixelY, int frameIndex, int tileCountX, int tileCountY) {
+        int jitterX = Integer.remainderUnsigned(hash(frameIndex * 2), TILE_SIZE);
+        int jitterY = Integer.remainderUnsigned(hash(frameIndex * 2 + 1), TILE_SIZE);
+        int tileX = (int) (((Integer.toUnsignedLong(pixelX) + jitterX)
+                % ((long) tileCountX * TILE_SIZE)) / TILE_SIZE);
+        int tileY = (int) (((Integer.toUnsignedLong(pixelY) + jitterY)
+                % ((long) tileCountY * TILE_SIZE)) / TILE_SIZE);
         return ((long) tileY * tileCountX + tileX) * LOCAL_SLOTS;
     }
 
@@ -308,6 +381,6 @@ final class RtNeeAtPropertiesTest {
         }
     }
 
-    private record GlobalDistribution(float[] pdf, float[] cdf) { }
+    private record GlobalDistribution(int[] count, int[] base, int total) { }
     private record LocalDistribution(int[] lights, long[] cdf) { }
 }
