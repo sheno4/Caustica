@@ -37,7 +37,7 @@ public final class MinecraftTerrainLightAdapter {
                 vy = -vy;
                 vz = -vz;
             }
-            descriptors.add(new LightDescriptor.Rectangle(
+            descriptors.add(new LightDescriptor.Parallelogram(
                     records[source] + originX,
                     records[source + 1] + originY,
                     records[source + 2] + originZ,

@@ -15,14 +15,14 @@ final class RtRetainedLightPlanTest {
     @Test
     void packsEveryPublicLightInAcceptanceOrderAndPhysicalUnits() {
         ByteBuffer records = RtRetainedLightPlan.pack(List.of(
-                new LightDescriptor.Rectangle(11, 22, 33, 2, 0, 0, 0, 3, 0, 4, 5, 6),
+                new LightDescriptor.Parallelogram(11, 22, 33, 2, 0, 0, 0, 3, 0, 4, 5, 6),
                 new LightDescriptor.Spot(17, 28, 39, 0, 0, 1,
                         11, 0.2, 12, 13, 14),
                 new LightDescriptor.Distant(0, 1, 0, 15, 16, 17, 0.4, false)),
                 new SceneOrigin(10, 20, 30)).order(ByteOrder.nativeOrder());
 
         assertEquals(3 * 80, records.remaining());
-        assertRecord(records, 0, RtRetainedLightPlan.RECTANGLE, 1, 2, 3, 0, 0);
+        assertRecord(records, 0, RtRetainedLightPlan.PARALLELOGRAM, 1, 2, 3, 0, 0);
         assertEquals(2.0f, records.getFloat(32));
         assertEquals(3.0f, records.getFloat(52));
         assertEquals(4.0f, records.getFloat(64));
@@ -40,7 +40,7 @@ final class RtRetainedLightPlanTest {
 
     @Test
     void marksOnlyLightsWithActiveGeometryEmitterLinks() {
-        var light = new LightDescriptor.Rectangle(0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1);
+        var light = new LightDescriptor.Parallelogram(0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1);
         ByteBuffer records = RtRetainedLightPlan.pack(List.of(light, light),
                 new SceneOrigin(0, 0, 0), new boolean[]{true, false});
 

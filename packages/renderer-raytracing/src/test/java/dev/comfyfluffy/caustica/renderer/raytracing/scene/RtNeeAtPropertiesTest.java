@@ -119,7 +119,7 @@ final class RtNeeAtPropertiesTest {
     @Test
     void telemetryCountsEveryRetainedDescriptorShape() {
         List<RtRetainedSceneBackend.SceneLight> lights = List.of(
-                light(1, new LightDescriptor.Rectangle(
+                light(1, new LightDescriptor.Parallelogram(
                         0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 5, 6)),
                 light(2, new LightDescriptor.Spot(
                         0, 0, 0, 0, 0, 1, 10, 0.5, 7, 8, 9)),
@@ -130,7 +130,7 @@ final class RtNeeAtPropertiesTest {
 
         assertEquals(RtNeeAtBackend.CANDIDATES, telemetry.candidates());
         assertTrue(telemetry.historyValid());
-        assertEquals(1, telemetry.rectangles());
+        assertEquals(1, telemetry.parallelograms());
         assertEquals(1, telemetry.spots());
         assertEquals(1, telemetry.distants());
         assertEquals(3, telemetry.lightCount());

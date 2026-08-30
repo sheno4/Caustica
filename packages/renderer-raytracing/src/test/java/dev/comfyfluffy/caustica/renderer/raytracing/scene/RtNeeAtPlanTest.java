@@ -31,7 +31,7 @@ final class RtNeeAtPlanTest {
     @Test
     void assignsPositivePhysicalPowerToEveryPublicShape() {
         List<LightDescriptor> descriptors = List.of(
-                new LightDescriptor.Rectangle(0, 0, 0, 2, 0, 0, 0, 3, 0, 4, 5, 6),
+                new LightDescriptor.Parallelogram(0, 0, 0, 2, 0, 0, 0, 3, 0, 4, 5, 6),
                 new LightDescriptor.Spot(0, 0, 0, 0, 0, 1,
                         10, 0.2, 11, 12, 13),
                 new LightDescriptor.Distant(0, 1, 0, 14, 15, 16, 0.4, false));
@@ -40,11 +40,11 @@ final class RtNeeAtPlanTest {
     }
 
     @Test
-    void convertsRectangleAreaToSquareMetersAndUsesCircularSpotSolidAngle() {
-        var rectangle = new LightDescriptor.Rectangle(0, 0, 0,
+    void convertsParallelogramAreaToSquareMetersAndUsesCircularSpotSolidAngle() {
+        var parallelogram = new LightDescriptor.Parallelogram(0, 0, 0,
                 2, 0, 0, 0, 3, 0, 4, 5, 6);
-        float unitScale = RtNeeAtPlan.samplingPower(rectangle, 1.0);
-        assertEquals(unitScale * 4.0f, RtNeeAtPlan.samplingPower(rectangle, 2.0), unitScale * 1.0e-5f);
+        float unitScale = RtNeeAtPlan.samplingPower(parallelogram, 1.0);
+        assertEquals(unitScale * 4.0f, RtNeeAtPlan.samplingPower(parallelogram, 2.0), unitScale * 1.0e-5f);
 
         double halfAngle = 0.3;
         var circularSpot = new LightDescriptor.Spot(0, 0, 0, 0, 0, 1,

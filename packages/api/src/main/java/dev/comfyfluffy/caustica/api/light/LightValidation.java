@@ -37,13 +37,17 @@ final class LightValidation {
         }
     }
 
-    static void perpendicular(double ax, double ay, double az,
-                              double bx, double by, double bz, String name) {
+    static void linearlyIndependent(double ax, double ay, double az,
+                                    double bx, double by, double bz, String name) {
         double lengthA = Math.sqrt(ax * ax + ay * ay + az * az);
         double lengthB = Math.sqrt(bx * bx + by * by + bz * bz);
-        double cosine = (ax * bx + ay * by + az * bz) / (lengthA * lengthB);
-        if (!Double.isFinite(cosine) || Math.abs(cosine) > UNIT_TOLERANCE) {
-            throw new IllegalArgumentException(name + " must be perpendicular");
+        double crossX = ay * bz - az * by;
+        double crossY = az * bx - ax * bz;
+        double crossZ = ax * by - ay * bx;
+        double sine = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ)
+                / (lengthA * lengthB);
+        if (!Double.isFinite(sine) || sine <= UNIT_TOLERANCE) {
+            throw new IllegalArgumentException(name + " must be linearly independent");
         }
     }
 

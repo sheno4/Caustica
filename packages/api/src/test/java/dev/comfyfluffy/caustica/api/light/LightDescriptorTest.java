@@ -11,13 +11,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class LightDescriptorTest {
     @Test
     void exposesOnlyTheProvenFiniteShapes() {
-        assertEquals(Set.of(LightDescriptor.Rectangle.class, LightDescriptor.Spot.class),
+        assertEquals(Set.of(LightDescriptor.Parallelogram.class, LightDescriptor.Spot.class),
                 Set.of(LightDescriptor.Finite.class.getPermittedSubclasses()));
     }
 
     @Test
     void acceptsCanonicalLights() {
-        assertDoesNotThrow(() -> new LightDescriptor.Rectangle(
+        assertDoesNotThrow(() -> new LightDescriptor.Parallelogram(
                 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 3, 4));
         assertDoesNotThrow(() -> new LightDescriptor.Spot(
                 0, 0, 0, 0, 0, -1, 10, 0.5, 1, 2, 3));
@@ -43,10 +43,12 @@ final class LightDescriptorTest {
     }
 
     @Test
-    void rejectsDegenerateRectangle() {
-        assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Rectangle(
+    void acceptsSkewedParallelogramAndRejectsDegenerateAxes() {
+        assertDoesNotThrow(() -> new LightDescriptor.Parallelogram(
+                0, 0, 0, 1, 0.25, 0, 0, 1, 0, 1, 1, 1));
+        assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Parallelogram(
                 0, 0, 0, 1, 0, 0, 2, 0, 0, 1, 1, 1));
-        assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Rectangle(
-                0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1));
+        assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Parallelogram(
+                0, 0, 0, 1, 0, 0, -2, 0, 0, 1, 1, 1));
     }
 }

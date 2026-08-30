@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.api.light;
 
 /**
- * One engine-sampled light. Positions and rectangle axes use the target scene's coordinate units; fields
+ * One engine-sampled light. Positions and parallelogram axes use the target scene's coordinate units; fields
  * explicitly named in metres remain physical. Colours use scene-linear ACEScg and every vector named as a
- * direction or normal is unit length. The supported light types are {@link Rectangle}, {@link Spot}, and
+ * direction or normal is unit length. The supported light types are {@link Parallelogram}, {@link Spot}, and
  * {@link Distant}.
  */
 public sealed interface LightDescriptor {
@@ -16,20 +16,20 @@ public sealed interface LightDescriptor {
     }
 
     /**
-     * A one-sided rectangular emitter whose emitting normal is {@code normalize(halfU × halfV)};
-     * radiance is in cd/m².
+     * A one-sided parallelogram emitter whose emitting normal is {@code normalize(halfU × halfV)}.
+     * The two non-parallel half-axes span the surface and radiance is in cd/m².
      */
-    record Rectangle(double positionX, double positionY, double positionZ,
-                     double halfUx, double halfUy, double halfUz,
-                     double halfVx, double halfVy, double halfVz,
-                     double radianceRedCdM2, double radianceGreenCdM2, double radianceBlueCdM2)
+    record Parallelogram(double positionX, double positionY, double positionZ,
+                         double halfUx, double halfUy, double halfUz,
+                         double halfVx, double halfVy, double halfVz,
+                         double radianceRedCdM2, double radianceGreenCdM2, double radianceBlueCdM2)
             implements Finite {
-        public Rectangle {
+        public Parallelogram {
             LightValidation.position(positionX, positionY, positionZ);
-            LightValidation.nonzero(halfUx, halfUy, halfUz, "rectangle half-U axis");
-            LightValidation.nonzero(halfVx, halfVy, halfVz, "rectangle half-V axis");
-            LightValidation.perpendicular(halfUx, halfUy, halfUz, halfVx, halfVy, halfVz,
-                    "rectangle axes");
+            LightValidation.nonzero(halfUx, halfUy, halfUz, "parallelogram half-U axis");
+            LightValidation.nonzero(halfVx, halfVy, halfVz, "parallelogram half-V axis");
+            LightValidation.linearlyIndependent(halfUx, halfUy, halfUz, halfVx, halfVy, halfVz,
+                    "parallelogram axes");
             LightValidation.color(radianceRedCdM2, radianceGreenCdM2, radianceBlueCdM2, "radiance");
         }
     }

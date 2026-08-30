@@ -76,9 +76,9 @@ final class RtNeeAtBackend {
         if (shouldLogTelemetry(telemetry, state.lastLoggedTelemetry,
                 input.frameIndex(), state.lastTelemetryFrameIndex)) {
             LOGGER.info("NEE-AT runtime: scene={}, frame={}, candidates={}, historyValid={}, "
-                            + "retainedLights={} [Rectangle={}, Spot={}, Distant={}]",
+                            + "retainedLights={} [Parallelogram={}, Spot={}, Distant={}]",
                     scene, input.frameIndex(), telemetry.candidates(), telemetry.historyValid(),
-                    telemetry.lightCount(), telemetry.rectangles(), telemetry.spots(), telemetry.distants());
+                    telemetry.lightCount(), telemetry.parallelograms(), telemetry.spots(), telemetry.distants());
             state.lastLoggedTelemetry = telemetry;
             state.lastTelemetryFrameIndex = input.frameIndex();
         }
@@ -216,36 +216,36 @@ final class RtNeeAtBackend {
     }
 
     static Telemetry telemetry(List<RtRetainedSceneBackend.SceneLight> lights, boolean historyValid) {
-        int rectangles = 0;
+        int parallelograms = 0;
         int spots = 0;
         int distants = 0;
         for (RtRetainedSceneBackend.SceneLight light : lights) {
             switch (light.descriptor()) {
-                case LightDescriptor.Rectangle ignored -> rectangles++;
+                case LightDescriptor.Parallelogram ignored -> parallelograms++;
                 case LightDescriptor.Spot ignored -> spots++;
                 case LightDescriptor.Distant ignored -> distants++;
             }
         }
-        return new Telemetry(CANDIDATES, historyValid, rectangles, spots, distants);
+        return new Telemetry(CANDIDATES, historyValid, parallelograms, spots, distants);
     }
 
     static boolean shouldLogTelemetry(Telemetry current, Telemetry previous,
                                       long frameIndex, long previousFrameIndex) {
         return previous == null || current.candidates() != previous.candidates()
                 || current.historyValid() != previous.historyValid()
-                || current.rectanglesPresent() != previous.rectanglesPresent()
+                || current.parallelogramsPresent() != previous.parallelogramsPresent()
                 || current.spotsPresent() != previous.spotsPresent()
                 || current.distantsPresent() != previous.distantsPresent()
                 || frameIndex < previousFrameIndex
                 || frameIndex - previousFrameIndex >= TELEMETRY_INTERVAL_FRAMES;
     }
 
-    record Telemetry(int candidates, boolean historyValid, int rectangles, int spots, int distants) {
+    record Telemetry(int candidates, boolean historyValid, int parallelograms, int spots, int distants) {
         int lightCount() {
-            return Math.addExact(Math.addExact(rectangles, spots), distants);
+            return Math.addExact(Math.addExact(parallelograms, spots), distants);
         }
 
-        boolean rectanglesPresent() { return rectangles != 0; }
+        boolean parallelogramsPresent() { return parallelograms != 0; }
         boolean spotsPresent() { return spots != 0; }
         boolean distantsPresent() { return distants != 0; }
     }

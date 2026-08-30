@@ -45,7 +45,7 @@ final class RtNeeAtPlan {
 
     static float samplingPower(LightDescriptor descriptor, double metersPerSceneUnit) {
         return switch (descriptor) {
-            case LightDescriptor.Rectangle light -> {
+            case LightDescriptor.Parallelogram light -> {
                 double cx = light.halfUy() * light.halfVz() - light.halfUz() * light.halfVy();
                 double cy = light.halfUz() * light.halfVx() - light.halfUx() * light.halfVz();
                 double cz = light.halfUx() * light.halfVy() - light.halfUy() * light.halfVx();

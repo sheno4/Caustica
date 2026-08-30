@@ -17,7 +17,7 @@ import java.util.Objects;
  *
  * <p>Lights are not derived from geometry. The renderer sees no emission on a triangle, so an emissive
  * surface is lit by retaining a light beside it — Minecraft turns every emissive block face into a
- * rectangle. That is what keeps the acceleration path free of shading data.
+ * parallelogram. That is what keeps the acceleration path free of shading data.
  *
  * <p>All methods are thread-safe.
  */

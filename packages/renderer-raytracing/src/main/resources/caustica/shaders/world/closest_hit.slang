@@ -211,7 +211,7 @@ float retainedEmissionMis(WorldPayload payload, RetainedGeometryRecord record, f
     if (payload.previousBsdfPdf <= 0.0) return 1.0;
     uint lightIndex = worldEmitterLightIndex(record);
     if (lightIndex == NEE_AT_NO_LIGHT) return 1.0;
-    float lightPdf = neeAtReverseRectanglePdf(worldBindings, DispatchRaysIndex().xy, lightIndex,
+    float lightPdf = neeAtReverseParallelogramPdf(worldBindings, DispatchRaysIndex().xy, lightIndex,
             payload.previousPosition, hitPosition, payload.previousNeeProposalMode,
             payload.previousNeeCandidateCount);
     return payload.previousBsdfPdf / max(payload.previousBsdfPdf + lightPdf, 1.0e-20);

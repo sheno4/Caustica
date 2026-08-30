@@ -27,7 +27,7 @@ final class ShowcaseSelectionContribution implements MinecraftWorldSessionContri
         LightChannel channel = context.renderSession().lights();
         lights = List.of(channel.newLight(), channel.newLight(), channel.newLight());
         channel.submit(RetainedBatch.of(List.of(
-                new LightChannel.SetLight(lights.get(0), context.scene(), new LightDescriptor.Rectangle(
+                new LightChannel.SetLight(lights.get(0), context.scene(), new LightDescriptor.Parallelogram(
                         0, 66, 0, 0.5, 0, 0, 0, 0, 0.5, 20, 18, 15)),
                 new LightChannel.SetLight(lights.get(1), context.scene(), new LightDescriptor.Spot(
                         0, 66, 0, 0, -1, 0, 24, 0.35, 500, 450, 400)),

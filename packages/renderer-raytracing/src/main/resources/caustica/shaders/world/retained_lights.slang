@@ -3,7 +3,7 @@ module retained_lights;
 import bindings;
 import world_common;
 
-public static const uint RETAINED_LIGHT_RECTANGLE = 0u;
+public static const uint RETAINED_LIGHT_PARALLELOGRAM = 0u;
 public static const uint RETAINED_LIGHT_SPOT = 1u;
 public static const uint RETAINED_LIGHT_DISTANT = 2u;
 public static const uint NEE_AT_HISTORY_VALID = 1u;
@@ -148,7 +148,7 @@ DirectLightSample sampleRetainedLightIndex(NeeAtState state, uint lightIndex,
     }
 
     float3 lightPosition = light.positionOrDirection.xyz;
-    if (light.type == RETAINED_LIGHT_RECTANGLE) {
+    if (light.type == RETAINED_LIGHT_PARALLELOGRAM) {
         lightPosition += light.axisU.xyz * (2.0 * randomU - 1.0)
                 + light.axisV.xyz * (2.0 * randomV - 1.0);
     }
@@ -162,9 +162,9 @@ DirectLightSample sampleRetainedLightIndex(NeeAtState state, uint lightIndex,
     float rayEpsilon = 0.002 / max(state.metersPerSceneUnit, 1.0e-8);
     sample.maximumDistance = max(distance - rayEpsilon, 0.5 * rayEpsilon);
 
-    if (light.type != RETAINED_LIGHT_RECTANGLE
+    if (light.type != RETAINED_LIGHT_PARALLELOGRAM
             && distance * state.metersPerSceneUnit > light.rangeMeters) return invalidDirectLight();
-    if (light.type == RETAINED_LIGHT_RECTANGLE) {
+    if (light.type == RETAINED_LIGHT_PARALLELOGRAM) {
         float3 crossAxes = cross(light.axisU.xyz, light.axisV.xyz);
         float emitterCosine = dot(normalize(crossAxes), -sample.direction);
         if (emitterCosine <= 0.0) return invalidDirectLight();
@@ -193,14 +193,14 @@ float neeAtProposalPdf(NeeAtState state, uint2 pixel, uint lightIndex,
             + localFraction * neeAtLocalPdf(state, pixel, lightIndex);
 }
 
-public float neeAtReverseRectanglePdf(WorldBindingRoots roots, uint2 pixel, uint lightIndex,
+public float neeAtReverseParallelogramPdf(WorldBindingRoots roots, uint2 pixel, uint lightIndex,
                                       float3 previousPosition, float3 hitPosition,
                                       uint proposalMode, uint candidateCount) {
     NeeAtState state = neeAtState(roots.neeAtStateAddress)[0];
     if (lightIndex >= state.lightCount) return 0.0;
     ConstPtr<RetainedLightRecord> records = (ConstPtr<RetainedLightRecord>)state.lightTableAddress;
     RetainedLightRecord light = records[lightIndex];
-    if (light.type != RETAINED_LIGHT_RECTANGLE
+    if (light.type != RETAINED_LIGHT_PARALLELOGRAM
             || (light.flags & RETAINED_LIGHT_LINKED_EMITTER) == 0u) return 0.0;
     float3 toHit = hitPosition - previousPosition;
     float distanceSquared = dot(toHit, toHit);

@@ -12,7 +12,7 @@ import java.util.Objects;
 
 /** Packs public physical-light descriptors into the reflected scene-relative GPU ABI. */
 final class RtRetainedLightPlan {
-    static final int RECTANGLE = 0;
+    static final int PARALLELOGRAM = 0;
     static final int SPOT = 1;
     static final int DISTANT = 2;
     static final int RECORD_BYTES = RetainedLightRecordData.BYTE_SIZE;
@@ -42,8 +42,8 @@ final class RtRetainedLightPlan {
                                                 boolean linkedEmitter) {
         int flags = linkedEmitter ? 1 : 0;
         return switch (descriptor) {
-            case LightDescriptor.Rectangle light -> new RetainedLightRecordData(
-                    RECTANGLE, flags, 0.0f, 0.0f,
+            case LightDescriptor.Parallelogram light -> new RetainedLightRecordData(
+                    PARALLELOGRAM, flags, 0.0f, 0.0f,
                     position(light.positionX(), light.positionY(), light.positionZ(), origin),
                     vector(light.halfUx(), light.halfUy(), light.halfUz(), 0.0),
                     vector(light.halfVx(), light.halfVy(), light.halfVz(), 0.0),

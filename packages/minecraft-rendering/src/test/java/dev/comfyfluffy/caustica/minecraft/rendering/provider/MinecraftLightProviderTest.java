@@ -58,9 +58,9 @@ final class MinecraftLightProviderTest {
         RecordingLights channel = new RecordingLights();
         MinecraftLightProvider provider = new MinecraftLightProvider(channel, new SceneId() { },
                 () -> new MinecraftLightProvider.CelestialSettings(30.0, 0.6, 1.5), () -> null);
-        LightDescriptor.Rectangle rectangle = new LightDescriptor.Rectangle(
+        LightDescriptor.Parallelogram parallelogram = new LightDescriptor.Parallelogram(
                 1, 2, 3, 0.5, 0, 0, 0, 0.5, 0, 4, 5, 6);
-        MinecraftTerrainLightBatch section = new MinecraftTerrainLightBatch(9L, 1L, List.of(rectangle));
+        MinecraftTerrainLightBatch section = new MinecraftTerrainLightBatch(9L, 1L, List.of(parallelogram));
 
         provider.publish(emptyCelestial(), Optional.empty(),
                 new MinecraftTerrainLightSnapshot(List.of(section), 1L));
@@ -134,10 +134,10 @@ final class MinecraftLightProviderTest {
     void closeClearsSingletonAndTerrainLightsInOneBatch() {
         RecordingLights channel = new RecordingLights();
         MinecraftLightProvider provider = provider(channel);
-        LightDescriptor.Rectangle rectangle = new LightDescriptor.Rectangle(
+        LightDescriptor.Parallelogram parallelogram = new LightDescriptor.Parallelogram(
                 1, 2, 3, 0.5, 0, 0, 0, 0.5, 0, 4, 5, 6);
         provider.publish(emptyCelestial(), Optional.empty(), new MinecraftTerrainLightSnapshot(
-                List.of(new MinecraftTerrainLightBatch(9L, 1L, List.of(rectangle))), 1L));
+                List.of(new MinecraftTerrainLightBatch(9L, 1L, List.of(parallelogram))), 1L));
 
         provider.close();
 
