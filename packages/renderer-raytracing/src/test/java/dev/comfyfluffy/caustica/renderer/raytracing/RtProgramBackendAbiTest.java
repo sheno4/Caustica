@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 
-import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import org.junit.jupiter.api.Test;
@@ -94,7 +93,6 @@ final class RtProgramBackendAbiTest {
             @Override public VulkanDeviceAddress compositionDataAddress() {
                 return new VulkanDeviceAddress(address);
             }
-            @Override public int implementationIndex(ProgramKey key) { return 1; }
             @Override public void close() { }
         };
     }

@@ -53,7 +53,7 @@ final class WorldShaderCompilerTest {
     }
 
     @Test
-    void assignsCategoryLocalIndicesAndBuildsImplementationDataTable(@TempDir Path cache) throws Exception {
+    void preservesStableCategorySlotsAndBuildsImplementationDataTable(@TempDir Path cache) throws Exception {
         ProgramKey surfaceKey = new ProgramKey(ProgramKey.Kind.SURFACE, 1);
         ProgramKey volumeKey = new ProgramKey(ProgramKey.Kind.VOLUME, 2);
         ProgramKey environmentKey = new ProgramKey(ProgramKey.Kind.ENVIRONMENT, 3);
@@ -71,8 +71,9 @@ final class WorldShaderCompilerTest {
         ProgramComposition sourceOnly = new ProgramComposition(List.of(
                 program.declarations().get(0), program.declarations().get(2)));
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache, sourceOnly)) {
-            assertEquals(1, compiler.implementationIndex(surfaceKey));
-            assertEquals(1, compiler.implementationIndex(environmentKey));
+            assertEquals(1, compiler.composition().implementationIndices().get(surfaceKey));
+            assertEquals(3, compiler.composition().implementationIndices().get(environmentKey));
+            assertTrue(compiler.composition().rootSource().contains("case 3u:"));
             assertEquals(List.of(41L), compiler.composition().implementationData());
             assertTrue(compiler.composition().rootSource().contains("ShaderDataPtr<uint64_t>"));
             assertTrue(compiler.composition().rootSource().contains(

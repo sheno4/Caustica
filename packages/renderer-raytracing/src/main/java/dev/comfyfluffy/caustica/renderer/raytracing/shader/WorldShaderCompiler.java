@@ -167,11 +167,6 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         return composition.implementationData();
     }
 
-    @Override
-    public int implementationIndex(ProgramKey key) {
-        return composition.implementationIndex(key);
-    }
-
     public byte[] compileSpecialized(String engineModule, String entryPoint) {
         String key = "composition:" + composition.contentHash() + '/' + engineModule + '/' + entryPoint;
         return cached(key, () -> session.compileSpecialized(engineModule, entryPoint,
@@ -228,20 +223,18 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         Map<ProgramKey, Integer> indices = new LinkedHashMap<>();
         Map<ProgramKey, Integer> dataOffsets = new LinkedHashMap<>();
         List<Long> data = new ArrayList<>();
-        for (int index = 0; index < surfaces.size(); index++) {
-            ProgramComposition.Surface surface = surfaces.get(index);
-            indices.put(surface.key(), index + 1);
+        for (ProgramComposition.Surface surface : surfaces) {
+            indices.put(surface.key(), surface.key().implementationIndex());
             dataOffsets.put(surface.key(), data.size());
             data.add(surface.definition().implementationData().bits());
         }
-        for (int index = 0; index < volumes.size(); index++) {
-            ProgramComposition.Volume volume = volumes.get(index);
-            indices.put(volume.key(), index + 1);
+        for (ProgramComposition.Volume volume : volumes) {
+            indices.put(volume.key(), volume.key().implementationIndex());
             dataOffsets.put(volume.key(), data.size());
             data.add(volume.definition().implementationData().bits());
         }
-        for (int index = 0; index < environments.size(); index++) {
-            indices.put(environments.get(index).key(), index + 1);
+        for (ProgramComposition.Environment environment : environments) {
+            indices.put(environment.key(), environment.key().implementationIndex());
         }
 
         StringBuilder source = new StringBuilder("module ").append(COMPOSITION_MODULE).append(";\n\n")
@@ -257,7 +250,8 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("        switch (implementation) {\n");
         for (int i = 0; i < surfaces.size(); i++) {
             ProgramComposition.Surface value = surfaces.get(i);
-            source.append("            case ").append(i + 1).append("u: { input.implementationData = ")
+            source.append("            case ").append(value.key().implementationIndex())
+                    .append("u: { input.implementationData = ")
                     .append("ShaderDataPtr<uint64_t>(input.shaderRoot.compositionData)[")
                     .append(dataOffsets.get(value.key())).append("u]; ")
                     .append(value.definition().surface().type())
@@ -272,7 +266,8 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             ProgramComposition.Surface value = surfaces.get(i);
             ShaderDefinition coverage = value.definition().coverage();
             if (coverage == null) continue;
-            source.append("            case ").append(i + 1).append("u: { input.implementationData = ")
+            source.append("            case ").append(value.key().implementationIndex())
+                    .append("u: { input.implementationData = ")
                     .append("ShaderDataPtr<uint64_t>(input.shaderRoot.compositionData)[")
                     .append(dataOffsets.get(value.key())).append("u]; ").append(coverage.type())
                     .append(" value; return value.evaluateCoverage(input); }\n");
@@ -296,7 +291,8 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("        switch (implementation) {\n")
                 .append("            case 0u: { BuiltinEnvironment value; return value.evaluateEnvironment(query); }\n");
         for (int i = 0; i < environments.size(); i++) {
-            source.append("            case ").append(i + 1).append("u: { ")
+            source.append("            case ").append(environments.get(i).key().implementationIndex())
+                    .append("u: { ")
                     .append(environments.get(i).definition().implementation().type())
                     .append(" value; return value.evaluateEnvironment(query); }\n");
         }
@@ -314,7 +310,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                                           Map<ProgramKey, Integer> offsets, boolean lighting) {
         for (int i = 0; i < volumes.size(); i++) {
             ProgramComposition.Volume value = volumes.get(i);
-            source.append("            case ").append(i + 1).append("u: { input")
+            source.append("            case ").append(value.key().implementationIndex()).append("u: { input")
                     .append(lighting ? ".volume" : "").append(".implementationData = ")
                     .append("ShaderDataPtr<uint64_t>(input").append(lighting ? ".volume" : "")
                     .append(".shaderRoot.compositionData)[").append(offsets.get(value.key())).append("u]; ")

@@ -14,14 +14,11 @@ import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramContributionChannel;
-import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -128,7 +125,52 @@ final class ProgramSessionTest {
         session.progress();
         assertInstanceOf(ProgramRegistration.Ready.class, laterCompletion.getFirst());
         assertEquals(2, backend.activeComposition.declarations().size());
-        assertEquals(2, session.resolve(later.exports()));
+        assertEquals(3, session.resolve(later.exports()));
+    }
+
+    @Test
+    void removingAnotherOwnerDoesNotRetargetRetainedProgramSlots() {
+        ManualBackend backend = new ManualBackend();
+        ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
+        ProgramContributionChannel removableOwner = session.openChannel(new ContributionOwner(1));
+        ProgramContributionChannel geometryOwner = session.openChannel(new ContributionOwner(2));
+
+        record Exports(SurfaceId<Binding, Instance> surface, VolumeId<Binding, Instance> volume) { }
+        ProgramRegistration<Exports> removable = removableOwner.register(builder -> new Exports(
+                builder.surface(surface("sample.RemovableSurface", () -> { })),
+                builder.volume(volume("sample.RemovableVolume", () -> { }))));
+        ProgramRegistration<Exports> retained = geometryOwner.register(builder -> new Exports(
+                builder.surface(surface("sample.RetainedSurface", () -> { })),
+                builder.volume(volume("sample.RetainedVolume", () -> { }))));
+        session.progress();
+        backend.succeed();
+        session.progress();
+        backend.succeed();
+        session.progress();
+
+        int retainedSurfaceSlot = session.resolve(retained.exports().surface());
+        int retainedVolumeSlot = session.resolve(retained.exports().volume());
+        assertEquals(2, retainedSurfaceSlot);
+        assertEquals(2, retainedVolumeSlot);
+
+        removable.close();
+        session.progress();
+        backend.succeed();
+        session.progress();
+
+        assertEquals(0, session.resolve(removable.exports().surface()));
+        assertEquals(0, session.resolve(removable.exports().volume()));
+        assertEquals(retainedSurfaceSlot, session.resolve(retained.exports().surface()));
+        assertEquals(retainedVolumeSlot, session.resolve(retained.exports().volume()));
+
+        ProgramRegistration<Exports> replacement = removableOwner.register(builder -> new Exports(
+                builder.surface(surface("sample.ReplacementSurface", () -> { })),
+                builder.volume(volume("sample.ReplacementVolume", () -> { }))));
+        session.progress();
+        backend.succeed();
+        session.progress();
+        assertEquals(3, session.resolve(replacement.exports().surface()));
+        assertEquals(3, session.resolve(replacement.exports().volume()));
     }
 
     @Test
@@ -163,7 +205,7 @@ final class ProgramSessionTest {
         session.progress();
         assertInstanceOf(ProgramRegistration.Ready.class, readyCompletion.getFirst());
         ready.close();
-        assertEquals(1, session.resolve(ready.exports()));
+        assertEquals(2, session.resolve(ready.exports()));
 
         session.progress();
         backend.succeed();
@@ -361,19 +403,10 @@ final class ProgramSessionTest {
 
         private final class TestProgram implements CompiledProgram {
             private final ProgramComposition composition;
-            private final Map<ProgramKey, Integer> indices = new LinkedHashMap<>();
             private boolean closed;
 
             private TestProgram(ProgramComposition composition) {
                 this.composition = composition;
-                composition.declarations().forEach(declaration -> indices.put(declaration.key(),
-                        Math.toIntExact(indices.keySet().stream()
-                                .filter(key -> key.kind() == declaration.key().kind()).count() + 1)));
-            }
-
-            @Override
-            public int implementationIndex(ProgramKey key) {
-                return indices.get(key);
             }
 
             @Override public void close() {

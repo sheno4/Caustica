@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
-import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtShaderCode;
@@ -199,7 +198,6 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             this.pipeline = pipeline;
         }
 
-        @Override public int implementationIndex(ProgramKey key) { return compiler.implementationIndex(key); }
         @Override public RtPipeline pipeline() { return pipeline; }
         @Override public VulkanDeviceAddress compositionDataAddress() { return table.address; }
 

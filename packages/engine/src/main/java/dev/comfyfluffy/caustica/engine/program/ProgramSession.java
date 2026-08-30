@@ -41,7 +41,7 @@ public final class ProgramSession {
     private List<Registration<?>> published = List.of();
     private ProgramBackend.CompiledProgram activeProgram;
     private BuildRequest inFlight;
-    private long nextDeclarationSequence;
+    private final int[] nextDeclarationSequences = new int[ProgramKey.Kind.values().length];
     private boolean declarationActive;
 
     public ProgramSession(ProgramBackend backend, ProgramEngineFailureHandler failures) {
@@ -100,7 +100,7 @@ public final class ProgramSession {
                 || !reference.registration.published || activeProgram == null) {
             return 0;
         }
-        return activeProgram.implementationIndex(reference.key);
+        return reference.key.implementationIndex();
     }
 
     /** Returns the published implementation index, or zero for vacuum. */
@@ -109,7 +109,7 @@ public final class ProgramSession {
                 || !reference.registration.published || activeProgram == null) {
             return 0;
         }
-        return activeProgram.implementationIndex(reference.key);
+        return reference.key.implementationIndex();
     }
 
     /** Returns the published implementation index, or zero for the error environment. */
@@ -118,7 +118,7 @@ public final class ProgramSession {
                 || !reference.registration.published || activeProgram == null) {
             return 0;
         }
-        return activeProgram.implementationIndex(reference.key);
+        return reference.key.implementationIndex();
     }
 
     /** Validates a surface reference and its erased geometry-slot schemas for this session. */
@@ -357,6 +357,11 @@ public final class ProgramSession {
         }
     }
 
+    private ProgramKey nextKey(ProgramKey.Kind kind) {
+        int ordinal = kind.ordinal();
+        return new ProgramKey(kind, ++nextDeclarationSequences[ordinal]);
+    }
+
     private record BuildRequest(List<Registration<?>> target, Registration<?> introduced) { }
     private record CompletionEvent(BuildRequest request, ProgramBackend.Compilation result) { }
     private record CallbackTask(ProgramContributionChannel channel, Runnable action) { }
@@ -453,8 +458,7 @@ public final class ProgramSession {
         public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            SurfaceReference reference = new SurfaceReference(session,
-                    new ProgramKey(ProgramKey.Kind.SURFACE, ++nextDeclarationSequence), definition);
+            SurfaceReference reference = new SurfaceReference(session, nextKey(ProgramKey.Kind.SURFACE), definition);
             declarations.add(new SurfaceDeclaration(reference, definition));
             return (SurfaceId<B, N>) (SurfaceId<?, ?>) reference;
         }
@@ -464,8 +468,7 @@ public final class ProgramSession {
         public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            VolumeReference reference = new VolumeReference(session,
-                    new ProgramKey(ProgramKey.Kind.VOLUME, ++nextDeclarationSequence), definition);
+            VolumeReference reference = new VolumeReference(session, nextKey(ProgramKey.Kind.VOLUME), definition);
             declarations.add(new VolumeDeclaration(reference, definition));
             return (VolumeId<B, N>) (VolumeId<?, ?>) reference;
         }
@@ -475,8 +478,8 @@ public final class ProgramSession {
         public <B> EnvironmentId<B> environment(EnvironmentDefinition<B> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            EnvironmentReference reference = new EnvironmentReference(session,
-                    new ProgramKey(ProgramKey.Kind.ENVIRONMENT, ++nextDeclarationSequence), definition);
+            EnvironmentReference reference = new EnvironmentReference(
+                    session, nextKey(ProgramKey.Kind.ENVIRONMENT), definition);
             declarations.add(new EnvironmentDeclaration(reference, definition));
             return (EnvironmentId<B>) (EnvironmentId<?>) reference;
         }

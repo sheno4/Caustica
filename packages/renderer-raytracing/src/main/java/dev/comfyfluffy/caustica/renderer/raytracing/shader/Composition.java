@@ -23,12 +23,6 @@ record Composition(Map<ProgramKey, Integer> implementationIndices, List<Long> im
         Objects.requireNonNull(contentHash, "contentHash");
     }
 
-    public int implementationIndex(ProgramKey key) {
-        Integer index = implementationIndices.get(Objects.requireNonNull(key, "key"));
-        if (index == null) throw new IllegalArgumentException("program key is not in this composition: " + key);
-        return index;
-    }
-
     static Composition create(Map<ProgramKey, Integer> indices, List<Long> implementationData,
                               String rootModule, String rootType,
                               String rootSource, Map<String, byte[]> sources) {
