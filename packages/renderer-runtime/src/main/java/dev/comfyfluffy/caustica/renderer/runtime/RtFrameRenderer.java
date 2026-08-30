@@ -1,5 +1,15 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackend;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackendFactory;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserCommonSettings;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserExtent;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserFrame;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserImage;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserInputs;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserReset;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
@@ -65,22 +75,23 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
- * On-screen composite. Each frame, ray-trace into a render-res storage image (+ guide buffers), use
- * DLSS Ray Reconstruction to denoise and upscale it to display res, write that into a storage-capable
- * copy of the world color, and copy the result back to the world target at the
- * end-of-world seam. Gated by {@code -Dcaustica.rt=true}.
+ * On-screen composite. Each frame, ray-trace into scene color and guide images, route them through
+ * raw presentation, NRD temporal denoising, or DLSS Ray Reconstruction, then copy the display-mapped
+ * result back to the world target at the end-of-world seam. Gated by {@code -Dcaustica.rt=true}.
  *
- * <p>The path tracer and its guide buffers run at the configured render scale of display res with a per-frame
- * sub-pixel camera jitter; DLSS-RR ({@link DlssRayReconstruction}) reconstructs the display-res image. With RR
- * disabled the trace runs at 1:1 and a linear blit stands in for the upscale (a raw, noisy reference).
+ * <p>Raw and NRD routes trace at display resolution; NRD and DLSS-RR use per-frame sub-pixel camera
+ * jitter. DLSS-RR ({@link DlssRayReconstruction}) alone selects a lower render extent and reconstructs
+ * to display resolution. A failed RR evaluation falls back to a linear upscale of the noisy trace.
  *
  * <p>Traces the active retained scene with perspective camera rays (camera matrices captured
  * each frame via {@link #captureFrame}); writes nothing until a scene is available.
  * Pipelines/SBT/descriptors are built once; sized images rebuilt on resize.
  */
 public final class RtFrameRenderer {
+    static final float NRD_DENOISING_RANGE = 50_000.0f;
     private static final Logger LOGGER = LoggerFactory.getLogger(RtFrameRenderer.class);
     // WorldPushData and its serializer are generated from Slang's reflected Std430DataLayout. Java never
     // owns or calculates a shader byte offset, struct size, array stride, or fixed-array capacity.
@@ -119,8 +130,8 @@ public final class RtFrameRenderer {
     private static final int PROCEDURAL_ANCHOR_MASK = 4095;
     // Renderer look metadata is exposure/LMT only; scene providers own their photometric calibration.
     private static final RtLookPackage LOOK = RtLookPackage.loadDefault();
-    // Sign of the sub-pixel jitter as reported to DLSS-RR + applied to the primary ray, mirroring the
-    // validated DLSS-SR convention (Vulkan flipped clip space wants Y negated).
+    // Sign applied to primary-ray jitter. NRD receives that actual offset; DLSS-RR receives its inverse
+    // at evaluation, matching the validated Vulkan clip-space convention.
     private static float jitterSignX() {
         return CausticaConfig.Rt.Composite.JITTER_SIGN_X.value();
     }
@@ -143,6 +154,12 @@ public final class RtFrameRenderer {
     private final EngineSessionServices services;
     private final RtFramePresenter presenter;
     private final DlssRayReconstruction rayReconstruction;
+    private final RtDenoiserState denoiser;
+    private long previousDenoiserFrameNanos;
+    private float previousDenoiserJitterX;
+    private float previousDenoiserJitterY;
+    private final Matrix4f previousDenoiserWorldToView = new Matrix4f();
+    private final Matrix4f previousDenoiserViewToClip = new Matrix4f();
     private final RtTelemetry telemetry;
     // recordFrame mutates this only on the render thread; each renderer owns an independent sequence.
     private final RtJitter jitter;
@@ -196,6 +213,7 @@ public final class RtFrameRenderer {
     public RtFrameRenderer(VulkanDeviceContext context, RtProgramBackend programs, RtRetainedSceneBackend scenes,
                     RtPassSchedulerBackend passes, EngineSessionServices services,
                     RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
+                    DenoiserBackendFactory denoiserFactory, RtDenoisingSettings denoisingSettings,
                     RtTelemetry telemetry) {
         this.context = Objects.requireNonNull(context, "context");
         this.programs = Objects.requireNonNull(programs, "programs");
@@ -204,9 +222,19 @@ public final class RtFrameRenderer {
         this.services = Objects.requireNonNull(services, "services");
         this.presenter = Objects.requireNonNull(presenter, "presenter");
         this.rayReconstruction = Objects.requireNonNull(rayReconstruction, "rayReconstruction");
+        this.denoiser = new RtDenoiserState(denoiserFactory, denoisingSettings);
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
         this.jitter = new RtJitter();
         this.frameResources = new RtFrameResources(presenter, rayReconstruction, LOOK, exposureSettings());
+    }
+
+    /** Applies one mutually exclusive output route at the next frame boundary. */
+    public void configureDenoising(RtDenoisingSettings settings) {
+        settings = Objects.requireNonNull(settings, "settings");
+        if (denoiser.configured(settings)) return;
+        context.waitIdle();
+        denoiser.configureAfterIdle(settings);
+        resetSceneHistory();
     }
 
     public boolean hasFailed() {
@@ -494,6 +522,7 @@ public final class RtFrameRenderer {
                     && isLightingCameraStationary(snapshot);
             if (!lightingHistoryContinuous) {
                 rayReconstruction.resetHistory();
+                denoiser.resetHistory();
             }
             updateMotion(snapshot);
             recordFrame(context, active, nativeColorImage, snapshot, lightingHistoryContinuous,
@@ -546,11 +575,19 @@ public final class RtFrameRenderer {
             throws IOException {
         presentationResources().configureExposure(exposureSettings());
         frameResources.ensurePresentationPipelines(ctx);
-        if (frameResources.ensureSized(ctx, width, height)) {
+        if (frameResources.ensureSized(ctx, width, height, denoiser.settings().route(),
+                denoiser::closeBackendAfterIdle)) {
             mvHasPrev = false;
             proceduralTimeValid = false;
+            denoiser.resetHistory();
         }
+        ensureDenoiserBackend();
         return true;
+    }
+
+    private void ensureDenoiserBackend() {
+        denoiser.ensureBackend(new DenoiserExtent(
+                traceExtent().renderWidth(), traceExtent().renderHeight()));
     }
 
     private RtProgramBackend.Published ensureWorld(VulkanDeviceContext ctx) {
@@ -598,6 +635,8 @@ public final class RtFrameRenderer {
         lastLightingFrame = -1L;
         lastLightingOrigin = null;
         proceduralTimeValid = false;
+        denoiser.resetHistory();
+        previousDenoiserFrameNanos = 0L;
     }
 
     /**
@@ -657,6 +696,73 @@ public final class RtFrameRenderer {
         return Math.abs(first - second) / Math.max(Math.max(Math.abs(first), Math.abs(second)), 1.0e-6f);
     }
 
+    private void recordTemporalDenoiser(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer,
+                                        boolean historyContinuous,
+                                        float jitterX, float jitterY) {
+        DenoiserBackend backend = denoiser.backend();
+        DenoiserReset frameReset = denoiser.frameReset(historyContinuous);
+        boolean reset = frameReset == DenoiserReset.CLEAR_AND_RESTART;
+        Matrix4f previousWorldToView = nrdPreviousWorldToView(reset, frameViewRotation,
+                previousDenoiserWorldToView, mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ);
+        Matrix4f previousViewToClip = reset ? frameProjection : previousDenoiserViewToClip;
+        float previousJitterX = reset ? jitterX : previousDenoiserJitterX;
+        float previousJitterY = reset ? jitterY : previousDenoiserJitterY;
+        long now = System.nanoTime();
+        float frameTimeMilliseconds = previousDenoiserFrameNanos == 0L
+                ? 0.0f : (now - previousDenoiserFrameNanos) * 1.0e-6f;
+        // The trace writes old = new + MV in render pixels; NRD consumes the same sign in screen units.
+        float inverseWidth = 1.0f / traceExtent().renderWidth();
+        float inverseHeight = 1.0f / traceExtent().renderHeight();
+        DenoiserCommonSettings common = new DenoiserCommonSettings(
+                frameViewRotation.get(new float[16]), previousWorldToView.get(new float[16]),
+                frameProjection.get(new float[16]), previousViewToClip.get(new float[16]),
+                jitterX, jitterY, previousJitterX, previousJitterY,
+                inverseWidth, inverseHeight, 0.0f, NRD_DENOISING_RANGE,
+                0.01f, 0.02f, frameTimeMilliseconds, (int) (frameCounter & 0x7fff_ffffL),
+                false, false, false,
+                frameReset);
+        DenoiserInputs inputs = new DenoiserInputs(
+                denoiserImage(traceImages().diffuseRadianceHitDistance()),
+                denoiserImage(traceImages().specularRadianceHitDistance()),
+                denoiserImage(traceImages().normalRoughness()),
+                denoiserImage(traceImages().nrdViewZ()),
+                denoiserImage(traceImages().motion()),
+                denoiserImage(traceImages().denoisedDiffuseRadianceHitDistance()),
+                denoiserImage(traceImages().denoisedSpecularRadianceHitDistance()),
+                Optional.empty(), Optional.empty());
+        ctx.invalidateDescriptorHeapsForExternalCommand(commandBuffer);
+        try {
+            backend.record(new DenoiserFrame(commandBuffer.address(), common, inputs));
+        } finally {
+            ctx.bindDescriptorHeaps(commandBuffer);
+        }
+        denoiser.frameRecorded();
+        previousDenoiserFrameNanos = now;
+        previousDenoiserJitterX = jitterX;
+        previousDenoiserJitterY = jitterY;
+        previousDenoiserWorldToView.set(frameViewRotation);
+        previousDenoiserViewToClip.set(frameProjection);
+    }
+
+    private DenoiserImage denoiserImage(GpuImage image) {
+        return new DenoiserImage(image.image(), image.format(), VK10.VK_IMAGE_LAYOUT_GENERAL,
+                new DenoiserExtent(image.width(), image.height()));
+    }
+
+    private int nrdSignalEncoding() {
+        return denoiser.settings().signalEncoding()
+                == DenoiserSignalEncoding.YCOCG_NORMALIZED_HIT_DISTANCE ? 1 : 0;
+    }
+
+    static Matrix4f nrdPreviousWorldToView(boolean reset, Matrix4f currentWorldToView,
+                                           Matrix4f previousWorldToView,
+                                           float currentMinusPreviousX,
+                                           float currentMinusPreviousY,
+                                           float currentMinusPreviousZ) {
+        return reset ? new Matrix4f(currentWorldToView) : new Matrix4f(previousWorldToView)
+                .translate(currentMinusPreviousX, currentMinusPreviousY, currentMinusPreviousZ);
+    }
+
     private void recordFrame(VulkanDeviceContext ctx, RtProgramBackend.Published program, long nativeColorImage,
                              FrameSnapshot snapshot, boolean lightingHistoryContinuous,
                              boolean localLightingHistoryContinuous) {
@@ -676,19 +782,20 @@ public final class RtFrameRenderer {
         SceneId entryScene = snapshot.view().entryScene();
         boolean passFrameOpen = false;
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
-            // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
-            // A debug view observes this ordinary path; it never changes jitter or disables RR.
-            boolean rrPath = rayReconstruction.enabled();
+            // The selected route owns jitter and reconstruction. Debug presentation observes the completed
+            // route and never changes its sampling or history behavior.
+            DenoiserRoute denoiserRoute = denoiser.settings().route();
+            boolean rrPath = denoiserRoute == DenoiserRoute.RAY_RECONSTRUCTION
+                    && rayReconstruction.enabled();
             float jitterX = 0f;
             float jitterY = 0f;
-            if (rrPath) {
+            if (denoiserRoute != DenoiserRoute.RAW) {
                 jitter.prepare(traceExtent().renderWidth(), traceExtent().renderHeight(),
                         traceExtent().displayWidth());
                 jitterX = jitter.jitterPixelsX() * jitterSignX();
                 jitterY = jitter.jitterPixelsY() * jitterSignY();
             }
 
-            boolean rrDone = false;
             pushSlot = (pushSlot + 1) % PUSH_RING;
             PushSlot selectedPushSlot = pushRing[pushSlot];
             graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
@@ -783,39 +890,61 @@ public final class RtFrameRenderer {
                     program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                             roots, 1, trace.hitTable());
                 }
-                VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
+                VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to reconstruction reads
                 scenes.finishLighting(entryScene, lighting, cmd, graphicsUse);
                 lightingFinished = true;
             } catch (Throwable failure) {
                 if (!lightingFinished) scenes.abandonLighting(entryScene, lighting);
                 throw failure;
             }
-            // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
-            // RR reads them and writes the display-res denoised result straight into rrOutput.
-            if (rrPath) ctx.invalidateDescriptorHeapsForExternalCommand(cmd);
-            if (rrPath && rayReconstruction.ensureFeature(cmd, traceExtent().renderWidth(),
-                    traceExtent().renderHeight(), traceExtent().displayWidth(), traceExtent().displayHeight())) {
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
-                     RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.dlssRr")) {
-                    rrDone = rayReconstruction.evaluate(cmd, traceImages().traceColor(), traceImages().linearDepth(),
-                            traceImages().motion(), traceImages().diffuseAlbedo(),
-                            traceImages().specularAlbedo(), traceImages().normalRoughness(),
-                            traceImages().specularMotion(), traceImages().reconstructedColor(),
-                            traceExtent().renderWidth(), traceExtent().renderHeight(),
-                            traceExtent().displayWidth(), traceExtent().displayHeight(),
-                            -jitterX, -jitterY);
+            boolean outputReady = false;
+            if (denoiserRoute == DenoiserRoute.RAY_RECONSTRUCTION) {
+                if (rrPath) {
+                    ctx.invalidateDescriptorHeapsForExternalCommand(cmd);
+                    try {
+                        if (rayReconstruction.ensureFeature(cmd, traceExtent().renderWidth(),
+                                traceExtent().renderHeight(), traceExtent().displayWidth(),
+                                traceExtent().displayHeight())) {
+                            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
+                                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.dlssRr")) {
+                                outputReady = rayReconstruction.evaluate(cmd, traceImages().traceColor(),
+                                        traceImages().linearDepth(), traceImages().motion(),
+                                        traceImages().diffuseAlbedo(), traceImages().specularAlbedo(),
+                                        traceImages().normalRoughness(), traceImages().specularMotion(),
+                                        traceImages().reconstructedColor(), traceExtent().renderWidth(),
+                                        traceExtent().renderHeight(), traceExtent().displayWidth(),
+                                        traceExtent().displayHeight(), -jitterX, -jitterY);
+                            }
+                        }
+                    } finally {
+                        ctx.bindDescriptorHeaps(cmd);
+                    }
+                }
+            } else if (denoiserRoute == DenoiserRoute.TEMPORAL_DENOISER) {
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD evaluate");
+                     RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.nrd")) {
+                    recordTemporalDenoiser(ctx, cmd, lightingHistoryContinuous,
+                            jitterX, jitterY);
                     VulkanBarriers.memoryBarrier(cmd, stack);
+                    presentationResources().nrdComposePipeline().dispatch(cmd,
+                            traceImages().reconstructedColor(),
+                            traceImages().denoisedDiffuseRadianceHitDistance(),
+                            traceImages().denoisedSpecularRadianceHitDistance(),
+                            traceImages().diffuseAlbedo(), traceImages().specularAlbedo(),
+                            traceImages().nrdStableRadiance(),
+                            presentationResources().exposure().preExposure(),
+                            nrdSignalEncoding());
+                    outputReady = true;
+                }
+            } else {
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "raw trace copy");
+                     RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.rawCopy")) {
+                    copyImage(cmd, stack, traceImages().traceColor(), traceImages().reconstructedColor());
+                    outputReady = true;
                 }
             }
-            // External reconstruction implementations can invalidate descriptor-heap state even when feature
-            // creation or evaluation fails. Establish the engine heaps before any heap-native post work.
-            ctx.bindDescriptorHeaps(cmd);
 
-            // When DLSS-RR did not produce the display-res image (disabled or a runtime failure), bring
-            // the render-res trace up to display res with a linear blit so the display mapper and
-            // downstream debug pass always have a valid display-res scene image. With RR off
-            // render == display, so this is a 1:1 copy.
-            if (!rrDone) {
+            if (!outputReady) {
                 VulkanBarriers.memoryBarrier(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.upscale")) {
@@ -824,11 +953,9 @@ public final class RtFrameRenderer {
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // reconstructed output visible to exposure histogram
 
-            // Auto-exposure meters rrOutput (the post-RR, denoised/converged image), not the raw
-            // pre-RR trace: RR has no notion of exposure (DLSS-RR Integration Guide §3.7 — ignore
-            // exposure/auto-exposure/sharpness entirely for RR), so this is purely our own metering
-            // choice, independent of RR's pipeline placement. Metering the noisy pre-RR buffer biases
-            // the histogram's log-luminance average; the reconstructed output is the stable metering input.
+            // Auto-exposure meters the selected route's reconstructed output. This keeps temporal routes
+            // stable and leaves RR exposure-independent as required by its integration contract; raw mode
+            // deliberately meters its own noisy reference.
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.exposure")) {
                 presentationResources().exposure().record(ctx, cmd, stack, traceImages().reconstructedColor(),
@@ -854,7 +981,7 @@ public final class RtFrameRenderer {
             VulkanBarriers.memoryBarrier(cmd, stack); // display output visible to debug composite
 
             if (debugView != 0) {
-                // Debug content is composited only after the real scene has completed trace, RR/fallback,
+                // Debug content is composited only after the real scene has completed trace, reconstruction,
                 // exposure, and display mapping. It therefore observes the renderer without perturbing
                 // exposure history or feeding literal diagnostic colors through ACES. Debug presentation
                 // remains SDR for now; a PQ swapchain uses the existing SDR->PQ conversion path.
@@ -929,6 +1056,21 @@ public final class RtFrameRenderer {
                 storageIndex(traceImages().specularAlbedo()));
         target.putInt(base + RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET,
                 storageIndex(traceImages().specularMotion()));
+        target.putInt(base + RtBindings.WORLD_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET,
+                storageIndex(traceImages().diffuseRadianceHitDistance()));
+        target.putInt(base + RtBindings.WORLD_SPECULAR_RADIANCE_HIT_DISTANCE_INDEX_OFFSET,
+                storageIndex(traceImages().specularRadianceHitDistance()));
+        target.putInt(base + RtBindings.WORLD_NRD_VIEW_Z_INDEX_OFFSET,
+                storageIndex(traceImages().nrdViewZ()));
+        target.putInt(base + RtBindings.WORLD_DENOISED_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET,
+                storageIndex(traceImages().denoisedDiffuseRadianceHitDistance()));
+        target.putInt(base + RtBindings.WORLD_DENOISED_SPECULAR_RADIANCE_HIT_DISTANCE_INDEX_OFFSET,
+                storageIndex(traceImages().denoisedSpecularRadianceHitDistance()));
+        target.putInt(base + RtBindings.WORLD_NRD_STABLE_RADIANCE_INDEX_OFFSET,
+                storageIndex(traceImages().nrdStableRadiance()));
+        target.putInt(base + RtBindings.WORLD_NRD_SIGNAL_ENCODING_OFFSET,
+                denoiser.settings().signalEncoding() == DenoiserSignalEncoding.YCOCG_NORMALIZED_HIT_DISTANCE
+                        ? 1 : 0);
         ViewMedium medium = snapshot.view().medium();
         int implementation = medium instanceof ViewMedium.Volume<?, ?> volume
                 ? services.programs().resolve(volume.implementation()) : 0;
@@ -979,6 +1121,7 @@ public final class RtFrameRenderer {
     }
 
     public void destroy() {
+        denoiser.close();
         rayReconstruction.destroyAfterDeviceIdle();
         presenter.invalidateRenderedFrame();
         frameResources.destroy();
@@ -1000,6 +1143,8 @@ public final class RtFrameRenderer {
         frameSnapshot = null;
         currentTrace = null;
         pendingGraphicsUse = null;
+        denoiser.resetHistory();
+        previousDenoiserFrameNanos = 0L;
     }
 
     private static VkImageCopy2.Buffer copyRegion(MemoryStack stack, int width, int height) {
@@ -1009,6 +1154,17 @@ public final class RtFrameRenderer {
         region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
         region.get(0).extent().set(width, height, 1);
         return region;
+    }
+
+    private static void copyImage(VkCommandBuffer commandBuffer, MemoryStack stack,
+                                  GpuImage source, GpuImage destination) {
+        if (source.width() != destination.width() || source.height() != destination.height()) {
+            throw new IllegalArgumentException("copied images must have matching extents");
+        }
+        VK13.vkCmdCopyImage2(commandBuffer, VkCopyImageInfo2.calloc(stack).sType$Default()
+                .srcImage(source.image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                .dstImage(destination.image()).dstImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                .pRegions(copyRegion(stack, source.width(), source.height())));
     }
 
     private static void blitUpscale(VkCommandBuffer cmd, MemoryStack stack, GpuImage src, GpuImage dst) {

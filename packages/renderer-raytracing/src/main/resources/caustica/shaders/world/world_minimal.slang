@@ -9,6 +9,9 @@ import caustica_coverage;
 
 public struct WorldPayload {
     public float3 radiance;
+    public float3 diffuseRadiance;
+    public float3 specularRadiance;
+    public float diffuseHitDistance;
     public float hitDistance;
     public float3 feedbackThroughput;
     public float3 volumeAbsorption;
@@ -36,6 +39,8 @@ public struct WorldPayload {
     public float guideContinuationIor;
     public uint guideContinuationVolumeActive;
     public uint guideContinuationEvent;
+    public float signalHitDistance;
+    public uint firstLobeEvent;
 };
 
 public static const uint WORLD_PATH_REQUEST_CONTINUATION = 1u;

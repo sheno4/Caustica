@@ -47,7 +47,8 @@ abstract class GenerateRtBindings extends DefaultTask {
              words: [INITIAL_VOLUME_BINDING: "initialVolumeBinding",
                      INITIAL_VOLUME_INSTANCE: "initialVolumeInstance"],
              scalars: [INITIAL_VOLUME_IMPLEMENTATION: "initialVolumeImplementation",
-                       INITIAL_VOLUME_ACTIVE: "initialVolumeActive"],
+                       INITIAL_VOLUME_ACTIVE: "initialVolumeActive",
+                       NRD_SIGNAL_ENCODING: "nrdSignalEncoding"],
              floats: [:],
              resources: ["topLevelAS": "AccelerationStructureIndex",
                          "outputImage": "StorageImageIndex",
@@ -55,7 +56,13 @@ abstract class GenerateRtBindings extends DefaultTask {
                          "normalGuide": "StorageImageIndex",
                          "albedoGuide": "StorageImageIndex", "depthGuide": "StorageImageIndex",
                          "motionGuide": "StorageImageIndex", "specularAlbedoGuide": "StorageImageIndex",
-                         "specularMotionGuide": "StorageImageIndex"]],
+                         "specularMotionGuide": "StorageImageIndex",
+                         "diffuseRadianceHitDistance": "StorageImageIndex",
+                         "specularRadianceHitDistance": "StorageImageIndex",
+                         "nrdViewZ": "StorageImageIndex",
+                         "denoisedDiffuseRadianceHitDistance": "StorageImageIndex",
+                         "denoisedSpecularRadianceHitDistance": "StorageImageIndex",
+                         "nrdStableRadiance": "StorageImageIndex"]],
     ]
 
     // Gradle decorates this task; closure dispatch cannot resolve a private static helper through it.

@@ -75,12 +75,31 @@ public final class TraceResources {
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide specular albedo " + renderWidth + "x" + renderHeight);
         GpuImage specularMotion = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16_SFLOAT, "guide specular motion " + renderWidth + "x" + renderHeight);
+        GpuImage diffuseRadianceHitDistance = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "NRD diffuse radiance hit distance " + renderWidth + "x" + renderHeight);
+        GpuImage specularRadianceHitDistance = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "NRD specular radiance hit distance " + renderWidth + "x" + renderHeight);
+        GpuImage nrdViewZ = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R32_SFLOAT, "NRD view Z " + renderWidth + "x" + renderHeight);
+        GpuImage denoisedDiffuseRadianceHitDistance = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "NRD denoised diffuse radiance hit distance " + renderWidth + "x" + renderHeight);
+        GpuImage denoisedSpecularRadianceHitDistance = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "NRD denoised specular radiance hit distance " + renderWidth + "x" + renderHeight);
+        GpuImage nrdStableRadiance = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "NRD stable radiance " + renderWidth + "x" + renderHeight);
         GpuImage reconstructedColor = context.createStorageImage(displayWidth, displayHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                 "reconstruction output " + displayWidth + "x" + displayHeight);
         images = new TraceImages(traceColor, stablePlaneMetadata,
                 normalRoughness, diffuseAlbedo, linearDepth, motion,
-                specularAlbedo, specularMotion, reconstructedColor);
+                specularAlbedo, specularMotion, diffuseRadianceHitDistance,
+                specularRadianceHitDistance, nrdViewZ, denoisedDiffuseRadianceHitDistance,
+                denoisedSpecularRadianceHitDistance, nrdStableRadiance, reconstructedColor);
         extent = wanted;
     }
 
@@ -108,6 +127,12 @@ public final class TraceResources {
             images.motion().destroy();
             images.specularAlbedo().destroy();
             images.specularMotion().destroy();
+            images.diffuseRadianceHitDistance().destroy();
+            images.specularRadianceHitDistance().destroy();
+            images.nrdViewZ().destroy();
+            images.denoisedDiffuseRadianceHitDistance().destroy();
+            images.denoisedSpecularRadianceHitDistance().destroy();
+            images.nrdStableRadiance().destroy();
             images.reconstructedColor().destroy();
             images = null;
         }

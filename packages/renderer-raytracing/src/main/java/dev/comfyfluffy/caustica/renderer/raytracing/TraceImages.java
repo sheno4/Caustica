@@ -14,6 +14,12 @@ public record TraceImages(
         GpuImage motion,
         GpuImage specularAlbedo,
         GpuImage specularMotion,
+        GpuImage diffuseRadianceHitDistance,
+        GpuImage specularRadianceHitDistance,
+        GpuImage nrdViewZ,
+        GpuImage denoisedDiffuseRadianceHitDistance,
+        GpuImage denoisedSpecularRadianceHitDistance,
+        GpuImage nrdStableRadiance,
         GpuImage reconstructedColor) {
     public TraceImages {
         Objects.requireNonNull(traceColor, "traceColor");
@@ -24,6 +30,12 @@ public record TraceImages(
         Objects.requireNonNull(motion, "motion");
         Objects.requireNonNull(specularAlbedo, "specularAlbedo");
         Objects.requireNonNull(specularMotion, "specularMotion");
+        Objects.requireNonNull(diffuseRadianceHitDistance, "diffuseRadianceHitDistance");
+        Objects.requireNonNull(specularRadianceHitDistance, "specularRadianceHitDistance");
+        Objects.requireNonNull(nrdViewZ, "nrdViewZ");
+        Objects.requireNonNull(denoisedDiffuseRadianceHitDistance, "denoisedDiffuseRadianceHitDistance");
+        Objects.requireNonNull(denoisedSpecularRadianceHitDistance, "denoisedSpecularRadianceHitDistance");
+        Objects.requireNonNull(nrdStableRadiance, "nrdStableRadiance");
         Objects.requireNonNull(reconstructedColor, "reconstructedColor");
     }
 }

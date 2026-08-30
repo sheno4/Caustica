@@ -9,6 +9,8 @@ import retained_path_queue;
 import path_queue_types;
 import retained_trace_policy;
 import stable_planes;
+import nrd_signals;
+import surface_bsdf;
 
 public void runRetainedIndirect<TComposition : IComposition,
                                 TTrace : IRetainedRadianceTrace>() {
@@ -19,7 +21,18 @@ public void runRetainedIndirect<TComposition : IComposition,
     WorldPush frame = frames[0];
     DevicePtr<PackedPathSegment> queue = (DevicePtr<PackedPathSegment>)worldBindings.pathQueueAddress;
     TTrace tracer = {};
+    float4 normalRoughness = worldFloat4StorageImage(worldBindings.resources.normalGuide)[pixel];
+    float3 diffuseBsdfEstimate =
+            worldFloat4StorageImage(worldBindings.resources.albedoGuide)[pixel].xyz;
+    float3 specularBsdfEstimate =
+            worldFloat4StorageImage(worldBindings.resources.specularAlbedoGuide)[pixel].xyz;
     float3 indirectRadiance = float3(0.0);
+    float3 diffuseRadiance = float3(0.0);
+    float3 specularRadiance = float3(0.0);
+    float3 stableRadiance = float3(0.0);
+    float diffuseHitDistanceSum = 0.0;
+    float specularHitDistance = 0.0;
+    float diffuseHitDistanceWeight = 0.0;
     uint recordIndex = pixelIndex;
 
     for (uint branch = 0u; branch < MAX_PATH_SEGMENTS && recordIndex != PATH_NO_NEXT; branch++) {
@@ -47,6 +60,8 @@ public void runRetainedIndirect<TComposition : IComposition,
             payload.currentNeeProposalMode = NEE_AT_PROPOSAL_GLOBAL;
             payload.currentNeeCandidateCount = clamp(
                     neeAtState(worldBindings.neeAtStateAddress)[0].candidateCount, 1u, 8u);
+            payload.signalHitDistance = state.signalHitDistance;
+            payload.firstLobeEvent = state.firstLobeEvent;
             payload.pathFlags = WORLD_PATH_REQUEST_CONTINUATION
                     | (state.volumeActive ? WORLD_PATH_VOLUME_ACTIVE : 0u);
             payload.queueRecordIndex = recordIndex;
@@ -59,10 +74,29 @@ public void runRetainedIndirect<TComposition : IComposition,
             ray.TMax = 10000.0;
             tracer.trace(payload, ray, min(bounce, 3u));
 
-            float travel = payload.hitDistance >= 0.0 ? payload.hitDistance : ray.TMax;
-            float3 segmentTransmittance = exp(-state.absorption * max(travel, 0.0));
-            indirectRadiance += throughput * segmentTransmittance * payload.radiance;
-            if ((payload.pathFlags & WORLD_PATH_MISS) != 0u || bounce == frame.maxBounces) break;
+            bool missed = (payload.pathFlags & WORLD_PATH_MISS) != 0u;
+            float attenuationTravel = missed ? ray.TMax : max(payload.hitDistance, 0.0);
+            float3 segmentTransmittance = exp(-state.absorption * attenuationTravel);
+            float3 contribution = throughput * segmentTransmittance * payload.radiance;
+            indirectRadiance += contribution;
+            float signalHitDistance = missed
+                    ? 0.0 : state.signalHitDistance + max(payload.hitDistance, 0.0);
+            if ((state.firstLobeEvent & EVENT_DIFFUSE) != 0u) {
+                diffuseRadiance += contribution;
+                float contributionWeight = nrdLuminance(
+                        nrdDemodulate(contribution, diffuseBsdfEstimate));
+                diffuseHitDistanceSum += contributionWeight * signalHitDistance;
+                diffuseHitDistanceWeight += contributionWeight;
+            } else if ((state.firstLobeEvent & EVENT_GLOSSY) != 0u) {
+                specularRadiance += contribution;
+                if (signalHitDistance > 0.0 && any(contribution > 0.0)) {
+                    specularHitDistance = specularHitDistance > 0.0
+                            ? min(specularHitDistance, signalHitDistance) : signalHitDistance;
+                }
+            } else {
+                stableRadiance += contribution;
+            }
+            if (missed || bounce == frame.maxBounces) break;
 
             PackedPathSegment nextPacked = queue[recordIndex];
             RetainedPathState next = unpackRetainedPath(nextPacked);
@@ -82,4 +116,10 @@ public void runRetainedIndirect<TComposition : IComposition,
     float3 accumulated = clamp(max(indirectRadiance * frame.preExposure,
             float3(0.0)), float3(0.0), float3(HALF_MAX));
     stablePlaneAddRadiance(pixel, accumulated);
+    float diffuseHitDistance = diffuseHitDistanceWeight > 0.0
+            ? diffuseHitDistanceSum / diffuseHitDistanceWeight : 0.0;
+    nrdAddIndirectSignals(pixel, diffuseRadiance, diffuseHitDistance,
+            specularRadiance, specularHitDistance, diffuseBsdfEstimate,
+            specularBsdfEstimate, normalRoughness.w);
+    nrdAddStableRadiance(pixel, stableRadiance);
 }

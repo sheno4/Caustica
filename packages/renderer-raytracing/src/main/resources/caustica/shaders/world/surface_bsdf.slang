@@ -55,7 +55,15 @@ public struct BsdfQuery {
     public float3 incomingDirection;
 };
 
-public struct BsdfEvaluation { public float3 value; public float pdf; public uint eventFlags; };
+public struct BsdfEvaluation {
+    public float3 value;
+    public float3 diffuseValue;
+    public float3 specularValue;
+    public float diffusePdf;
+    public float specularPdf;
+    public float pdf;
+    public uint eventFlags;
+};
 public struct BsdfSampleQuery {
     public SurfaceClosure surface;
     public float3 outgoingDirection;
@@ -153,12 +161,27 @@ public float4 surfaceLobeProbabilities(SurfaceClosure surface, float outgoingCos
             maxComponent(surface.diffuseTransmissionAlbedo),
             maxComponent(sheetTransmission) * thinWeight);
     float total = importance.x + importance.y + importance.z + importance.w;
-    return total > 0.0 ? importance / total : float4(0.0);
+    if (total <= 0.0) return float4(0.0);
+    float4 probabilities = importance / total;
+    float glossyProbability = probabilities.x + probabilities.w;
+    float diffuseProbability = probabilities.y + probabilities.z;
+    if (glossyProbability > 0.0 && diffuseProbability > 0.0) {
+        // A 1/16 grouped floor bounds first-lobe path weights while retaining the authored ratio
+        // between reflection and transmission inside each grouped denoiser signal.
+        float clampedDiffuseProbability = clamp(diffuseProbability, 1.0 / 16.0, 15.0 / 16.0);
+        probabilities.xw *= (1.0 - clampedDiffuseProbability) / glossyProbability;
+        probabilities.yz *= clampedDiffuseProbability / diffuseProbability;
+    }
+    return probabilities;
 }
 
 public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     BsdfEvaluation result;
     result.value = float3(0.0);
+    result.diffuseValue = float3(0.0);
+    result.specularValue = float3(0.0);
+    result.diffusePdf = 0.0;
+    result.specularPdf = 0.0;
     result.pdf = 0.0;
     result.eventFlags = EVENT_NONE;
 
@@ -192,6 +215,10 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
         float specularPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6)
                 * probabilities.x;
         result.value = diffuse + specular;
+        result.diffuseValue = diffuse;
+        result.specularValue = specular;
+        result.diffusePdf = diffusePdf;
+        result.specularPdf = specularPdf;
         result.pdf = diffusePdf + specularPdf;
         result.eventFlags = EVENT_DIFFUSE | EVENT_GLOSSY | EVENT_REFLECTION;
         return result;
@@ -223,6 +250,10 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     float glossyPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6) * probabilities.w;
 
     result.value = diffuse + glossyTransmission;
+    result.diffuseValue = diffuse;
+    result.specularValue = glossyTransmission;
+    result.diffusePdf = diffusePdf;
+    result.specularPdf = glossyPdf;
     result.pdf = diffusePdf + glossyPdf;
     result.eventFlags = EVENT_DIFFUSE | EVENT_GLOSSY | EVENT_TRANSMISSION;
     return result;
@@ -275,11 +306,13 @@ public BsdfSample sampleBsdf(BsdfSampleQuery query) {
     evaluationQuery.outgoingDirection = query.outgoingDirection;
     evaluationQuery.incomingDirection = result.incomingDirection;
     BsdfEvaluation evaluation = evaluateBsdf(evaluationQuery);
-    result.pdf = evaluation.pdf;
-    result.throughputWeight = evaluation.value * abs(sampledNdl) / max(evaluation.pdf, 1.0e-7);
     if (sampleReflectionGlossy) result.eventFlags = EVENT_GLOSSY | EVENT_REFLECTION;
     if (sampleDiffuseReflection) result.eventFlags = EVENT_DIFFUSE | EVENT_REFLECTION;
     if (sampleDiffuseTransmission) result.eventFlags = EVENT_DIFFUSE | EVENT_TRANSMISSION;
     if (sampleThinTransmission) result.eventFlags = EVENT_GLOSSY | EVENT_TRANSMISSION;
+    bool selectedDiffuse = (result.eventFlags & EVENT_DIFFUSE) != 0u;
+    float3 selectedValue = selectedDiffuse ? evaluation.diffuseValue : evaluation.specularValue;
+    result.pdf = selectedDiffuse ? evaluation.diffusePdf : evaluation.specularPdf;
+    result.throughputWeight = selectedValue * abs(sampledNdl) / max(result.pdf, 1.0e-7);
     return result;
 }

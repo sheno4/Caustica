@@ -26,12 +26,19 @@ final class RtPipelineBindingAbiTest {
         assertEquals(36, WORLD_OUTPUT_IMAGE_INDEX_OFFSET);
         assertEquals(40, WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET);
         assertEquals(64, WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET);
-        assertEquals(68, RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET);
-        assertEquals(72, RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET);
-        assertEquals(80, RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET);
-        assertEquals(88, RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET);
-        assertEquals(96, RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET);
-        assertEquals(104, WORLD_PUSH_CONSTANT_SIZE);
+        assertEquals(68, RtBindings.WORLD_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET);
+        assertEquals(72, RtBindings.WORLD_SPECULAR_RADIANCE_HIT_DISTANCE_INDEX_OFFSET);
+        assertEquals(76, RtBindings.WORLD_NRD_VIEW_Z_INDEX_OFFSET);
+        assertEquals(80, RtBindings.WORLD_DENOISED_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET);
+        assertEquals(84, RtBindings.WORLD_DENOISED_SPECULAR_RADIANCE_HIT_DISTANCE_INDEX_OFFSET);
+        assertEquals(88, RtBindings.WORLD_NRD_STABLE_RADIANCE_INDEX_OFFSET);
+        assertEquals(92, RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET);
+        assertEquals(96, RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET);
+        assertEquals(104, RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET);
+        assertEquals(112, RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET);
+        assertEquals(120, RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET);
+        assertEquals(128, RtBindings.WORLD_NRD_SIGNAL_ENCODING_OFFSET);
+        assertEquals(136, WORLD_PUSH_CONSTANT_SIZE);
     }
 
     @Test

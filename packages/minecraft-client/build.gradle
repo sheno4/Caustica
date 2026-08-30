@@ -19,6 +19,8 @@ evaluationDependsOn(":packages:minecraft-adapter")
 evaluationDependsOn(":packages:minecraft-content")
 evaluationDependsOn(":packages:minecraft-rendering")
 evaluationDependsOn(":packages:nvidia-ngx")
+evaluationDependsOn(":packages:nvidia-nrd")
+evaluationDependsOn(":packages:renderer-denoising")
 evaluationDependsOn(":packages:renderer-presentation")
 evaluationDependsOn(":packages:renderer-raytracing")
 evaluationDependsOn(":packages:renderer-runtime")
@@ -135,6 +137,8 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:minecraft-content").sourceSets.main)
 				sourceSet(project(":packages:minecraft-rendering").sourceSets.main)
 				sourceSet(project(":packages:nvidia-ngx").sourceSets.main)
+				sourceSet(project(":packages:nvidia-nrd").sourceSets.main)
+				sourceSet(project(":packages:renderer-denoising").sourceSets.main)
 				sourceSet(project(":packages:renderer-presentation").sourceSets.main)
 				sourceSet(project(":packages:renderer-raytracing").sourceSets.main)
 				sourceSet(project(":packages:renderer-runtime").sourceSets.main)
@@ -184,6 +188,10 @@ dependencies {
 	apiRuntime project(":packages:minecraft-rendering")
 	compileOnly project(":packages:nvidia-ngx")
 	apiRuntime project(":packages:nvidia-ngx")
+	compileOnly project(":packages:nvidia-nrd")
+	apiRuntime project(path: ":packages:nvidia-nrd", configuration: "nrdNatives")
+	compileOnly project(":packages:renderer-denoising")
+	apiRuntime project(":packages:renderer-denoising")
 	compileOnly project(":packages:renderer-presentation")
 	apiRuntime project(":packages:renderer-presentation")
 	compileOnly project(":packages:renderer-raytracing")
@@ -218,6 +226,8 @@ dependencies {
 	testImplementation project(":packages:minecraft-content")
 	testImplementation project(":packages:minecraft-rendering")
 	testImplementation project(":packages:nvidia-ngx")
+	testImplementation project(":packages:nvidia-nrd")
+	testImplementation project(":packages:renderer-denoising")
 	testImplementation project(":packages:renderer-presentation")
 	testImplementation project(":packages:renderer-raytracing")
 	testImplementation project(":packages:renderer-runtime")
@@ -235,6 +245,8 @@ dependencies {
 	testRuntimeOnly project(":packages:minecraft-content")
 	testRuntimeOnly project(":packages:minecraft-rendering")
 	testRuntimeOnly project(":packages:nvidia-ngx")
+	testRuntimeOnly project(":packages:nvidia-nrd")
+	testRuntimeOnly project(":packages:renderer-denoising")
 	testRuntimeOnly project(":packages:renderer-presentation")
 	testRuntimeOnly project(":packages:renderer-raytracing")
 	testRuntimeOnly project(":packages:renderer-runtime")
@@ -330,6 +342,8 @@ sourceSets.main.resources.srcDir(files(shaderGenRoot).builtBy(compileShaders))
 
 def slangRuntimePackage = project(":packages:slang-runtime")
 def bundleSlangRuntime = slangRuntimePackage.tasks.named("bundleSlangRuntime")
+def nvidiaNrdPackage = project(":packages:nvidia-nrd")
+def nrdNativeJar = nvidiaNrdPackage.tasks.named("nrdNativeJar", Jar)
 
 tasks.named("test", Test) {
 	dependsOn(bundleSlangRuntime)
@@ -357,6 +371,7 @@ java {
 }
 
 tasks.named("jar", Jar).configure {
+	dependsOn(nrdNativeJar)
 	from(project(":packages:api").sourceSets.main.output)
 	from(project(":packages:api-support").sourceSets.main.output)
 	from(project(":packages:config").sourceSets.main.output)
@@ -368,6 +383,11 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:minecraft-content").sourceSets.main.output)
 	from(project(":packages:minecraft-rendering").sourceSets.main.output)
 	from(project(":packages:nvidia-ngx").sourceSets.main.output)
+	from(project(":packages:nvidia-nrd").sourceSets.main.output)
+	from(project(":packages:renderer-denoising").sourceSets.main.output)
+	from(nrdNativeJar.flatMap { it.archiveFile }.map { zipTree(it) }) {
+		include "caustica/natives/nrd/**"
+	}
 	from(project(":packages:renderer-presentation").sourceSets.main.output)
 	from(project(":packages:renderer-raytracing").sourceSets.main.output)
 	from(project(":packages:renderer-runtime").sourceSets.main.output)
@@ -395,6 +415,9 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:minecraft-rendering").file("src/shaderReflection")) { into "shaders/minecraft-rendering" }
 	from(project(":packages:nvidia-ngx").sourceSets.main.allSource)
 	from(project(":packages:nvidia-ngx").file("native")) { into "native/nvidia-ngx" }
+	from(project(":packages:nvidia-nrd").sourceSets.main.allSource)
+	from(project(":packages:nvidia-nrd").file("native")) { into "native/nvidia-nrd" }
+	from(project(":packages:renderer-denoising").sourceSets.main.allSource)
 	from(project(":packages:renderer-presentation").sourceSets.main.allSource)
 	from(project(":packages:renderer-presentation").file("shaders")) { into "shaders/presentation" }
 	from(project(":packages:renderer-raytracing").sourceSets.main.allSource)
@@ -420,6 +443,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:minecraft-content").tasks.named("jar"),
 			project(":packages:minecraft-rendering").tasks.named("jar"),
 			project(":packages:nvidia-ngx").tasks.named("jar"),
+			project(":packages:nvidia-nrd").tasks.named("jar"), nrdNativeJar,
+			project(":packages:renderer-denoising").tasks.named("jar"),
 			project(":packages:renderer-presentation").tasks.named("jar"),
 			project(":packages:renderer-raytracing").tasks.named("jar"),
 			project(":packages:renderer-runtime").tasks.named("jar"),
@@ -439,6 +464,9 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:minecraft-content").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-rendering").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:nvidia-ngx").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:nvidia-nrd").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(nrdNativeJar.flatMap { it.archiveFile })
+	inputs.file(project(":packages:renderer-denoising").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-presentation").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-raytracing").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-runtime").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -470,6 +498,10 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def minecraftContentEntries = names(project(":packages:minecraft-content").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftRenderingEntries = names(project(":packages:minecraft-rendering").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def nvidiaNgxEntries = names(project(":packages:nvidia-ngx").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def nvidiaNrdEntries = names(project(":packages:nvidia-nrd").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def nrdNativeEntries = names(nrdNativeJar.get().archiveFile.get().asFile)
+		def rendererDenoisingEntries = names(project(":packages:renderer-denoising").tasks.named("jar", Jar)
+				.get().archiveFile.get().asFile)
 		def rendererPresentationEntries = names(project(":packages:renderer-presentation").tasks.named("jar", Jar)
 				.get().archiveFile.get().asFile)
 		def rendererRayTracingEntries = names(project(":packages:renderer-raytracing").tasks.named("jar", Jar)
@@ -496,6 +528,11 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 				|| it.startsWith("caustica/shaders/minecraft/") && !it.endsWith("/") })
 		required.addAll(nvidiaNgxEntries.findAll { it.endsWith(".class")
 				|| it.startsWith("caustica/natives/") && !it.endsWith("/") })
+		required.addAll(nvidiaNrdEntries.findAll { it.endsWith(".class") })
+		required.addAll(nrdNativeEntries.findAll {
+			it.startsWith("caustica/natives/nrd/") && !it.endsWith("/")
+		})
+		required.addAll(rendererDenoisingEntries.findAll { it.endsWith(".class") })
 		required.addAll(rendererPresentationEntries.findAll { it.endsWith(".class")
 				|| it.startsWith("caustica/shaders/pipelines/") && !it.endsWith("/")
 				|| it.startsWith("caustica/color/") && !it.endsWith("/") })

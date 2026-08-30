@@ -42,10 +42,10 @@ final class RtFrameRendererSynchronizationContractTest {
         int publishInputs = source.indexOf("VulkanBarriers.memoryBarrier(cmd, stack);", indirectTrace);
         int invalidate = source.indexOf("ctx.invalidateDescriptorHeapsForExternalCommand(cmd);", publishInputs);
         int ensure = source.indexOf("rayReconstruction.ensureFeature(", invalidate);
-        int evaluate = source.indexOf("rrDone = rayReconstruction.evaluate(", ensure);
-        int publishOutput = source.indexOf("VulkanBarriers.memoryBarrier(cmd, stack);", evaluate);
+        int evaluate = source.indexOf("outputReady = rayReconstruction.evaluate(", ensure);
         int restore = source.indexOf("ctx.bindDescriptorHeaps(cmd);", evaluate);
-        int fallback = source.indexOf("if (!rrDone)", evaluate);
+        int fallback = source.indexOf("if (!outputReady)", evaluate);
+        int publishOutput = source.indexOf("VulkanBarriers.memoryBarrier(cmd, stack);", fallback);
         int exposure = source.indexOf("presentationResources().exposure().record(", fallback);
 
         assertTrue(indirectTrace >= 0);
@@ -53,11 +53,30 @@ final class RtFrameRendererSynchronizationContractTest {
         assertTrue(invalidate > publishInputs);
         assertTrue(ensure > invalidate);
         assertTrue(evaluate > ensure);
-        assertTrue(publishOutput > evaluate);
         assertTrue(restore > evaluate);
-        assertTrue(restore > publishOutput);
         assertTrue(fallback > restore);
+        assertTrue(publishOutput > fallback);
         assertTrue(exposure > restore);
         assertFalse(source.contains("storageImagesToExternalSampled"));
+    }
+
+    @Test
+    void engineDescriptorHeapsAreRestoredWhenExternalNrdRecordingThrows() throws Exception {
+        String source = Files.readString(Path.of(
+                "src/main/java/dev/comfyfluffy/caustica/renderer/runtime/RtFrameRenderer.java"));
+
+        int recordMethod = source.indexOf("private void recordTemporalDenoiser(");
+        int invalidate = source.indexOf("ctx.invalidateDescriptorHeapsForExternalCommand(commandBuffer);", recordMethod);
+        int tryBlock = source.indexOf("try {", invalidate);
+        int record = source.indexOf("backend.record(", tryBlock);
+        int finallyBlock = source.indexOf("finally {", record);
+        int restore = source.indexOf("ctx.bindDescriptorHeaps(commandBuffer);", finallyBlock);
+
+        assertTrue(recordMethod >= 0);
+        assertTrue(invalidate > recordMethod);
+        assertTrue(tryBlock > invalidate);
+        assertTrue(record > tryBlock);
+        assertTrue(finallyBlock > record);
+        assertTrue(restore > finallyBlock);
     }
 }

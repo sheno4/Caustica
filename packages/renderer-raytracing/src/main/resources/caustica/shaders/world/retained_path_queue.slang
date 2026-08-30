@@ -13,6 +13,8 @@ public struct RetainedPathState {
     public uint seed;
     public uint proposalMode;
     public uint candidateCount;
+    public float signalHitDistance;
+    public uint firstLobeEvent;
     public bool volumeActive;
     public bool valid;
 };
@@ -67,10 +69,13 @@ public PackedPathSegment packRetainedPath(RetainedPathState state, uint nextReco
     packed.throughput = retainedPackRgb9e5(state.throughput);
     packed.currentExtinction = retainedPackRgb9e5(state.absorption);
     packed.outerExtinction = asuint(state.previousBsdfPdf);
-    packed.mediumIors = packHalf2(float2(state.volumeIor, 1.0));
+    packed.mediumIors = packHalf2(float2(state.volumeIor,
+            min(max(state.signalHitDistance, 0.0), 65504.0)));
     packed.rayCone = (state.proposalMode & 0xffu) | ((state.candidateCount & 0xffu) << 8u);
     packed.seed = state.seed;
-    packed.pathFlags = (state.volumeActive ? 1u : 0u) | (state.valid ? 0x80000000u : 0u);
+    packed.pathFlags = (state.volumeActive ? 1u : 0u)
+            | ((state.firstLobeEvent & 0xfu) << 1u)
+            | (state.valid ? 0x80000000u : 0u);
     packed.nextRecord = nextRecord;
     return packed;
 }
@@ -83,9 +88,11 @@ public RetainedPathState unpackRetainedPath(PackedPathSegment packed) {
     state.absorption = retainedUnpackRgb9e5(packed.currentExtinction);
     state.previousBsdfPdf = asfloat(packed.outerExtinction);
     state.volumeIor = unpackHalf2(packed.mediumIors).x;
+    state.signalHitDistance = unpackHalf2(packed.mediumIors).y;
     state.seed = packed.seed;
     state.proposalMode = packed.rayCone & 0xffu;
     state.candidateCount = (packed.rayCone >> 8u) & 0xffu;
+    state.firstLobeEvent = (packed.pathFlags >> 1u) & 0xfu;
     state.volumeActive = (packed.pathFlags & 1u) != 0u;
     state.valid = (packed.pathFlags & 0x80000000u) != 0u;
     return state;

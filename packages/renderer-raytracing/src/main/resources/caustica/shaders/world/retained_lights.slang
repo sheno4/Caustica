@@ -18,6 +18,7 @@ public struct DirectLightSample {
     public float3 direction;
     public float3 radianceOverShapePdf;
     public float maximumDistance;
+    public float signalDistance;
     public uint lightIndex;
     public float proposalPdf;
     public float shapePdf;
@@ -179,6 +180,7 @@ DirectLightSample sampleRetainedLightIndex(NeeAtState state, uint lightIndex,
     float distanceMetersSquared = distanceSquared
             * state.metersPerSceneUnit * state.metersPerSceneUnit;
     sample.direction = toLight / distance;
+    sample.signalDistance = distance;
     float rayEpsilon = 0.002 / max(state.metersPerSceneUnit, 1.0e-8);
     sample.maximumDistance = max(distance - rayEpsilon, 0.5 * rayEpsilon);
 

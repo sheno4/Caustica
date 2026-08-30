@@ -15,13 +15,19 @@ import path_queue_types;
 float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool allowLocal,
                               float3 currentMediumAbsorption, float currentMediumIor,
                               bool currentMediumActive, float3 feedbackThroughput,
-                              inout uint seed) {
+                              inout uint seed, out float3 diffuseLighting,
+                              out float3 specularLighting, out float directHitDistance) {
+    diffuseLighting = float3(0.0);
+    specularLighting = float3(0.0);
+    directHitDistance = 0.0;
     uint2 pixel = DispatchRaysIndex().xy;
     SurfaceClosure closure = surfaceClosure(material, input.geometricNormal);
     NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
     uint candidateCount = clamp(state.candidateCount, 1u, 8u);
     DirectLightSample selected = invalidDirectLight();
     float3 selectedContribution = float3(0.0);
+    float3 selectedDiffuseContribution = float3(0.0);
+    float3 selectedSpecularContribution = float3(0.0);
     float selectedTarget = 0.0;
     float weightSum = 0.0;
     for (uint candidate = 0u; candidate < candidateCount; candidate++) {
@@ -36,9 +42,13 @@ float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool 
         query.incomingDirection = light.direction;
         BsdfEvaluation evaluation = evaluateBsdf(query);
         float3 contribution = evaluation.value * cosine * light.radianceOverShapePdf;
+        float3 diffuseContribution = evaluation.diffuseValue * cosine * light.radianceOverShapePdf;
+        float3 specularContribution = evaluation.specularValue * cosine * light.radianceOverShapePdf;
         if (light.linkedEmitter && light.shapePdf > 0.0) {
             float lightPdf = neeAtLightMisPdf(light.proposalPdf, light.shapePdf, candidateCount);
-            contribution *= lightPdf / max(lightPdf + evaluation.pdf, 1.0e-20);
+            diffuseContribution *= lightPdf / max(lightPdf + evaluation.diffusePdf, 1.0e-20);
+            specularContribution *= lightPdf / max(lightPdf + evaluation.specularPdf, 1.0e-20);
+            contribution = diffuseContribution + specularContribution;
         }
         float target = max(dot(max(contribution, float3(0.0)),
                 float3(0.27222872, 0.67408177, 0.05368952)), 0.0);
@@ -47,11 +57,16 @@ float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool 
         if (weight > 0.0 && retainedLightRandom(seed) * weightSum <= weight) {
             selected = light;
             selectedContribution = contribution;
+            selectedDiffuseContribution = diffuseContribution;
+            selectedSpecularContribution = specularContribution;
             selectedTarget = target;
         }
     }
     if (!selected.valid || selectedTarget <= 0.0 || weightSum <= 0.0) return float3(0.0);
-    float3 estimator = selectedContribution * (weightSum / (float(candidateCount) * selectedTarget));
+    float reservoirScale = weightSum / (float(candidateCount) * selectedTarget);
+    float3 estimator = selectedContribution * reservoirScale;
+    diffuseLighting = selectedDiffuseContribution * reservoirScale;
+    specularLighting = selectedSpecularContribution * reservoirScale;
     float3 incomingFeedbackThroughput = feedbackThroughput
             * exp(-currentMediumAbsorption * max(RayTCurrent(), 0.0));
 
@@ -74,8 +89,15 @@ float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool 
     TraceRay(worldAccelerationStructure(worldBindings),
             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
             WORLD_RAY_MASK_SECONDARY, 1u, 2u, 1u, ray, shadow);
-    if (shadow.hitDistance >= 0.0 || !any(shadow.radiance > 0.0)) return float3(0.0);
+    if (shadow.hitDistance >= 0.0 || !any(shadow.radiance > 0.0)) {
+        diffuseLighting = float3(0.0);
+        specularLighting = float3(0.0);
+        return float3(0.0);
+    }
     estimator *= shadow.radiance;
+    diffuseLighting *= shadow.radiance;
+    specularLighting *= shadow.radiance;
+    directHitDistance = selected.signalDistance;
     float feedback = dot(max(incomingFeedbackThroughput * estimator, float3(0.0)),
             float3(0.27222872, 0.67408177, 0.05368952));
     neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex, feedback);
@@ -243,7 +265,16 @@ BsdfSample retainedSampleContinuation<TComposition : IComposition>(inout uint se
     BsdfSampleQuery query;
     query.surface = surfaceClosure(sampledSurface, input.geometricNormal);
     query.outgoingDirection = input.outgoingDirection;
-    query.random = float3(retainedLightRandom(seed), retainedLightRandom(seed),
+    float selectorRandom = retainedLightRandom(seed);
+    if ((payload.pathFlags & WORLD_PATH_PRIMARY) != 0u) {
+        uint2 pixel = DispatchRaysIndex().xy;
+        ConstPtr<WorldPush> frames = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
+        uint pattern = ((pixel.x & 3u) + 4u * (pixel.y & 3u)) * 5u + 3u;
+        float rotation = retainedLightHash(frames[0].frameIndex * 0x9e3779b9u)
+                * (1.0 / 4294967296.0);
+        selectorRandom = frac((float(pattern & 15u) + 0.5) * (1.0 / 16.0) + rotation);
+    }
+    query.random = float3(selectorRandom, retainedLightRandom(seed),
             retainedLightRandom(seed));
     BsdfSample result = sampleBsdf(query);
     reversePdf = (volumeBoundary ? 1.0 - boundaryWeight : 1.0) * result.pdf;
@@ -291,6 +322,10 @@ void retainedWriteContinuation<TComposition : IComposition>(inout WorldPayload p
     next.seed = seed;
     next.proposalMode = payload.currentNeeProposalMode;
     next.candidateCount = payload.currentNeeCandidateCount;
+    next.signalHitDistance = (payload.pathFlags & WORLD_PATH_PRIMARY) != 0u
+            ? 0.0 : payload.signalHitDistance + max(payload.hitDistance, 0.0);
+    next.firstLobeEvent = payload.firstLobeEvent != EVENT_NONE
+            ? payload.firstLobeEvent : sample.eventFlags;
     next.volumeActive = volumeActive;
     next.valid = true;
     DevicePtr<PackedPathSegment> queue = (DevicePtr<PackedPathSegment>)worldBindings.pathQueueAddress;
@@ -323,7 +358,7 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     float3 previousNormal = any(surface.previous_geometry_normal != 0.0)
             ? normalize(surface.previous_geometry_normal) : input.previousGeometricNormal;
     payload.previousGuideNormal = packNormalOct(previousNormal);
-    payload.guideAlbedo = retainedPackRgb9e5(clamp(surface.base_color, 0.0, 1.0));
+    payload.guideAlbedo = retainedPackRgb9e5(clamp(closure.diffuseAlbedo, 0.0, 1.0));
     payload.guideSpecularAlbedo = retainedPackRgb9e5(closure.specularF0);
     payload.pathFlags &= ~WORLD_PATH_MISS;
     retainedSelectStablePlaneContinuation<TComposition>(payload, record, input, surface, closure);
@@ -332,12 +367,19 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     if (any(emission > 0.0)) payload.pathFlags |= WORLD_PATH_EMISSIVE;
     if ((payload.pathFlags & WORLD_PATH_GUIDE) != 0u) return;
     uint pathSeed = payload.seed;
+    float3 diffuseLighting;
+    float3 specularLighting;
+    float directHitDistance;
     float3 directLighting = retainedDirectLighting(surface, input,
                     payload.currentNeeProposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE,
                     payload.volumeAbsorption, payload.volumeIor,
                     (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u,
-                    payload.feedbackThroughput, pathSeed);
+                    payload.feedbackThroughput, pathSeed, diffuseLighting, specularLighting,
+                    directHitDistance);
     payload.seed = pathSeed;
+    payload.diffuseRadiance = diffuseLighting;
+    payload.specularRadiance = specularLighting;
+    payload.diffuseHitDistance = any(diffuseLighting > 0.0) ? directHitDistance : 0.0;
     payload.radiance = emission * retainedEmissionMis(payload, record, input.position) + directLighting;
     retainedWriteContinuation<TComposition>(payload, record, input, surface, closure);
 }

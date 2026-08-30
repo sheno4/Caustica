@@ -10,6 +10,7 @@ import retained_lights;
 import retained_path_queue;
 import path_queue_types;
 import stable_planes;
+import nrd_signals;
 
 uint primarySeed(uint2 pixel, uint frameIndex) {
     uint seed = retainedLightHash(pixel.x ^ (pixel.y * 0x9e3779b9u) ^ (frameIndex * 0x85ebca6bu));
@@ -131,7 +132,8 @@ StablePlaneEndpoint stablePlaneEndpoint(WorldPayload primary, WorldPush frame) {
 }
 
 void writePrimaryStablePlane<TComposition : IComposition>(uint2 pixel, uint2 extent,
-        WorldPush frame, WorldPayload primary, float3 radiance) {
+        WorldPush frame, WorldPayload primary, float3 radiance, float3 unexposedRadiance,
+        float3 unexposedDiffuse, float3 unexposedSpecular) {
     StablePlaneEndpoint endpoint = stablePlaneEndpoint(primary, frame);
     float3 normal = float3(0.0);
     float3 albedo = float3(0.0);
@@ -181,6 +183,11 @@ void writePrimaryStablePlane<TComposition : IComposition>(uint2 pixel, uint2 ext
     plane.reflectionCount = endpoint.reflectionCount;
     plane.containsTransmission = endpoint.containsTransmission;
     stablePlaneWrite(pixel, plane);
+    float3 stableRadiance = max(unexposedRadiance - unexposedDiffuse - unexposedSpecular,
+            float3(0.0));
+    nrdWritePrimarySignals(pixel, primaryValid, depth, primary.roughness,
+            unexposedDiffuse, unexposedSpecular, stableRadiance,
+            primary.diffuseHitDistance, 0.0, albedo, specularAlbedo);
 }
 
 public void runPrimary<TComposition : IComposition>() {
@@ -235,9 +242,13 @@ public void runPrimary<TComposition : IComposition>() {
         continuation.throughput *= transmittance;
         queue[pixelIndex] = packRetainedPath(continuation, queued.nextRecord);
     }
-    float3 radiance = clamp(max(payload.radiance * transmittance, float3(0.0))
-            * frame.preExposure, float3(0.0), float3(HALF_MAX));
-    writePrimaryStablePlane<TComposition>(pixel, extent, frame, payload, radiance);
+    float3 unexposedRadiance = max(payload.radiance * transmittance, float3(0.0));
+    float3 unexposedDiffuse = max(payload.diffuseRadiance * transmittance, float3(0.0));
+    float3 unexposedSpecular = max(payload.specularRadiance * transmittance, float3(0.0));
+    float3 radiance = clamp(unexposedRadiance * frame.preExposure,
+            float3(0.0), float3(HALF_MAX));
+    writePrimaryStablePlane<TComposition>(pixel, extent, frame, payload, radiance,
+            unexposedRadiance, unexposedDiffuse, unexposedSpecular);
 }
 
 [shader("raygeneration")]

@@ -151,11 +151,18 @@ def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
         ["queueFamily.queueType = nri::QueueType::GRAPHICS",
          "command.queueType = nri::QueueType::GRAPHICS",
          "settings.hitDistanceParameters = {3.0f, 0.1f, 20.0f, -25.0f}",
+         "settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5",
          "nri::Layout::GENERAL", "catch (...)", "noexcept"].each {
             if (!source.contains(it)) throw new GradleException("Missing native contract: ${it}")
         }
         if (source.contains("QueueType::COMPUTE") || header.contains("computeQueueFamily")) {
             throw new GradleException("NRD must record on the renderer graphics queue")
+        }
+        if (source.contains("SHADER_READ_ONLY_OPTIMAL")) {
+            throw new GradleException("NRD must accept only unified or GENERAL image layouts")
+        }
+        if (source.count("settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5") != 2) {
+            throw new GradleException("RELAX and REBLUR must both reconstruct stratified hit distances")
         }
         if (!build.contains('"-DFETCHCONTENT_FULLY_DISCONNECTED=ON"')) {
             throw new GradleException("NRD native configuration must keep FetchContent offline")

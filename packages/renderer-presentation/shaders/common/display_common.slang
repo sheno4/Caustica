@@ -111,3 +111,14 @@ public struct DebugPresentPush {
     public float centerWeightSigma;
     public float centerWeightFloor;
 };
+
+public struct NrdComposePush {
+    public uint outputImageIndex;
+    public uint denoisedDiffuseImageIndex;
+    public uint denoisedSpecularImageIndex;
+    public uint stableRadianceImageIndex;
+    public uint diffuseAlbedoImageIndex;
+    public uint specularAlbedoImageIndex;
+    public float preExposure;
+    public uint signalEncoding; // 0: RELAX linear RGB, 1: REBLUR YCoCg
+};

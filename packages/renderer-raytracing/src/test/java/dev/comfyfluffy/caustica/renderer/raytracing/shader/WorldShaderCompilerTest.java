@@ -114,6 +114,7 @@ final class WorldShaderCompilerTest {
         String world = shaderSource("world_minimal.slang");
         String miss = shaderSource("sky_miss.slang");
         String stablePlanes = shaderSource("stable_planes.slang");
+        String nrdSignals = shaderSource("nrd_signals.slang");
         String bsdf = shaderSource("surface_bsdf.slang");
 
         assertFalse(indirect.contains("primary_rgen"));
@@ -138,7 +139,7 @@ final class WorldShaderCompilerTest {
         assertTrue(core.contains("payload.currentNeeProposalMode = NEE_AT_PROPOSAL_GLOBAL"));
         assertTrue(core.contains("bounce <= frame.maxBounces"));
         assertTrue(core.contains("stablePlaneAddRadiance(pixel, accumulated)"));
-        assertFalse(core.contains("normalGuide"));
+        assertTrue(core.contains("worldBindings.resources.normalGuide"));
         assertTrue(queue.contains("MAX_PATH_SEGMENTS = 2u"));
 
         assertFalse(primary.contains("float4(0.0, 0.0, 1.0, 1.0)"));
@@ -166,6 +167,14 @@ final class WorldShaderCompilerTest {
         assertTrue(closest.contains("retainedVolumeBoundaryWeight(record, surface)"));
         assertTrue(closest.contains("if (volumeBoundary) sampledSurface.transmission_weight = 0.0"));
         assertTrue(bsdf.contains("public float4 surfaceLobeProbabilities"));
+        assertTrue(bsdf.contains("clamp(diffuseProbability, 1.0 / 16.0, 15.0 / 16.0)"));
+        assertTrue(bsdf.contains("probabilities.xw *= (1.0 - clampedDiffuseProbability)"));
+        assertTrue(bsdf.contains("probabilities.yz *= clampedDiffuseProbability"));
+        assertTrue(bsdf.contains("selectedDiffuse ? evaluation.diffuseValue : evaluation.specularValue"));
+        assertTrue(bsdf.contains("selectedDiffuse ? evaluation.diffusePdf : evaluation.specularPdf"));
+        assertFalse(bsdf.contains("result.throughputWeight = evaluation.value"));
+        assertTrue(closest.contains("lightPdf + evaluation.diffusePdf"));
+        assertTrue(closest.contains("lightPdf + evaluation.specularPdf"));
         assertTrue(shadow.contains("1.0 - clamp(surface.base_metalness"));
         assertTrue(stablePlanes.contains("STABLE_PLANE_MAX_DELTA_SEGMENTS = 3u"));
         assertFalse(stablePlanes.contains("StablePlaneSet"));
@@ -198,6 +207,24 @@ final class WorldShaderCompilerTest {
         assertTrue(primary.contains("plane.primaryMotion = motion"));
         assertTrue(stablePlanes.contains("point - 2.0 * dot(point - planePosition, planeNormal)"));
         assertFalse(stablePlanes.contains("direction - 2.0 * dot(direction, planeNormal)"));
+        assertTrue(primary.contains("unexposedRadiance - unexposedDiffuse - unexposedSpecular"));
+        assertTrue(primary.contains("primary.diffuseHitDistance, 0.0, albedo, specularAlbedo"));
+        assertTrue(closest.contains("evaluation.diffuseValue"));
+        assertTrue(closest.contains("evaluation.specularValue"));
+        assertTrue(closest.contains("retainedPackRgb9e5(clamp(closure.diffuseAlbedo"));
+        assertTrue(closest.contains("payload.firstLobeEvent != EVENT_NONE"));
+        assertTrue(closest.contains("sample.eventFlags"));
+        assertTrue(closest.contains("selected.maximumDistance"));
+        assertTrue(closest.contains("pattern & 15u"));
+        assertTrue(core.contains("state.firstLobeEvent & EVENT_DIFFUSE"));
+        assertTrue(core.contains("state.firstLobeEvent & EVENT_GLOSSY"));
+        assertTrue(core.contains("nrdAddIndirectSignals"));
+        assertTrue(nrdSignals.contains("NRD_REBLUR_HIT_DISTANCE_PARAMETERS = float4(3.0, 0.1, 20.0, -25.0)"));
+        assertTrue(nrdSignals.contains("nrdLinearToYCoCg"));
+        assertTrue(nrdSignals.contains("radiance / max(bsdfEstimate, float3(1.0e-4))"));
+        assertTrue(nrdSignals.contains("NRD_INVALID_VIEW_Z = 65504.0"));
+        assertTrue(nrdSignals.contains("worldBindings.resources.nrdStableRadiance"));
+        assertFalse(nrdSignals.contains("preExposure"));
 
         assertTrue(lights.contains("pixelFeedback[pixelIndex] = event"));
         assertFalse(lights.contains("InterlockedCompareExchange"));

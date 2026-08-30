@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 
 import java.io.IOException;
 
@@ -42,8 +43,9 @@ final class RtFrameResources {
     }
 
     /** Resizes both owners after one shared drain of all prior frame use. */
-    boolean ensureSized(VulkanDeviceContext context, int width, int height) {
-        boolean rrEnabled = rayReconstruction.configured();
+    boolean ensureSized(VulkanDeviceContext context, int width, int height, DenoiserRoute route,
+                        Runnable beforeResizeAfterIdle) {
+        boolean rrEnabled = usesRayReconstructionRenderSize(route, rayReconstruction.configured());
         int rrQuality = rrEnabled ? rayReconstruction.quality() : Integer.MIN_VALUE;
         if (presentation.matches(width, height) && trace.hasDisplayExtent(width, height)
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
@@ -52,6 +54,7 @@ final class RtFrameResources {
 
         presenter.invalidateRenderedFrame();
         context.waitIdle();
+        beforeResizeAfterIdle.run();
         int[] optimal = rrEnabled ? rayReconstruction.queryOptimalRenderSize(width, height) : null;
         int renderWidth = optimal != null ? optimal[0] : width;
         int renderHeight = optimal != null ? optimal[1] : height;
@@ -60,6 +63,10 @@ final class RtFrameResources {
         renderSizeRrEnabled = rrEnabled;
         renderSizeRrQuality = rrQuality;
         return true;
+    }
+
+    static boolean usesRayReconstructionRenderSize(DenoiserRoute route, boolean configured) {
+        return route == DenoiserRoute.RAY_RECONSTRUCTION && configured;
     }
 
     void destroy() {

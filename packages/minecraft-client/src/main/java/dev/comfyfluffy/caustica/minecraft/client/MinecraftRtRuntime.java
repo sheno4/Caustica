@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
+import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftEngineWorldSession;
@@ -15,6 +15,13 @@ import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.nvidia.nrd.NrdBackendFactory;
+import dev.comfyfluffy.caustica.nvidia.nrd.NrdDevice;
+import dev.comfyfluffy.caustica.nvidia.nrd.NrdLibrary;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackendFactory;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
+import dev.comfyfluffy.caustica.renderer.runtime.RtDenoisingSettings;
 import dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer;
 import dev.comfyfluffy.caustica.renderer.runtime.RtLifecycleCoordinator;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry;
@@ -69,6 +76,8 @@ public final class MinecraftRtRuntime {
     private VulkanRendererBackend vulkanBackend;
     private VulkanDeviceContext vulkanContext;
     private NgxRuntime ngxRuntime;
+    private NrdLibrary nrdLibrary;
+    private DenoiserBackendFactory denoiserFactory;
     private final RtLifecycleCoordinator lifecycle = new RtLifecycleCoordinator(
             new RtLifecycleCoordinator.Listener() {
                 @Override
@@ -134,17 +143,33 @@ public final class MinecraftRtRuntime {
         VulkanRendererBackend backend = java.util.Objects.requireNonNull(
                 vulkanBackend, "Vulkan renderer backend is not installed");
         VulkanDeviceContext created = VulkanDeviceContext.create(backend);
+        NgxRuntime createdNgxRuntime = null;
+        DenoiserBackendFactory createdDenoiserFactory = null;
         try {
             lifecycle.observeDevice(created);
-            NgxRuntime createdNgxRuntime = new NgxRuntime(created, ngxSettings);
+            createdNgxRuntime = new NgxRuntime(created, ngxSettings);
+            NrdLibrary createdNrdLibrary = NrdLibrary.loadBundled(
+                    shaderCacheRoot.getParent().resolve("natives"));
+            var physicalDevice = backend.device().getPhysicalDevice();
+            createdDenoiserFactory = NrdBackendFactory.open(createdNrdLibrary, new NrdDevice(
+                    physicalDevice.getInstance().address(), physicalDevice.address(),
+                    backend.device().address(), backend.graphicsQueue().familyIndex(),
+                    VulkanCommandEncoder.MAX_SUBMITS_IN_FLIGHT));
             vulkanContext = created;
             ngxRuntime = createdNgxRuntime;
+            nrdLibrary = createdNrdLibrary;
+            denoiserFactory = createdDenoiserFactory;
             return created;
         } catch (Throwable failure) {
             try {
-                lifecycle.closeDevice(created);
+                if (createdDenoiserFactory != null) createdDenoiserFactory.close();
+                if (createdNgxRuntime != null) createdNgxRuntime.shutdown();
             } finally {
-                created.destroy();
+                try {
+                    lifecycle.closeDevice(created);
+                } finally {
+                    created.destroy();
+                }
             }
             throw failure;
         }
@@ -155,9 +180,35 @@ public final class MinecraftRtRuntime {
         return java.util.Objects.requireNonNull(ngxRuntime, "NGX runtime was not created with the Vulkan device");
     }
 
-    private DlssRayReconstruction.Settings rayReconstructionSettings() {
-        return new DlssRayReconstruction.Settings(CausticaConfig.Rt.DlssRr.ENABLED.value(),
+    private DlssRayReconstruction.Settings rayReconstructionSettings(RtDenoisingSettings denoising) {
+        return new DlssRayReconstruction.Settings(
+                denoising.route() == DenoiserRoute.RAY_RECONSTRUCTION,
                 CausticaConfig.Rt.DlssRr.QUALITY.value(), CausticaConfig.Rt.DlssRr.PRESET.value());
+    }
+
+    private RtDenoisingSettings denoisingSettings() {
+        return denoisingSettings(CausticaConfig.Rt.Denoising.ROUTE.get(),
+                CausticaConfig.Rt.Denoising.METHOD.get());
+    }
+
+    static RtDenoisingSettings denoisingSettings(String routeValue, String methodValue) {
+        DenoiserRoute route = switch (routeValue) {
+            case "raw" -> DenoiserRoute.RAW;
+            case "temporal_denoiser" -> DenoiserRoute.TEMPORAL_DENOISER;
+            case "ray_reconstruction" -> DenoiserRoute.RAY_RECONSTRUCTION;
+            default -> throw new IllegalStateException("unsupported denoising route");
+        };
+        DenoiserSignalEncoding encoding = route == DenoiserRoute.TEMPORAL_DENOISER
+                && methodValue.equals("reblur")
+                ? DenoiserSignalEncoding.YCOCG_NORMALIZED_HIT_DISTANCE
+                : DenoiserSignalEncoding.LINEAR_RGB_ABSOLUTE_HIT_DISTANCE;
+        return new RtDenoisingSettings(route, encoding);
+    }
+
+    private DenoiserBackendFactory requireDenoiserFactory() {
+        requireVulkanContext();
+        return java.util.Objects.requireNonNull(denoiserFactory,
+                "denoiser factory was not created with the Vulkan device");
     }
 
     private DlssFrameGeneration.Settings frameGenerationSettings() {
@@ -398,12 +449,19 @@ public final class MinecraftRtRuntime {
             try {
                 VulkanDeviceContext context = vulkanContext;
                 NgxRuntime closingNgxRuntime = ngxRuntime;
+                DenoiserBackendFactory closingDenoiserFactory = denoiserFactory;
                 vulkanContext = null;
                 ngxRuntime = null;
+                denoiserFactory = null;
+                nrdLibrary = null;
                 if (context != null) {
                     try {
                         context.waitIdle();
-                        if (closingNgxRuntime != null) closingNgxRuntime.shutdown();
+                        try {
+                            if (closingDenoiserFactory != null) closingDenoiserFactory.close();
+                        } finally {
+                            if (closingNgxRuntime != null) closingNgxRuntime.shutdown();
+                        }
                     } finally {
                         try {
                             lifecycle.closeDevice(context);
@@ -601,7 +659,9 @@ public final class MinecraftRtRuntime {
                 closeWorld();
                 openWorld(requestedWorldEpoch, dimension, new ResourcePackEpoch(applied.generation()));
             }
-            rayReconstruction.configure(rayReconstructionSettings());
+            RtDenoisingSettings denoising = denoisingSettings();
+            rayReconstruction.configure(rayReconstructionSettings(denoising));
+            renderer.configureDenoising(denoising);
 
             world.progress();
             boolean resourcesReady = programs.active() != null;
@@ -632,15 +692,17 @@ public final class MinecraftRtRuntime {
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R32_SFLOAT,
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM);
+            RtDenoisingSettings denoising = denoisingSettings();
             rayReconstruction = new DlssRayReconstruction(
-                    requireNgxRuntime(), rayReconstructionSettings());
+                    requireNgxRuntime(), rayReconstructionSettings(denoising));
             try {
                 world = new MinecraftEngineWorldSession(apiHost(),
                         minecraftSessionHost, context,
                         programs, scenes, passes, dimension, resourcePackEpoch,
                         failure -> LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(context, programs, scenes, passes,
-                        world.services(), presenter, rayReconstruction, telemetry);
+                        world.services(), presenter, rayReconstruction,
+                        requireDenoiserFactory(), denoising, telemetry);
                 worldEpoch = epoch;
             } catch (Throwable failure) {
                 closeWorld();

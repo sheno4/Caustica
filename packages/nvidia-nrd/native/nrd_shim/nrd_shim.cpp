@@ -84,14 +84,14 @@ struct State {
         if (description.method == 0) {
             nrd::RelaxSettings settings{};
             settings.checkerboardMode = nrd::CheckerboardMode::OFF;
-            settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
+            settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5;
             return integration.SetDenoiserSettings(kDenoiser, &settings) == nrd::Result::SUCCESS;
         }
 
         nrd::ReblurSettings settings{};
         settings.hitDistanceParameters = {3.0f, 0.1f, 20.0f, -25.0f};
         settings.checkerboardMode = nrd::CheckerboardMode::OFF;
-        settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
+        settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5;
         return integration.SetDenoiserSettings(kDenoiser, &settings) == nrd::Result::SUCCESS;
     }
 };
@@ -116,10 +116,9 @@ nrd::Resource resource(const NrdShimImage& image, bool storage) {
 
 bool validImage(const NrdShimImage& image, bool storage) {
     constexpr uint32_t general = 1; // VK_IMAGE_LAYOUT_GENERAL
-    constexpr uint32_t shaderReadOnly = 5; // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     constexpr uint32_t readOnly = 1000314000; // VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL
     return image.image && image.format && (image.layout == general
-            || (!storage && (image.layout == shaderReadOnly || image.layout == readOnly)));
+            || (!storage && image.layout == readOnly));
 }
 
 void setRequired(nrd::ResourceSnapshot& snapshot, nrd::ResourceType slot,

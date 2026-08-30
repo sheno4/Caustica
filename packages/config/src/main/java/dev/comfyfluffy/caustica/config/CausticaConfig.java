@@ -61,7 +61,7 @@ public final class CausticaConfig {
      */
     static final List<Class<?>> HOLDERS = List.of(
             Rt.class, Rt.Composite.class, Rt.Terrain.class, Rt.Lights.class,
-            Rt.Entities.class, Rt.Overlay.class, Rt.DlssRr.class,
+            Rt.Entities.class, Rt.Overlay.class, Rt.Denoising.class, Rt.DlssRr.class,
             Rt.Fg.class, Rt.Reflex.class, Rt.Exposure.class, Rt.Tonemap.class, Rt.FrameStats.class,
             Rt.Screenshots.class, Rt.Hdr.class, Rt.Composition.class,
             Ngx.class, Slang.class);
@@ -781,8 +781,6 @@ public final class CausticaConfig {
         }
 
         public static final class DlssRr {
-            public static final BooleanSetting ENABLED =
-                    bool("caustica.rt.dlssRr", "dlss-rr.enabled", true).inGroup("upscaling");
             public static final IntSetting PRESET = intValue("caustica.rt.dlssRr.preset", "dlss-rr.preset", 0);
 
             // NVSDK_NGX_PerfQuality_Value. Per NVIDIA's DLSS-RR programming guide, Ray Reconstruction only
@@ -794,6 +792,19 @@ public final class CausticaConfig {
                     intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 0, QUALITY_STEPS).inGroup("upscaling");
 
             private DlssRr() {
+            }
+        }
+
+        /** Selects the single consumer of the path-traced image and its temporal guides. */
+        public static final class Denoising {
+            public static final StringSetting ROUTE = stringChoice(
+                    "caustica.rt.denoisingRoute", "denoising.route", "ray_reconstruction",
+                    List.of("ray_reconstruction", "temporal_denoiser", "raw")).inGroup("upscaling");
+            public static final StringSetting METHOD = stringChoice(
+                    "caustica.rt.denoisingMethod", "denoising.method", "relax",
+                    List.of("relax", "reblur")).inGroup("upscaling");
+
+            private Denoising() {
             }
         }
 

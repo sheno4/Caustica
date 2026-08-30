@@ -23,6 +23,12 @@ public struct WorldResourceIndices {
     public StorageImageIndex motionGuide;
     public StorageImageIndex specularAlbedoGuide;
     public StorageImageIndex specularMotionGuide;
+    public StorageImageIndex diffuseRadianceHitDistance;
+    public StorageImageIndex specularRadianceHitDistance;
+    public StorageImageIndex nrdViewZ;
+    public StorageImageIndex denoisedDiffuseRadianceHitDistance;
+    public StorageImageIndex denoisedSpecularRadianceHitDistance;
+    public StorageImageIndex nrdStableRadiance;
 };
 
 /**
@@ -40,6 +46,7 @@ public struct WorldBindingRoots {
     public uint64_t initialVolumeBinding;
     public uint64_t initialVolumeInstance;
     public uint64_t neeAtStateAddress;
+    public uint nrdSignalEncoding;
 };
 
 public RaytracingAccelerationStructure worldAccelerationStructure(WorldBindingRoots roots) {
