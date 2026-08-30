@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.scene;
 
 import java.util.function.Supplier;
+import java.util.Objects;
 
 /** Publication seam for acceleration-structure and light-resource implementations. */
 public interface RetainedSceneBackend {
@@ -22,6 +23,43 @@ public interface RetainedSceneBackend {
                                  Supplier<RetainedSceneSnapshot> fallbackSnapshot,
                                  Runnable published, Runnable previousRetired) {
         publish(fallbackSnapshot.get(), published, previousRetired);
+    }
+
+    /**
+     * Accepts geometry and content as one revision. The two retirement callbacks correspond to the
+     * displaced geometry and content values and may run independently, although the default complete
+     * snapshot implementation retires both at the same native boundary.
+     */
+    default void publishGeometryAndContent(RetainedSceneGeometryDelta geometry,
+                                           RetainedSceneContentSnapshot content,
+                                           Supplier<RetainedSceneSnapshot> fallbackSnapshot,
+                                           Runnable published, Runnable previousGeometryRetired,
+                                           Runnable previousContentRetired) {
+        Objects.requireNonNull(geometry, "geometry");
+        Objects.requireNonNull(content, "content");
+        if (geometry.revision() != content.revision()) {
+            throw new IllegalArgumentException("geometry and content revisions must match");
+        }
+        publish(fallbackSnapshot.get(), published,
+                () -> retireBoth(previousGeometryRetired, previousContentRetired));
+    }
+
+    private static void retireBoth(Runnable first, Runnable second) {
+        Throwable failure = null;
+        try {
+            first.run();
+        } catch (Throwable callbackFailure) {
+            failure = callbackFailure;
+        }
+        try {
+            second.run();
+        } catch (Throwable callbackFailure) {
+            if (failure == null) failure = callbackFailure;
+            else failure.addSuppressed(callbackFailure);
+        }
+        if (failure instanceof RuntimeException runtime) throw runtime;
+        if (failure instanceof Error error) throw error;
+        if (failure != null) throw new IllegalStateException("retained scene retirement failed", failure);
     }
 
     /**

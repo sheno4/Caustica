@@ -104,9 +104,23 @@ public record MeshBuild<N>(Stream positions,
          */
         record Cutout(float alphaCutoff) implements CoveragePolicy {
             public Cutout {
-                if (!Float.isFinite(alphaCutoff) || alphaCutoff < 0.0f || alphaCutoff > 1.0f) {
-                    throw new IllegalArgumentException("alphaCutoff must be in [0,1]");
-                }
+                requireCutoff(alphaCutoff);
+            }
+        }
+
+        /**
+         * Coverage is sampled as a Bernoulli event for radiance rays. Stable guide rays use
+         * {@code guideAlphaCutoff}, while shadow rays accumulate the uncovered fraction as transmittance.
+         */
+        record Stochastic(float guideAlphaCutoff) implements CoveragePolicy {
+            public Stochastic {
+                requireCutoff(guideAlphaCutoff);
+            }
+        }
+
+        private static void requireCutoff(float cutoff) {
+            if (!Float.isFinite(cutoff) || cutoff < 0.0f || cutoff > 1.0f) {
+                throw new IllegalArgumentException("alpha cutoff must be in [0,1]");
             }
         }
     }

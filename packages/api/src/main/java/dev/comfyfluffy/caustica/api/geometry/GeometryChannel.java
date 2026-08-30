@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api.geometry;
 
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
@@ -75,6 +76,18 @@ public interface GeometryChannel {
      * <p>A group must contain at least one batch.
      */
     GeometryPublication submitGroup(List<RetainedBatch<Operation>> batches);
+
+    /**
+     * Publishes geometry and its retained lights as one scene revision.
+     *
+     * <p>Both channels must come from the same contribution in the same render session. Geometry batches
+     * retain their resources independently, and {@code lightBatch} keeps its own retirement callback. The
+     * complete mutation is rejected if either side is invalid; no intermediate geometry-only or light-only
+     * revision is observable.
+     */
+    GeometryPublication submitWithLights(List<RetainedBatch<Operation>> geometryBatches,
+                                         LightChannel lights,
+                                         RetainedBatch<LightChannel.Operation> lightBatch);
 
     sealed interface Operation permits SetMesh, DropMesh, SetInstance, DropInstance { }
 

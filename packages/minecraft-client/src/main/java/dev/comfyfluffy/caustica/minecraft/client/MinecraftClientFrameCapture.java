@@ -9,7 +9,6 @@ import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftSkyFrame;
-import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightSnapshot;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -35,12 +34,10 @@ final class MinecraftClientFrameCapture {
     private MinecraftClientFrameCapture() { }
 
     static MinecraftCapturedFrame capture(Minecraft minecraft, double cameraY, double metersPerSceneUnit,
-                                          MinecraftLightingCalibration calibration,
-                                          MinecraftTerrainLightSnapshot terrainLights) {
+                                          MinecraftLightingCalibration calibration) {
         Optional<MinecraftCelestialFrame> celestial = celestial(
                 minecraft, cameraY, metersPerSceneUnit, calibration);
-        MinecraftLightFrame light = new MinecraftLightFrame(celestial, helmet(minecraft),
-                terrainLights);
+        MinecraftLightFrame light = new MinecraftLightFrame(celestial, helmet(minecraft));
         Optional<MinecraftSkyFrame> sky = celestial.flatMap(value -> atlas(minecraft, value)
                 .map(atlas -> new MinecraftSkyFrame(value, atlas)));
         return new MinecraftCapturedFrame(light, sky);

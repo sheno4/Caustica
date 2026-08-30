@@ -35,6 +35,7 @@ public final class RtRetainedGeometryPlan {
     public static final int HAS_SURFACE = 1;
     public static final int HAS_VOLUME = 2;
     public static final int CUTOUT = 4;
+    public static final int STOCHASTIC = 8;
 
     private RtRetainedGeometryPlan() { }
 
@@ -61,15 +62,20 @@ public final class RtRetainedGeometryPlan {
             MeshBuild.Geometry<?> geometry = mesh.build().geometries().get(i);
             RetainedSceneSnapshot.GeometryPrograms programs = mesh.geometryPrograms().get(i);
             int surface = programs.surfaceImplementation();
-            boolean cutout = geometry.surface() != null
-                    && geometry.surface().coverage() instanceof MeshBuild.CoveragePolicy.Cutout;
-            int coverage = cutout ? surface : 0;
+            MeshBuild.CoveragePolicy coveragePolicy = geometry.surface() == null
+                    ? null : geometry.surface().coverage();
+            boolean cutout = coveragePolicy instanceof MeshBuild.CoveragePolicy.Cutout;
+            boolean stochastic = coveragePolicy instanceof MeshBuild.CoveragePolicy.Stochastic;
+            int coverage = cutout || stochastic ? surface : 0;
             int volume = programs.volumeImplementation();
             int flags = (geometry.surface() == null ? 0 : HAS_SURFACE)
                     | (geometry.volume() == null ? 0 : HAS_VOLUME)
-                    | (cutout ? CUTOUT : 0);
+                    | (cutout ? CUTOUT : 0)
+                    | (stochastic ? STOCHASTIC : 0);
             float alphaCutoff = cutout
-                    ? ((MeshBuild.CoveragePolicy.Cutout) geometry.surface().coverage()).alphaCutoff()
+                    ? ((MeshBuild.CoveragePolicy.Cutout) coveragePolicy).alphaCutoff()
+                    : stochastic
+                    ? ((MeshBuild.CoveragePolicy.Stochastic) coveragePolicy).guideAlphaCutoff()
                     : 0.0f;
             records.add(new GeometryRecord(surface, coverage, volume, flags,
                     geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
@@ -103,11 +109,12 @@ public final class RtRetainedGeometryPlan {
     public static List<HitGroup> hitGroups(List<GeometryRecord> records) {
         List<HitGroup> groups = new ArrayList<>(Math.multiplyExact(records.size(), HIT_RECORDS_PER_GEOMETRY));
         for (GeometryRecord record : records) {
-            boolean cutout = (record.flags() & CUTOUT) != 0 && (record.flags() & HAS_VOLUME) == 0;
+            boolean anyHit = (record.flags() & (CUTOUT | STOCHASTIC)) != 0
+                    && (record.flags() & HAS_VOLUME) == 0;
             boolean volume = (record.flags() & HAS_VOLUME) != 0;
-            groups.add(cutout ? HitGroup.RADIANCE_CUTOUT : HitGroup.RADIANCE_OPAQUE);
+            groups.add(anyHit ? HitGroup.RADIANCE_CUTOUT : HitGroup.RADIANCE_OPAQUE);
             groups.add(volume ? HitGroup.SHADOW_TRANSMISSIVE
-                    : cutout ? HitGroup.SHADOW_CUTOUT : HitGroup.SHADOW_OPAQUE);
+                    : anyHit ? HitGroup.SHADOW_CUTOUT : HitGroup.SHADOW_OPAQUE);
         }
         return List.copyOf(groups);
     }

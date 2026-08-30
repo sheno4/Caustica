@@ -222,11 +222,26 @@ public float neeAtReverseParallelogramPdf(WorldBindingRoots roots, uint2 pixel, 
     RetainedLightRecord light = records[lightIndex];
     if (light.type != RETAINED_LIGHT_PARALLELOGRAM
             || (light.flags & RETAINED_LIGHT_LINKED_EMITTER) == 0u) return 0.0;
+    float3 fromCenter = hitPosition - light.positionOrDirection.xyz;
+    float uu = dot(light.axisU.xyz, light.axisU.xyz);
+    float uv = dot(light.axisU.xyz, light.axisV.xyz);
+    float vv = dot(light.axisV.xyz, light.axisV.xyz);
+    float determinant = uu * vv - uv * uv;
+    if (determinant <= 0.0) return 0.0;
+    float3 crossAxes = cross(light.axisU.xyz, light.axisV.xyz);
+    float planeDistance = abs(dot(fromCenter, crossAxes)) / sqrt(determinant);
+    if (planeDistance > 1.0e-4 * sqrt(max(uu, vv))) return 0.0;
+    float2 supportCoordinates = float2(
+            (dot(fromCenter, light.axisU.xyz) * vv
+                    - dot(fromCenter, light.axisV.xyz) * uv) / determinant,
+            (dot(fromCenter, light.axisV.xyz) * uu
+                    - dot(fromCenter, light.axisU.xyz) * uv) / determinant);
+    if (any(abs(supportCoordinates) > float2(1.0001))) return 0.0;
     float3 toHit = hitPosition - previousPosition;
     float distanceSquared = dot(toHit, toHit);
     float3 direction = normalize(toHit);
-    float area = 4.0 * length(cross(light.axisU.xyz, light.axisV.xyz));
-    float emitterCosine = dot(normalize(cross(light.axisU.xyz, light.axisV.xyz)), -direction);
+    float area = 4.0 * length(crossAxes);
+    float emitterCosine = dot(normalize(crossAxes), -direction);
     if (emitterCosine <= 0.0) return 0.0;
     uint candidates = max(candidateCount, 1u);
     float proposalPdf = neeAtProposalPdf(state, pixel, lightIndex, candidates,

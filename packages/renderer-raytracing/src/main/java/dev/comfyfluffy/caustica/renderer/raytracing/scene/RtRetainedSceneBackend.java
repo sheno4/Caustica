@@ -145,6 +145,58 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
+    /** Accepts geometry and content into one native candidate and one revision queue slot. */
+    @Override
+    public synchronized void publishGeometryAndContent(
+            RetainedSceneGeometryDelta geometry, RetainedSceneContentSnapshot content,
+            Supplier<RetainedSceneSnapshot> fallbackSnapshot, Runnable onPublished,
+            Runnable previousGeometryRetired, Runnable previousContentRetired) {
+        if (closed) throw new IllegalStateException("retained scene backend is closed");
+        if (fatalFailure != null) throw fatalException();
+        Objects.requireNonNull(geometry, "geometry");
+        Objects.requireNonNull(content, "content");
+        Objects.requireNonNull(fallbackSnapshot, "fallbackSnapshot");
+        Objects.requireNonNull(onPublished, "onPublished");
+        Objects.requireNonNull(previousGeometryRetired, "previousGeometryRetired");
+        Objects.requireNonNull(previousContentRetired, "previousContentRetired");
+        if (geometry.revision() != content.revision()) {
+            throw new IllegalArgumentException("geometry and content revisions must match");
+        }
+        if (geometry.revision() <= tailRevision()) {
+            throw new IllegalArgumentException("scene revisions must increase");
+        }
+        Candidate predecessor = queued.isEmpty() ? published : queued.getLast().candidate;
+        if (predecessor == null) {
+            throw new IllegalStateException("combined publication needs a preceding scene publication");
+        }
+        Publication publication = new Publication(geometry.revision(), onPublished, () -> {
+            Throwable failure = null;
+            try {
+                previousGeometryRetired.run();
+            } catch (Throwable callbackFailure) {
+                failure = callbackFailure;
+            }
+            try {
+                previousContentRetired.run();
+            } catch (Throwable callbackFailure) {
+                if (failure == null) failure = callbackFailure;
+                else failure.addSuppressed(callbackFailure);
+            }
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+            if (failure != null) throw new IllegalStateException("retained scene retirement failed", failure);
+        });
+        try {
+            publication.candidate = prepare(geometry, predecessor,
+                    assembleContent(content.scenes(), content.lights()));
+            accept(publication);
+            queued.addLast(publication);
+        } catch (Throwable failure) {
+            if (publication.candidate != null) publication.candidate.releaseRejected();
+            throw failure;
+        }
+    }
+
     /** Accepts content in the same revision queue while sharing the preceding native geometry generation. */
     @Override
     public synchronized void publishContent(RetainedSceneContentSnapshot snapshot, Runnable onPublished,
@@ -486,6 +538,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     private Candidate prepare(RetainedSceneGeometryDelta delta, Candidate predecessor) {
+        return prepare(delta, predecessor, predecessor.content);
+    }
+
+    private Candidate prepare(RetainedSceneGeometryDelta delta, Candidate predecessor,
+                              Map<SceneId, SceneContent> content) {
         Map<Long, NativeMesh> meshes = new LinkedHashMap<>();
         predecessor.geometry.meshes.forEach((identity, mesh) -> {
             mesh.retain();
@@ -551,7 +608,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             });
             instances.replaceAll((ignored, value) -> List.copyOf(value));
             Candidate candidate = new Candidate(delta.revision(), new NativeGeometry(meshes, instances),
-                    predecessor.content, false);
+                    content, false);
             candidate.unsubmitted = List.copyOf(created);
             candidate.builds = List.copyOf(builds);
             return candidate;

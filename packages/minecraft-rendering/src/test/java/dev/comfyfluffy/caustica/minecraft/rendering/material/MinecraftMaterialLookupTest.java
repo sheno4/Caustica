@@ -9,11 +9,13 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialReso
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTopology;
 import dev.comfyfluffy.caustica.minecraft.content.material.OpenPbrDefaults;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftMaterialLookupTest {
     @Test
@@ -48,5 +50,19 @@ final class MinecraftMaterialLookupTest {
             assertEquals(MinecraftMaterialEmission.NONE, byId.emission());
             assertEquals(MinecraftMaterialRecord.fallback(), lookup.records().get(byId.materialIndex()));
         }
+    }
+
+    @Test
+    void entityFallbackIsExplicitAndDoesNotWeakenStrictLookup() {
+        MinecraftMaterialLookup lookup = MinecraftMaterialLookup.compile(
+                new ResourcePackEpoch(7), List.of(), List.of(), MinecraftMaterialPageCompiler.compile(List.of()));
+        var key = new MinecraftMaterialKey(ResourceId.of("minecraft", "entity/zombie/zombie"), null,
+                MinecraftMaterialProfile.ROUGH_DIELECTRIC, MinecraftMaterialTopology.SURFACE);
+
+        assertThrows(IllegalArgumentException.class, () -> lookup.resolve(key));
+        MinecraftMaterialResolution fallback = lookup.resolveEntityOrFallback(key);
+        assertEquals(0, fallback.materialIndex());
+        assertEquals(key.material(), fallback.material());
+        assertEquals(MinecraftMaterialEmission.NONE, fallback.emission());
     }
 }

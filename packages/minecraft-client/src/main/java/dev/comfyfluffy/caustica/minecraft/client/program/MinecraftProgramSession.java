@@ -210,7 +210,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease = null;
         MinecraftFrameSelector frameSelector = null;
         try {
-            terrainSession.bind(programs, context.renderSession().geometry(), context.scene());
+            terrainSession.bind(programs, context.renderSession().geometry(),
+                    context.renderSession().lights(), context.scene());
             terrainSession.publishMaterialLookup(request.lookup);
             frameSelector = new MinecraftFrameSelector(context.scene(), programs.waterVolume(),
                     request.prepared.gpu().fallbackBindingData(),

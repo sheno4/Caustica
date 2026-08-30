@@ -704,16 +704,16 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                         continue;
                     }
                     int vb = capture.verts.size(), ib = capture.idx.size();
-                    int ub = capture.uvList.size(), surfaceCount = capture.surfaces.size();
+                    int ub = capture.uvList.size(), cb = capture.colorList.size();
+                    int surfaceCount = capture.surfaces.size();
                     int vertBefore = vb / 3;
                     particleScratch.clear();
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
-                        textures.contributeAtlas(layer.textureAtlasLocation());
+                        MinecraftEntityMesh.Texture texture = textures.contributeAtlas(layer.textureAtlasLocation());
                         capture.currentMaterial = new MinecraftEntityMesh.Material(
                                 MinecraftMaterialIds.PARTICLE_BILLBOARD,
-                                MinecraftEntityMesh.Texture.atlas(ResourceId.of(
-                                        layer.textureAtlasLocation().getNamespace(), layer.textureAtlasLocation().getPath())),
+                                texture,
                                 MinecraftEntityMesh.Program.MATERIAL);
                         particleScratch.buildLayer(layer, particleCapture);
                         particleCapture.flush();
@@ -728,6 +728,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                         capture.verts.size(vb); // off-screen → truncate this particle back out (clean quad boundary)
                         capture.idx.size(ib);
                         capture.uvList.size(ub);
+                        capture.colorList.size(cb);
                         capture.surfaces.subList(surfaceCount, capture.surfaces.size()).clear();
                         continue;
                     }
@@ -925,6 +926,12 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             content = (content ^ value) * 1099511628211L;
         }
         topology = (topology ^ uvn) * 1099511628211L;
+        float[] colors = capture.colorList.elements();
+        int colorCount = capture.colorList.size();
+        for (int i = 0; i < colorCount; i++) {
+            long value = Float.floatToRawIntBits(colors[i]) & 0xffffffffL;
+            content = (content ^ value) * 1099511628211L;
+        }
         for (MinecraftEntityMesh.Triangle surface : capture.surfaces) {
             long value = surface.hashCode() & 0xffffffffL;
             content = (content ^ value) * 1099511628211L;

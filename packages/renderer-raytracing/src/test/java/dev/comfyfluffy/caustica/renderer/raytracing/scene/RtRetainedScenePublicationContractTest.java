@@ -73,4 +73,20 @@ final class RtRetainedScenePublicationContractTest {
         assertTrue(body.contains("prepare(delta, predecessor)"));
         assertTrue(!body.contains("fallbackSnapshot.get("));
     }
+
+    @Test
+    void combinedPublicationBuildsOneCandidateWithTheNewGeometryAndContent() throws Exception {
+        String source = Files.readString(Path.of(
+                "src/main/java/dev/comfyfluffy/caustica/renderer/raytracing/scene/RtRetainedSceneBackend.java"));
+
+        int method = source.indexOf("void publishGeometryAndContent(");
+        int end = source.indexOf("void publishContent(RetainedSceneContentSnapshot snapshot", method);
+        String body = source.substring(method, end);
+        assertTrue(body.contains("prepare(geometry, predecessor,"));
+        assertTrue(body.contains("assembleContent(content.scenes(), content.lights())"));
+        assertTrue(body.contains("queued.addLast(publication);"));
+        assertTrue(!body.contains("publishGeometry("));
+        assertTrue(!body.contains("publishContent("));
+        assertTrue(!body.contains("fallbackSnapshot.get("));
+    }
 }

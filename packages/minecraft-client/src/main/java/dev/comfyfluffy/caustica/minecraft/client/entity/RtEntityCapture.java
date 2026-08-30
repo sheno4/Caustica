@@ -31,6 +31,7 @@ public final class RtEntityCapture implements VertexConsumer {
     final FloatArrayList verts = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 3);   // 3 floats/vertex (capture-space position)
     final IntArrayList idx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY)); // 3 indices/triangle
     final FloatArrayList uvList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 2);  // 2 floats/vertex (entity-texture UV)
+    final FloatArrayList colorList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 4); // scene-linear float4/vertex
     final List<MinecraftEntityMesh.Triangle> surfaces = new ArrayList<>();
     // Reset to the diagnostic material so a producer path that omits material selection fails visibly.
     MinecraftEntityMesh.Material currentMaterial = fallbackMaterial();
@@ -57,6 +58,7 @@ public final class RtEntityCapture implements VertexConsumer {
         verts.clear();
         idx.clear();
         uvList.clear();
+        colorList.clear();
         surfaces.clear();
         n = 0;
         currentMaterial = fallbackMaterial();
@@ -72,6 +74,7 @@ public final class RtEntityCapture implements VertexConsumer {
         verts.ensureCapacity(vertexCount * 3);
         idx.ensureCapacity(indexCapacity(vertexCount));
         uvList.ensureCapacity(vertexCount * 2);
+        colorList.ensureCapacity(vertexCount * 4);
     }
 
     /** Reserve room for an upcoming direct-model submission without changing any logical sizes. */
@@ -111,7 +114,8 @@ public final class RtEntityCapture implements VertexConsumer {
     MinecraftEntityMesh entityMesh(long indexRevision) {
         return new MinecraftEntityMesh(java.util.Arrays.copyOf(verts.elements(), verts.size()),
                 java.util.Arrays.copyOf(idx.elements(), idx.size()),
-                java.util.Arrays.copyOf(uvList.elements(), uvList.size()), surfaces, indexRevision);
+                java.util.Arrays.copyOf(uvList.elements(), uvList.size()),
+                java.util.Arrays.copyOf(colorList.elements(), colorList.size()), surfaces, indexRevision);
     }
 
     @Override
@@ -155,7 +159,7 @@ public final class RtEntityCapture implements VertexConsumer {
     }
 
     private void emitQuad() {
-        appendQuad(qx, qy, qz, null, qu, qv, qnx[0], qny[0], qnz[0], qcol[0], false, 0f);
+        appendQuad(qx, qy, qz, null, qu, qv, qnx[0], qny[0], qnz[0], qcol, 0, false, 0f);
     }
 
     /**
@@ -171,7 +175,7 @@ public final class RtEntityCapture implements VertexConsumer {
     /** Append a direct quad with an explicit per-primitive emission strength. */
     void addDirectQuad(float[] x, float[] y, float[] z, float[] u, float[] v,
                        float nx, float ny, float nz, int color, float emission) {
-        appendQuad(x, y, z, null, u, v, nx, ny, nz, color, uvRemap, emission);
+        appendQuad(x, y, z, null, u, v, nx, ny, nz, null, color, uvRemap, emission);
     }
 
     /** Fail fast before a later submission can accidentally complete a malformed custom-geometry quad. */
@@ -186,11 +190,12 @@ public final class RtEntityCapture implements VertexConsumer {
     /** Append a face whose positions reference a transformed eight-corner cube template. */
     void addIndexedDirectQuad(float[] x, float[] y, float[] z, int[] corners, float[] u, float[] v,
                               float nx, float ny, float nz, int color) {
-        appendQuad(x, y, z, corners, u, v, nx, ny, nz, color, uvRemap, 0f);
+        appendQuad(x, y, z, corners, u, v, nx, ny, nz, null, color, uvRemap, 0f);
     }
 
     private void appendQuad(float[] x, float[] y, float[] z, int[] corners, float[] u, float[] v,
-                            float nx, float ny, float nz, int color, boolean remapUv, float emission) {
+                            float nx, float ny, float nz, int[] colors, int flatColor,
+                            boolean remapUv, float emission) {
         // Authored model normal (pose-transformed by compile); planar quad, so vertex 0's normal is the
         // face normal. Baked quads (items/blocks) pass no normal → fall back to a geometric one from the
         // quad edges. The closest-hit flips it toward the viewer, as for terrain. Computed BEFORE the
@@ -228,6 +233,15 @@ public final class RtEntityCapture implements VertexConsumer {
             verts.add(offset ? z[p] + nz * off : z[p]);
             uvList.add(remapUv ? uvU0 + u[i] * uvDU : u[i]);
             uvList.add(remapUv ? uvV0 + v[i] * uvDV : v[i]);
+            int color = colors == null ? flatColor : colors[i];
+            float[] rgb = ColorSpaces.srgbToAcesCg(
+                    ((color >> 16) & 0xFF) * (1f / 255f),
+                    ((color >> 8) & 0xFF) * (1f / 255f),
+                    (color & 0xFF) * (1f / 255f));
+            colorList.add(rgb[0]);
+            colorList.add(rgb[1]);
+            colorList.add(rgb[2]);
+            colorList.add(((color >>> 24) & 0xFF) * (1f / 255f));
         }
         idx.add(base);
         idx.add(base + 1);
@@ -235,14 +249,8 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.add(base);
         idx.add(base + 2);
         idx.add(base + 3);
-        // Minecraft submission colours are encoded sRGB; the shader ABI consumes scene-linear ACEScg.
-        int c = color;
-        float[] tint = ColorSpaces.srgbToAcesCg(
-                ((c >> 16) & 0xFF) * (1f / 255f),
-                ((c >> 8) & 0xFF) * (1f / 255f),
-                (c & 0xFF) * (1f / 255f));
         MinecraftEntityMesh.Triangle surface = new MinecraftEntityMesh.Triangle(
-                currentMaterial, currentCoverage, nx, ny, nz, emission, tint[0], tint[1], tint[2]);
+                currentMaterial, currentCoverage, nx, ny, nz, emission);
         surfaces.add(surface);
         surfaces.add(surface);
     }

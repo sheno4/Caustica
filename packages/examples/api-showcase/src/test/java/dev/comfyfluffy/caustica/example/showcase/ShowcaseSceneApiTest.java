@@ -174,5 +174,11 @@ final class ShowcaseSceneApiTest {
             operations.add(batches.stream().flatMap(batch -> batch.operations().stream()).toList());
             return publication;
         }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+                List<RetainedBatch<Operation>> geometryBatches,
+                dev.comfyfluffy.caustica.api.light.LightChannel lights,
+                RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
+            throw new UnsupportedOperationException();
+        }
     }
 }

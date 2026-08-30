@@ -6,8 +6,6 @@ import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
-import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightSnapshot;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainGeometry;
@@ -49,7 +47,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.WORKER_TESS;
@@ -102,10 +99,6 @@ public final class RtTerrain {
     // If no render frame has driven a streaming pass for this long, the 20 TPS tick takes over (loading
     // screens / hidden window — states where render-driven streaming has stopped).
     private static final long STREAM_FALLBACK_AFTER_NANOS = 200_000_000L;
-    // Light edits and streaming completions can arrive every frame. Coalesce immutable publication inputs
-    // without adding noticeable edit latency.
-    private static final long LIGHT_SNAPSHOT_UPDATE_INTERVAL_NANOS = 50_000_000L;
-
     private static int rebaseDistanceBlocks() {
         return CausticaConfig.Rt.Terrain.REBASE_DISTANCE_BLOCKS.value();
     }
@@ -168,13 +161,6 @@ public final class RtTerrain {
     public int blockX;
     public int blockY;
     public int blockZ;
-    /** Sorted light-only snapshot, updated with section publication instead of rescanning all geometry. */
-    private final TreeMap<Long, MinecraftTerrainLightBatch> lightSections = new TreeMap<>();
-    private long lightGroupRevision;
-    private long retainedLightGeneration;
-    private boolean lightSnapshotDirty;
-    private long lastLightSnapshotNanos;
-    private MinecraftTerrainLightSnapshot retainedLights = MinecraftTerrainLightSnapshot.empty(0L);
     private boolean windowValid;
     private int windowPcx;
     private int windowPcz;
@@ -249,10 +235,6 @@ public final class RtTerrain {
         int scz = SectionPos.blockToSectionCoord(blockPos.getZ());
         long key = sectionKey(scx, scy, scz);
         return sceneInitialized && (isPublished(key) || empty.contains(key));
-    }
-
-    public MinecraftTerrainLightSnapshot retainedLightSnapshot() {
-        return retainedLights;
     }
 
     /** Stable renderer frame origin selected by the terrain streaming window. */
@@ -458,7 +440,6 @@ public final class RtTerrain {
         }
         if (reextract.isEmpty() && missing.isEmpty()
                 && completedBuilds.isEmpty()
-                && !lightSnapshotDirty
                 && removed.isEmpty() && prepared.isEmpty()) {
             return;
         }
@@ -507,9 +488,6 @@ public final class RtTerrain {
         } finally {
             instrumentation.endStage("terrain.snapshotDispatch", snapshotDispatchStart);
         }
-
-        flushLightSnapshotUpdate();
-
     }
 
     private void syncDesiredWindow(ClientChunkCache chunkSource, int pcx, int psy, int pcz,
@@ -1347,14 +1325,14 @@ public final class RtTerrain {
     private record SubmittedGeometryGroup(List<PendingGeometryGroup> groups,
                                           GeometryPublication receipt, long submittedNanos) { }
 
-    private record PublishedPut(long key, int originX, int originY, int originZ, float[] lights, long token,
+    private record PublishedPut(long key, long token,
                                 Object extractionStamp, Object readyStamp, long workerCompletedNanos) { }
 
     private record PublishedDrop(long key, long token) { }
 
     private record PublishedEmpty(long key, Object extractionStamp, Object readyStamp) { }
 
-    private record PublishedSection(int originX, int originY, int originZ, float[] lights) { }
+    private record PublishedSection() { }
 
     private boolean shouldRebase(int rbx, int rby, int rbz) {
         return Math.abs(rbx - blockX) >= rebaseDistanceBlocks()
@@ -1431,7 +1409,9 @@ public final class RtTerrain {
     private void appendPut(List<MinecraftTerrainGeometry.Change> operations, List<SectionResult> puts, SectionResult result) {
         SectionTask task = result.task();
         long key = task.key;
-        operations.add(new MinecraftTerrainGeometry.Put(key, task.sox, task.soy, task.soz, result.geometry()));
+        operations.add(new MinecraftTerrainGeometry.Put(key, task.sox, task.soy, task.soz, result.geometry(),
+                MinecraftTerrainLightAdapter.describe(key, task.token, task.sox, task.soy, task.soz,
+                        result.lights())));
         puts.add(result);
     }
 
@@ -1459,7 +1439,7 @@ public final class RtTerrain {
             SectionTask task = put.task();
             long token = ++nextPublicationToken;
             pendingPublicationToken.put(task.key, token);
-            publicationPuts.add(new PublishedPut(task.key, task.sox, task.soy, task.soz, put.lights(), token,
+            publicationPuts.add(new PublishedPut(task.key, token,
                     task.extractionStamp, put.readyStamp(), put.workerCompletedNanos()));
         }
         ArrayList<PublishedDrop> publicationDrops = new ArrayList<>(drops.size());
@@ -1596,33 +1576,25 @@ public final class RtTerrain {
     }
 
     private void acknowledgePublication(PendingPublication publication, long submittedNanos) {
-        boolean lightsChanged = false;
         for (PublishedPut put : publication.puts()) {
             long key = put.key();
-            float[] lights = put.lights();
-            PublishedSection previous = publishedSections.put(key, new PublishedSection(
-                    put.originX(), put.originY(), put.originZ(), lights));
+            publishedSections.put(key, new PublishedSection());
             clearPendingPublication(key, put.token());
             instrumentation.published(put.extractionStamp());
             instrumentation.published(put.readyStamp());
             recordTerrainLatency("terrainSubmitToPublication", submittedNanos, System.nanoTime());
             empty.remove(key);
-            lightsChanged |= !sameLightRecords(previous == null ? null : previous.lights(), lights);
-            updateLightSection(key, publishedSections.get(key));
         }
         for (PublishedDrop drop : publication.drops()) {
             long key = drop.key();
-            PublishedSection previous = publishedSections.remove(key);
+            publishedSections.remove(key);
             clearPendingPublication(key, drop.token());
-            lightsChanged |= previous != null && hasLights(previous.lights());
-            removeLightSection(key);
             if (emptyAfterDrop(desired.contains(key))) empty.add(key);
             else empty.remove(key);
         }
         for (PublishedEmpty ready : publication.readyEmpty()) {
             acknowledgeReadyEmpty(ready.key(), ready.extractionStamp(), ready.readyStamp());
         }
-        if (lightsChanged) markLightSnapshotDirty();
     }
 
     private void acknowledgeReadyEmpty(SectionResult result) {
@@ -1649,48 +1621,6 @@ public final class RtTerrain {
         pendingPublications.remove(key);
         pendingDrops.remove(key);
         return true;
-    }
-
-    private static boolean hasLights(float[] lights) {
-        return lights != null && lights.length > 0;
-    }
-
-    /** Null and an empty collector result both mean that the section contributes no lights. */
-    static boolean sameLightRecords(float[] previous, float[] current) {
-        if (!hasLights(previous) && !hasLights(current)) return true;
-        return Arrays.equals(previous, current);
-    }
-
-    private void updateLightSection(long key, PublishedSection section) {
-        if (!hasLights(section.lights())) {
-            removeLightSection(key);
-            return;
-        }
-        lightSections.put(key, MinecraftTerrainLightAdapter.describe(key, ++lightGroupRevision,
-                section.originX(), section.originY(), section.originZ(), section.lights()));
-    }
-
-    private void removeLightSection(long key) {
-        lightSections.remove(key);
-    }
-
-    private void markLightSnapshotDirty() {
-        lightSnapshotDirty = true;
-    }
-
-    /** Publish a new immutable input generation after the edit-coalescing interval. */
-    private void flushLightSnapshotUpdate() {
-        if (!lightSnapshotDirty) return;
-        long now = System.nanoTime();
-        if (lastLightSnapshotNanos != 0L
-                && now - lastLightSnapshotNanos < LIGHT_SNAPSHOT_UPDATE_INTERVAL_NANOS) {
-            return;
-        }
-        // Snapshot the sorted values once; unchanged generations are reused by subsequent frame updates.
-        retainedLights = new MinecraftTerrainLightSnapshot(List.copyOf(lightSections.values()),
-                ++retainedLightGeneration);
-        lightSnapshotDirty = false;
-        lastLightSnapshotNanos = now;
     }
 
     /** Join outstanding CPU meshing tasks and discard their unsubmitted results. */
@@ -1747,11 +1677,6 @@ public final class RtTerrain {
         reextract.clear();
         queuedReextract.clear();
         windowValid = false;
-        lightSections.clear();
-        lightGroupRevision = 0L;
-        lightSnapshotDirty = false;
-        lastLightSnapshotNanos = 0L;
-        retainedLights = MinecraftTerrainLightSnapshot.empty(++retainedLightGeneration);
         empty.clear();
         removed.clear();
         removed.addAll(acceptedBeforeClear);

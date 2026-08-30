@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
+import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 
@@ -30,6 +31,11 @@ public final class GeometryContributionChannel implements GeometryChannel {
     }
     @Override public GeometryPublication submitGroup(List<RetainedBatch<Operation>> batches) {
         return directory.submitGeometryGroup(this, batches);
+    }
+    @Override public GeometryPublication submitWithLights(
+            List<RetainedBatch<Operation>> geometryBatches, LightChannel lights,
+            RetainedBatch<LightChannel.Operation> lightBatch) {
+        return directory.submitGeometryAndLights(this, lights, geometryBatches, lightBatch);
     }
     public void quiesce() { directory.quiesce(this); }
     public void invalidate() { directory.invalidate(this); }

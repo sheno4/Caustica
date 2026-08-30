@@ -112,7 +112,8 @@ final class RtTerrainMesher {
         if (!collected.isEmpty()) {
             lights = collected.toFloatArray();
         }
-        return new CpuSection(packSection(mesh), lights);
+        PackedSection packed = packSection(mesh);
+        return new CpuSection(packed.mesh(), remapLights(lights, packed.sourceToDestinationPrimitives()));
     }
 
     private static final float[] EMPTY_LIGHTS = new float[0];
@@ -124,13 +125,16 @@ final class RtTerrainMesher {
         }
     }
 
-    private static MinecraftTerrainMesh packSection(SectionMesh mesh) {
+    private static PackedSection packSection(SectionMesh mesh) {
         Geom geom = mesh.geometry();
         ArrayList<TriangleRouting> routing = new ArrayList<>(geom.surfaces.size());
         for (int triangle = 0; triangle < geom.surfaces.size(); triangle++) {
             TerrainSurface surface = geom.surfaces.get(triangle);
-            var coverage = surface.coverage() == Coverage.CUTOUT
-                    ? MinecraftTerrainMesh.Coverage.CUTOUT : MinecraftTerrainMesh.Coverage.OPAQUE;
+            var coverage = switch (surface.coverage()) {
+                case OPAQUE -> MinecraftTerrainMesh.Coverage.OPAQUE;
+                case CUTOUT -> MinecraftTerrainMesh.Coverage.CUTOUT;
+                case STOCHASTIC -> MinecraftTerrainMesh.Coverage.STOCHASTIC;
+            };
             var program = surface.material().material().equals(MinecraftMaterialIds.WATER)
                     ? MinecraftTerrainMesh.ProgramCategory.WATER
                     : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
@@ -140,8 +144,35 @@ final class RtTerrainMesher {
                 java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size()),
                 java.util.Arrays.copyOf(geom.cornerUv.elements(), geom.cornerUv.size()),
                 java.util.Arrays.copyOf(geom.prim.elements(), geom.prim.size()), routing);
-        return new MinecraftTerrainMesh(java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
-                packed.indices(), packed.cornerUvs(), packed.primitiveData(), packed.geometries(), 0L);
+        return new PackedSection(new MinecraftTerrainMesh(
+                java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
+                packed.indices(), packed.cornerUvs(), packed.primitiveData(), packed.geometries(), 0L),
+                packed.sourceToDestinationPrimitives());
+    }
+
+    static float[] remapLights(float[] source, int[] sourceToDestinationPrimitives) {
+        if (source.length == 0) return source;
+        int count = source.length / RtLightCollector.FLOATS_PER_LIGHT;
+        float[][] records = new float[count][];
+        for (int light = 0; light < count; light++) {
+            int offset = light * RtLightCollector.FLOATS_PER_LIGHT;
+            float[] record = java.util.Arrays.copyOfRange(source, offset,
+                    offset + RtLightCollector.FLOATS_PER_LIGHT);
+            int sourcePrimitive = (int) record[7];
+            int destinationPrimitive = sourceToDestinationPrimitives[sourcePrimitive];
+            if (sourceToDestinationPrimitives[sourcePrimitive + 1] != destinationPrimitive + 1) {
+                throw new IllegalStateException("terrain quad triangles must remain adjacent after routing");
+            }
+            record[7] = destinationPrimitive;
+            records[light] = record;
+        }
+        java.util.Arrays.sort(records, java.util.Comparator.comparingDouble(record -> record[7]));
+        float[] remapped = new float[source.length];
+        for (int light = 0; light < count; light++) {
+            System.arraycopy(records[light], 0, remapped, light * RtLightCollector.FLOATS_PER_LIGHT,
+                    RtLightCollector.FLOATS_PER_LIGHT);
+        }
+        return remapped;
     }
 
     /** Vulkan routing shared by triangles that may occupy one contiguous acceleration-geometry range. */
@@ -150,8 +181,11 @@ final class RtTerrainMesher {
                            float alphaCutoff) { }
 
     /** Triangle streams packed in stable routing-bucket order. */
+    private record PackedSection(MinecraftTerrainMesh mesh, int[] sourceToDestinationPrimitives) { }
+
     record PackedTriangles(int[] indices, float[] cornerUvs, float[] primitiveData,
-                           List<MinecraftTerrainMesh.Geometry> geometries) { }
+                           List<MinecraftTerrainMesh.Geometry> geometries,
+                           int[] sourceToDestinationPrimitives) { }
 
     static PackedTriangles bucketTriangles(int[] sourceIndices, float[] sourceCornerUvs,
                                            float[] sourcePrimitiveData, List<TriangleRouting> routing) {
@@ -163,6 +197,7 @@ final class RtTerrainMesher {
         int[] indices = new int[sourceIndices.length];
         float[] cornerUvs = new float[sourceCornerUvs.length];
         float[] primitiveData = new float[sourcePrimitiveData.length];
+        int[] sourceToDestinationPrimitives = new int[routing.size()];
         ArrayList<MinecraftTerrainMesh.Geometry> geometries = new ArrayList<>(buckets.size());
         int destinationTriangle = 0;
         for (var bucket : buckets.entrySet()) {
@@ -175,13 +210,15 @@ final class RtTerrainMesher {
                 System.arraycopy(sourcePrimitiveData, sourceTriangle * MinecraftTerrainMesh.PRIMITIVE_FLOATS,
                         primitiveData, destinationTriangle * MinecraftTerrainMesh.PRIMITIVE_FLOATS,
                         MinecraftTerrainMesh.PRIMITIVE_FLOATS);
+                sourceToDestinationPrimitives[sourceTriangle] = destinationTriangle;
                 destinationTriangle++;
             }
             TriangleRouting route = bucket.getKey();
             geometries.add(new MinecraftTerrainMesh.Geometry(route.program(), route.coverage(), firstIndex,
                     sourceTriangles.size() * 3, route.alphaCutoff()));
         }
-        return new PackedTriangles(indices, cornerUvs, primitiveData, geometries);
+        return new PackedTriangles(indices, cornerUvs, primitiveData, geometries,
+                sourceToDestinationPrimitives);
     }
 
     private static void tessellate(BlockAndTintGetter region, BlockStateModelSet modelSet,
@@ -269,7 +306,7 @@ final class RtTerrainMesher {
         }
     }
 
-    private enum Coverage { OPAQUE, CUTOUT }
+    private enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
 
     private record TerrainMaterial(int materialIndex, ResourceId material, ResourceId texture) { }
 
@@ -468,7 +505,8 @@ final class RtTerrainMesher {
             MinecraftMaterialResolution terrainMaterial = materials.resolve(key);
             q.material = new TerrainMaterial(terrainMaterial.materialIndex(), terrainMaterial.material(),
                     spriteMaterial.texture());
-            q.coverage = q.cutout && !q.translucent ? Coverage.CUTOUT : Coverage.OPAQUE;
+            q.coverage = q.translucent ? Coverage.STOCHASTIC
+                    : q.cutout ? Coverage.CUTOUT : Coverage.OPAQUE;
             q.materialEmission = terrainMaterial.emission();
         }
 

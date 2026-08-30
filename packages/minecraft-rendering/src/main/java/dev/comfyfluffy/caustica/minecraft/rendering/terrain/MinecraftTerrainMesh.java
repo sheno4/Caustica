@@ -67,7 +67,7 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
     public enum ProgramCategory { MATERIAL, WATER, PORTAL }
 
     /** Traversal category remains separate from optical transmission. */
-    public enum Coverage { OPAQUE, CUTOUT }
+    public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
 
     /** One shader-homogeneous range in the source index stream. */
     public record Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount,

@@ -5,18 +5,12 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
-import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightSnapshot;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightFrame;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.function.Supplier;
 
 /** Owns Minecraft's retained celestial, helmet, and emissive-terrain light contributions. */
@@ -31,11 +25,9 @@ public final class MinecraftLightProvider implements AutoCloseable {
     private final LightId helmetLight;
     private final LightId sunLight;
     private final LightId moonLight;
-    private final Map<Long, TerrainSection> terrainSections = new HashMap<>();
     private Optional<LightDescriptor.Distant> publishedSun;
     private Optional<LightDescriptor.Distant> publishedMoon;
     private Optional<LightDescriptor.Spot> publishedHelmet;
-    private long terrainGeneration = Long.MIN_VALUE;
 
     public MinecraftLightProvider(LightChannel lights, SceneId scene,
                                   Supplier<CelestialSettings> celestialSettings,
@@ -56,11 +48,10 @@ public final class MinecraftLightProvider implements AutoCloseable {
         CelestialLights celestial = frame.celestial()
                 .map(value -> celestialLights(celestialFrame(value, celestialSettings.get())))
                 .orElse(CelestialLights.NONE);
-        publish(celestial, frame.helmet(), frame.terrainLights());
+        publish(celestial, frame.helmet());
     }
 
-    void publish(CelestialLights celestial, Optional<LightDescriptor.Spot> helmet,
-                 MinecraftTerrainLightSnapshot terrain) {
+    void publish(CelestialLights celestial, Optional<LightDescriptor.Spot> helmet) {
         ArrayList<LightChannel.Operation> operations = new ArrayList<>();
         boolean sunChanged = !java.util.Objects.equals(publishedSun, celestial.sun());
         boolean moonChanged = !java.util.Objects.equals(publishedMoon, celestial.moon());
@@ -74,45 +65,11 @@ public final class MinecraftLightProvider implements AutoCloseable {
         if (helmetChanged) {
             setOrDrop(operations, helmetLight, helmet);
         }
-        if (terrain.generation() != terrainGeneration) {
-            reconcileTerrain(operations, terrain.batches());
-            terrainGeneration = terrain.generation();
-        }
         if (operations.isEmpty()) return;
         lights.submit(RetainedBatch.of(operations));
         if (sunChanged) publishedSun = celestial.sun();
         if (moonChanged) publishedMoon = celestial.moon();
         if (helmetChanged) publishedHelmet = helmet;
-    }
-
-    private void reconcileTerrain(List<LightChannel.Operation> operations,
-                                  List<MinecraftTerrainLightBatch> batches) {
-        Set<Long> current = new HashSet<>();
-        for (MinecraftTerrainLightBatch batch : batches) {
-            current.add(batch.sectionKey());
-            TerrainSection previous = terrainSections.get(batch.sectionKey());
-            if (previous != null && previous.revision() == batch.revision()) continue;
-
-            ArrayList<LightId> ids = previous == null
-                    ? new ArrayList<>()
-                    : new ArrayList<>(previous.lights());
-            while (ids.size() < batch.lights().size()) ids.add(lights.newLight());
-            for (int i = 0; i < batch.lights().size(); i++) {
-                operations.add(new LightChannel.SetLight(ids.get(i), scene, batch.lights().get(i)));
-            }
-            for (int i = batch.lights().size(); i < ids.size(); i++) {
-                operations.add(new LightChannel.DropLight(ids.get(i)));
-            }
-            terrainSections.put(batch.sectionKey(), new TerrainSection(batch.revision(),
-                    List.copyOf(ids.subList(0, batch.lights().size()))));
-        }
-        var iterator = terrainSections.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<Long, TerrainSection> entry = iterator.next();
-            if (current.contains(entry.getKey())) continue;
-            entry.getValue().lights().forEach(light -> operations.add(new LightChannel.DropLight(light)));
-            iterator.remove();
-        }
     }
 
     private void setOrDrop(List<LightChannel.Operation> operations, LightId light,
@@ -128,9 +85,6 @@ public final class MinecraftLightProvider implements AutoCloseable {
         operations.add(new LightChannel.DropLight(sunLight));
         operations.add(new LightChannel.DropLight(moonLight));
         operations.add(new LightChannel.DropLight(helmetLight));
-        terrainSections.values().forEach(section -> section.lights().forEach(light ->
-                operations.add(new LightChannel.DropLight(light))));
-        terrainSections.clear();
         lights.submit(RetainedBatch.of(operations));
     }
 
@@ -188,6 +142,4 @@ public final class MinecraftLightProvider implements AutoCloseable {
                                     double moonAngularRadiusDegrees) {
     }
 
-    private record TerrainSection(long revision, List<LightId> lights) {
-    }
 }

@@ -10,6 +10,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtTerrainMesherPackingTest {
     @Test
+    void emitterRangesFollowBucketedPrimitiveOrderAndStaySorted() {
+        float[] records = new float[2 * RtLightCollector.FLOATS_PER_LIGHT];
+        records[7] = 0;
+        records[RtLightCollector.FLOATS_PER_LIGHT + 7] = 4;
+
+        float[] remapped = RtTerrainMesher.remapLights(records, new int[]{4, 5, 2, 3, 0, 1});
+
+        assertEquals(0, (int) remapped[7]);
+        assertEquals(4, (int) remapped[RtLightCollector.FLOATS_PER_LIGHT + 7]);
+    }
+
+    @Test
     void packsTrianglesIntoStableVulkanRoutingBuckets() {
         var material = route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
                 MinecraftTerrainMesh.Coverage.OPAQUE, 0.5f);
@@ -55,6 +67,22 @@ final class RtTerrainMesherPackingTest {
         assertEquals(2, packed.geometries().size());
         assertEquals(0.4f, packed.geometries().get(0).alphaCutoff());
         assertEquals(0.6f, packed.geometries().get(1).alphaCutoff());
+    }
+
+    @Test
+    void keepsStochasticTerrainSeparateFromOpaqueAndCutout() {
+        var packed = RtTerrainMesher.bucketTriangles(integerTriangleLanes(3, 3), triangleLanes(3, 6),
+                triangleLanes(3, MinecraftTerrainMesh.PRIMITIVE_FLOATS), List.of(
+                        route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
+                                MinecraftTerrainMesh.Coverage.OPAQUE, 0.5f),
+                        route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
+                                MinecraftTerrainMesh.Coverage.STOCHASTIC, 0.5f),
+                        route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
+                                MinecraftTerrainMesh.Coverage.CUTOUT, 0.5f)));
+
+        assertEquals(List.of(MinecraftTerrainMesh.Coverage.OPAQUE,
+                        MinecraftTerrainMesh.Coverage.STOCHASTIC, MinecraftTerrainMesh.Coverage.CUTOUT),
+                packed.geometries().stream().map(MinecraftTerrainMesh.Geometry::coverage).toList());
     }
 
     private static RtTerrainMesher.TriangleRouting route(MinecraftTerrainMesh.ProgramCategory program,

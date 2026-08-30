@@ -112,6 +112,14 @@ public final class MinecraftMaterialLookup {
         return value;
     }
 
+    /** Resolve captured entity material metadata, or use the neutral record for an unindexed vanilla texture. */
+    public MinecraftMaterialResolution resolveEntityOrFallback(MinecraftMaterialKey key) {
+        MinecraftMaterialResolution value = resolutions.get(key);
+        if (value == null && key.geometry() != null) value = resolutions.get(key.defaultGeometry());
+        return value != null ? value : new MinecraftMaterialResolution(0, key.material(), key.topology(),
+                MinecraftMaterialEmission.NONE);
+    }
+
     public MinecraftMaterialResolution resolve(ResourceId material) {
         MinecraftMaterialResolution value = defaults.get(material);
         if (value == null) throw new IllegalArgumentException("No Minecraft material for " + material);

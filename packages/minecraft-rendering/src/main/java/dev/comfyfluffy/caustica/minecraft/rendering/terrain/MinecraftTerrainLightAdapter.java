@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.terrain;
 
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
+import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
 
 import java.util.ArrayList;
@@ -17,7 +18,7 @@ public final class MinecraftTerrainLightAdapter {
                                                       double originX, double originY, double originZ,
                                                       float[] records) {
         int lightCount = records.length / FLOATS_PER_LIGHT;
-        ArrayList<LightDescriptor.Finite> descriptors = new ArrayList<>(lightCount);
+        ArrayList<MinecraftTerrainEmitter> emitters = new ArrayList<>(lightCount);
         for (int source = 0; source < records.length;
              source += FLOATS_PER_LIGHT) {
             double ux = records[source + 8];
@@ -37,13 +38,14 @@ public final class MinecraftTerrainLightAdapter {
                 vy = -vy;
                 vz = -vz;
             }
-            descriptors.add(new LightDescriptor.Parallelogram(
+            var descriptor = new LightDescriptor.Parallelogram(
                     records[source] + originX,
                     records[source + 1] + originY,
                     records[source + 2] + originZ,
                     ux, uy, uz, vx, vy, vz,
-                    records[source + 16], records[source + 17], records[source + 18]));
+                    records[source + 16], records[source + 17], records[source + 18]);
+            emitters.add(new MinecraftTerrainEmitter(descriptor, (int) records[source + 7], 2));
         }
-        return new MinecraftTerrainLightBatch(sectionKey, revision, descriptors);
+        return new MinecraftTerrainLightBatch(sectionKey, revision, emitters);
     }
 }

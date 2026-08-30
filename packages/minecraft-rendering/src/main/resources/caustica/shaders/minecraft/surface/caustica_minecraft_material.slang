@@ -11,6 +11,7 @@ public static const uint MINECRAFT_MATERIAL_SPEC = 1u;
 public static const uint MINECRAFT_MATERIAL_NORMAL = 2u;
 public static const uint MINECRAFT_MATERIAL_EMISSION_MASK = 4u;
 public static const uint MINECRAFT_MATERIAL_SUBSURFACE_COLOR_BASE = 8u;
+public static const uint MINECRAFT_MATERIAL_EMISSION_COLOR_BASE = 16u;
 public static const uint MINECRAFT_MATERIAL_UNIFORM_EMISSION = 32u;
 
 public struct MinecraftImplementationData {
@@ -44,6 +45,7 @@ public struct MinecraftPrimitiveData {
     public float3 tint;
     public uint materialIndex;
     public SampledTexture2DIndex baseTexture;
+    public SamplerIndex baseSampler;
     public uint textureFlags;
     public float primitiveEmission;
     public float3 tangent;
@@ -94,9 +96,13 @@ public MinecraftHitData minecraftHitData(uint64_t implementationData, uint64_t b
     return hit;
 }
 
-public float4 minecraftSample(MinecraftHitData hit, SampledTexture2DIndex texture,
+public float4 minecraftSampleMaterial(MinecraftHitData hit, SampledTexture2DIndex texture,
         float2 coordinates, float lod) {
     return sampleTexture2DLod(texture, hit.implementation.samplerIndex, coordinates, lod);
+}
+
+public float4 minecraftSampleBase(MinecraftHitData hit, float2 coordinates, float lod) {
+    return sampleTexture2DLod(hit.primitive.baseTexture, hit.primitive.baseSampler, coordinates, lod);
 }
 
 public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
@@ -117,15 +123,13 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
     if ((hit.primitive.textureFlags & MINECRAFT_TEXTURE_PRESENT) == 0u) {
         material.base_color *= geometryTint;
     } else {
-        float4 texel = minecraftSample(hit, hit.primitive.baseTexture,
-                hit.textureCoordinate, 0.0);
+        float4 texel = minecraftSampleBase(hit, hit.textureCoordinate, 0.0);
         float3 sampled = (hit.primitive.textureFlags & MINECRAFT_TEXTURE_LINEAR) != 0u
                 ? texel.rgb : srgbToLinear(texel.rgb);
         sampled = bt709ToAcesCg(sampled);
-        material.base_color *= material.transmission_weight > 0.0
-                ? lerp(float3(1.0), sampled * geometryTint, texel.a * hit.vertexColor.a)
-                : sampled * geometryTint;
+        material.base_color *= sampled * geometryTint;
     }
+    float3 emissionBaseColor = material.base_color;
 
     material.emission_luminance *= (data.features & MINECRAFT_MATERIAL_UNIFORM_EMISSION) != 0u
             ? 1.0 : hit.primitive.primitiveEmission;
@@ -134,9 +138,9 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
     float2 pageUv = data.materialUv.xy + localUv * data.materialUv.zw;
     float pageLod = min(input.textureFootprint, data.maxLod);
     if ((data.features & (MINECRAFT_MATERIAL_SPEC | MINECRAFT_MATERIAL_EMISSION_MASK)) != 0u) {
-        float4 surface0 = minecraftSample(hit, data.surface0Texture, pageUv, pageLod);
+        float4 surface0 = minecraftSampleMaterial(hit, data.surface0Texture, pageUv, pageLod);
         if ((data.features & MINECRAFT_MATERIAL_SPEC) != 0u) {
-            float4 surface1 = minecraftSample(hit, data.surface1Texture, pageUv, pageLod);
+            float4 surface1 = minecraftSampleMaterial(hit, data.surface1Texture, pageUv, pageLod);
             material.specular_roughness *= surface0.r;
             material.base_metalness *= surface0.g;
             material.subsurface_weight *= surface0.a;
@@ -148,14 +152,18 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
         if ((data.features & MINECRAFT_MATERIAL_EMISSION_MASK) != 0u) {
             material.emission_luminance *= surface0.b;
             material.emission_color *= bt709ToAcesCg(
-                    minecraftSample(hit, data.emissionTexture, pageUv, pageLod).rgb);
+                    minecraftSampleMaterial(hit, data.emissionTexture, pageUv, pageLod).rgb);
         }
+    }
+    if ((data.features & MINECRAFT_MATERIAL_EMISSION_COLOR_BASE) != 0u
+            && (data.features & MINECRAFT_MATERIAL_EMISSION_MASK) == 0u) {
+        material.emission_color *= emissionBaseColor;
     }
     if ((data.features & MINECRAFT_MATERIAL_SUBSURFACE_COLOR_BASE) != 0u) {
         material.subsurface_color = material.base_color;
     }
     if ((data.features & MINECRAFT_MATERIAL_NORMAL) != 0u) {
-        float2 encoded = minecraftSample(hit, data.normalTexture, pageUv, pageLod).xy * 2.0 - 1.0;
+        float2 encoded = minecraftSampleMaterial(hit, data.normalTexture, pageUv, pageLod).xy * 2.0 - 1.0;
         float z = sqrt(max(0.0, 1.0 - dot(encoded, encoded)));
         float3 objectNormal = normalize(hit.primitive.tangent * encoded.x
                 + hit.primitive.bitangent * encoded.y
@@ -167,7 +175,7 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
         }
     }
     if ((hit.instance.flags & MINECRAFT_DAMAGE_PRESENT) != 0u) {
-        float damage = minecraftSample(hit, hit.instance.damageTexture,
+        float damage = minecraftSampleMaterial(hit, hit.instance.damageTexture,
                 hit.textureCoordinate, 0.0).a * clamp(hit.instance.damageStrength, 0.0, 1.0);
         material.base_color = lerp(material.base_color, material.base_color * 0.18, damage);
         material.specular_roughness = lerp(material.specular_roughness, 0.92, damage);

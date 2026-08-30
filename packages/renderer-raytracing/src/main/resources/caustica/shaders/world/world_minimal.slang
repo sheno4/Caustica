@@ -42,6 +42,17 @@ public static const uint WORLD_PATH_EMISSIVE = 64u;
 public static const uint WORLD_RAY_MASK_SECONDARY = 0x01u;
 public static const uint WORLD_RAY_MASK_PRIMARY = 0x02u;
 
+public float worldCoverageRandom(uint seed, uint instanceIndex, uint geometryIndex, uint primitiveIndex) {
+    uint state = seed ^ (instanceIndex * 0x9e3779b9u)
+            ^ (geometryIndex * 0x85ebca6bu) ^ (primitiveIndex * 0xc2b2ae35u);
+    state ^= 2747636419u;
+    state *= 2654435769u;
+    state ^= state >> 16u;
+    state *= 2654435769u;
+    state ^= state >> 16u;
+    return (float(state) + 0.5) * (1.0 / 4294967296.0);
+}
+
 public ShaderRootData worldShaderRoot() {
     ShaderRootData root = {};
     root.abiVersion = CAUSTICA_SHADER_ABI_VERSION;

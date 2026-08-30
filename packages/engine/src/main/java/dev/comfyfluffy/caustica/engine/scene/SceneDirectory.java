@@ -185,26 +185,8 @@ public final class SceneDirectory {
         Map<InstanceRef, InstanceValue> nextInstances = new LinkedHashMap<>(instances);
         List<RetainedValue> removed = new ArrayList<>();
         for (int batchIndex = 0; batchIndex < group.size(); batchIndex++) {
-            BatchToken token = tokens.get(batchIndex);
-            for (GeometryChannel.Operation operation : group.get(batchIndex).operations()) {
-                if (operation instanceof GeometryChannel.SetMesh<?> set) {
-                    MeshRef mesh = (MeshRef) set.mesh();
-                    replace(nextMeshes, mesh, new MeshValue(token, set.build()), removed);
-                } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
-                    MeshRef mesh = (MeshRef) drop.mesh();
-                    remove(nextMeshes, mesh, removed);
-                    nextInstances.entrySet().removeIf(entry -> {
-                        if (entry.getValue().mesh != mesh) return false;
-                        removed.add(entry.getValue());
-                        return true;
-                    });
-                } else if (operation instanceof GeometryChannel.SetInstance<?> set) {
-                    replace(nextInstances, (InstanceRef) set.instance(),
-                            new InstanceValue(token, (SceneRef) set.scene(), (MeshRef) set.mesh(), set), removed);
-                } else if (operation instanceof GeometryChannel.DropInstance drop) {
-                    remove(nextInstances, (InstanceRef) drop.instance(), removed);
-                }
-            }
+            applyGeometry(group.get(batchIndex).operations(), tokens.get(batchIndex),
+                    nextMeshes, nextInstances, removed);
         }
         long nextRevision = revision + 1;
         RetainedSceneGeometryDelta delta = geometryDelta(nextRevision, operations);
@@ -222,26 +204,97 @@ public final class SceneDirectory {
         return receipt;
     }
 
+    synchronized GeometryPublication submitGeometryAndLights(
+            GeometryContributionChannel geometryChannel, LightChannel lightChannel,
+            List<RetainedBatch<GeometryChannel.Operation>> geometryGroup,
+            RetainedBatch<LightChannel.Operation> lightBatch) {
+        requireSubmission(geometryChannel);
+        if (!(lightChannel instanceof LightContributionChannel ownedLights)) {
+            throw new IllegalArgumentException("foreign light channel");
+        }
+        requireSubmission(ownedLights);
+        if (geometryChannel.owner != ownedLights.owner) {
+            throw new IllegalArgumentException("geometry and light channels belong to different contributions");
+        }
+        geometryGroup = List.copyOf(geometryGroup);
+        if (geometryGroup.isEmpty()) {
+            throw new IllegalArgumentException("a submission group needs at least one geometry batch");
+        }
+        Objects.requireNonNull(lightBatch, "lightBatch");
+        List<GeometryChannel.Operation> geometryOperations = geometryGroup.stream()
+                .flatMap(batch -> batch.operations().stream())
+                .toList();
+        validateGeometry(geometryChannel, geometryOperations);
+        validateLights(ownedLights, lightBatch.operations());
+
+        List<BatchToken> geometryTokens = geometryGroup.stream()
+                .map(batch -> new BatchToken(geometryChannel, batch.retired()))
+                .toList();
+        BatchToken lightToken = new BatchToken(ownedLights, lightBatch.retired());
+        Map<MeshRef, MeshValue> nextMeshes = new LinkedHashMap<>(meshes);
+        Map<InstanceRef, InstanceValue> nextInstances = new LinkedHashMap<>(instances);
+        List<RetainedValue> removedGeometry = new ArrayList<>();
+        for (int batchIndex = 0; batchIndex < geometryGroup.size(); batchIndex++) {
+            applyGeometry(geometryGroup.get(batchIndex).operations(), geometryTokens.get(batchIndex),
+                    nextMeshes, nextInstances, removedGeometry);
+        }
+        Map<LightRef, LightValue> nextLights = new LinkedHashMap<>(lights);
+        List<RetainedValue> removedLights = new ArrayList<>();
+        applyLights(lightBatch.operations(), lightToken, nextLights, removedLights);
+
+        long nextRevision = revision + 1;
+        RetainedSceneGeometryDelta geometryDelta = geometryDelta(nextRevision, geometryOperations);
+        RetainedSceneContentSnapshot content = contentSnapshot(nextRevision, nextLights, environments);
+        PublicationReceipt receipt = new PublicationReceipt();
+        Map<SceneRef, EnvironmentValue> currentEnvironments = environments;
+        backend.publishGeometryAndContent(geometryDelta, content,
+                () -> snapshot(nextRevision, nextMeshes, nextInstances, nextLights, currentEnvironments),
+                receipt::publish, () -> enqueueRelease(removedGeometry),
+                () -> enqueueRelease(removedLights));
+        batches.addAll(geometryTokens);
+        batches.add(lightToken);
+        meshes = nextMeshes;
+        instances = nextInstances;
+        lights = nextLights;
+        revision++;
+        geometryTokens.forEach(token -> token.seal(this));
+        lightToken.seal(this);
+        return receipt;
+    }
+
     synchronized void submitLights(LightContributionChannel channel,
                                    RetainedBatch<LightChannel.Operation> batch) {
         requireSubmission(channel);
         Objects.requireNonNull(batch, "batch");
-        Map<LightRef, Boolean> simulated = new LinkedHashMap<>();
-        lights.keySet().forEach(light -> simulated.put(light, Boolean.TRUE));
-        for (LightChannel.Operation operation : batch.operations()) {
-            if (operation instanceof LightChannel.SetLight set) {
-                requireOwnedLight(channel, set.light());
-                requireLiveScene(set.scene());
-                simulated.put((LightRef) set.light(), Boolean.TRUE);
-            } else if (operation instanceof LightChannel.DropLight drop) {
-                requireOwnedLight(channel, drop.light());
-                simulated.remove((LightRef) drop.light());
-            }
-        }
+        validateLights(channel, batch.operations());
         BatchToken token = new BatchToken(channel, batch.retired());
         Map<LightRef, LightValue> nextLights = new LinkedHashMap<>(lights);
         List<RetainedValue> removed = new ArrayList<>();
-        for (LightChannel.Operation operation : batch.operations()) {
+        applyLights(batch.operations(), token, nextLights, removed);
+        RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, nextLights, environments);
+        backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
+        batches.add(token);
+        lights = nextLights;
+        revision++;
+        token.seal(this);
+    }
+
+    private void validateLights(LightContributionChannel channel,
+                                List<LightChannel.Operation> operations) {
+        for (LightChannel.Operation operation : operations) {
+            if (operation instanceof LightChannel.SetLight set) {
+                requireOwnedLight(channel, set.light());
+                requireLiveScene(set.scene());
+            } else if (operation instanceof LightChannel.DropLight drop) {
+                requireOwnedLight(channel, drop.light());
+            }
+        }
+    }
+
+    private static void applyLights(List<LightChannel.Operation> operations, BatchToken token,
+                                    Map<LightRef, LightValue> nextLights,
+                                    List<RetainedValue> removed) {
+        for (LightChannel.Operation operation : operations) {
             if (operation instanceof LightChannel.SetLight set) {
                 replace(nextLights, (LightRef) set.light(),
                         new LightValue(token, (SceneRef) set.scene(), set.descriptor()), removed);
@@ -249,12 +302,31 @@ public final class SceneDirectory {
                 remove(nextLights, (LightRef) drop.light(), removed);
             }
         }
-        RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, nextLights, environments);
-        backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
-        batches.add(token);
-        lights = nextLights;
-        revision++;
-        token.seal(this);
+    }
+
+    private static void applyGeometry(List<GeometryChannel.Operation> operations, BatchToken token,
+                                      Map<MeshRef, MeshValue> nextMeshes,
+                                      Map<InstanceRef, InstanceValue> nextInstances,
+                                      List<RetainedValue> removed) {
+        for (GeometryChannel.Operation operation : operations) {
+            if (operation instanceof GeometryChannel.SetMesh<?> set) {
+                MeshRef mesh = (MeshRef) set.mesh();
+                replace(nextMeshes, mesh, new MeshValue(token, set.build()), removed);
+            } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
+                MeshRef mesh = (MeshRef) drop.mesh();
+                remove(nextMeshes, mesh, removed);
+                nextInstances.entrySet().removeIf(entry -> {
+                    if (entry.getValue().mesh != mesh) return false;
+                    removed.add(entry.getValue());
+                    return true;
+                });
+            } else if (operation instanceof GeometryChannel.SetInstance<?> set) {
+                replace(nextInstances, (InstanceRef) set.instance(),
+                        new InstanceValue(token, (SceneRef) set.scene(), (MeshRef) set.mesh(), set), removed);
+            } else if (operation instanceof GeometryChannel.DropInstance drop) {
+                remove(nextInstances, (InstanceRef) drop.instance(), removed);
+            }
+        }
     }
 
     synchronized void selectEnvironment(SceneEnvironmentContributionChannel channel,
@@ -496,7 +568,7 @@ public final class SceneDirectory {
         for (MeshBuild.Geometry<?> geometry : build.geometries()) {
             if (geometry.surface() != null) programs.validateSurface(geometry.surface().surface(),
                     geometry.surface().bindingData(), mesh.instanceType,
-                    geometry.surface().coverage() instanceof MeshBuild.CoveragePolicy.Cutout);
+                    !(geometry.surface().coverage() instanceof MeshBuild.CoveragePolicy.Opaque));
             if (geometry.volume() != null) programs.validateVolume(geometry.volume().volume(),
                     geometry.volume().bindingData(), mesh.instanceType);
         }

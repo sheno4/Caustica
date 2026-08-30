@@ -238,6 +238,14 @@ final class RtNeeAtPropertiesTest {
         assertTrue(lights.contains("return neeAtLightMisPdf(proposalPdf, shapePdf, candidates)"));
         assertTrue(closest.contains("neeAtLightMisPdf(light.proposalPdf, light.shapePdf, candidateCount)"));
 
+        // Reverse MIS has support only on the linked proxy. The Gram solve remains correct when the
+        // parallelogram axes are skewed rather than assuming an orthogonal basis.
+        assertTrue(lights.contains("float determinant = uu * vv - uv * uv"));
+        assertTrue(lights.contains("if (determinant <= 0.0) return 0.0"));
+        assertTrue(lights.contains("float planeDistance = abs(dot(fromCenter, crossAxes)) / sqrt(determinant)"));
+        assertTrue(lights.contains("planeDistance > 1.0e-4 * sqrt(max(uu, vv))"));
+        assertTrue(lights.contains("if (any(abs(supportCoordinates) > float2(1.0001))) return 0.0"));
+
         // Feedback is a float reservoir biased against the global pdf, not a fixed-point counter.
         assertTrue(lights.contains("pow(globalPdf, 0.65)"));
         assertTrue(lights.contains("event.y = asuint(total)"));

@@ -84,8 +84,7 @@ public final class MinecraftFrameAdapter {
         FrameCaptureBinding capture = frameCapture;
         if (capture != null) {
             capture.sink.update(MinecraftClientFrameCapture.capture(
-                    client, cameraY, METERS_PER_WORLD_UNIT, capture.calibration,
-                    terrain.retainedLightSnapshot()));
+                    client, cameraY, METERS_PER_WORLD_UNIT, capture.calibration));
         }
         MinecraftFrameSelector.Selection selection = selection(submerged);
         if (selection == null) return null;

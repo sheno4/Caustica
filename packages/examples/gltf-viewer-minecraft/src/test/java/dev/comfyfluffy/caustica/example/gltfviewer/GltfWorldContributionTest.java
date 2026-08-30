@@ -119,6 +119,12 @@ final class GltfWorldContributionTest {
             order.add("geometry");
             return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
         }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+                List<RetainedBatch<Operation>> geometryBatches,
+                dev.comfyfluffy.caustica.api.light.LightChannel lights,
+                RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
+            throw new UnsupportedOperationException();
+        }
         RetainedBatch<Operation> last() { return batches.getLast(); }
     }
 

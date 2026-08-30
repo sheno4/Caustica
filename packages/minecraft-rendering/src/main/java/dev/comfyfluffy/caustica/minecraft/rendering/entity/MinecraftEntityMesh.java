@@ -1,17 +1,19 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 
 import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.minecraft.rendering.texture.MinecraftTextureSampler;
 
 import java.util.List;
 import java.util.Objects;
 
 /** Immutable CPU geometry captured from one Minecraft entity, block entity, or particle group. */
-public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs,
+public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs, float[] vertexColors,
                                   List<Triangle> triangles, long indexRevision) {
     public MinecraftEntityMesh {
         positions = positions.clone();
         indices = indices.clone();
         uvs = uvs.clone();
+        vertexColors = vertexColors.clone();
         triangles = List.copyOf(triangles);
         if (positions.length == 0 || positions.length % 3 != 0) {
             throw new IllegalArgumentException("positions must contain float3 vertices");
@@ -21,6 +23,9 @@ public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs,
         }
         if (uvs.length != positions.length / 3 * 2) {
             throw new IllegalArgumentException("UVs must contain one float2 per vertex");
+        }
+        if (vertexColors.length != positions.length / 3 * 4) {
+            throw new IllegalArgumentException("vertex colors must contain one float4 per vertex");
         }
         if (triangles.size() != indices.length / 3) {
             throw new IllegalArgumentException("every triangle needs captured shading data");
@@ -36,6 +41,7 @@ public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs,
     @Override public float[] positions() { return positions.clone(); }
     @Override public int[] indices() { return indices.clone(); }
     @Override public float[] uvs() { return uvs.clone(); }
+    @Override public float[] vertexColors() { return vertexColors.clone(); }
 
     public int vertexCount() { return positions.length / 3; }
     public int triangleCount() { return indices.length / 3; }
@@ -51,18 +57,27 @@ public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs,
     public enum TextureKind { STANDALONE, ATLAS }
 
     /** Stable Minecraft texture identity. The uploader resolves its current Vulkan view at upload time. */
-    public record Texture(ResourceId resource, TextureKind kind) {
+    public record Texture(ResourceId resource, TextureKind kind, MinecraftTextureSampler sampler) {
         public Texture {
             Objects.requireNonNull(resource, "resource");
             Objects.requireNonNull(kind, "kind");
+            Objects.requireNonNull(sampler, "sampler");
         }
 
         public static Texture standalone(ResourceId resource) {
-            return new Texture(resource, TextureKind.STANDALONE);
+            return standalone(resource, MinecraftTextureSampler.PIXEL_ART);
+        }
+
+        public static Texture standalone(ResourceId resource, MinecraftTextureSampler sampler) {
+            return new Texture(resource, TextureKind.STANDALONE, sampler);
         }
 
         public static Texture atlas(ResourceId resource) {
-            return new Texture(resource, TextureKind.ATLAS);
+            return atlas(resource, MinecraftTextureSampler.PIXEL_ART);
+        }
+
+        public static Texture atlas(ResourceId resource, MinecraftTextureSampler sampler) {
+            return new Texture(resource, TextureKind.ATLAS, sampler);
         }
     }
 
@@ -83,7 +98,7 @@ public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs,
     /** Per-triangle source data consumed by Minecraft's primitive-record uploader. */
     public record Triangle(Material material, Coverage coverage,
                            float normalX, float normalY, float normalZ,
-                           float emission, float tintR, float tintG, float tintB) {
+                           float emission) {
         public Triangle {
             Objects.requireNonNull(material, "material");
             Objects.requireNonNull(coverage, "coverage");

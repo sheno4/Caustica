@@ -16,6 +16,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
+import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,7 +72,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             primitiveBuffer = create((long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     bytes -> writePrimitiveRecords(bytes, source.triangleCount(), positions, indices,
-                            cornerUvs, primitive, atlas.descriptorIndex()));
+                            cornerUvs, primitive, atlas.descriptorIndex(), atlas.samplerDescriptorIndex()));
             instanceBuffer = create(MinecraftInstanceData.BYTE_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1f, 1f, 1f), 0,
                             new MinecraftInstanceData.SampledTexture2DIndex(0), 0f).write(bytes));
@@ -95,9 +96,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             long primitiveOffset = primitiveRecordOffset(geometry.firstIndex());
             ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
                     primitiveAddress.addBytes(primitiveOffset).value());
-            var policy = geometry.coverage() == MinecraftTerrainMesh.Coverage.OPAQUE
-                    ? (MeshBuild.CoveragePolicy) new MeshBuild.CoveragePolicy.Opaque()
-                    : new MeshBuild.CoveragePolicy.Cutout(geometry.alphaCutoff());
+            MeshBuild.CoveragePolicy policy = coveragePolicy(geometry);
             var surface = switch (geometry.program()) {
                 case MATERIAL -> new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
                 case WATER -> new MeshBuild.SurfaceSlot<>(programs.waterSurface(), binding, policy);
@@ -108,6 +107,14 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             geometries.add(new MeshBuild.Geometry<>(surface, volume, geometry.firstIndex(), geometry.indexCount()));
         }
         return List.copyOf(geometries);
+    }
+
+    static MeshBuild.CoveragePolicy coveragePolicy(MinecraftTerrainMesh.Geometry geometry) {
+        return switch (geometry.coverage()) {
+            case OPAQUE -> new MeshBuild.CoveragePolicy.Opaque();
+            case CUTOUT -> new MeshBuild.CoveragePolicy.Cutout(geometry.alphaCutoff());
+            case STOCHASTIC -> new MeshBuild.CoveragePolicy.Stochastic(geometry.alphaCutoff());
+        };
     }
 
     private UploadedSection uploaded(MinecraftTerrainMesh source, MinecraftPrograms programs,
@@ -126,7 +133,8 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     }
 
     static void writePrimitiveRecords(ByteBuffer bytes, int triangles, float[] positions, int[] indices,
-                                      float[] uvs, float[] primitive, int atlasDescriptor) {
+                                      float[] uvs, float[] primitive, int atlasDescriptor,
+                                      int atlasSamplerDescriptor) {
         for (int triangle = 0; triangle < triangles; triangle++) {
             int uv = triangle * 6;
             int data = triangle * MinecraftTerrainMesh.PRIMITIVE_FLOATS;
@@ -142,6 +150,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     new MinecraftPrimitiveData.Float3(primitive[data + 4], primitive[data + 5], primitive[data + 6]),
                     (int) primitive[data + 8],
                     new MinecraftPrimitiveData.SampledTexture2DIndex(textured ? atlasDescriptor : 0),
+                    new MinecraftPrimitiveData.SamplerIndex(textured ? atlasSamplerDescriptor : 0),
                     textured ? TEXTURE_PRESENT : 0,
                     primitive[data + 3],
                     basis.tangent(), basis.bitangent());
@@ -221,20 +230,26 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
 
     static final class SharedAtlas implements AutoCloseable {
         private final int descriptorIndex;
+        private final int samplerDescriptorIndex;
         private final Runnable cleanup;
         private int references = 1;
         private boolean ownerClosed;
 
-        SharedAtlas(int descriptorIndex, Runnable cleanup) {
-            if (descriptorIndex < 0) throw new IllegalArgumentException("descriptorIndex must be non-negative");
+        SharedAtlas(int descriptorIndex, int samplerDescriptorIndex, Runnable cleanup) {
+            if (descriptorIndex < 0 || samplerDescriptorIndex < 0) {
+                throw new IllegalArgumentException("descriptor indices must be non-negative");
+            }
             this.descriptorIndex = descriptorIndex;
+            this.samplerDescriptorIndex = samplerDescriptorIndex;
             this.cleanup = java.util.Objects.requireNonNull(cleanup, "cleanup");
         }
 
         static SharedAtlas create(GpuDevice gpu, BorrowedMinecraftTexture borrowed) {
             GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
+            GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 range = gpu.descriptorHeap().allocateResources(1);
+                samplerRange = gpu.descriptorHeap().allocateSamplers(1);
                 VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
                         .image(borrowed.vkImage()).viewType(VK_IMAGE_VIEW_TYPE_2D).format(borrowed.format());
                 view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
@@ -244,12 +259,16 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                         .pView(view).layout(borrowed.imageLayout());
                 gpu.descriptorHeap().writer().writeResource(range, 0,
                         VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()
-                                .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(data -> data.pImage(image)));
+                                 .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(data -> data.pImage(image)));
+                gpu.descriptorHeap().writer().writeSampler(samplerRange, 0,
+                        borrowed.sampler().write(VkSamplerCreateInfo.calloc(stack).sType$Default()));
                 GpuDescriptorRange<GpuDescriptorIndex.Resource> ownedRange = range;
-                return new SharedAtlas(range.firstIndex().value(),
-                        () -> throwIfFailed(closeAll(ownedRange::destroy, borrowed)));
+                GpuDescriptorRange<GpuDescriptorIndex.Sampler> ownedSamplerRange = samplerRange;
+                return new SharedAtlas(range.firstIndex().value(), samplerRange.firstIndex().value(),
+                        () -> throwIfFailed(closeAll(ownedRange::destroy, ownedSamplerRange::destroy, borrowed)));
             } catch (RuntimeException | Error failure) {
-                Throwable cleanup = closeAll(range == null ? null : range::destroy, borrowed);
+                Throwable cleanup = closeAll(range == null ? null : range::destroy,
+                        samplerRange == null ? null : samplerRange::destroy, borrowed);
                 if (cleanup != null) failure.addSuppressed(cleanup);
                 throw failure;
             }
@@ -257,6 +276,10 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
 
         int descriptorIndex() {
             return descriptorIndex;
+        }
+
+        int samplerDescriptorIndex() {
+            return samplerDescriptorIndex;
         }
 
         synchronized Lease retain() {

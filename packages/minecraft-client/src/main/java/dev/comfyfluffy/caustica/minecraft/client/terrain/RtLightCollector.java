@@ -217,8 +217,9 @@ final class RtLightCollector {
 
             append(out,
                     c0x + aC * e01x + bC * e03x, c0y + aC * e01y + bC * e03y, c0z + aC * e01z + bC * e03z,
-                    rectArea,
-                    p[pb], p[pb + 1], p[pb + 2],
+                     rectArea,
+                     p[pb], p[pb + 1], p[pb + 2],
+                    2 * k,
                     0.5f * (aHi - aLo) * e01x, 0.5f * (aHi - aLo) * e01y, 0.5f * (aHi - aLo) * e01z,
                     packHalf2(uvHuU, uvHuV),
                     0.5f * (bHi - bLo) * e03x, 0.5f * (bHi - bLo) * e03y, 0.5f * (bHi - bLo) * e03z,
@@ -242,13 +243,14 @@ final class RtLightCollector {
 
     /**
      * Packed light record, 5 vec4s / 80 B (matches the shader struct):
-     * {@code {pos.xyz, rectArea} {normal.xyz, reserved} {halfU.xyz, packHalf2(uvHu)}
+     * {@code {pos.xyz, rectArea} {normal.xyz, firstPrimitive} {halfU.xyz, packHalf2(uvHu)}
      * {halfV.xyz, packHalf2(uvHv)} {Le2020.rgb, packHalf2(uvCenter)}}. Positions/axes section-local
      * here; publish adds the section-origin-minus-rebase offset to pos only.
      */
     private static void append(FloatArrayList out,
                                float px, float py, float pz, float area,
                                float nx, float ny, float nz,
+                               int firstPrimitive,
                                float hux, float huy, float huz, float uvHu,
                                float hvx, float hvy, float hvz, float uvHv,
                                float leR, float leG, float leB, float uvC) {
@@ -259,7 +261,7 @@ final class RtLightCollector {
         out.add(nx);
         out.add(ny);
         out.add(nz);
-        out.add(0.0f);
+        out.add(firstPrimitive);
         out.add(hux);
         out.add(huy);
         out.add(huz);

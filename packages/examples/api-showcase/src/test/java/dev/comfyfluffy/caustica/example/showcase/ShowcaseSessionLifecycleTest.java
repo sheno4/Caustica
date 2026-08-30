@@ -139,6 +139,11 @@ final class ShowcaseSessionLifecycleTest {
             batches.addAll(accepted);
             return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
         }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+                List<RetainedBatch<Operation>> geometryBatches, LightChannel lights,
+                RetainedBatch<LightChannel.Operation> lightBatch) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class Lights implements LightChannel {

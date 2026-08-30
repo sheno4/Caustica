@@ -34,6 +34,21 @@ final class RtEntityCaptureTest {
     }
 
     @Test
+    void preservesPerVertexAndDrawAlpha() {
+        RtEntityCapture capture = new RtEntityCapture();
+        int[] colors = {0x20FF0000, 0x4000FF00, 0x800000FF, 0xFFFFFFFF};
+        for (int i = 0; i < 4; i++) {
+            capture.addVertex(X[i], Y[i], Z[i], colors[i], U[i], V[i], 0, 0, 0, 0, 1);
+        }
+
+        float[] captured = capture.entityMesh().vertexColors();
+        assertEquals(0x20 / 255f, captured[3]);
+        assertEquals(0x40 / 255f, captured[7]);
+        assertEquals(0x80 / 255f, captured[11]);
+        assertEquals(1f, captured[15]);
+    }
+
+    @Test
     void adjacentQuadsShareOnlyTheirOwnSurfaceValue() {
         RtEntityCapture capture = new RtEntityCapture();
         MinecraftEntityMesh.Material firstMaterial = material("first");
@@ -58,9 +73,10 @@ final class RtEntityCaptureTest {
         assertEquals(1f, first.normalZ());
         assertEquals(1.25f, first.emission());
         float[] firstTint = ColorSpaces.srgbToAcesCg(128f / 255f, 64f / 255f, 32f / 255f);
-        assertEquals(firstTint[0], first.tintR());
-        assertEquals(firstTint[1], first.tintG());
-        assertEquals(firstTint[2], first.tintB());
+        assertEquals(firstTint[0], mesh.vertexColors()[0]);
+        assertEquals(firstTint[1], mesh.vertexColors()[1]);
+        assertEquals(firstTint[2], mesh.vertexColors()[2]);
+        assertEquals(1f, mesh.vertexColors()[3]);
         assertEquals(secondMaterial, second.material());
         assertEquals(MinecraftEntityMesh.Coverage.OPAQUE, second.coverage());
         assertEquals(0f, second.normalX());
@@ -68,9 +84,10 @@ final class RtEntityCaptureTest {
         assertEquals(0f, second.normalZ());
         assertEquals(2.5f, second.emission());
         float[] secondTint = ColorSpaces.srgbToAcesCg(16f / 255f, 32f / 255f, 64f / 255f);
-        assertEquals(secondTint[0], second.tintR());
-        assertEquals(secondTint[1], second.tintG());
-        assertEquals(secondTint[2], second.tintB());
+        assertEquals(secondTint[0], mesh.vertexColors()[16]);
+        assertEquals(secondTint[1], mesh.vertexColors()[17]);
+        assertEquals(secondTint[2], mesh.vertexColors()[18]);
+        assertEquals(1f, mesh.vertexColors()[19]);
     }
 
     @Test
@@ -104,9 +121,14 @@ final class RtEntityCaptureTest {
         assertNotEquals(deformed.contentHash(), uvChanged.contentHash());
         assertEquals(deformed.topologyRevision(), uvChanged.topologyRevision());
 
+        capture.colorList.set(3, 0.25f);
+        RtEntities.MeshFingerprint alphaChanged = RtEntities.meshFingerprint(capture);
+        assertNotEquals(uvChanged.contentHash(), alphaChanged.contentHash());
+        assertEquals(uvChanged.topologyRevision(), alphaChanged.topologyRevision());
+
         capture.idx.set(0, 1);
         RtEntities.MeshFingerprint reordered = RtEntities.meshFingerprint(capture);
-        assertNotEquals(uvChanged.topologyRevision(), reordered.topologyRevision());
+        assertNotEquals(alphaChanged.topologyRevision(), reordered.topologyRevision());
         assertEquals(reordered.topologyRevision(), capture.entityMesh(reordered.topologyRevision()).indexRevision());
     }
 
@@ -121,9 +143,12 @@ final class RtEntityCaptureTest {
         positions[0] = 99f;
         int[] indices = mesh.indices();
         indices[0] = 3;
+        float[] colors = mesh.vertexColors();
+        colors[3] = 0f;
 
         assertEquals(original, mesh.positions()[0]);
         assertEquals(0, mesh.indices()[0]);
+        assertEquals(1f, mesh.vertexColors()[3]);
         assertEquals(23L, mesh.indexRevision());
     }
 

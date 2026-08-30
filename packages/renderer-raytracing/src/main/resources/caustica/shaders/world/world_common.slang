@@ -39,6 +39,7 @@ public struct RetainedGeometryRecord {
 };
 
 public static const uint RETAINED_GEOMETRY_HAS_VOLUME = 2u;
+public static const uint RETAINED_GEOMETRY_STOCHASTIC = 8u;
 
 // Scene-relative geometry and physical radiometry for one immutable retained light.
 public struct RetainedLightRecord {

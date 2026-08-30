@@ -67,6 +67,8 @@ final class MeshBuildTest {
         SurfaceId<Binding, Instance> surface = new SurfaceId<>() { };
         assertThrows(IllegalArgumentException.class,
                 () -> new MeshBuild.CoveragePolicy.Cutout(Float.NaN));
+        assertThrows(IllegalArgumentException.class,
+                () -> new MeshBuild.CoveragePolicy.Stochastic(1.01f));
     }
 
     @Test

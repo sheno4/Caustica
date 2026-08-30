@@ -13,6 +13,7 @@ final class MinecraftTerrainLightAdapterTest {
         record[4] = 0.8f;
         record[5] = 0.2f;
         record[6] = -0.4f;
+        record[7] = 12.0f;
         record[8] = 2.0f;
         record[13] = 3.0f;
         record[16] = 10.0f;
@@ -20,7 +21,8 @@ final class MinecraftTerrainLightAdapterTest {
         record[18] = 12.0f;
 
         var batch = MinecraftTerrainLightAdapter.describe(4L, 7L, 32, 48, 80, record);
-        LightDescriptor.Parallelogram light = (LightDescriptor.Parallelogram) batch.lights().getFirst();
+        var emitter = batch.emitters().getFirst();
+        LightDescriptor.Parallelogram light = (LightDescriptor.Parallelogram) emitter.descriptor();
 
         assertEquals(32.0, light.positionX());
         assertEquals(48.0, light.positionY());
@@ -28,7 +30,9 @@ final class MinecraftTerrainLightAdapterTest {
         assertEquals(-3.0, light.halfVy());
         assertEquals(4L, batch.sectionKey());
         assertEquals(7L, batch.revision());
-        assertThrows(UnsupportedOperationException.class, () -> batch.lights().add(light));
+        assertEquals(12, emitter.firstPrimitive());
+        assertEquals(2, emitter.primitiveCount());
+        assertThrows(UnsupportedOperationException.class, () -> batch.emitters().add(emitter));
     }
 
     @Test
@@ -44,9 +48,9 @@ final class MinecraftTerrainLightAdapterTest {
 
         var batch = MinecraftTerrainLightAdapter.describe(1L, 2L, 0, 0, 0, record);
 
-        assertEquals(1, batch.lights().size());
+        assertEquals(1, batch.emitters().size());
         LightDescriptor.Parallelogram light =
-                (LightDescriptor.Parallelogram) batch.lights().getFirst();
+                (LightDescriptor.Parallelogram) batch.emitters().getFirst().descriptor();
         assertEquals(0.2, light.halfUy(), 1.0e-6);
         assertEquals(0.3, Math.abs(light.halfVy()), 1.0e-6);
     }

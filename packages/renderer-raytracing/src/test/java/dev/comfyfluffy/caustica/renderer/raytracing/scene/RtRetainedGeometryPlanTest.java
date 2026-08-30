@@ -43,6 +43,32 @@ final class RtRetainedGeometryPlanTest {
     }
 
     @Test
+    void stochasticCoverageUsesAnyHitAndPreservesItsGuideCutoff() {
+        MeshBuild<Instance> build = build(new MeshBuild.IndexRevision(7), 0x1000,
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(11),
+                        new MeshBuild.CoveragePolicy.Opaque()),
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22),
+                        new MeshBuild.CoveragePolicy.Stochastic(0.35f)));
+        var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
+                1, build, List.of(
+                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
+                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)));
+        var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
+                1, new dev.comfyfluffy.caustica.api.scene.SceneId() { }, 1,
+                GeometryTransform.translation(0, 0, 0), 0xff, BINDING.data(0), List.of());
+
+        var record = RtRetainedGeometryPlan.records(mesh, instance,
+                GeometryTransform.translation(0, 0, 0)).get(1);
+
+        assertFalse(RtRetainedGeometryPlan.blasRanges(build).get(1).opaque());
+        assertTrue((record.flags() & RtRetainedGeometryPlan.STOCHASTIC) != 0);
+        assertEquals(0.35f, record.alphaCutoff());
+        assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_CUTOUT,
+                        RtRetainedGeometryPlan.HitGroup.SHADOW_CUTOUT),
+                RtRetainedGeometryPlan.hitGroups(List.of(record)));
+    }
+
+    @Test
     void reuseRequiresStableInputsRevisionAndGeometryShapeButNotBindingWords() {
         MeshBuild<Instance> first = build(new MeshBuild.IndexRevision(9), 0x1000,
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1), new MeshBuild.CoveragePolicy.Opaque()),

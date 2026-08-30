@@ -7,5 +7,6 @@ public interface BorrowedMinecraftTexture extends AutoCloseable {
     int baseMipLevel();
     int mipLevels();
     int imageLayout();
+    MinecraftTextureSampler sampler();
     @Override void close();
 }

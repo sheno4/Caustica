@@ -465,6 +465,79 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void geometryAndLightsPublishInOneRevisionAndRetireTheirBatchesIndependently() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        ContributionOwner owner = new ContributionOwner(2);
+        GeometryContributionChannel geometry = directory.openGeometry(owner);
+        LightContributionChannel lights = directory.openLights(owner);
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var instance = geometry.newInstance();
+        var light = lights.newLight();
+        AtomicInteger geometryRetired = new AtomicInteger();
+        AtomicInteger lightRetired = new AtomicInteger();
+
+        geometry.submitWithLights(List.of(new RetainedBatch<>(List.of(
+                        new GeometryChannel.SetMesh<>(mesh, mesh(surface)),
+                        new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                                GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0),
+                                new PrimitiveLightMap(List.of(
+                                        new PrimitiveLightMap.Range(0, 1, light))))),
+                        geometryRetired::incrementAndGet)), lights,
+                new RetainedBatch<>(List.of(new LightChannel.SetLight(light, scene,
+                        new LightDescriptor.Parallelogram(
+                                0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1))),
+                        lightRetired::incrementAndGet));
+
+        RetainedSceneSnapshot combined = backend.snapshots.getLast();
+        assertEquals(1, combined.instances().size());
+        assertEquals(1, combined.lights().size());
+        assertEquals(combined.lights().getFirst().identity(),
+                combined.instances().getFirst().primitiveEmitters().getFirst().lightIdentity());
+        geometry.submitWithLights(List.of(RetainedBatch.of(List.of(
+                        new GeometryChannel.DropInstance(instance),
+                        new GeometryChannel.DropMesh<>(mesh)))), lights,
+                RetainedBatch.of(List.of(new LightChannel.DropLight(light))));
+        backend.retireLatest();
+        directory.progress();
+
+        assertEquals(1, geometryRetired.get());
+        assertEquals(1, lightRetired.get());
+    }
+
+    @Test
+    void combinedPublicationRequiresChannelsFromTheSameContributionAndSession() {
+        ProgramFixture programs = new ProgramFixture();
+        SceneDirectory directory = directory(programs, new SceneBackend());
+        ContributionOwner owner = new ContributionOwner(1);
+        GeometryContributionChannel geometry = directory.openGeometry(owner);
+        LightContributionChannel otherOwner = directory.openLights(new ContributionOwner(2));
+        LightContributionChannel sameOwner = directory.openLights(owner);
+        LightContributionChannel foreignSession = directory(new ProgramFixture(), new SceneBackend())
+                .openLights(owner);
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var geometryBatch = RetainedBatch.<GeometryChannel.Operation>of(List.of(
+                new GeometryChannel.DropMesh<>(mesh)));
+        var otherLight = otherOwner.newLight();
+        var sameLight = sameOwner.newLight();
+        var foreignLight = foreignSession.newLight();
+
+        assertThrows(IllegalArgumentException.class, () -> geometry.submitWithLights(
+                List.of(geometryBatch), otherOwner,
+                RetainedBatch.of(List.of(new LightChannel.DropLight(otherLight)))));
+        assertThrows(IllegalArgumentException.class, () -> geometry.submitWithLights(
+                List.of(geometryBatch), foreignSession,
+                RetainedBatch.of(List.of(new LightChannel.DropLight(foreignLight)))));
+        assertEquals(0, directory.snapshot().meshes().size());
+        assertThrows(IllegalArgumentException.class, () -> geometry.submitWithLights(
+                List.of(), sameOwner,
+                RetainedBatch.of(List.of(new LightChannel.DropLight(sameLight)))));
+    }
+
+    @Test
     void primitiveLightMapsAreSessionScopedPlacementSelectionsBoundedByTheMesh() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));

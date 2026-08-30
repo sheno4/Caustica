@@ -63,8 +63,13 @@ public void runShadowAnyHit<TComposition : IComposition>(inout WorldPayload payl
         IgnoreHit();
         return;
     }
-    if (coverages.evaluateCoverage(record.coverageImplementation,
-            worldCoverageInput(attributes)) < record.alphaCutoff) {
+    float coverage = clamp(coverages.evaluateCoverage(record.coverageImplementation,
+            worldCoverageInput(attributes)), 0.0, 1.0);
+    if ((record.flags & RETAINED_GEOMETRY_STOCHASTIC) != 0u) {
+        payload.radiance *= 1.0 - coverage;
+        if (!any(payload.radiance > 0.0)) return;
+        IgnoreHit();
+    } else if (coverage < record.alphaCutoff) {
         IgnoreHit();
     } else {
         payload.radiance = float3(0.0);

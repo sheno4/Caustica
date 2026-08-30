@@ -288,9 +288,10 @@ final class MinecraftEntityGeometryTest {
         var material = new MinecraftEntityMesh.Material(ResourceId.of("test", "entity"), null,
                 MinecraftEntityMesh.Program.MATERIAL);
         var triangle = new MinecraftEntityMesh.Triangle(material, MinecraftEntityMesh.Coverage.OPAQUE,
-                0, 0, 1, 0, 1, 1, 1);
+                0, 0, 1, 0);
         return new MinecraftEntityMesh(new float[] {0, 0, 0, 1, 0, 0, 0, 1, 0},
-                new int[] {0, 1, 2}, new float[] {0, 0, 1, 0, 0, 1}, List.of(triangle), 17);
+                new int[] {0, 1, 2}, new float[] {0, 0, 1, 0, 0, 1},
+                new float[] {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, List.of(triangle), 17);
     }
 
     private static MinecraftEntityGeometry.MeshRevision revision(long content) {
@@ -356,6 +357,12 @@ final class MinecraftEntityGeometryTest {
             }
             groups.add(List.copyOf(group));
             return publication;
+        }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+                List<RetainedBatch<Operation>> geometryBatches,
+                dev.comfyfluffy.caustica.api.light.LightChannel lights,
+                RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
+            throw new UnsupportedOperationException();
         }
     }
 }

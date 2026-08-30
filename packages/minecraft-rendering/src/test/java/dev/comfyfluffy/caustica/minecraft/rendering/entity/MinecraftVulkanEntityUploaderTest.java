@@ -2,6 +2,9 @@ package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData;
 import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTexture;
+import dev.comfyfluffy.caustica.minecraft.rendering.texture.MinecraftTextureSampler;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
@@ -33,23 +36,31 @@ final class MinecraftVulkanEntityUploaderTest {
                 MinecraftEntityMesh.Coverage.CUTOUT);
         var uv = new MinecraftPrimitiveData.Float2[]{new MinecraftPrimitiveData.Float2(0, 0),
                 new MinecraftPrimitiveData.Float2(1, 0), new MinecraftPrimitiveData.Float2(0, 1)};
-        var color = new MinecraftPrimitiveData.Float4(.2f, .3f, .4f, 1);
+        var colors = new MinecraftPrimitiveData.Float4[]{
+                new MinecraftPrimitiveData.Float4(.1f, .2f, .3f, .25f),
+                new MinecraftPrimitiveData.Float4(.2f, .3f, .4f, .5f),
+                new MinecraftPrimitiveData.Float4(.3f, .4f, .5f, .75f)};
 
         MinecraftPrimitiveData record = MinecraftVulkanEntityUploader.primitiveRecord(
-                triangle, uv, color, 17, 23, MinecraftVulkanEntityUploader.TangentBasis.ZERO);
+                triangle, uv, colors, 17, 23, 29, MinecraftVulkanEntityUploader.TangentBasis.ZERO);
 
         assertEquals(17, record.materialIndex());
         assertEquals(23, record.baseTexture().value());
+        assertEquals(29, record.baseSampler().value());
         assertEquals(1, record.textureFlags());
         assertEquals(2.5f, record.primitiveEmission());
-        assertEquals(.2f, record.vertexColors()[2].x());
+        assertEquals(.3f, record.vertexColors()[2].x());
+        assertEquals(.25f, record.vertexColors()[0].w());
+        assertEquals(.5f, record.vertexColors()[1].w());
+        assertEquals(.75f, record.vertexColors()[2].w());
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE)
                 .order(ByteOrder.LITTLE_ENDIAN);
         record.write(bytes);
         assertEquals(17, bytes.getInt(92));
         assertEquals(23, bytes.getInt(96));
-        assertEquals(1, bytes.getInt(100));
-        assertEquals(2.5f, bytes.getFloat(104));
+        assertEquals(29, bytes.getInt(100));
+        assertEquals(1, bytes.getInt(104));
+        assertEquals(2.5f, bytes.getFloat(108));
     }
 
     @Test void textureSetDestroysDescriptorThenAllLeasesAndAggregatesFailures() {
@@ -62,12 +73,18 @@ final class MinecraftVulkanEntityUploaderTest {
             @Override public int descriptorCount() { return 1; }
             @Override public void destroy() { closed.add("descriptor"); throw new IllegalStateException("descriptor"); }
         };
+        var samplers = new GpuDescriptorRange<GpuDescriptorIndex.Sampler>() {
+            @Override public GpuDescriptorIndex.Sampler firstIndex() { return new GpuDescriptorIndex.Sampler(8); }
+            @Override public int descriptorCount() { return 1; }
+            @Override public void destroy() { closed.add("sampler"); }
+        };
         BorrowedMinecraftTexture first = lease(closed, "first", true);
         BorrowedMinecraftTexture second = lease(closed, "second", false);
-        var set = new MinecraftVulkanEntityUploader.TextureSet(range, Map.of(), List.of(first, second));
+        var set = new MinecraftVulkanEntityUploader.TextureSet(
+                range, samplers, Map.of(), Map.of(), List.of(first, second));
 
         IllegalStateException failure = assertThrows(IllegalStateException.class, set::close);
-        assertEquals(List.of("descriptor", "first", "second"), closed);
+        assertEquals(List.of("descriptor", "sampler", "first", "second"), closed);
         assertEquals(1, failure.getSuppressed().length);
     }
 
@@ -79,6 +96,7 @@ final class MinecraftVulkanEntityUploaderTest {
             @Override public int baseMipLevel() { return 0; }
             @Override public int mipLevels() { return 1; }
             @Override public int imageLayout() { return 0; }
+            @Override public MinecraftTextureSampler sampler() { return MinecraftTextureSampler.PIXEL_ART; }
             @Override public void close() {
                 closed.add(name);
                 if (fail) throw new IllegalArgumentException(name);
@@ -105,6 +123,17 @@ final class MinecraftVulkanEntityUploaderTest {
                 triangle(a, MinecraftEntityMesh.Coverage.STOCHASTIC),
                 triangle(b, MinecraftEntityMesh.Coverage.STOCHASTIC)));
         assertEquals(1, MinecraftVulkanEntityUploader.geometryRanges(stochastic).size());
+    }
+
+    @Test void stochasticCoverageRemainsDistinctAtTheMeshApiBoundary() {
+        assertInstanceOf(dev.comfyfluffy.caustica.api.geometry.MeshBuild.CoveragePolicy.Opaque.class,
+                MinecraftVulkanEntityUploader.coveragePolicy(MinecraftEntityMesh.Coverage.OPAQUE));
+        assertInstanceOf(dev.comfyfluffy.caustica.api.geometry.MeshBuild.CoveragePolicy.Cutout.class,
+                MinecraftVulkanEntityUploader.coveragePolicy(MinecraftEntityMesh.Coverage.CUTOUT));
+        var stochastic = assertInstanceOf(
+                dev.comfyfluffy.caustica.api.geometry.MeshBuild.CoveragePolicy.Stochastic.class,
+                MinecraftVulkanEntityUploader.coveragePolicy(MinecraftEntityMesh.Coverage.STOCHASTIC));
+        assertEquals(.5f, stochastic.guideAlphaCutoff());
     }
 
     @Test void materialKeyPreservesOpticalProfileAndMediumBoundary() {
@@ -135,9 +164,11 @@ final class MinecraftVulkanEntityUploaderTest {
         int count = triangles.size();
         float[] positions = new float[count * 9];
         float[] uvs = new float[count * 6];
+        float[] colors = new float[count * 12];
+        java.util.Arrays.fill(colors, 1.0f);
         int[] indices = new int[count * 3];
         for (int i = 0; i < indices.length; i++) indices[i] = i;
-        return new MinecraftEntityMesh(positions, indices, uvs, triangles, 1);
+        return new MinecraftEntityMesh(positions, indices, uvs, colors, triangles, 1);
     }
 
     private static MinecraftEntityMesh.Material material(String name, MinecraftEntityMesh.Program program) {
@@ -146,6 +177,6 @@ final class MinecraftVulkanEntityUploaderTest {
 
     private static MinecraftEntityMesh.Triangle triangle(MinecraftEntityMesh.Material material,
                                                           MinecraftEntityMesh.Coverage coverage) {
-        return new MinecraftEntityMesh.Triangle(material, coverage, 0, 1, 0, 2.5f, .2f, .3f, .4f);
+        return new MinecraftEntityMesh.Triangle(material, coverage, 0, 1, 0, 2.5f);
     }
 }

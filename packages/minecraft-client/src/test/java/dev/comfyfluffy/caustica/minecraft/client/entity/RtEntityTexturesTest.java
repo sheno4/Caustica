@@ -3,6 +3,11 @@ package dev.comfyfluffy.caustica.minecraft.client.entity;
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.minecraft.rendering.texture.MinecraftTextureSampler;
+import com.mojang.blaze3d.textures.AddressMode;
+import com.mojang.blaze3d.textures.FilterMode;
+import com.mojang.blaze3d.textures.GpuSampler;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -14,6 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.util.Map;
+import java.util.OptionalDouble;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -45,6 +51,40 @@ final class RtEntityTexturesTest {
     void perTypeEntityTexturesStillComeFromSampler0() {
         Identifier zombie = Identifier.parse("minecraft:textures/entity/zombie/zombie.png");
         assertEquals(zombie, boundTexture(RenderTypes.entitySolid(zombie)));
+    }
+
+    @Test
+    void standaloneEntityMaterialUsesItsLogicalTextureIdentity() {
+        var texture = MinecraftEntityMesh.Texture.standalone(
+                ResourceId.of("minecraft", "entity/zombie/zombie"));
+
+        MinecraftEntityMesh.Material material = RtEntityCollectorBase.standaloneMaterial(texture);
+
+        assertEquals(texture.resource(), material.material());
+        assertEquals(texture, material.texture());
+    }
+
+    @Test
+    void snapshotsMinecraftSamplerStateWithoutRetainingTheGpuSampler() {
+        GpuSampler source = new GpuSampler() {
+            @Override public AddressMode getAddressModeU() { return AddressMode.REPEAT; }
+            @Override public AddressMode getAddressModeV() { return AddressMode.CLAMP_TO_EDGE; }
+            @Override public FilterMode getMinFilter() { return FilterMode.NEAREST; }
+            @Override public FilterMode getMagFilter() { return FilterMode.LINEAR; }
+            @Override public int getMaxAnisotropy() { return 4; }
+            @Override public OptionalDouble getMaxLod() { return OptionalDouble.of(6.0); }
+            @Override public void close() { }
+        };
+
+        MinecraftTextureSampler captured = RtEntityTextures.sampler(source);
+
+        assertEquals(MinecraftTextureSampler.Filter.NEAREST, captured.minFilter());
+        assertEquals(MinecraftTextureSampler.Filter.LINEAR, captured.magFilter());
+        assertEquals(MinecraftTextureSampler.AddressMode.REPEAT, captured.addressModeU());
+        assertEquals(MinecraftTextureSampler.AddressMode.CLAMP_TO_EDGE, captured.addressModeV());
+        assertEquals(MinecraftTextureSampler.MipmapMode.LINEAR, captured.mipmapMode());
+        assertEquals(6f, captured.maxLod());
+        assertEquals(4, captured.maxAnisotropy());
     }
 
     private static Identifier boundTexture(RenderType renderType) {
