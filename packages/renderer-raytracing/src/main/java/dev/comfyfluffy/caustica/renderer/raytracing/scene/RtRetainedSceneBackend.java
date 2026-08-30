@@ -771,7 +771,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                             true, "retained light records");
                     emitters = ctx.createBuffer(emitterCapacity, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                             true, "retained primitive-light indices");
-                    descriptor = ctx.descriptorHeap().allocateResources(1, "retained scene TLAS");
+                    descriptor = ctx.descriptorHeap().allocateResources(1);
                     slot = new TraceSlot(geometry, hits, lights, emitters, descriptor,
                             pipeline.retainedHitRecordStride());
                     slots[slotIndex] = slot;

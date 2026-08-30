@@ -405,8 +405,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
             image.retainViews();
             GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                range = gpu.descriptorHeap().allocateResources(
-                        1, "Minecraft celestials atlas epoch " + epoch);
+                range = gpu.descriptorHeap().allocateResources(1);
                 GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = range;
                 VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
                         .image(image.vkImage())

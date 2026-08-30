@@ -19,13 +19,10 @@ public interface GpuDescriptorHeap {
      * {@link GpuDescriptorHeapProperties#resourceDescriptorStrideBytes()}. The range is uninitialized until
      * written through {@link #writer()}.
      */
-    GpuDescriptorRange<GpuDescriptorIndex.Resource> allocateResources(int descriptorCount, String label);
+    GpuDescriptorRange<GpuDescriptorIndex.Resource> allocateResources(int descriptorCount);
 
-    /**
-     * Allocate consecutive shader-visible sampler slots using
-     * {@link GpuDescriptorHeapProperties#samplerDescriptorStrideBytes()}.
-     */
-    GpuDescriptorRange<GpuDescriptorIndex.Sampler> allocateSamplers(int descriptorCount, String label);
+    /** Allocate consecutive shader-visible sampler slots. */
+    GpuDescriptorRange<GpuDescriptorIndex.Sampler> allocateSamplers(int descriptorCount);
 
     /** Encoder that writes valid descriptor bytes and flushes non-coherent heap memory before returning. */
     GpuDescriptorWriter writer();

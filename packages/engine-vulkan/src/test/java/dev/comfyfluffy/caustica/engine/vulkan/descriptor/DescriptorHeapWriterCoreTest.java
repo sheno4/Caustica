@@ -176,8 +176,8 @@ final class DescriptorHeapWriterCoreTest {
 
     private static DescriptorHeapAllocationCore allocations() {
         return new DescriptorHeapAllocationCore(
-                new GpuDescriptorHeapProperties(32, 8, 16, 8, 8, 4, 256, 64),
-                64, 16, 4096, 1024);
+                new GpuDescriptorHeapProperties(32, 8, 4),
+                8, 16, 8, 256, 64, 64, 16, 4096, 1024);
     }
 
     private static RecordingStorage resourceStorage() {

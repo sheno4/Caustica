@@ -52,7 +52,7 @@ public final class VulkanSampler implements AutoCloseable {
             VulkanChecks.check(VK10.vkCreateSampler(gpu.vk(), info, null, output),
                     "vkCreateSampler(" + label + ")");
             sampler = output.get(0);
-            descriptor = gpu.descriptorHeap().allocateSamplers(1, label);
+            descriptor = gpu.descriptorHeap().allocateSamplers(1);
             gpu.descriptorHeap().writer().writeSampler(descriptor, 0, info);
             return new VulkanSampler(gpu.vk(), sampler, descriptor);
         } catch (RuntimeException | Error failure) {

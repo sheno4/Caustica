@@ -36,7 +36,7 @@ public final class MinecraftVulkanImageBorrow implements GpuImage {
         texture.addViews();
         GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            range = gpu.descriptorHeap().allocateResources(1, "Minecraft presentation source");
+            range = gpu.descriptorHeap().allocateResources(1);
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default()
                     .image(texture.vkImage()).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
             viewInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)

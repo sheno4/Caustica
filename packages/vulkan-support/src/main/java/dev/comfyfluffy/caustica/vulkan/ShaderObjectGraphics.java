@@ -14,7 +14,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Descriptor-heap vertex and fragment shader objects with fully dynamic raster state. */
+/**
+ * Descriptor-heap vertex and fragment shader objects with fully dynamic raster state. The Caustica device
+ * profile leaves tessellation and geometry shader features disabled, so draw recording binds only these two
+ * shader stages.
+ */
 public final class ShaderObjectGraphics implements AutoCloseable {
     /** One dynamic vertex binding expressed directly in Vulkan terms. */
     public record VertexBinding(int binding, int stride, int inputRate, int divisor) {

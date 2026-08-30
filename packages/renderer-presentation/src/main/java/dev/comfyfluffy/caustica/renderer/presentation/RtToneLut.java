@@ -174,8 +174,8 @@ public final class RtToneLut {
             createdSampler = samplerOut.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, createdSampler, "tone LUT " + label + " sampler");
 
-            sampledDescriptor = ctx.descriptorHeap().allocateResources(1, "tone LUT " + label);
-            samplerDescriptor = ctx.descriptorHeap().allocateSamplers(1, "tone LUT " + label);
+            sampledDescriptor = ctx.descriptorHeap().allocateResources(1);
+            samplerDescriptor = ctx.descriptorHeap().allocateSamplers(1);
             VkImageDescriptorInfoEXT imageDescriptor = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
                     .pView(viewInfo).layout(VK10.VK_IMAGE_LAYOUT_GENERAL);
             VkResourceDescriptorInfoEXT resource = VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()

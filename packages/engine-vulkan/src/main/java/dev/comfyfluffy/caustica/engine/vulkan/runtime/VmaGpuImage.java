@@ -39,7 +39,7 @@ final class VmaGpuImage implements GpuImage {
         boolean storage = (usage & VK10.VK_IMAGE_USAGE_STORAGE_BIT) != 0;
         boolean sampled = (usage & VK10.VK_IMAGE_USAGE_SAMPLED_BIT) != 0;
         int descriptorCount = (storage ? 1 : 0) + (sampled ? 1 : 0);
-        descriptors = descriptorCount == 0 ? null : heap.allocateResources(descriptorCount, label);
+        descriptors = descriptorCount == 0 ? null : heap.allocateResources(descriptorCount);
         GpuImageDescriptor createdStorage;
         GpuImageDescriptor createdSampled;
         try {

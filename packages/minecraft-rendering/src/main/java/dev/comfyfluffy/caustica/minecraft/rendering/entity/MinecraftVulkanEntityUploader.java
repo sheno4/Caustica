@@ -211,7 +211,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         if (leases.isEmpty()) return new TextureSet(null, Map.of(), List.of());
         GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            range = gpu.descriptorHeap().allocateResources(leases.size(), "Minecraft entity textures");
+            range = gpu.descriptorHeap().allocateResources(leases.size());
             int offset = 0;
             Map<MinecraftEntityMesh.Texture, Integer> indices = new LinkedHashMap<>();
             for (var entry : leases.entrySet()) {

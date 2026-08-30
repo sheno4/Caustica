@@ -68,7 +68,7 @@ public final class VmaImage2D implements AutoCloseable {
             imageInfo.extent().set(width, height, 1);
             imageAllocation = VmaImageAllocation.create(gpu, imageInfo, label);
 
-            descriptors = gpu.descriptorHeap().allocateResources(2, label);
+            descriptors = gpu.descriptorHeap().allocateResources(2);
             VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
                     .image(imageAllocation.image()).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
             view.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)

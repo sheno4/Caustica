@@ -105,7 +105,7 @@ final class OverlayPipelines {
             texture.addViews();
             GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                descriptor = gpu.descriptorHeap().allocateResources(1, label);
+                descriptor = gpu.descriptorHeap().allocateResources(1);
                 GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = descriptor;
                 VkImageViewCreateInfo imageView = VkImageViewCreateInfo.calloc(stack).sType$Default()
                         .image(texture.vkImage()).viewType(VK_IMAGE_VIEW_TYPE_2D).format(VK_FORMAT_R8G8B8A8_UNORM);

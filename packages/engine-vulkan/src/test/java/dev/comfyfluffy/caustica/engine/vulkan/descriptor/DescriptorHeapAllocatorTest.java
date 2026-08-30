@@ -60,9 +60,9 @@ final class DescriptorHeapAllocatorTest {
     @Test
     void resourceAndSamplerHeapsKeepDistinctIndexTypesAndSlotSpaces() {
         GpuDescriptorHeapProperties properties = new GpuDescriptorHeapProperties(
-                32, 8, 8, 4, 4, 2, 256, 64);
+                32, 4, 2);
         DescriptorHeapAllocationCore core = new DescriptorHeapAllocationCore(
-                properties, 33, 1, 4096, 1024);
+                properties, 8, 8, 4, 256, 64, 33, 1, 4096, 1024);
 
         DescriptorHeapAllocation<GpuDescriptorIndex.Resource> resource = core.allocateResources(1);
         DescriptorHeapAllocation<GpuDescriptorIndex.Sampler> sampler = core.allocateSamplers(1);

@@ -13,30 +13,23 @@ class GpuContractTest {
     @Test
     void descriptorPropertiesRejectNonPositiveStrides() {
         assertThrows(IllegalArgumentException.class,
-                () -> new GpuDescriptorHeapProperties(0, 8, 1024, 256, 128, 64, 256, 64));
+                () -> new GpuDescriptorHeapProperties(0, 128, 64));
     }
 
     @Test
     void resourceStrideIsUnifiedAcrossImageAndBufferDescriptors() {
         GpuDescriptorHeapProperties properties = new GpuDescriptorHeapProperties(
-                32, 8, 1024, 256, 128, 64, 256, 64);
+                32, 128, 64);
 
         assertEquals(32, properties.resourceDescriptorStrideBytes());
-        assertEquals(8, properties.samplerDescriptorStrideBytes());
-        assertEquals(1024, properties.resourceDescriptorCapacity());
-        assertEquals(256, properties.samplerDescriptorCapacity());
         assertEquals(128, properties.maximumResourceAllocation());
         assertEquals(64, properties.maximumSamplerAllocation());
-        assertEquals(256, properties.resourceHeapAlignmentBytes());
-        assertEquals(64, properties.samplerHeapAlignmentBytes());
     }
 
     @Test
-    void descriptorPropertiesValidateAllocationLimitsAndHeapAlignment() {
+    void descriptorPropertiesValidateAllocationLimits() {
         assertThrows(IllegalArgumentException.class,
-                () -> new GpuDescriptorHeapProperties(32, 8, 64, 32, 65, 8, 256, 64));
-        assertThrows(IllegalArgumentException.class,
-                () -> new GpuDescriptorHeapProperties(32, 8, 64, 32, 16, 8, 96, 64));
+                () -> new GpuDescriptorHeapProperties(32, 0, 8));
     }
 
     @Test

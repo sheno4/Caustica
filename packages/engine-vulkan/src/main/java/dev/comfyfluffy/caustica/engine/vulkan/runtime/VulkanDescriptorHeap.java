@@ -81,11 +81,13 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
             int samplerCapacity = capacity(samplerStride, heapProperties.minSamplerHeapReservedRange(),
                     heapProperties.maxSamplerHeapSize(), TARGET_SAMPLER_CAPACITY, "sampler");
             GpuDescriptorHeapProperties apiProperties = new GpuDescriptorHeapProperties(
-                    resourceStride, samplerStride, resourceCapacity, samplerCapacity,
+                    resourceStride,
                     Math.min(resourceCapacity, MAX_RESOURCE_ALLOCATION),
-                    Math.min(samplerCapacity, MAX_SAMPLER_ALLOCATION),
-                    heapProperties.resourceHeapAlignment(), heapProperties.samplerHeapAlignment());
+                    Math.min(samplerCapacity, MAX_SAMPLER_ALLOCATION));
             DescriptorHeapAllocationCore allocations = new DescriptorHeapAllocationCore(apiProperties,
+                    samplerStride,
+                    resourceCapacity, samplerCapacity,
+                    heapProperties.resourceHeapAlignment(), heapProperties.samplerHeapAlignment(),
                     heapProperties.minResourceHeapReservedRange(), heapProperties.minSamplerHeapReservedRange(),
                     heapProperties.maxResourceHeapSize(), heapProperties.maxSamplerHeapSize());
             return new VulkanDescriptorHeap(vk, vma, apiProperties, allocations,
@@ -123,12 +125,12 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     }
 
     @Override
-    public GpuDescriptorRange<GpuDescriptorIndex.Resource> allocateResources(int descriptorCount, String label) {
+    public GpuDescriptorRange<GpuDescriptorIndex.Resource> allocateResources(int descriptorCount) {
         return allocations.allocateResources(descriptorCount);
     }
 
     @Override
-    public GpuDescriptorRange<GpuDescriptorIndex.Sampler> allocateSamplers(int descriptorCount, String label) {
+    public GpuDescriptorRange<GpuDescriptorIndex.Sampler> allocateSamplers(int descriptorCount) {
         return allocations.allocateSamplers(descriptorCount);
     }
 
@@ -169,7 +171,7 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     public void writeSampler(long destinationHostAddress, VkSamplerCreateInfo sampler) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkHostAddressRangeEXT.Buffer destination = destination(stack, destinationHostAddress,
-                    properties.samplerDescriptorStrideBytes());
+                    allocations.samplers().layout().descriptorStrideBytes());
             VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteSamplerDescriptorsEXT(
                     vk, 1, sampler.address(), destination.address()), "vkWriteSamplerDescriptorsEXT");
         }
@@ -179,7 +181,7 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     public void writeSamplers(long destinationHostAddress, VkSamplerCreateInfo.Buffer samplers) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkHostAddressRangeEXT.Buffer destinations = destinations(stack, destinationHostAddress,
-                    properties.samplerDescriptorStrideBytes(), samplers.remaining());
+                    allocations.samplers().layout().descriptorStrideBytes(), samplers.remaining());
             VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteSamplerDescriptorsEXT(
                     vk, samplers.remaining(), samplers.address(), destinations.address()),
                     "vkWriteSamplerDescriptorsEXT");

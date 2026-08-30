@@ -39,7 +39,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
 
     public MinecraftProgramResources(GpuDevice gpu) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
-        sampler = gpu.descriptorHeap().allocateSamplers(1, "Minecraft material sampler");
+        sampler = gpu.descriptorHeap().allocateSamplers(1);
         try {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 gpu.descriptorHeap().writer().writeSampler(sampler, 0,
@@ -121,7 +121,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
         VmaMappedBuffer instance = null;
         try {
             if (!images.isEmpty()) {
-                descriptors = gpu.descriptorHeap().allocateResources(images.size(), "Minecraft material textures");
+                descriptors = gpu.descriptorHeap().allocateResources(images.size());
                 writeDescriptors(descriptors, images);
             }
             int firstDescriptor = descriptors == null ? 0 : descriptors.firstIndex().value();
