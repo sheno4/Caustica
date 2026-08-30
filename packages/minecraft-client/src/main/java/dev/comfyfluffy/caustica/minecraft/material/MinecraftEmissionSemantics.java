@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialEmissionIndex;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;

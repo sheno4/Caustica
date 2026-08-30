@@ -2,6 +2,9 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureResource;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialRule;
 
 import java.util.List;
 import java.util.Objects;

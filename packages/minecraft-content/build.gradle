@@ -82,7 +82,7 @@ def verifyMinecraftContentJar = tasks.register("verifyMinecraftContentJar") {
         new java.util.jar.JarFile(jarPath).withCloseable { jar ->
             jar.entries().each { entry ->
                 if (entry.name.endsWith(".class")
-                        && !entry.name.startsWith("dev/comfyfluffy/caustica/minecraft/material/")) {
+                        && !entry.name.startsWith("dev/comfyfluffy/caustica/minecraft/content/material/")) {
                     strays.add(entry.name)
                 }
             }

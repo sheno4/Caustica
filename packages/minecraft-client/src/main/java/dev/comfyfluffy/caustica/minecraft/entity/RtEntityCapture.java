@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.resources.model.geometry.BakedQuad;

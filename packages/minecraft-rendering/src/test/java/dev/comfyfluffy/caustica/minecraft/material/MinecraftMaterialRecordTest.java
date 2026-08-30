@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialUv;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.settings.ResourceId;

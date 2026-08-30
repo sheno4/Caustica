@@ -118,9 +118,9 @@ final class MinecraftVulkanEntityUploaderTest {
                 MinecraftEntityMesh.Program.MATERIAL,
                 MinecraftEntityMesh.MaterialProfile.SMOOTH_DIELECTRIC, true);
         var key = MinecraftVulkanEntityUploader.materialKey(material);
-        assertEquals(dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialProfile.SMOOTH_DIELECTRIC,
+        assertEquals(dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile.SMOOTH_DIELECTRIC,
                 key.profile());
-        assertEquals(dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialTopology.MEDIUM_BOUNDARY,
+        assertEquals(dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTopology.MEDIUM_BOUNDARY,
                 key.topology());
     }
 

@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.material;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTexture;
 import dev.comfyfluffy.caustica.vulkan.VmaImageAllocation;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
 import org.lwjgl.system.MemoryStack;

@@ -1,5 +1,13 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialKey;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialResolution;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTopology;
+import dev.comfyfluffy.caustica.minecraft.content.material.OpenPbrDefaults;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import org.junit.jupiter.api.Test;
 

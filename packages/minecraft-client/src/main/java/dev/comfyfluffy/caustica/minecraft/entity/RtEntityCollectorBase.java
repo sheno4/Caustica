@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.font.TextRenderable;

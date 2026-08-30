@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialRule;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 
 import java.util.List;

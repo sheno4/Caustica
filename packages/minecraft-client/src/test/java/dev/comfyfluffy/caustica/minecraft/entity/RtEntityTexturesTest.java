@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;

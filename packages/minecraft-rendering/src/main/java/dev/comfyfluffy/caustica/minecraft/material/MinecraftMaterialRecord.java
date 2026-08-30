@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialUv;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
+import dev.comfyfluffy.caustica.minecraft.content.material.OpenPbrDefaults;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftMaterialData;
 
 import java.util.Objects;

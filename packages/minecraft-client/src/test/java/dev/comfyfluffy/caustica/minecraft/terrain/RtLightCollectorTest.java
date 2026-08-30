@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftEmissionFootprint;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftEmissionFootprintFixtures;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftEmissionFootprint;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftEmissionFootprintFixtures;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;

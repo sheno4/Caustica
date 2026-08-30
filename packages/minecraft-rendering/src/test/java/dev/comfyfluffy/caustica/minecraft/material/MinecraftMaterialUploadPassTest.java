@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTexture;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

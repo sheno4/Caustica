@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.content.material.OpenPbrDefaults;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
