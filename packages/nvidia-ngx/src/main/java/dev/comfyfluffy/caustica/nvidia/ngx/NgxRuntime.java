@@ -38,7 +38,7 @@ import java.util.stream.Stream;
 /**
  * Shared NVIDIA NGX lifetime for one Vulkan device. Loads the native shim, extracts bundled feature libraries,
  * and runs {@code ngxshim_init} / {@code ngxshim_shutdown} exactly once per Vulkan device. Multiple NGX
- * DLSS Ray Reconstruction and Frame Generation share this single initialized
+ * DLSS Super Resolution, Ray Reconstruction, and Frame Generation share this single initialized
  * {@link NgxLibrary}; each feature owns only its own create/evaluate/release. NGX is shut down only at
  * device teardown (so releasing one feature can't tear NGX down while another still holds a handle).
  */
@@ -335,11 +335,11 @@ public final class NgxRuntime {
             boolean x64 = arch.equals("x86_64") || arch.equals("amd64");
             if (os.contains("win") && x64) {
                 return new PlatformNatives("windows-x64", "ngxshim.dll",
-                        List.of("nvngx_dlssd.dll", "nvngx_dlssg.dll"), List.of(), true);
+                        List.of("nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll"), List.of(), true);
             }
             if (os.contains("linux") && x64) {
                 return new PlatformNatives("linux-x64", "libngxshim.so", List.of(),
-                        List.of("libnvidia-ngx-dlssd.so", "libnvidia-ngx-dlssg.so"), true);
+                        List.of("libnvidia-ngx-dlss.so", "libnvidia-ngx-dlssd.so", "libnvidia-ngx-dlssg.so"), true);
             }
             return new PlatformNatives(os + "/" + arch, System.mapLibraryName("ngxshim"), List.of(), List.of(), false);
         }

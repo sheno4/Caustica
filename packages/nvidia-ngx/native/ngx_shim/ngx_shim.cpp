@@ -218,8 +218,8 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlss(VkCommandBuffer cmd,
 }
 
 // Records a DLSS evaluation into cmd. All images are VkImageView+VkImage+VkFormat
-// triples. The linear-depth guide is an R32 storage image and therefore uses the color aspect;
-// output is the only read-write (storage) resource.
+// triples backed by storage-capable images, so NGX requires ReadWrite resources even for inputs.
+// The linear-depth guide is an R32 color-aspect image, not a depth attachment.
 NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
                                      VkImageView colorView, VkImage colorImage, int colorFormat,
                                      VkImageView depthView, VkImage depthImage, int depthFormat,
@@ -240,9 +240,9 @@ NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
     NGX_LOG("evaluate: handle=%p params=%p colorView=%p depthView=%p mvView=%p outputView=%p",
             (void*) f->handle, (void*) f->params, (void*) colorView, (void*) depthView, (void*) mvView, (void*) outputView);
 
-    NVSDK_NGX_Resource_VK color = makeImageResource(colorView, colorImage, colorFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
+    NVSDK_NGX_Resource_VK color = makeImageResource(colorView, colorImage, colorFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
     NVSDK_NGX_Resource_VK output = makeImageResource(outputView, outputImage, outputFormat, displayWidth, displayHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
 
     NVSDK_NGX_VK_DLSS_Eval_Params eval;
@@ -371,9 +371,9 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
 
 // Records a DLSS Ray Reconstruction evaluation. Guide buffers are HDR color, linear depth, motion
 // vectors, diffuse albedo, specular albedo, world-space normals with roughness packed in normals.w,
-// and reflection motion vectors. Specular hit distance remains optional and is omitted.
-// Output is the only read-write (storage) resource. All non-output images use the color aspect;
-// depth is a linear value carried in a color image, not a depth-aspect attachment.
+// and reflection motion vectors. Specular hit distance remains optional and is omitted. Every
+// supplied image is storage-capable and must be declared ReadWrite to NGX. All guides use the
+// color aspect; depth is a linear value carried in a color image, not a depth-aspect attachment.
 NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
                                            VkImageView colorView, VkImage colorImage, int colorFormat,
                                            VkImageView depthView, VkImage depthImage, int depthFormat,
@@ -387,10 +387,10 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
                                            unsigned int renderWidth, unsigned int renderHeight,
                                            unsigned int displayWidth, unsigned int displayHeight,
                                            float jitterX, float jitterY, float mvScaleX, float mvScaleY,
-                                           int reset, float frameTimeMs) {
-    NGX_LOG("evaluate_dlssd: enter cmd=%p feature=%p render=%ux%u display=%ux%u jitter=(%.3f,%.3f) mvScale=(%.3f,%.3f) reset=%d frameTimeMs=%.3f",
+                                           int reset, float frameTimeMs, float preExposure) {
+    NGX_LOG("evaluate_dlssd: enter cmd=%p feature=%p render=%ux%u display=%ux%u jitter=(%.3f,%.3f) mvScale=(%.3f,%.3f) reset=%d frameTimeMs=%.3f preExposure=%.6f",
             (void*) cmd, feature, renderWidth, renderHeight, displayWidth, displayHeight,
-            jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs);
+            jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs, preExposure);
     DlssFeature* f = (DlssFeature*) feature;
     if (!f) {
         NGX_LOG("evaluate_dlssd: null feature, returning -1");
@@ -403,13 +403,13 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     (void) specularHitDistanceImage;
     (void) specularHitDistanceFormat;
 
-    NVSDK_NGX_Resource_VK color = makeImageResource(colorView, colorImage, colorFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK diffuseAlbedo = makeImageResource(diffuseAlbedoView, diffuseAlbedoImage, diffuseAlbedoFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK specularAlbedo = makeImageResource(specularAlbedoView, specularAlbedoImage, specularAlbedoFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK normals = makeImageResource(normalsView, normalsImage, normalsFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK specularMotion = makeImageResource(specularMotionView, specularMotionImage, specularMotionFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
+    NVSDK_NGX_Resource_VK color = makeImageResource(colorView, colorImage, colorFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK diffuseAlbedo = makeImageResource(diffuseAlbedoView, diffuseAlbedoImage, diffuseAlbedoFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK specularAlbedo = makeImageResource(specularAlbedoView, specularAlbedoImage, specularAlbedoFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK normals = makeImageResource(normalsView, normalsImage, normalsFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
+    NVSDK_NGX_Resource_VK specularMotion = makeImageResource(specularMotionView, specularMotionImage, specularMotionFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
     NVSDK_NGX_Resource_VK output = makeImageResource(outputView, outputImage, outputFormat, displayWidth, displayHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
 
     NVSDK_NGX_VK_DLSSD_Eval_Params eval;
@@ -434,6 +434,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     eval.InRenderSubrectDimensions.Width = renderWidth;
     eval.InRenderSubrectDimensions.Height = renderHeight;
     eval.InFrameTimeDeltaInMsec = frameTimeMs;
+    eval.InPreExposure = preExposure;
     NGX_LOG("evaluate_dlssd: calling NGX_VULKAN_EVALUATE_DLSSD_EXT");
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSSD_EXT(cmd, f->handle, f->params, &eval);
     g_lastResult = (int) r;

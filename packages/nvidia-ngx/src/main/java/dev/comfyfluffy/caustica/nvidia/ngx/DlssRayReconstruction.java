@@ -109,7 +109,7 @@ public final class DlssRayReconstruction {
                             GpuImage diffuseAlbedo, GpuImage specularAlbedo, GpuImage normals,
                             GpuImage specularMotion, GpuImage out,
                             int renderWidth, int renderHeight, int displayWidth, int displayHeight,
-                            float jitterX, float jitterY) {
+                            float jitterX, float jitterY, float preExposure) {
         if (!isReady()) {
             return false;
         }
@@ -131,7 +131,7 @@ public final class DlssRayReconstruction {
                     out.view(), out.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     renderWidth, renderHeight, displayWidth, displayHeight,
                     // Jitter and motion vectors use render-pixel units.
-                    jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs);
+                    jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs, preExposure);
             resetHistory = false;
             if (NgxRuntime.ngxFailed(rc)) {
                 throw new IllegalStateException("ngxshim_evaluate_dlssd failed: 0x" + Integer.toHexString(rc)

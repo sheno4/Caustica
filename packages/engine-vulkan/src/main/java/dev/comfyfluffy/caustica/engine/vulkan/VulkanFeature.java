@@ -5,6 +5,7 @@ public enum VulkanFeature {
     SHADER_INT64("shaderInt64"),
     SHADER_INT16("shaderInt16"),
     SHADER_FLOAT16("shaderFloat16"),
+    DESCRIPTOR_BINDING_PARTIALLY_BOUND("descriptorBindingPartiallyBound"),
     SHADER_STORAGE_IMAGE_EXTENDED_FORMATS("shaderStorageImageExtendedFormats"),
     SHADER_STORAGE_IMAGE_READ_WITHOUT_FORMAT("shaderStorageImageReadWithoutFormat"),
     SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT("shaderStorageImageWriteWithoutFormat"),

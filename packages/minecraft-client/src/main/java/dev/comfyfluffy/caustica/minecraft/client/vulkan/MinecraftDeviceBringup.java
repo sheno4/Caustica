@@ -112,6 +112,9 @@ public final class MinecraftDeviceBringup {
             "timelineSemaphore", VkPhysicalDeviceVulkan12Features.TIMELINESEMAPHORE);
     private static final VulkanFeature SHADER_FLOAT16 = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
             "shaderFloat16", VkPhysicalDeviceVulkan12Features.SHADERFLOAT16);
+    private static final VulkanFeature DESCRIPTOR_BINDING_PARTIALLY_BOUND = new VulkanFeature(
+            VulkanBackend.VK12_FEATURES_STRUCT, "descriptorBindingPartiallyBound",
+            VkPhysicalDeviceVulkan12Features.DESCRIPTORBINDINGPARTIALLYBOUND);
     private static final VulkanFeature STORAGE_IMAGE_EXTENDED_FORMATS = new VulkanFeature(
             VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageExtendedFormats",
             VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEEXTENDEDFORMATS);
@@ -165,6 +168,9 @@ public final class MinecraftDeviceBringup {
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_INT64, SHADER_INT64),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_INT16, SHADER_INT16),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_FLOAT16, SHADER_FLOAT16),
+            new ProfileFeature(
+                    dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.DESCRIPTOR_BINDING_PARTIALLY_BOUND,
+                    DESCRIPTOR_BINDING_PARTIALLY_BOUND),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_STORAGE_IMAGE_EXTENDED_FORMATS,
                     STORAGE_IMAGE_EXTENDED_FORMATS),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_STORAGE_IMAGE_READ_WITHOUT_FORMAT,

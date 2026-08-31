@@ -47,10 +47,10 @@ def currentPlatform = {
 def platforms = [
         [name: "windows-x64", shimIncludes: ["ngxshim.dll"],
          vendorRoot: { sdk, config -> new File(sdk, "lib/Windows_x86_64/${config}") },
-         vendorIncludes: ["nvngx_dlssd.dll", "nvngx_dlssg.dll"]],
+         vendorIncludes: ["nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll"]],
         [name: "linux-x64", shimIncludes: ["libngxshim.so"],
          vendorRoot: { sdk, config -> new File(sdk, "lib/Linux_x86_64/${config}") },
-         vendorIncludes: ["libnvidia-ngx-dlssd.so*", "libnvidia-ngx-dlssg.so*"]]
+         vendorIncludes: ["libnvidia-ngx-dlss.so*", "libnvidia-ngx-dlssd.so*", "libnvidia-ngx-dlssg.so*"]]
 ]
 def platformByName = platforms.collectEntries { [(it.name): it] }
 def requestedPlatforms = (findProperty("ngxPlatforms") ?: "current").toString().split(",")

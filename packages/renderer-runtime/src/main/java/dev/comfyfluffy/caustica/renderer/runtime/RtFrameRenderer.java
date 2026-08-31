@@ -891,7 +891,8 @@ public final class RtFrameRenderer {
                                         traceImages().normalRoughness(), traceImages().specularMotion(),
                                         traceImages().reconstructedColor(), traceExtent().renderWidth(),
                                         traceExtent().renderHeight(), traceExtent().displayWidth(),
-                                        traceExtent().displayHeight(), -jitterX, -jitterY);
+                                        traceExtent().displayHeight(), -jitterX, -jitterY,
+                                        presentationResources().exposure().preExposure());
                             }
                         }
                     } finally {
