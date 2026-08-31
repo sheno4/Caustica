@@ -27,7 +27,9 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
+import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
+import org.joml.Vector3f;
 
 
 
@@ -67,38 +69,57 @@ public final class MinecraftFrameAdapter {
     }
 
     /** Returns no snapshot while a world/program epoch has not installed its engine-issued scene. */
-    public FrameSnapshot capture(Minecraft client, Matrix4fc projection, Matrix4fc viewRotation,
+    public FrameSnapshot capture(Minecraft client, Matrix4fc baseProjection, Matrix4fc levelProjection,
+                                 Matrix4fc viewRotation,
                                  double cameraX, double cameraY, double cameraZ) {
         terrain.frame();
+        Camera camera = centerLevelCamera(baseProjection, levelProjection, viewRotation,
+                cameraX, cameraY, cameraZ);
         ClientLevel level = client.level;
-        BlockPos cameraBlockPos = new BlockPos(Mth.floor(cameraX), Mth.floor(cameraY), Mth.floor(cameraZ));
+        BlockPos cameraBlockPos = new BlockPos(
+                Mth.floor(camera.x()), Mth.floor(camera.y()), Mth.floor(camera.z()));
         boolean submerged = false;
         if (level != null) {
             BlockState blockState = level.getBlockState(cameraBlockPos);
             FluidState fluid = blockState.getFluidState();
             if (fluid.is(FluidTags.WATER)) {
                 submerged = MinecraftFluidSurface.contains(
-                        level, cameraBlockPos, blockState, fluid, cameraX, cameraY, cameraZ);
+                        level, cameraBlockPos, blockState, fluid, camera.x(), camera.y(), camera.z());
             }
         }
         FrameCaptureBinding capture = frameCapture;
         if (capture != null) {
             capture.sink.update(MinecraftClientFrameCapture.capture(
-                    client, cameraY, METERS_PER_WORLD_UNIT, capture.calibration));
+                    client, camera.y(), METERS_PER_WORLD_UNIT, capture.calibration));
         }
         MinecraftFrameSelector.Selection selection = selection(submerged);
         if (selection == null) return null;
-        Camera camera = new Camera(cameraX, cameraY, cameraZ,
-                projection.get(new float[16]), viewRotation.get(new float[16]));
         RtTerrain currentTerrain = terrain.currentOrNull();
         SceneOrigin sceneOrigin = currentTerrain != null ? currentTerrain.sceneOrigin() : SceneOrigin.ZERO;
         FrameSnapshot snapshot = new FrameSnapshot(new SceneView(selection.scene(), camera, selection.medium()), sceneOrigin,
                 CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);
-        entities.submitFrame(snapshot.sceneOrigin(), cameraX, cameraY, cameraZ,
-                new org.joml.Matrix4f(projection), new org.joml.Matrix4f(viewRotation),
+        entities.submitFrame(snapshot.sceneOrigin(), camera.x(), camera.y(), camera.z(),
+                new Matrix4f().set(camera.clipFromView()), new Matrix4f(viewRotation),
                 renderedWorldFrameIndex++);
         return snapshot;
+    }
+
+    /**
+     * Moves the affine view translation embedded in Minecraft's level projection into the camera position.
+     * The resulting projection-view matrix represents exactly the same clip transform, but its inverse rays
+     * originate at the camera position as required by the RT primary-ray shader.
+     */
+    static Camera centerLevelCamera(Matrix4fc baseProjection, Matrix4fc levelProjection,
+                                    Matrix4fc viewRotation,
+                                    double cameraX, double cameraY, double cameraZ) {
+        Matrix4f viewEffect = new Matrix4f(baseProjection).invert().mul(levelProjection);
+        Vector3f originOffset = new Matrix4f(viewEffect).mul(viewRotation).invert()
+                .transformPosition(new Vector3f());
+        viewEffect.m30(0.0f).m31(0.0f).m32(0.0f);
+        Matrix4f centeredProjection = new Matrix4f(baseProjection).mul(viewEffect);
+        return new Camera(cameraX + originOffset.x, cameraY + originOffset.y, cameraZ + originOffset.z,
+                centeredProjection.get(new float[16]), viewRotation.get(new float[16]));
     }
 
     RtEntities entities() { return entities; }

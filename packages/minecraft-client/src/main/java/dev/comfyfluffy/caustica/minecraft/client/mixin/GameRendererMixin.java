@@ -138,9 +138,8 @@ public abstract class GameRendererMixin {
 		CausticaClientComposition.current().renderScaler().endSafetyNet(this.mainRenderTarget);
 	}
 
-	// Capture the frame's camera for the RT composite at the exact point the level projection is built
-	// (this projection already includes view bobbing, exactly as rendered). The RT path jitters the
-	// primary ray in the shader, so the projection matrix itself is left unmodified — we only read it.
+	// Capture the exact level projection while retaining the base projection needed to move view-effect
+	// translation into the RT camera origin. The host matrix itself remains unmodified.
 	@ModifyArg(method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
 			at = @At(value = "INVOKE",
 					target = "Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;getBuffer(Lorg/joml/Matrix4f;)Lcom/mojang/blaze3d/buffers/GpuBufferSlice;"),
@@ -152,7 +151,7 @@ public abstract class GameRendererMixin {
 
 		var cameraState = this.gameRenderState().levelRenderState.cameraRenderState;
 		var snapshot = CausticaClientComposition.current().frameAdapter().capture(
-				Minecraft.getInstance(), projection, cameraState.viewRotationMatrix,
+				Minecraft.getInstance(), cameraState.projectionMatrix, projection, cameraState.viewRotationMatrix,
 				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
 		if (snapshot == null) {
 			return projection;

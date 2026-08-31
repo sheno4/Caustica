@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
+import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
 
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
@@ -11,12 +12,16 @@ import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtWorkerPool;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
+import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
 
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftFrameAdapterTest {
     @Test
@@ -53,6 +58,53 @@ final class MinecraftFrameAdapterTest {
         assertEquals(1920, first.width());
         assertEquals(1080, first.height());
         assertEquals(UiPresentationResources.EMPTY, second);
+    }
+
+    @Test
+    void viewTranslationMovesToCameraOriginWithoutChangingClipTransform() {
+        Matrix4f baseProjection = new Matrix4f().perspective(1.0f, 1.5f, 0.05f, 1000.0f);
+        Matrix4f viewEffect = new Matrix4f()
+                .translate(0.08f, -0.12f, 0.0f)
+                .rotateZ(0.04f)
+                .rotateX(-0.07f);
+        Matrix4f levelProjection = new Matrix4f(baseProjection).mul(viewEffect);
+        Matrix4f viewRotation = new Matrix4f().rotateY(0.3f);
+        double cameraX = 100.0;
+        double cameraY = 64.0;
+        double cameraZ = -20.0;
+
+        Camera camera = MinecraftFrameAdapter.centerLevelCamera(
+                baseProjection, levelProjection, viewRotation, cameraX, cameraY, cameraZ);
+        Matrix4f centeredProjection = new Matrix4f().set(camera.clipFromView());
+        Vector3f originOffset = new Vector3f(
+                (float) (camera.x() - cameraX),
+                (float) (camera.y() - cameraY),
+                (float) (camera.z() - cameraZ));
+        Vector4f originalRelativePoint = new Vector4f(2.0f, -1.0f, -7.0f, 1.0f);
+        Vector4f centeredRelativePoint = new Vector4f(
+                originalRelativePoint.x - originOffset.x,
+                originalRelativePoint.y - originOffset.y,
+                originalRelativePoint.z - originOffset.z,
+                1.0f);
+        Vector4f expectedClip = new Matrix4f(levelProjection).mul(viewRotation)
+                .transform(originalRelativePoint, new Vector4f());
+        Vector4f actualClip = new Matrix4f(centeredProjection).mul(viewRotation)
+                .transform(centeredRelativePoint, new Vector4f());
+
+        assertTrue(expectedClip.equals(actualClip, 1.0e-4f));
+
+        Matrix4f centeredViewProjection = new Matrix4f(centeredProjection).mul(viewRotation);
+        Vector4f launchClip = new Vector4f(0.3f, -0.2f, 0.5f, 1.0f);
+        Vector4f unprojected = centeredViewProjection.invert(new Matrix4f())
+                .transform(launchClip, new Vector4f());
+        Vector3f rayDirection = new Vector3f(unprojected.x, unprojected.y, unprojected.z)
+                .div(unprojected.w)
+                .normalize();
+        Vector4f hitClip = centeredViewProjection.transform(
+                new Vector4f(rayDirection.mul(10.0f), 1.0f), new Vector4f());
+
+        assertEquals(launchClip.x / launchClip.w, hitClip.x / hitClip.w, 1.0e-5f);
+        assertEquals(launchClip.y / launchClip.w, hitClip.y / hitClip.w, 1.0e-5f);
     }
 
     private static GpuImage image() {
