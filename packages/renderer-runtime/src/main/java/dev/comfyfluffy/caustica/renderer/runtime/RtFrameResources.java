@@ -18,15 +18,17 @@ import java.io.IOException;
 final class RtFrameResources {
     private final RtFramePresenter presenter;
     private final DlssRayReconstruction rayReconstruction;
+    private final RtUpscaler upscaler;
     private final TraceResources trace = new TraceResources();
     private final PresentationResources presentation;
-    private boolean renderSizeRrEnabled;
-    private int renderSizeRrQuality = Integer.MIN_VALUE;
+    private DenoiserRoute renderSizeRoute;
+    private int renderSizeConfiguration = Integer.MIN_VALUE;
 
     RtFrameResources(RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
-                     RtLookPackage look, RtExposure.Settings exposureSettings) {
+                     RtUpscaler upscaler, RtLookPackage look, RtExposure.Settings exposureSettings) {
         this.presenter = presenter;
         this.rayReconstruction = rayReconstruction;
+        this.upscaler = upscaler;
         this.presentation = new PresentationResources(look, exposureSettings);
     }
 
@@ -46,22 +48,25 @@ final class RtFrameResources {
     boolean ensureSized(VulkanDeviceContext context, int width, int height, DenoiserRoute route,
                         Runnable beforeResizeAfterIdle) {
         boolean rrEnabled = usesRayReconstructionRenderSize(route, rayReconstruction.configured());
-        int rrQuality = rrEnabled ? rayReconstruction.quality() : Integer.MIN_VALUE;
+        boolean upscalerEnabled = usesTemporalUpscalerRenderSize(route, upscaler.configured());
+        int configuration = rrEnabled ? rayReconstruction.quality()
+                : upscalerEnabled ? upscaler.configurationKey() : Integer.MIN_VALUE;
         if (presentation.matches(width, height) && trace.hasDisplayExtent(width, height)
-                && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
+                && renderSizeRoute == route && renderSizeConfiguration == configuration) {
             return false;
         }
 
         presenter.invalidateRenderedFrame();
         context.waitIdle();
         beforeResizeAfterIdle.run();
-        int[] optimal = rrEnabled ? rayReconstruction.queryOptimalRenderSize(width, height) : null;
+        int[] optimal = rrEnabled ? rayReconstruction.queryOptimalRenderSize(width, height)
+                : upscalerEnabled ? upscaler.queryOptimalRenderSize(width, height) : null;
         int renderWidth = optimal != null ? optimal[0] : width;
         int renderHeight = optimal != null ? optimal[1] : height;
         trace.resize(context, new TraceExtent(renderWidth, renderHeight, width, height));
         presentation.resize(context, width, height);
-        renderSizeRrEnabled = rrEnabled;
-        renderSizeRrQuality = rrQuality;
+        renderSizeRoute = route;
+        renderSizeConfiguration = configuration;
         return true;
     }
 
@@ -69,10 +74,14 @@ final class RtFrameResources {
         return route == DenoiserRoute.RAY_RECONSTRUCTION && configured;
     }
 
+    static boolean usesTemporalUpscalerRenderSize(DenoiserRoute route, boolean configured) {
+        return route == DenoiserRoute.TEMPORAL_DENOISER && configured;
+    }
+
     void destroy() {
         trace.destroy();
         presentation.destroy();
-        renderSizeRrEnabled = false;
-        renderSizeRrQuality = Integer.MIN_VALUE;
+        renderSizeRoute = null;
+        renderSizeConfiguration = Integer.MIN_VALUE;
     }
 }

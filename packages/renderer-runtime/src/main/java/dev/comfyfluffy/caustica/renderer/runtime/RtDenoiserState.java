@@ -9,11 +9,13 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 
 import java.util.Objects;
 
-/** Owns the temporal backend and reset state inside one renderer lifetime. */
+/** Owns the fixed three-plane temporal history set and its shared reset state. */
 final class RtDenoiserState implements AutoCloseable {
+    static final int PLANE_COUNT = 3;
+
     private final DenoiserBackendFactory factory;
     private RtDenoisingSettings settings;
-    private DenoiserBackend backend;
+    private final DenoiserBackend[] backends = new DenoiserBackend[PLANE_COUNT];
     private boolean resetPending = true;
 
     RtDenoiserState(DenoiserBackendFactory factory, RtDenoisingSettings settings) {
@@ -41,14 +43,23 @@ final class RtDenoiserState implements AutoCloseable {
         Objects.requireNonNull(extent, "extent");
         if (settings.route() != DenoiserRoute.TEMPORAL_DENOISER) return;
         DenoiserBackendDescriptor descriptor = new DenoiserBackendDescriptor(extent, settings.signalEncoding());
-        if (backend != null && backend.descriptor().equals(descriptor)) return;
+        if (backends[0] != null && backends[0].descriptor().equals(descriptor)) return;
         closeBackendAfterIdle();
-        backend = factory.create(descriptor);
+        for (int plane = 0; plane < PLANE_COUNT; plane++) {
+            backends[plane] = factory.create(descriptor);
+        }
         resetPending = true;
     }
 
     DenoiserBackend backend() {
-        return Objects.requireNonNull(backend, "temporal denoiser backend is not initialized");
+        return backend(0);
+    }
+
+    DenoiserBackend backend(int plane) {
+        if (plane < 0 || plane >= PLANE_COUNT) {
+            throw new IllegalArgumentException("temporal denoiser plane must be in [0, " + PLANE_COUNT + ")");
+        }
+        return Objects.requireNonNull(backends[plane], "temporal denoiser backend is not initialized");
     }
 
     DenoiserReset frameReset(boolean historyContinuous) {
@@ -65,9 +76,11 @@ final class RtDenoiserState implements AutoCloseable {
     }
 
     void closeBackendAfterIdle() {
-        if (backend != null) {
-            backend.close();
-            backend = null;
+        for (int plane = 0; plane < PLANE_COUNT; plane++) {
+            if (backends[plane] != null) {
+                backends[plane].close();
+                backends[plane] = null;
+            }
         }
     }
 

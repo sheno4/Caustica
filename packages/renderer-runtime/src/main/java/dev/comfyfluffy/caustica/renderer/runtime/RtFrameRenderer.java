@@ -154,6 +154,7 @@ public final class RtFrameRenderer {
     private final EngineSessionServices services;
     private final RtFramePresenter presenter;
     private final DlssRayReconstruction rayReconstruction;
+    private final RtUpscaler upscaler;
     private final RtDenoiserState denoiser;
     private long previousDenoiserFrameNanos;
     private float previousDenoiserJitterX;
@@ -202,6 +203,7 @@ public final class RtFrameRenderer {
     public RtFrameRenderer(VulkanDeviceContext context, RtProgramBackend programs, RtRetainedSceneBackend scenes,
                     RtPassSchedulerBackend passes, EngineSessionServices services,
                     RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
+                    RtUpscaler upscaler,
                     DenoiserBackendFactory denoiserFactory, RtDenoisingSettings denoisingSettings,
                     RtTelemetry telemetry) {
         this.context = Objects.requireNonNull(context, "context");
@@ -211,10 +213,11 @@ public final class RtFrameRenderer {
         this.services = Objects.requireNonNull(services, "services");
         this.presenter = Objects.requireNonNull(presenter, "presenter");
         this.rayReconstruction = Objects.requireNonNull(rayReconstruction, "rayReconstruction");
+        this.upscaler = Objects.requireNonNull(upscaler, "upscaler");
         this.denoiser = new RtDenoiserState(denoiserFactory, denoisingSettings);
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
         this.jitter = new RtJitter();
-        this.frameResources = new RtFrameResources(presenter, rayReconstruction, LOOK, exposureSettings());
+        this.frameResources = new RtFrameResources(presenter, rayReconstruction, upscaler, LOOK, exposureSettings());
     }
 
     /** Applies one mutually exclusive output route at the next frame boundary. */
@@ -488,6 +491,7 @@ public final class RtFrameRenderer {
                     && isLightingCameraStationary(snapshot);
             if (!lightingHistoryContinuous) {
                 rayReconstruction.resetHistory();
+                upscaler.resetHistory();
                 denoiser.resetHistory();
             }
             updateMotion(snapshot);
@@ -533,6 +537,7 @@ public final class RtFrameRenderer {
                 denoiser::closeBackendAfterIdle)) {
             mvHasPrev = false;
             proceduralTimeValid = false;
+            upscaler.resetHistory();
             denoiser.resetHistory();
         }
         ensureDenoiserBackend();
@@ -572,6 +577,7 @@ public final class RtFrameRenderer {
     public void resetSceneHistory() {
         resetExposureHistory();
         rayReconstruction.resetHistory();
+        upscaler.resetHistory();
         presenter.resetSceneHistory();
         mvHasPrev = false;
         lastLightingFrame = -1L;
@@ -638,7 +644,7 @@ public final class RtFrameRenderer {
         return Math.abs(first - second) / Math.max(Math.max(Math.abs(first), Math.abs(second)), 1.0e-6f);
     }
 
-    private void recordTemporalDenoiser(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer,
+    private boolean recordTemporalDenoiser(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer,
                                         boolean historyContinuous,
                                         float jitterX, float jitterY) {
         DenoiserBackend backend = denoiser.backend();
@@ -684,6 +690,7 @@ public final class RtFrameRenderer {
         previousDenoiserJitterY = jitterY;
         previousDenoiserWorldToView.set(frameViewRotation);
         previousDenoiserViewToClip.set(frameProjection);
+        return reset;
     }
 
     private DenoiserImage denoiserImage(GpuImage image) {
@@ -862,18 +869,38 @@ public final class RtFrameRenderer {
             } else if (denoiserRoute == DenoiserRoute.TEMPORAL_DENOISER) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD evaluate");
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.nrd")) {
-                    recordTemporalDenoiser(ctx, cmd, lightingHistoryContinuous,
+                    boolean temporalReset = recordTemporalDenoiser(ctx, cmd, lightingHistoryContinuous,
                             jitterX, jitterY);
                     VulkanBarriers.memoryBarrier(cmd, stack);
+                    boolean upscale = upscaler.configured();
+                    GpuImage composeOutput = upscale
+                            ? traceImages().traceColor() : traceImages().reconstructedColor();
                     presentationResources().nrdComposePipeline().dispatch(cmd,
-                            traceImages().reconstructedColor(),
+                            composeOutput,
                             traceImages().denoisedDiffuseRadianceHitDistance(),
                             traceImages().denoisedSpecularRadianceHitDistance(),
                             traceImages().diffuseAlbedo(), traceImages().specularAlbedo(),
                             traceImages().nrdStableRadiance(),
                             presentationResources().exposure().preExposure(),
                             nrdSignalEncoding());
-                    outputReady = true;
+                    if (!upscale) {
+                        outputReady = true;
+                    } else {
+                        VulkanBarriers.memoryBarrier(cmd, stack);
+                        ctx.invalidateDescriptorHeapsForExternalCommand(cmd);
+                        try (RtDebugLabels.Scope ignoredUpscale = RtDebugLabels.scope(ctx, cmd, "temporal upscale");
+                             RtTelemetry.Scope ignoredUpscaleStats = telemetry.frame().stage("frame.upscale")) {
+                            outputReady = upscaler.record(new RtUpscaler.Frame(cmd, composeOutput,
+                                    traceImages().linearDepth(), traceImages().motion(),
+                                    traceImages().reconstructedColor(),
+                                    new RtUpscaler.Extent(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                                            traceExtent().displayWidth(), traceExtent().displayHeight()),
+                                    jitterX, jitterY, temporalReset,
+                                    presentationResources().exposure().preExposure()));
+                        } finally {
+                            ctx.bindDescriptorHeaps(cmd);
+                        }
+                    }
                 }
             } else {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "raw trace copy");
@@ -1060,6 +1087,7 @@ public final class RtFrameRenderer {
     public void destroy() {
         denoiser.close();
         rayReconstruction.destroyAfterDeviceIdle();
+        upscaler.destroyAfterDeviceIdle();
         presenter.invalidateRenderedFrame();
         frameResources.destroy();
         mvHasPrev = false;

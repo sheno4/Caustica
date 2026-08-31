@@ -15,6 +15,7 @@ import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
 import dev.comfyfluffy.caustica.nvidia.nrd.NrdBackendFactory;
 import dev.comfyfluffy.caustica.nvidia.nrd.NrdDevice;
 import dev.comfyfluffy.caustica.nvidia.nrd.NrdLibrary;
@@ -23,6 +24,7 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import dev.comfyfluffy.caustica.renderer.runtime.RtDenoisingSettings;
 import dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer;
+import dev.comfyfluffy.caustica.renderer.runtime.RtDlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.runtime.RtLifecycleCoordinator;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry;
 import dev.comfyfluffy.caustica.renderer.runtime.pass.RtPassSchedulerBackend;
@@ -183,6 +185,18 @@ public final class MinecraftRtRuntime {
         return new DlssRayReconstruction.Settings(
                 denoising.route() == DenoiserRoute.RAY_RECONSTRUCTION,
                 CausticaConfig.Rt.DlssRr.QUALITY.value(), CausticaConfig.Rt.DlssRr.PRESET.value());
+    }
+
+    private DlssSuperResolution.Settings superResolutionSettings(RtDenoisingSettings denoising) {
+        return superResolutionSettings(denoising,
+                CausticaConfig.Rt.DlssSr.QUALITY.value(), CausticaConfig.Rt.DlssSr.PRESET.value());
+    }
+
+    static DlssSuperResolution.Settings superResolutionSettings(
+            RtDenoisingSettings denoising, int quality, int preset) {
+        return new DlssSuperResolution.Settings(
+                denoising.route() == DenoiserRoute.TEMPORAL_DENOISER,
+                quality, preset);
     }
 
     private RtDenoisingSettings denoisingSettings() {
@@ -594,6 +608,7 @@ public final class MinecraftRtRuntime {
         private RtRetainedSceneBackend scenes;
         private RtPassSchedulerBackend passes;
         private DlssRayReconstruction rayReconstruction;
+        private DlssSuperResolution superResolution;
         private MinecraftEngineWorldSession world;
         private RtFrameRenderer renderer;
         private long worldEpoch;
@@ -629,6 +644,7 @@ public final class MinecraftRtRuntime {
             }
             RtDenoisingSettings denoising = denoisingSettings();
             rayReconstruction.configure(rayReconstructionSettings(denoising));
+            superResolution.configure(superResolutionSettings(denoising));
             renderer.configureDenoising(denoising);
 
             world.progress();
@@ -663,6 +679,8 @@ public final class MinecraftRtRuntime {
             RtDenoisingSettings denoising = denoisingSettings();
             rayReconstruction = new DlssRayReconstruction(
                     requireNgxRuntime(), rayReconstructionSettings(denoising));
+            superResolution = new DlssSuperResolution(
+                    requireNgxRuntime(), superResolutionSettings(denoising));
             try {
                 world = new MinecraftEngineWorldSession(apiHost(),
                         minecraftSessionHost, context,
@@ -670,6 +688,7 @@ public final class MinecraftRtRuntime {
                         failure -> LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(context, programs, scenes, passes,
                         world.services(), presenter, rayReconstruction,
+                        new RtDlssSuperResolution(superResolution),
                         requireDenoiserFactory(), denoising, telemetry);
                 worldEpoch = epoch;
             } catch (Throwable failure) {
@@ -694,7 +713,7 @@ public final class MinecraftRtRuntime {
 
         private void closeWorld() {
             if (world == null && programs == null && scenes == null
-                    && renderer == null && rayReconstruction == null) return;
+                    && renderer == null && rayReconstruction == null && superResolution == null) return;
             host().resetFrameBridge();
             if (world != null) {
                 world.close();
@@ -705,9 +724,16 @@ public final class MinecraftRtRuntime {
                 renderer.destroy();
                 renderer = null;
                 rayReconstruction = null;
-            } else if (rayReconstruction != null) {
-                rayReconstruction.destroyAfterDeviceIdle();
-                rayReconstruction = null;
+                superResolution = null;
+            } else {
+                if (rayReconstruction != null) {
+                    rayReconstruction.destroyAfterDeviceIdle();
+                    rayReconstruction = null;
+                }
+                if (superResolution != null) {
+                    superResolution.destroyAfterDeviceIdle();
+                    superResolution = null;
+                }
             }
             if (scenes != null) {
                 scenes.shutdownAfterDeviceIdle();

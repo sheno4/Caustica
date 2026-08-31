@@ -61,7 +61,7 @@ public final class CausticaConfig {
      */
     static final List<Class<?>> HOLDERS = List.of(
             Rt.class, Rt.Composite.class, Rt.Terrain.class, Rt.Lights.class,
-            Rt.Entities.class, Rt.Overlay.class, Rt.Denoising.class, Rt.DlssRr.class,
+            Rt.Entities.class, Rt.Overlay.class, Rt.Denoising.class, Rt.DlssRr.class, Rt.DlssSr.class,
             Rt.Fg.class, Rt.Reflex.class, Rt.Exposure.class, Rt.Tonemap.class, Rt.FrameStats.class,
             Rt.Screenshots.class, Rt.Hdr.class, Rt.Composition.class,
             Ngx.class, Slang.class);
@@ -792,6 +792,17 @@ public final class CausticaConfig {
                     intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 0, QUALITY_STEPS).inGroup("upscaling");
 
             private DlssRr() {
+            }
+        }
+
+        public static final class DlssSr {
+            public static final IntSetting PRESET = intChoice(
+                    "caustica.rt.dlssSr.preset", "dlss-sr.preset", 0, List.of(0, 10, 11, 12, 13));
+            public static final List<Integer> QUALITY_STEPS = List.of(3, 0, 1, 2, 5);
+            public static final IntSetting QUALITY = intChoice(
+                    "caustica.rt.dlssSr.quality", "dlss-sr.quality", 2, QUALITY_STEPS).inGroup("upscaling");
+
+            private DlssSr() {
             }
         }
 

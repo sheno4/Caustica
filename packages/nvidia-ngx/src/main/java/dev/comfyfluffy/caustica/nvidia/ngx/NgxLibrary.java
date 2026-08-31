@@ -52,7 +52,7 @@ final class NgxLibrary {
 		this.createDlss = handle(lookup, "ngxshim_create_dlss",
 				FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-		// int ngxshim_evaluate(cmd, feature, [color/depth/mv/out: view,img,fmt]*4, rw,rh,dw,dh, jx,jy,mvsx,mvsy, reset, frameMs)
+		// int ngxshim_evaluate(cmd, feature, [color/depth/mv/out: view,img,fmt]*4, rw,rh,dw,dh, jx,jy,mvsx,mvsy, reset, frameMs, preExposure)
 		this.evaluate = handle(lookup, "ngxshim_evaluate",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
@@ -89,7 +89,7 @@ final class NgxLibrary {
 						ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
-						ValueLayout.JAVA_INT, ValueLayout.JAVA_FLOAT));
+						ValueLayout.JAVA_INT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT));
 		// DLSS Frame Generation (DLSSG). Optional: a stale shim without these exports still loads (FG off).
 		this.dlssgAvailable = optionalHandle(lookup, "ngxshim_dlssg_available",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT));
@@ -181,7 +181,7 @@ final class NgxLibrary {
 	                    long outputView, long outputImage, int outputFormat,
 	                    int renderWidth, int renderHeight, int displayWidth, int displayHeight,
 	                    float jitterX, float jitterY, float mvScaleX, float mvScaleY,
-	                    int reset, float frameTimeMs) {
+	                    int reset, float frameTimeMs, float preExposure) {
 		try {
 			return (int) this.evaluate.invokeExact(cmd, feature,
 					colorView, colorImage, colorFormat,
@@ -189,7 +189,7 @@ final class NgxLibrary {
 					mvView, mvImage, mvFormat,
 					outputView, outputImage, outputFormat,
 					renderWidth, renderHeight, displayWidth, displayHeight,
-					jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs);
+					jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs, preExposure);
 		} catch (Throwable t) {
 			throw new RuntimeException("ngxshim_evaluate failed", t);
 		}

@@ -165,7 +165,7 @@ def verifyNvidiaNgxJar = tasks.register("verifyNvidiaNgxJar") {
         }
         def root = "dev/comfyfluffy/caustica/nvidia/ngx/"
         def required = ["NgxRuntime.class", "NgxLibrary.class", "DlssRayReconstruction.class",
-                        "DlssFrameGeneration.class"].collect { root + it }
+                        "DlssSuperResolution.class", "DlssFrameGeneration.class"].collect { root + it }
         def foreign = entries.findAll { it.endsWith(".class") && !it.startsWith(root) }
         def nativeFiles = entries.findAll { it.startsWith("caustica/natives/") && !it.endsWith("/") }
         if (!foreign.empty || !entries.containsAll(required) || nativeFiles.empty) {

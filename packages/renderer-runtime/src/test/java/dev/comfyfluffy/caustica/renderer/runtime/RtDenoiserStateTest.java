@@ -11,6 +11,9 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import org.junit.jupiter.api.Test;
 import org.joml.Matrix4f;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -35,6 +38,14 @@ class RtDenoiserStateTest {
         assertFalse(RtFrameResources.usesRayReconstructionRenderSize(DenoiserRoute.TEMPORAL_DENOISER, true));
         assertFalse(RtFrameResources.usesRayReconstructionRenderSize(DenoiserRoute.RAY_RECONSTRUCTION, false));
         assertTrue(RtFrameResources.usesRayReconstructionRenderSize(DenoiserRoute.RAY_RECONSTRUCTION, true));
+    }
+
+    @Test
+    void onlyTemporalDenoisingUsesTheStandaloneUpscalerExtent() {
+        assertFalse(RtFrameResources.usesTemporalUpscalerRenderSize(DenoiserRoute.RAW, true));
+        assertFalse(RtFrameResources.usesTemporalUpscalerRenderSize(DenoiserRoute.RAY_RECONSTRUCTION, true));
+        assertFalse(RtFrameResources.usesTemporalUpscalerRenderSize(DenoiserRoute.TEMPORAL_DENOISER, false));
+        assertTrue(RtFrameResources.usesTemporalUpscalerRenderSize(DenoiserRoute.TEMPORAL_DENOISER, true));
     }
 
     @Test
@@ -65,12 +76,24 @@ class RtDenoiserStateTest {
         state.ensureBackend(EXTENT);
         FakeBackend first = factory.last;
         state.ensureBackend(EXTENT);
-        assertEquals(1, factory.created);
+        assertEquals(RtDenoiserState.PLANE_COUNT, factory.created);
 
         state.ensureBackend(new DenoiserExtent(1280, 720));
         assertTrue(first.closed);
-        assertEquals(2, factory.created);
+        assertEquals(RtDenoiserState.PLANE_COUNT * 2, factory.created);
         assertEquals(new DenoiserExtent(1280, 720), state.backend().descriptor().extent());
+    }
+
+    @Test
+    void ownsIndependentTemporalHistoryForEachStablePlane() {
+        FakeFactory factory = new FakeFactory();
+        RtDenoiserState state = new RtDenoiserState(factory, settings(DenoiserRoute.TEMPORAL_DENOISER));
+        state.ensureBackend(EXTENT);
+
+        assertEquals(RtDenoiserState.PLANE_COUNT, factory.backends.size());
+        for (int plane = 0; plane < RtDenoiserState.PLANE_COUNT; plane++) {
+            assertSame(factory.backends.get(plane), state.backend(plane));
+        }
     }
 
     @Test
@@ -101,10 +124,10 @@ class RtDenoiserStateTest {
         FakeFactory factory = new FakeFactory();
         RtDenoiserState state = new RtDenoiserState(factory, settings(DenoiserRoute.TEMPORAL_DENOISER));
         state.ensureBackend(EXTENT);
-        FakeBackend backend = factory.last;
-        assertSame(backend, state.backend());
+        List<FakeBackend> backends = List.copyOf(factory.backends);
+        assertSame(backends.get(0), state.backend());
         state.close();
-        assertTrue(backend.closed);
+        assertTrue(backends.stream().allMatch(backend -> backend.closed));
         assertFalse(factory.closed);
     }
 
@@ -115,12 +138,15 @@ class RtDenoiserStateTest {
     private static final class FakeFactory implements DenoiserBackendFactory {
         private int created;
         private FakeBackend last;
+        private final List<FakeBackend> backends = new ArrayList<>();
         private boolean closed;
 
         @Override
         public DenoiserBackend create(DenoiserBackendDescriptor descriptor) {
             created++;
-            return last = new FakeBackend(descriptor);
+            last = new FakeBackend(descriptor);
+            backends.add(last);
+            return last;
         }
 
         @Override

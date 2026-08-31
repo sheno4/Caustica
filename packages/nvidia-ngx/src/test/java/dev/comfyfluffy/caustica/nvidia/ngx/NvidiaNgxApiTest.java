@@ -6,6 +6,7 @@ import org.lwjgl.vulkan.VkDevice;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class NvidiaNgxApiTest {
     @Test
@@ -16,7 +17,15 @@ final class NvidiaNgxApiTest {
     @Test
     void settingsAreImmutableFeatureInputs() {
         assertEquals(2, new DlssRayReconstruction.Settings(true, 2, 0).quality());
+        assertEquals(2, new DlssSuperResolution.Settings(true, 2, 11).quality());
         assertFalse(new DlssFrameGeneration.Settings(false).enabled());
+    }
+
+    @Test
+    void superResolutionRejectsUnsupportedNgxModes() {
+        assertThrows(IllegalArgumentException.class, () -> new DlssSuperResolution.Settings(true, 4, 0));
+        assertThrows(IllegalArgumentException.class, () -> new DlssSuperResolution.Settings(true, 6, 0));
+        assertThrows(IllegalArgumentException.class, () -> new DlssSuperResolution.Settings(true, 2, 9));
     }
 
     @Test

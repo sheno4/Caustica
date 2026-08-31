@@ -218,8 +218,8 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlss(VkCommandBuffer cmd,
 }
 
 // Records a DLSS evaluation into cmd. All images are VkImageView+VkImage+VkFormat
-// triples; depth uses the depth aspect, the rest use the color aspect; output is
-// the only read-write (storage) resource.
+// triples. The linear-depth guide is an R32 storage image and therefore uses the color aspect;
+// output is the only read-write (storage) resource.
 NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
                                      VkImageView colorView, VkImage colorImage, int colorFormat,
                                      VkImageView depthView, VkImage depthImage, int depthFormat,
@@ -228,7 +228,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
                                      unsigned int renderWidth, unsigned int renderHeight,
                                      unsigned int displayWidth, unsigned int displayHeight,
                                      float jitterX, float jitterY, float mvScaleX, float mvScaleY,
-                                     int reset, float frameTimeMs) {
+                                     int reset, float frameTimeMs, float preExposure) {
     NGX_LOG("evaluate: enter cmd=%p feature=%p render=%ux%u display=%ux%u jitter=(%.3f,%.3f) mvScale=(%.3f,%.3f) reset=%d frameTimeMs=%.3f",
             (void*) cmd, feature, renderWidth, renderHeight, displayWidth, displayHeight,
             jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs);
@@ -241,7 +241,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
             (void*) f->handle, (void*) f->params, (void*) colorView, (void*) depthView, (void*) mvView, (void*) outputView);
 
     NVSDK_NGX_Resource_VK color = makeImageResource(colorView, colorImage, colorFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
-    NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_DEPTH_BIT, false);
+    NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
     NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
     NVSDK_NGX_Resource_VK output = makeImageResource(outputView, outputImage, outputFormat, displayWidth, displayHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
 
@@ -259,6 +259,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
     eval.InRenderSubrectDimensions.Width = renderWidth;
     eval.InRenderSubrectDimensions.Height = renderHeight;
     eval.InFrameTimeDeltaInMsec = frameTimeMs;
+    eval.InPreExposure = preExposure;
 
     NGX_LOG("evaluate: calling NGX_VULKAN_EVALUATE_DLSS_EXT");
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSS_EXT(cmd, f->handle, f->params, &eval);
