@@ -190,7 +190,7 @@ public final class RtGpuExecutor {
     /** Destroy a tracked owner once its exact last frame use has completed. */
     public void retireAfterGraphics(TrackedGraphicsUse trackedUse, Runnable destroy) {
         assertRenderThread();
-        enqueueDestroyAfterGraphicsValue(trackedUse.value, destroy);
+        trackedUse.whenMarksApplied(() -> enqueueDestroyAfterGraphicsValue(trackedUse.value, destroy));
     }
 
     /** Retire extension-owned state after the latest graphics token reserved before this call. */
@@ -671,14 +671,52 @@ public final class RtGpuExecutor {
     public static final class TrackedGraphicsUse {
         private RtGpuExecutor owner;
         private long value;
+        private GraphicsUse pending;
 
+        /**
+         * Adopt {@code graphicsUse} as this owner's newest frame, but only once that frame's commands
+         * enter the host submission that signals its timeline value.
+         *
+         * <p>A frame reservation is allocated at {@link #beginGraphicsUse} and signalled only when
+         * {@link GraphicsUse#commandsAccepted()} ran. Recording a value eagerly would let a frame that
+         * never reaches submission leave a value here that the timeline never reaches, and every later
+         * {@link GraphicsUseWaiter#await} on this owner would block forever. Deferring through
+         * {@link GraphicsUse#whenSubmitted} means an abandoned frame simply leaves the previous value in
+         * place, which is correct: its commands never ran, so they never read this resource.
+         */
         public void mark(GraphicsUse graphicsUse) {
             graphicsUse.owner.assertRenderThread();
+            adopt(graphicsUse);
+        }
+
+        /** The device-independent half of {@link #mark}, so its ordering is testable without a device. */
+        void adopt(GraphicsUse graphicsUse) {
             if (owner != null && owner != graphicsUse.owner) {
                 throw new IllegalArgumentException("Tracked graphics use belongs to a different Vulkan device");
             }
             owner = graphicsUse.owner;
-            value = Math.max(value, graphicsUse.value);
+            pending = graphicsUse;
+            graphicsUse.whenSubmitted(() -> {
+                value = Math.max(value, graphicsUse.value);
+                pending = null;
+            });
+        }
+
+        long value() {
+            return value;
+        }
+
+        /**
+         * Run {@code action} once every mark on this owner has contributed to {@link #value}.
+         *
+         * <p>Retirement reads {@link #value} to choose a completion point. A mark recorded earlier in the
+         * frame that is still awaiting submission has not raised it yet, so reading it directly would
+         * schedule destruction against an older frame than the one already recording against this
+         * resource. Submitted callbacks run in registration order, so chaining here observes the mark.
+         */
+        void whenMarksApplied(Runnable action) {
+            if (pending == null) action.run();
+            else pending.whenSubmitted(action);
         }
 
         /** Forget timeline ownership after the owning resources have been destroyed or synchronized. */
@@ -688,6 +726,7 @@ public final class RtGpuExecutor {
             }
             value = 0L;
             owner = null;
+            pending = null;
         }
     }
 

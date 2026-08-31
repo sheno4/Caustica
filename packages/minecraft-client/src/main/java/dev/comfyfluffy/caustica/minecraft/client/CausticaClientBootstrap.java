@@ -20,7 +20,8 @@ public final class CausticaClientBootstrap {
     }
 
     public static void invalidateRenderState() {
-        CausticaClientComposition.current().runtime().resetRendererFailure();
+        // Re-arms only the presentation seam guard. A renderer fault is fatal and never leaves state
+        // behind that an invalidation could restore.
         CausticaClientComposition.current().renderController().resetFailureLatch();
     }
 }

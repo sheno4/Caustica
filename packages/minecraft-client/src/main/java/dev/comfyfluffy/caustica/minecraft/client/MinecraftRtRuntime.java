@@ -59,7 +59,6 @@ public final class MinecraftRtRuntime {
         READY,
         FRAME_INACTIVE,
         DEVICE_UNAVAILABLE,
-        RENDERER_FAILED,
         RESOURCE_TRANSITION
     }
 
@@ -260,10 +259,6 @@ public final class MinecraftRtRuntime {
         return session != null && session.renderer != null ? session.renderer.frameCounter() : 0L;
     }
 
-    public boolean rendererFailed() {
-        return session != null && session.failed();
-    }
-
     public String exposureSummary() {
         RtExposure exposure = session != null && session.renderer != null ? session.renderer.exposure() : null;
         return exposure != null && exposure.ready() ? exposure.debugSummaryLine() : null;
@@ -280,10 +275,6 @@ public final class MinecraftRtRuntime {
 
     public void resetExposureHistory() {
         if (session != null && session.renderer != null) session.renderer.resetExposureHistory();
-    }
-
-    public void resetRendererFailure() {
-        if (session != null && session.renderer != null) session.renderer.resetFailureLatch();
     }
 
     public void captureFrame(FrameSnapshot snapshot) {
@@ -393,19 +384,9 @@ public final class MinecraftRtRuntime {
         }
 
         boolean starting = state == State.STARTING;
-        boolean sessionReady;
-        try {
-            sessionReady = session.tick(sceneResources, worldEpoch, dimension,
-                    displayWidth, displayHeight, starting);
-        } catch (Throwable failure) {
-            LOGGER.error("RT runtime scene work failed; source presentation remains active", failure);
-            fail(reconfigureSurface);
-            return;
-        }
-        if (session.failed()) {
-            fail(reconfigureSurface);
-            return;
-        }
+        // Scene work failing is a renderer defect, not a condition to present around: let it surface.
+        boolean sessionReady = session.tick(sceneResources, worldEpoch, dimension,
+                displayWidth, displayHeight, starting);
         if (!sessionReady) {
             return;
         }
@@ -418,7 +399,6 @@ public final class MinecraftRtRuntime {
 
         state = State.ACTIVE;
         session.renderer.resetExposureHistory();
-        session.renderer.resetFailureLatch();
         host().resetPresentationFailure();
         if (CausticaConfig.Rt.Hdr.ENABLED.value()) {
             reconfigureSurface.run();
@@ -491,11 +471,8 @@ public final class MinecraftRtRuntime {
     }
 
     public WorldReplacement worldReplacement() {
-        boolean failed = rendererFailed();
         if (!frameActive) {
             return WorldReplacement.FRAME_INACTIVE;
-        } else if (failed) {
-            return WorldReplacement.RENDERER_FAILED;
         } else if (vulkanContext == null) {
             return WorldReplacement.DEVICE_UNAVAILABLE;
         } else if (requiresSourceWorldFallback()) {
@@ -578,11 +555,6 @@ public final class MinecraftRtRuntime {
         LOGGER.info("RT runtime off; source presentation restored");
     }
 
-    private void fail(Runnable reconfigureSurface) {
-        closeSession(reconfigureSurface, State.FAILED);
-        LOGGER.warn("RT runtime startup failed; source presentation remains active");
-    }
-
     private void closeSession(Runnable reconfigureSurface, State terminalState) {
         state = State.STOPPING;
         frameActive = false;
@@ -636,10 +608,6 @@ public final class MinecraftRtRuntime {
             this.frameGeneration = frameGeneration;
             this.presenter = presenter;
             this.shaderCacheRoot = shaderCacheRoot;
-        }
-
-        private boolean failed() {
-            return renderer != null && renderer.hasFailed();
         }
 
         private boolean requiresSourceFallback() {

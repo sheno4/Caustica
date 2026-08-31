@@ -163,19 +163,17 @@ public final class RtFrameRenderer {
     private final RtTelemetry telemetry;
     // recordFrame mutates this only on the render thread; each renderer owns an independent sequence.
     private final RtJitter jitter;
-    // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
+    // World push data lives in one host-visible BDA buffer; only its address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
-    // Exact graphics completion guards host writes; ring depth only avoids routine waits.
-    private static final int PUSH_RING = 6;
-    private PushSlot[] pushRing;
-    private int pushSlot;
+    // Exact graphics completion guards the host write, so the buffer is reused directly.
+    private PushBuffer pushBuffer;
     private final RtFrameResources frameResources;
 
-    private static final class PushSlot {
+    private static final class PushBuffer {
         final GpuBuffer buffer;
         final RtGpuExecutor.TrackedGraphicsUse graphicsUse = new RtGpuExecutor.TrackedGraphicsUse();
 
-        PushSlot(GpuBuffer buffer) {
+        PushBuffer(GpuBuffer buffer) {
             this.buffer = buffer;
         }
     }
@@ -197,7 +195,6 @@ public final class RtFrameRenderer {
     private SceneId lastEntryScene;
     private float previousProceduralTime;
     private boolean proceduralTimeValid;
-    private boolean failed;
     private boolean loggedActive;
 
     // Camera captured each frame from the host adapter (unjittered projection, rotation, and position).
@@ -237,10 +234,6 @@ public final class RtFrameRenderer {
         resetSceneHistory();
     }
 
-    public boolean hasFailed() {
-        return this.failed;
-    }
-
     /** Read-only access to the auto-exposure controller, for diagnostics (F3 entry, frame stats log). */
     public RtExposure exposure() {
         return presentationResources().exposure();
@@ -274,8 +267,7 @@ public final class RtFrameRenderer {
      */
     public boolean exportLatestResidualExposureExr(Path outputPath) throws java.io.IOException {
         context.backend().assertRenderThread();
-        if (failed || presentationResources().exposure().image() == null
-                || pendingGraphicsUse != null) {
+        if (presentationResources().exposure().image() == null || pendingGraphicsUse != null) {
             return false;
         }
 
@@ -411,18 +403,6 @@ public final class RtFrameRenderer {
         return programs.active() != null;
     }
 
-    /**
-     * Clear the failure latch on an explicit render-state invalidation (F3+A, dimension change) so RT
-     * re-arms after a transient error instead of staying on the source renderer until restart. A deterministic
-     * failure just latches again on the next frame (bounded log spam: one error line per invalidation).
-     */
-    public void resetFailureLatch() {
-        if (failed) {
-            failed = false;
-            LOGGER.info("RT failure latch cleared by render-state invalidation; retrying RT");
-        }
-    }
-
     /** Capture the immutable host frame for the next composite. Called from the host render adapter. */
     public void captureFrame(FrameSnapshot snapshot) {
         frameSnapshot = Objects.requireNonNull(snapshot, "snapshot");
@@ -455,9 +435,6 @@ public final class RtFrameRenderer {
 
     /** Records UI passes into a host command buffer after the host has made its UI layer available. */
     public void recordUiPasses(VkCommandBuffer commandBuffer, GpuImage uiLayer) {
-        if (failed) {
-            return;
-        }
         Objects.requireNonNull(commandBuffer, "commandBuffer");
         Objects.requireNonNull(uiLayer, "uiLayer");
         if (pendingGraphicsUse == null || currentTrace == null || frameSnapshot == null) {
@@ -492,9 +469,6 @@ public final class RtFrameRenderer {
     public boolean composite(long nativeColorImage, int width, int height) {
         frameCounter++; // renderer-local frame serial used by per-frame source rings and diagnostics
         VulkanDiagnostics.setInFlight("graphics-latest", "frame=" + frameCounter + " size=" + width + "x" + height);
-        if (failed) {
-            return false;
-        }
         context.gpuExecutor().throwIfFailed();
         services.progress();
         FrameSnapshot snapshot = frameSnapshot;
@@ -535,39 +509,27 @@ public final class RtFrameRenderer {
             }
             return true;
         } catch (Throwable t) {
+            // A frame that dies mid-recording leaves its reservation unresolved and the retained scene
+            // partially advanced. There is no defined state to resume from, so surface the original
+            // fault instead of masking it behind source rasterization.
             presenter.invalidateRenderedFrame();
-            resolvePendingGraphicsUse(t);
-            context.gpuExecutor().throwIfFailed();
-            failed = true;
-            LOGGER.error("RT composite failed; reverting to source rasterization", t);
-            return false;
-        }
-    }
-
-    private void resolvePendingGraphicsUse(Throwable frameFailure) {
-        RtGpuExecutor.GraphicsUse graphicsUse = pendingGraphicsUse;
-        if (graphicsUse == null) return;
-        pendingGraphicsUse = null;
-        currentTrace = null;
-        try {
-            context.gpuExecutor().resolveGraphicsUse(
-                    context.backend().createGraphicsSubmission(), graphicsUse);
-        } catch (Throwable resolutionFailure) {
-            frameFailure.addSuppressed(resolutionFailure);
+            LOGGER.error("RT composite failed", t);
+            if (t instanceof RuntimeException runtime) throw runtime;
+            if (t instanceof Error error) throw error;
+            throw new IllegalStateException("RT composite failed", t);
         }
     }
 
     /** Build every display-sized resource while startup is still presenting the source renderer. */
     public boolean ensurePresentationResourcesReady(long sceneId, int width, int height) {
-        if (failed || sceneId == 0L) {
+        if (sceneId == 0L) {
             return false;
         }
         try {
             return ensurePresentationResources(context, width, height);
-        } catch (Throwable t) {
-            failed = true;
-            LOGGER.error("RT presentation resource bring-up failed; reverting to host presentation", t);
-            return false;
+        } catch (IOException failure) {
+            // Shader and pipeline bring-up has no partial success worth presenting around.
+            throw new IllegalStateException("RT presentation resource bring-up failed", failure);
         }
     }
 
@@ -591,19 +553,16 @@ public final class RtFrameRenderer {
     }
 
     private RtProgramBackend.Published ensureWorld(VulkanDeviceContext ctx) {
-        ensurePushRing(ctx);
+        ensurePushBuffer(ctx);
         return programs.active();
     }
 
-    private void ensurePushRing(VulkanDeviceContext ctx) {
-        if (pushRing != null) {
+    private void ensurePushBuffer(VulkanDeviceContext ctx) {
+        if (pushBuffer != null) {
             return;
         }
-        pushRing = new PushSlot[PUSH_RING];
-        for (int i = 0; i < PUSH_RING; i++) {
-            pushRing[i] = new PushSlot(ctx.createBuffer(WORLD_PUSH_SIZE,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push " + i));
-        }
+        pushBuffer = new PushBuffer(ctx.createBuffer(WORLD_PUSH_SIZE,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push"));
     }
     /**
      * Invalidates temporal consumers before the host replaces pack-owned images. Descriptor leases and
@@ -773,7 +732,7 @@ public final class RtFrameRenderer {
         RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
         presentationResources().exposure().beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
-        PushSlot framePushSlot = null;
+        PushBuffer framePush = null;
         GpuBuffer continuationQueue = null;
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
@@ -796,13 +755,11 @@ public final class RtFrameRenderer {
                 jitterY = jitter.jitterPixelsY() * jitterSignY();
             }
 
-            pushSlot = (pushSlot + 1) % PUSH_RING;
-            PushSlot selectedPushSlot = pushRing[pushSlot];
-            graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
-            framePushSlot = selectedPushSlot;
+            graphicsUseWaiter.await(pushBuffer.graphicsUse);
+            framePush = pushBuffer;
             continuationQueue = traceResources().acquireContinuationQueue(graphicsUseWaiter);
             VK10.vkCmdFillBuffer(cmd, continuationQueue.handle(), 0L, continuationQueue.size(), 0);
-            GpuBuffer pushBuf = selectedPushSlot.buffer;
+            GpuBuffer pushBuf = pushBuffer.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
@@ -1019,7 +976,7 @@ public final class RtFrameRenderer {
         submission.execute(cmd);
         graphicsUse.commandsAccepted();
         // Submission makes every frame-owned address reachable until the final overlay consumer.
-        framePushSlot.graphicsUse.mark(graphicsUse);
+        framePush.graphicsUse.mark(graphicsUse);
         traceResources().markContinuationUse(graphicsUse);
         presentationResources().exposure().markStateReadbackUse(graphicsUse);
         presenter.publish(new RtFramePresenter.RenderedFrame(
@@ -1125,20 +1082,15 @@ public final class RtFrameRenderer {
         rayReconstruction.destroyAfterDeviceIdle();
         presenter.invalidateRenderedFrame();
         frameResources.destroy();
-        if (pushRing != null) {
-            for (PushSlot slot : pushRing) {
-                if (slot != null) {
-                    slot.buffer.destroy();
-                }
-            }
-            pushRing = null;
+        if (pushBuffer != null) {
+            pushBuffer.buffer.destroy();
+            pushBuffer = null;
         }
         mvHasPrev = false;
         lastLightingFrame = -1L;
         lastLightingOrigin = null;
         lastEntryScene = null;
         proceduralTimeValid = false;
-        failed = false;
         loggedActive = false;
         frameSnapshot = null;
         currentTrace = null;

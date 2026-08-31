@@ -28,7 +28,6 @@ final class MinecraftRtRuntimeStatusTest {
         assertFalse(runtime.active());
         assertFalse(runtime.frameActive());
         assertFalse(runtime.hasSession());
-        assertFalse(runtime.rendererFailed());
         assertEquals(MinecraftRtRuntime.WorldReplacement.FRAME_INACTIVE, runtime.worldReplacement());
     }
 

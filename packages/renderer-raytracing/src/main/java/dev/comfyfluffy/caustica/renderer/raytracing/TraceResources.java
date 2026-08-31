@@ -9,21 +9,12 @@ import org.lwjgl.vulkan.VK10;
 
 /** Owns extent-keyed trace images and continuation queues. */
 public final class TraceResources {
-    private static final int PATH_QUEUE_RING = 6;
     private static final int PATH_RECORDS_PER_PIXEL = 2;
 
-    private final GpuBuffer[] continuationQueues = new GpuBuffer[PATH_QUEUE_RING];
-    private final RtGpuExecutor.TrackedGraphicsUse[] continuationUses =
-            new RtGpuExecutor.TrackedGraphicsUse[PATH_QUEUE_RING];
-    private int continuationIndex = -1;
+    private GpuBuffer continuationQueue;
+    private final RtGpuExecutor.TrackedGraphicsUse continuationUse = new RtGpuExecutor.TrackedGraphicsUse();
     private TraceExtent extent;
     private TraceImages images;
-
-    public TraceResources() {
-        for (int i = 0; i < continuationUses.length; i++) {
-            continuationUses[i] = new RtGpuExecutor.TrackedGraphicsUse();
-        }
-    }
 
     public boolean hasDisplayExtent(int width, int height) {
         return extent != null && extent.displayWidth() == width && extent.displayHeight() == height;
@@ -57,12 +48,10 @@ public final class TraceResources {
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                 "stable plane metadata " + renderWidth + "x" + renderHeight);
         long continuationBytes = continuationBytes(renderWidth, renderHeight);
-        for (int i = 0; i < continuationQueues.length; i++) {
-            continuationQueues[i] = context.createBuffer(continuationBytes,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    false, "path continuation queue " + i + " " + renderWidth + "x" + renderHeight
-                            + "x" + PATH_RECORDS_PER_PIXEL);
-        }
+        continuationQueue = context.createBuffer(continuationBytes,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                false, "path continuation queue " + renderWidth + "x" + renderHeight
+                        + "x" + PATH_RECORDS_PER_PIXEL);
         GpuImage normalRoughness = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide normal roughness " + renderWidth + "x" + renderHeight);
         GpuImage diffuseAlbedo = context.createStorageImage(renderWidth, renderHeight,
@@ -104,13 +93,12 @@ public final class TraceResources {
     }
 
     public GpuBuffer acquireContinuationQueue(RtGpuExecutor.GraphicsUseWaiter waiter) {
-        continuationIndex = (continuationIndex + 1) % continuationQueues.length;
-        waiter.await(continuationUses[continuationIndex]);
-        return continuationQueues[continuationIndex];
+        waiter.await(continuationUse);
+        return continuationQueue;
     }
 
     public void markContinuationUse(RtGpuExecutor.GraphicsUse graphicsUse) {
-        continuationUses[continuationIndex].mark(graphicsUse);
+        continuationUse.mark(graphicsUse);
     }
 
     public void destroy() {
@@ -136,14 +124,11 @@ public final class TraceResources {
             images.reconstructedColor().destroy();
             images = null;
         }
-        for (int i = 0; i < continuationQueues.length; i++) {
-            if (continuationQueues[i] != null) {
-                continuationQueues[i].destroy();
-                continuationQueues[i] = null;
-            }
-            continuationUses[i].clear();
+        if (continuationQueue != null) {
+            continuationQueue.destroy();
+            continuationQueue = null;
         }
-        continuationIndex = -1;
+        continuationUse.clear();
         extent = null;
     }
 

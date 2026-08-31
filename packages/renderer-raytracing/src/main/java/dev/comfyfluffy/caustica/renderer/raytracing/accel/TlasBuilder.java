@@ -121,13 +121,16 @@ public final class TlasBuilder {
         }
     }
 
-    /** Owns reusable per-frame instance buffers, acceleration structures, and scratch buffers. */
-    public static final class Ring {
-        private static final int SIZE = 4;
+    /**
+     * Owns one scene's reusable instance buffer, acceleration structure, and scratch buffer.
+     *
+     * <p>Reuse is guarded by an exact wait on the last frame that read the buffers, so a frame that
+     * outruns the GPU stalls here rather than writing under it.
+     */
+    public static final class Buffers {
         private static final float GROWTH = 1.25f;
         private static final int MIN_CAPACITY = 1024;
-        private final Slot[] slots = new Slot[SIZE];
-        private int cursor;
+        private Slot slot;
 
         private static final class Slot {
             private RtAccel accel;
@@ -143,49 +146,47 @@ public final class TlasBuilder {
             }
         }
 
-        /** Free all slots after the caller has made the device idle. */
+        /** Free the buffers after the caller has made the device idle. */
         public void destroy() {
-            for (int i = 0; i < slots.length; i++) {
-                if (slots[i] != null) {
-                    slots[i].destroy();
-                    slots[i] = null;
-                }
+            if (slot != null) {
+                slot.destroy();
+                slot = null;
             }
         }
     }
 
-    /** Pack two instance ranges into the next reusable ring slot. */
+    /** Pack two instance ranges into this scene's instance buffer. */
     public static Prepared prepare(VulkanDeviceContext ctx, List<Instance> baseInstances,
-                                   List<Instance> dynamicInstances, Ring ring, GraphicsUse graphicsUse) {
+                                   List<Instance> dynamicInstances, Buffers buffers, GraphicsUse graphicsUse) {
         int baseCount = baseInstances.size();
         int count = Math.addExact(baseCount, dynamicInstances.size());
-        Ring.Slot slot = selectSlot(ctx, ring, count);
+        Buffers.Slot slot = selectSlot(ctx, buffers, count);
         writeInstances(baseInstances, slot.instanceBuffer.mapped(), 0);
         writeInstances(dynamicInstances, slot.instanceBuffer.mapped(), baseCount);
         return finish(slot, count, graphicsUse);
     }
 
-    /** Pack staged instances into the next reusable ring slot. */
-    public static Prepared prepare(VulkanDeviceContext ctx, InstanceBatch instances, Ring ring, GraphicsUse graphicsUse) {
+    /** Pack staged instances into this scene's instance buffer. */
+    public static Prepared prepare(VulkanDeviceContext ctx, InstanceBatch instances, Buffers buffers,
+                                   GraphicsUse graphicsUse) {
         int count = instances.size();
-        Ring.Slot slot = selectSlot(ctx, ring, count);
+        Buffers.Slot slot = selectSlot(ctx, buffers, count);
         writeInstances(instances, slot.instanceBuffer.mapped());
         return finish(slot, count, graphicsUse);
     }
 
-    private static Ring.Slot selectSlot(VulkanDeviceContext ctx, Ring ring, int count) {
-        Ring.Slot slot = ring.slots[ring.cursor];
+    private static Buffers.Slot selectSlot(VulkanDeviceContext ctx, Buffers buffers, int count) {
+        Buffers.Slot slot = buffers.slot;
         if (slot != null) ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
         if (slot == null || count > slot.capacity) {
             if (slot != null) slot.destroy();
-            slot = createSlot(ctx, Math.max(Ring.MIN_CAPACITY, (int) (count * Ring.GROWTH)));
-            ring.slots[ring.cursor] = slot;
+            slot = createSlot(ctx, Math.max(Buffers.MIN_CAPACITY, (int) (count * Buffers.GROWTH)));
+            buffers.slot = slot;
         }
-        ring.cursor = (ring.cursor + 1) % Ring.SIZE;
         return slot;
     }
 
-    private static Prepared finish(Ring.Slot slot, int count, GraphicsUse graphicsUse) {
+    private static Prepared finish(Buffers.Slot slot, int count, GraphicsUse graphicsUse) {
         if (count > 0) {
             slot.instanceBuffer.flush(0L, (long) count * VkAccelerationStructureInstanceKHR.SIZEOF);
         }
@@ -224,10 +225,10 @@ public final class TlasBuilder {
         }
     }
 
-    private static Ring.Slot createSlot(VulkanDeviceContext ctx, int capacity) {
+    private static Buffers.Slot createSlot(VulkanDeviceContext ctx, int capacity) {
         VkDevice vk = ctx.vk();
-        String label = "TLAS ring slot (" + capacity + " instance capacity)";
-        Ring.Slot slot = new Ring.Slot();
+        String label = "TLAS buffers (" + capacity + " instance capacity)";
+        Buffers.Slot slot = new Buffers.Slot();
         slot.capacity = capacity;
         slot.instanceBuffer = ctx.createAlignedBuffer((long) VkAccelerationStructureInstanceKHR.SIZEOF * capacity,
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true,

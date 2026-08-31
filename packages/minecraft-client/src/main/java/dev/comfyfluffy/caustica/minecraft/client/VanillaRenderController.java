@@ -150,7 +150,7 @@ public final class VanillaRenderController {
 
 	private String findInactiveReason(RenderTarget mainTarget) {
 		MinecraftRtRuntime.WorldReplacement replacement = CausticaClientComposition.current().runtime().worldReplacement();
-		if (this.failureLatched || replacement == MinecraftRtRuntime.WorldReplacement.RENDERER_FAILED) {
+		if (this.failureLatched) {
 			return "RT composite failure latch is set";
 		}
 		if (replacement == MinecraftRtRuntime.WorldReplacement.FRAME_INACTIVE) {

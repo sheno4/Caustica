@@ -22,9 +22,6 @@ public final class RtExposureDebugEntry implements DebugScreenEntry {
     @Override
     public void display(DebugScreenDisplayer displayer, @Nullable Level serverOrClientLevel,
                         @Nullable LevelChunk clientChunk, @Nullable LevelChunk serverChunk) {
-        if (CausticaClientComposition.current().runtime().rendererFailed()) {
-            return; // vanilla is rendering this frame; the exposure state is stale/irrelevant.
-        }
         String line = CausticaClientComposition.current().runtime().exposureSummary();
         if (line != null) {
             displayer.addLine(line);

@@ -46,8 +46,8 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BIND
 public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final VulkanDeviceContext ctx;
     private final RtNeeAtBackend neeAt;
-    private final Map<SceneId, TlasBuilder.Ring> tlasRings = new IdentityHashMap<>();
-    private final Map<SceneId, TraceRing> traceRings = new IdentityHashMap<>();
+    private final Map<SceneId, TlasBuilder.Buffers> tlasBuffers = new IdentityHashMap<>();
+    private final Map<SceneId, TraceBuffers> traceBuffers = new IdentityHashMap<>();
     private final ArrayDeque<Publication> queued = new ArrayDeque<>();
     private final RetainedSceneProgressQueue<CompletedBuild> completed = new RetainedSceneProgressQueue<>();
     private final RtLatestInstanceTransforms latestTransforms = new RtLatestInstanceTransforms();
@@ -309,8 +309,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         frameTransforms.put(scene, Map.copyOf(latched));
         current.graphicsUse.mark(graphicsUse);
-        TlasBuilder.Ring ring = tlasRings.computeIfAbsent(scene, ignored -> new TlasBuilder.Ring());
-        return TlasBuilder.prepare(ctx, instances, ring, graphicsUse);
+        TlasBuilder.Buffers buffers = tlasBuffers.computeIfAbsent(
+                scene, ignored -> new TlasBuilder.Buffers());
+        return TlasBuilder.prepare(ctx, instances, buffers, graphicsUse);
     }
 
     /** Packs the GeometryIndex-addressed records for one scene in the same order as its TLAS hit bases. */
@@ -338,7 +339,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         return RtRetainedGeometryPlan.hitGroups(records);
     }
 
-    /** Uploads this frame's rebased geometry records and pipeline-specific hit SBT into a protected ring slot. */
+    /** Uploads this frame's rebased geometry records and pipeline-specific hit SBT into this scene's buffers. */
     public synchronized PreparedTrace prepareTrace(SceneId scene, SceneOrigin origin, RtPipeline pipeline,
                                                    long tlasHandle, GraphicsUse graphicsUse) {
         Objects.requireNonNull(pipeline, "pipeline");
@@ -373,10 +374,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         List<RtRetainedGeometryPlan.HitGroup> groups = RtRetainedGeometryPlan.hitGroups(records);
         ByteBuffer hits = pipeline.retainedHitRecords(groups);
-        TraceRing ring = traceRings.computeIfAbsent(scene, ignored -> new TraceRing());
+        TraceBuffers buffers = traceBuffers.computeIfAbsent(scene, ignored -> new TraceBuffers());
         int geometryBytes = Math.multiplyExact(records.size(), RtRetainedGeometryPlan.RECORD_BYTES);
         int lightBytes = Math.multiplyExact(sceneLights.size(), RtRetainedLightPlan.RECORD_BYTES);
-        TraceSlot slot = ring.next(ctx, geometryBytes, hits.remaining(), lightBytes, emitterBytes, pipeline);
+        TraceSlot slot = buffers.next(ctx, geometryBytes, hits.remaining(), lightBytes, emitterBytes, pipeline);
         List<RtRetainedGeometryPlan.GeometryRecord> addressedRecords = new ArrayList<>(records.size());
         for (int index = 0; index < records.size(); index++) {
             int emitterOffset = emitterOffsets.get(index);
@@ -512,19 +513,19 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 else failure.addSuppressed(callbackFailure);
             }
         }
-        for (TlasBuilder.Ring ring : tlasRings.values()) {
+        for (TlasBuilder.Buffers buffers : tlasBuffers.values()) {
             try {
-                ring.destroy();
+                buffers.destroy();
             } catch (Throwable releaseFailure) {
                 if (failure == null) failure = releaseFailure;
                 else failure.addSuppressed(releaseFailure);
             }
         }
-        tlasRings.clear();
+        tlasBuffers.clear();
         frameTransforms.clear();
         latestTransforms.retainOnly(java.util.Set.of());
-        for (TraceRing ring : traceRings.values()) ring.destroy();
-        traceRings.clear();
+        for (TraceBuffers buffers : traceBuffers.values()) buffers.destroy();
+        traceBuffers.clear();
         if (failure instanceof RuntimeException runtime) throw runtime;
         if (failure instanceof Error error) throw error;
         if (failure != null) throw new IllegalStateException("retained scene shutdown failed", failure);
@@ -840,23 +841,24 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    private static final class TraceRing {
-        private static final int SIZE = 4;
-        private final TraceSlot[] slots = new TraceSlot[SIZE];
-        private int cursor;
+    /**
+     * Owns one scene's per-frame geometry, hit-SBT, light, and emitter uploads.
+     *
+     * <p>Reuse is guarded by an exact wait on the last frame that traced against these buffers.
+     */
+    private static final class TraceBuffers {
+        private TraceSlot slot;
 
         TraceSlot next(VulkanDeviceContext ctx, int geometryBytes, int hitBytes, int lightBytes, int emitterBytes,
                        RtPipeline pipeline) {
-            TraceSlot slot = slots[cursor];
-            cursor = (cursor + 1) % SIZE;
+            TraceSlot slot = this.slot;
             if (slot != null) ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
             if (slot == null || slot.geometry.size() < geometryBytes || slot.hits.size() < hitBytes
                     || slot.lights.size() < lightBytes
                     || slot.emitters.size() < emitterBytes
                     || slot.hitStride != pipeline.retainedHitRecordStride()) {
-                int slotIndex = (cursor + SIZE - 1) % SIZE;
                 if (slot != null) {
-                    slots[slotIndex] = null;
+                    this.slot = null;
                     slot.destroy();
                 }
                 int geometryCapacity = Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes);
@@ -880,7 +882,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     descriptor = ctx.descriptorHeap().allocateResources(1);
                     slot = new TraceSlot(geometry, hits, lights, emitters, descriptor,
                             pipeline.retainedHitRecordStride());
-                    slots[slotIndex] = slot;
+                    this.slot = slot;
                 } catch (Throwable failure) {
                     if (descriptor != null) descriptor.destroy();
                     if (emitters != null) emitters.destroy();
@@ -894,7 +896,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
 
         void destroy() {
-            for (TraceSlot slot : slots) if (slot != null) slot.destroy();
+            if (slot != null) slot.destroy();
         }
     }
 
