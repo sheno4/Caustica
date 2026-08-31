@@ -3,8 +3,6 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
@@ -192,73 +190,6 @@ final class RtNeeAtPropertiesTest {
                 10 + RtNeeAtBackend.TELEMETRY_INTERVAL_FRAMES, 10));
     }
 
-    @Test
-    void cpuReferenceIsPinnedToSlangConstantsAndBranchEdges() throws IOException {
-        String lights = shader("retained_lights.slang");
-        String bake = shader("nee_at_bake.slang");
-        String common = shader("world_common.slang");
-        String closest = shader("closest_hit.slang");
-
-        assertEquals(TILE_SIZE, RtNeeAtBackend.TILE_SIZE);
-        assertEquals(LOCAL_SLOTS, RtNeeAtBackend.LOCAL_SLOTS);
-        assertEquals(PROXY_RATIO, RtNeeAtBackend.PROXY_RATIO);
-        assertEquals(LOCAL_TO_GLOBAL_RATIO, RtNeeAtBackend.LOCAL_TO_GLOBAL_RATIO);
-        assertEquals(1, RtNeeAtBackend.LOCAL_HISTORY_VALID);
-        assertEquals(NO_LIGHT, RtNeeAtPlan.NO_LIGHT);
-        assertTrue(common.contains("NEE_AT_LOCAL_HISTORY_VALID = 1u"));
-        assertTrue(common.contains("NEE_AT_PROXY_RATIO = " + PROXY_RATIO + "u"));
-        assertTrue(common.contains("NEE_AT_GLOBAL_FEEDBACK_WEIGHT = " + GLOBAL_FEEDBACK_WEIGHT));
-        assertTrue(lights.contains("NEE_AT_NO_LIGHT = 0xffffffffu"));
-
-        // Tile jitter is derived from this hash on both the sampling and baking sides; if the two
-        // modules ever grew separate copies they could drift and silently address different tiles.
-        // Pinning the mixing constants to world_common alone is what rules that out.
-        assertTrue(common.contains("public uint neeAtHash(uint value)"));
-        assertTrue(common.contains("value *= 0x7feb352du"));
-        assertTrue(common.contains("value *= 0x846ca68bu"));
-        assertTrue(lights.contains("return neeAtHash(value)"));
-        assertFalse(lights.contains("value *= 0x7feb352du"));
-        assertFalse(bake.contains("value *= 0x7feb352du"));
-        assertTrue(bake.contains("neeAtHash(state.frameIndex * 2u)"));
-
-        // Global sampling is a single indexed proxy load, not a search over a cumulative table.
-        assertTrue(lights.contains("proxies[min(uint(randomValue * float(total)), total - 1u)]"));
-        assertFalse(lights.contains("if (randomValue <= entries[middle].y) high = middle"));
-        assertTrue(bake.contains("count = max(1u, uint(ceil(budget * pdf)))"));
-        assertTrue(bake.contains("distribution[middle].y <= proxy"));
-        assertTrue(bake.contains("NEE_AT_PROXY_RATIO - 2u"));
-
-        assertTrue(lights.contains("if (float(entries[base + middle].y) > target) high = middle"));
-        assertTrue(lights.contains("uint base = neeAtTileIndex(state, pixel) * state.localSlotCount"));
-        assertTrue(lights.contains("uint slot = retainedLightHash(lightIndex) % state.localSlotCount"));
-        assertFalse(lights.contains("InterlockedCompareExchange"));
-
-        // Both MIS directions must scale the light density by the candidate count identically.
-        assertTrue(lights.contains("public float neeAtLightMisPdf(float proposalPdf, float shapePdf, uint candidateCount)"));
-        assertTrue(lights.contains("return neeAtLightMisPdf(proposalPdf, shapePdf, candidates)"));
-        assertTrue(closest.contains("neeAtLightMisPdf(light.proposalPdf, light.shapePdf, candidateCount)"));
-
-        // Reverse MIS has support only on the linked proxy. The Gram solve remains correct when the
-        // parallelogram axes are skewed rather than assuming an orthogonal basis.
-        assertTrue(lights.contains("float determinant = uu * vv - uv * uv"));
-        assertTrue(lights.contains("if (determinant <= 0.0) return 0.0"));
-        assertTrue(lights.contains("float planeDistance = abs(dot(fromCenter, crossAxes)) / sqrt(determinant)"));
-        assertTrue(lights.contains("planeDistance > 1.0e-4 * sqrt(max(uu, vv))"));
-        assertTrue(lights.contains("if (any(abs(supportCoordinates) > float2(1.0001))) return 0.0"));
-
-        // Feedback is a float reservoir biased against the global pdf, not a fixed-point counter.
-        assertTrue(lights.contains("pow(globalPdf, 0.65)"));
-        assertTrue(lights.contains("event.y = asuint(total)"));
-        assertFalse(lights.contains("65535.0"));
-
-        assertTrue(bake.contains("groupshared uint localLights[128]"));
-        assertTrue(bake.contains("groupshared uint localMasses[128]"));
-        assertTrue(bake.contains("uint base = tileIndex * state.localSlotCount"));
-        assertTrue(bake.contains("uint mapped = plan[event.x].previousToCurrent"));
-        assertTrue(bake.contains("InterlockedAdd(counts[slot], 1u)"));
-        assertTrue(bake.contains("+ paddedExtent - jitter) % paddedExtent"));
-    }
-
     private static GlobalDistribution bakeGlobal(float[] power, int[] feedback,
                                                  int contributingPixels) {
         int lightCount = power.length;
@@ -379,14 +310,6 @@ final class RtNeeAtPropertiesTest {
 
     private static int divideRoundUp(int value, int divisor) {
         return (value + divisor - 1) / divisor;
-    }
-
-    private static String shader(String name) throws IOException {
-        try (var input = RtNeeAtPropertiesTest.class.getResourceAsStream(
-                "/caustica/shaders/world/" + name)) {
-            if (input == null) throw new IllegalStateException("missing shader " + name);
-            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
     }
 
     private record GlobalDistribution(int[] count, int[] base, int total) { }

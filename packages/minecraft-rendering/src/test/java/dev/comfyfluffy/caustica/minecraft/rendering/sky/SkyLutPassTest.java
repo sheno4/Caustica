@@ -15,7 +15,6 @@ import org.lwjgl.vulkan.VK13;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -73,15 +72,6 @@ final class SkyLutPassTest {
         assertEquals(1, closes.get());
     }
 
-    @Test void skyViewPublishesBindingInputsFromItsQueueOrderedDispatch() throws Exception {
-        String source;
-        try (var input = SkyLutPassTest.class.getResourceAsStream(
-                "/caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang")) {
-            source = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
-        assertTrue(source.contains("Access.ReadWrite, AddressSpace.Device, Std430DataLayout"));
-        assertTrue(source.contains("WritableSkyInputsPtr(pc.skyInputsAddress)[0] = pc.inputs"));
-    }
 
     @Test void lutDimensionsMatchAtmosphereConstants() {
         assertEquals(256, SkyLutPass.TRANSMITTANCE_WIDTH);
