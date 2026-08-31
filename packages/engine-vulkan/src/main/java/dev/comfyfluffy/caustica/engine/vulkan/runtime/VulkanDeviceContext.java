@@ -152,28 +152,8 @@ public final class VulkanDeviceContext implements GpuDevice {
         return vk;
     }
 
-    public GpuRasterCapabilities rasterCapabilities() {
-        return host.capabilities().raster();
-    }
-
     public void nameObject(int objectType, long handle, String label) {
         RtDebugLabels.name(this, objectType, handle, label);
-    }
-
-    public RtDebugLabels.Scope debugScope(VkCommandBuffer commandBuffer, String label) {
-        return RtDebugLabels.scope(this, commandBuffer, label);
-    }
-
-    public int graphicsQueueFamilyIndex() {
-        return graphicsQueue.familyIndex();
-    }
-
-    public int computeQueueFamilyIndex() {
-        return computeQueue.familyIndex();
-    }
-
-    public long vma() {
-        return vma;
     }
 
     @Override
@@ -247,13 +227,6 @@ public final class VulkanDeviceContext implements GpuDevice {
     /** Create a buffer whose returned device address is explicitly aligned for its consumer. */
     public GpuBuffer createAlignedBuffer(long size, int usage, boolean hostVisible, String label, long addressAlignment) {
         return createBuffer(size, usage, hostVisible, label, false,
-                hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, addressAlignment);
-    }
-
-    /** Create an explicitly aligned buffer shared by graphics and async compute when their families differ. */
-    public GpuBuffer createAsyncAlignedBuffer(long size, int usage, boolean hostVisible, String label,
-                                             long addressAlignment) {
-        return createBuffer(size, usage, hostVisible, label, true,
                 hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, addressAlignment);
     }
 
@@ -449,60 +422,6 @@ public final class VulkanDeviceContext implements GpuDevice {
                         + " exceeds format maximum " + imageProperties.imageFormatProperties().maxExtent().width()
                         + "x" + imageProperties.imageFormatProperties().maxExtent().height());
             }
-        }
-    }
-
-    /**
-     * A multisampled colour attachment for a raster mask pass that gets dynamic-rendering-resolved into a
-     * single-sample target immediately afterwards —
-     * e.g. a transient overlay's 4x MSAA edge-AA pass. {@code COLOR_ATTACHMENT_BIT | TRANSIENT_ATTACHMENT_BIT}
-     * only: unlike {@link #createStorageImage}, this is never sampled/stored/copied, and multisample images
-     * generally can't carry {@code STORAGE_BIT} anyway ({@code storageImageSampleCounts} is a separate,
-     * often-unsupported device limit). Kept in {@code GENERAL} layout like every other image here.
-     */
-    public GpuImage createTransientMsaaColorImage(int width, int height, int format, int samples, String label) {
-        int usage = VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK10.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-        long image;
-        long allocation;
-        long view;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkImageCreateInfo ici = VkImageCreateInfo.calloc(stack).sType$Default()
-                    .imageType(VK10.VK_IMAGE_TYPE_2D).format(format)
-                    .mipLevels(1).arrayLayers(1).samples(samples).tiling(VK10.VK_IMAGE_TILING_OPTIMAL)
-                    .usage(usage)
-                    .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
-            ici.extent().set(width, height, 1);
-            VmaAllocationCreateInfo iaci = VmaAllocationCreateInfo.calloc(stack).usage(Vma.VMA_MEMORY_USAGE_AUTO);
-            LongBuffer pImage = stack.mallocLong(1);
-            PointerBuffer pAlloc = stack.mallocPointer(1);
-            check(Vma.vmaCreateImage(vma, ici, iaci, pImage, pAlloc, null), "vmaCreateImage");
-            image = pImage.get(0);
-            allocation = pAlloc.get(0);
-            RtDebugLabels.nameImage(this, image, label);
-
-            VkImageViewCreateInfo vci = VkImageViewCreateInfo.calloc(stack).sType$Default()
-                    .image(image).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
-            vci.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
-            LongBuffer pView = stack.mallocLong(1);
-            check(VK10.vkCreateImageView(vk, vci, null, pView), "vkCreateImageView");
-            view = pView.get(0);
-            RtDebugLabels.nameImageView(this, view, label + " view");
-        }
-        long imageFinal = image;
-        submitSync(cmd -> {
-            try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(this, cmd, "init " + label)) {
-                VulkanBarriers.transitionUndefinedImage(cmd, stack, imageFinal,
-                        VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-            }
-        });
-        try {
-            return new VmaGpuImage(vma, vk, descriptorHeap, image, allocation, view,
-                    width, height, format, usage, label);
-        } catch (Throwable failure) {
-            VK10.vkDestroyImageView(vk, view, null);
-            Vma.vmaDestroyImage(vma, image, allocation);
-            throw failure;
         }
     }
 

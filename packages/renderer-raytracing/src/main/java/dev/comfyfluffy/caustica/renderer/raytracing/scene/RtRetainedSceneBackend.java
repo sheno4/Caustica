@@ -46,8 +46,6 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BIND
 public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final VulkanDeviceContext ctx;
     private final RtNeeAtBackend neeAt;
-    private final Map<SceneId, TlasBuilder.Buffers> tlasBuffers = new IdentityHashMap<>();
-    private final Map<SceneId, TraceBuffers> traceBuffers = new IdentityHashMap<>();
     private final ArrayDeque<Publication> queued = new ArrayDeque<>();
     private final RetainedSceneProgressQueue<CompletedBuild> completed = new RetainedSceneProgressQueue<>();
     private final RtLatestInstanceTransforms latestTransforms = new RtLatestInstanceTransforms();
@@ -309,9 +307,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         frameTransforms.put(scene, Map.copyOf(latched));
         current.graphicsUse.mark(graphicsUse);
-        TlasBuilder.Buffers buffers = tlasBuffers.computeIfAbsent(
-                scene, ignored -> new TlasBuilder.Buffers());
-        return TlasBuilder.prepare(ctx, instances, buffers, graphicsUse);
+        return TlasBuilder.prepare(ctx, instances, graphicsUse);
     }
 
     /** Packs the GeometryIndex-addressed records for one scene in the same order as its TLAS hit bases. */
@@ -374,10 +370,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         List<RtRetainedGeometryPlan.HitGroup> groups = RtRetainedGeometryPlan.hitGroups(records);
         ByteBuffer hits = pipeline.retainedHitRecords(groups);
-        TraceBuffers buffers = traceBuffers.computeIfAbsent(scene, ignored -> new TraceBuffers());
         int geometryBytes = Math.multiplyExact(records.size(), RtRetainedGeometryPlan.RECORD_BYTES);
         int lightBytes = Math.multiplyExact(sceneLights.size(), RtRetainedLightPlan.RECORD_BYTES);
-        TraceSlot slot = buffers.next(ctx, geometryBytes, hits.remaining(), lightBytes, emitterBytes, pipeline);
+        TraceSlot slot = createTraceSlot(ctx, geometryBytes, hits.remaining(), lightBytes, emitterBytes,
+                pipeline, graphicsUse);
         List<RtRetainedGeometryPlan.GeometryRecord> addressedRecords = new ArrayList<>(records.size());
         for (int index = 0; index < records.size(); index++) {
             int emitterOffset = emitterOffsets.get(index);
@@ -417,7 +413,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             slot.emitters.flush(0L, emitters.remaining());
         }
         ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
-        slot.graphicsUse.mark(graphicsUse);
         RtPipeline.HitTable hitTable = hits.hasRemaining() ? new RtPipeline.HitTable(
                 new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hits.remaining()),
                 pipeline.retainedHitRecordStride()) : null;
@@ -513,19 +508,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 else failure.addSuppressed(callbackFailure);
             }
         }
-        for (TlasBuilder.Buffers buffers : tlasBuffers.values()) {
-            try {
-                buffers.destroy();
-            } catch (Throwable releaseFailure) {
-                if (failure == null) failure = releaseFailure;
-                else failure.addSuppressed(releaseFailure);
-            }
-        }
-        tlasBuffers.clear();
         frameTransforms.clear();
         latestTransforms.retainOnly(java.util.Set.of());
-        for (TraceBuffers buffers : traceBuffers.values()) buffers.destroy();
-        traceBuffers.clear();
         if (failure instanceof RuntimeException runtime) throw runtime;
         if (failure instanceof Error error) throw error;
         if (failure != null) throw new IllegalStateException("retained scene shutdown failed", failure);
@@ -842,61 +826,40 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     /**
-     * Owns one scene's per-frame geometry, hit-SBT, light, and emitter uploads.
-     *
-     * <p>Reuse is guarded by an exact wait on the last frame that traced against these buffers.
+     * Allocate this frame's geometry, hit-SBT, light, and emitter uploads, sized to what it actually
+     * publishes and retired once the frame that traced against them completes. Each buffer is at least
+     * one record so a scene with no geometry, lights, or emitters still yields an addressable range.
      */
-    private static final class TraceBuffers {
-        private TraceSlot slot;
-
-        TraceSlot next(VulkanDeviceContext ctx, int geometryBytes, int hitBytes, int lightBytes, int emitterBytes,
-                       RtPipeline pipeline) {
-            TraceSlot slot = this.slot;
-            if (slot != null) ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
-            if (slot == null || slot.geometry.size() < geometryBytes || slot.hits.size() < hitBytes
-                    || slot.lights.size() < lightBytes
-                    || slot.emitters.size() < emitterBytes
-                    || slot.hitStride != pipeline.retainedHitRecordStride()) {
-                if (slot != null) {
-                    this.slot = null;
-                    slot.destroy();
-                }
-                int geometryCapacity = Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes);
-                int hitCapacity = Math.max(pipeline.retainedHitRecordStride(), hitBytes);
-                int lightCapacity = Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes);
-                int emitterCapacity = Math.max(Integer.BYTES, emitterBytes);
-                GpuBuffer geometry = null;
-                GpuBuffer hits = null;
-                GpuBuffer lights = null;
-                GpuBuffer emitters = null;
-                GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
-                try {
-                    geometry = ctx.createBuffer(geometryCapacity, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                            true, "retained geometry records");
-                    hits = ctx.createAlignedBuffer(hitCapacity, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
-                            true, "retained hit SBT", pipeline.retainedHitTableAlignment());
-                    lights = ctx.createBuffer(lightCapacity, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                            true, "retained light records");
-                    emitters = ctx.createBuffer(emitterCapacity, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                            true, "retained primitive-light indices");
-                    descriptor = ctx.descriptorHeap().allocateResources(1);
-                    slot = new TraceSlot(geometry, hits, lights, emitters, descriptor,
-                            pipeline.retainedHitRecordStride());
-                    this.slot = slot;
-                } catch (Throwable failure) {
-                    if (descriptor != null) descriptor.destroy();
-                    if (emitters != null) emitters.destroy();
-                    if (lights != null) lights.destroy();
-                    if (hits != null) hits.destroy();
-                    if (geometry != null) geometry.destroy();
-                    throw failure;
-                }
-            }
+    private static TraceSlot createTraceSlot(VulkanDeviceContext ctx, int geometryBytes, int hitBytes,
+                                             int lightBytes, int emitterBytes, RtPipeline pipeline,
+                                             GraphicsUse graphicsUse) {
+        GpuBuffer geometry = null;
+        GpuBuffer hits = null;
+        GpuBuffer lights = null;
+        GpuBuffer emitters = null;
+        GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
+        try {
+            geometry = ctx.createBuffer(Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes),
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "retained geometry records");
+            hits = ctx.createAlignedBuffer(Math.max(pipeline.retainedHitRecordStride(), hitBytes),
+                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, true, "retained hit SBT",
+                    pipeline.retainedHitTableAlignment());
+            lights = ctx.createBuffer(Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes),
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "retained light records");
+            emitters = ctx.createBuffer(Math.max(Integer.BYTES, emitterBytes),
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "retained primitive-light indices");
+            descriptor = ctx.descriptorHeap().allocateResources(1);
+            TraceSlot slot = new TraceSlot(geometry, hits, lights, emitters, descriptor,
+                    pipeline.retainedHitRecordStride());
+            graphicsUse.whenComplete(slot::destroy);
             return slot;
-        }
-
-        void destroy() {
-            if (slot != null) slot.destroy();
+        } catch (Throwable failure) {
+            if (descriptor != null) descriptor.destroy();
+            if (emitters != null) emitters.destroy();
+            if (lights != null) lights.destroy();
+            if (hits != null) hits.destroy();
+            if (geometry != null) geometry.destroy();
+            throw failure;
         }
     }
 
@@ -907,7 +870,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final GpuBuffer emitters;
         final GpuDescriptorRange<GpuDescriptorIndex.Resource> tlasDescriptor;
         final int hitStride;
-        final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
 
         TraceSlot(GpuBuffer geometry, GpuBuffer hits, GpuBuffer lights, GpuBuffer emitters,
                   GpuDescriptorRange<GpuDescriptorIndex.Resource> tlasDescriptor, int hitStride) {

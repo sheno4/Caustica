@@ -7,7 +7,6 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.TrackedGraphicsUse;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -121,76 +120,42 @@ public final class TlasBuilder {
         }
     }
 
-    /**
-     * Owns one scene's reusable instance buffer, acceleration structure, and scratch buffer.
-     *
-     * <p>Reuse is guarded by an exact wait on the last frame that read the buffers, so a frame that
-     * outruns the GPU stalls here rather than writing under it.
-     */
-    public static final class Buffers {
-        private static final float GROWTH = 1.25f;
-        private static final int MIN_CAPACITY = 1024;
-        private Slot slot;
+    /** One frame's instance buffer, acceleration structure, and build scratch. */
+    private static final class Slot {
+        private RtAccel accel;
+        private GpuBuffer instanceBuffer;
+        private GpuBuffer scratch;
 
-        private static final class Slot {
-            private RtAccel accel;
-            private GpuBuffer instanceBuffer;
-            private GpuBuffer scratch;
-            private int capacity;
-            private final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
-
-            private void destroy() {
-                accel.destroy();
-                instanceBuffer.destroy();
-                scratch.destroy();
-            }
-        }
-
-        /** Free the buffers after the caller has made the device idle. */
-        public void destroy() {
-            if (slot != null) {
-                slot.destroy();
-                slot = null;
-            }
+        private void destroy() {
+            accel.destroy();
+            instanceBuffer.destroy();
+            scratch.destroy();
         }
     }
 
-    /** Pack two instance ranges into this scene's instance buffer. */
+    /** Pack two instance ranges into a TLAS allocated for this frame. */
     public static Prepared prepare(VulkanDeviceContext ctx, List<Instance> baseInstances,
-                                   List<Instance> dynamicInstances, Buffers buffers, GraphicsUse graphicsUse) {
+                                   List<Instance> dynamicInstances, GraphicsUse graphicsUse) {
         int baseCount = baseInstances.size();
         int count = Math.addExact(baseCount, dynamicInstances.size());
-        Buffers.Slot slot = selectSlot(ctx, buffers, count);
+        Slot slot = createSlot(ctx, count, graphicsUse);
         writeInstances(baseInstances, slot.instanceBuffer.mapped(), 0);
         writeInstances(dynamicInstances, slot.instanceBuffer.mapped(), baseCount);
-        return finish(slot, count, graphicsUse);
+        return finish(slot, count);
     }
 
-    /** Pack staged instances into this scene's instance buffer. */
-    public static Prepared prepare(VulkanDeviceContext ctx, InstanceBatch instances, Buffers buffers,
-                                   GraphicsUse graphicsUse) {
+    /** Pack staged instances into a TLAS allocated for this frame. */
+    public static Prepared prepare(VulkanDeviceContext ctx, InstanceBatch instances, GraphicsUse graphicsUse) {
         int count = instances.size();
-        Buffers.Slot slot = selectSlot(ctx, buffers, count);
+        Slot slot = createSlot(ctx, count, graphicsUse);
         writeInstances(instances, slot.instanceBuffer.mapped());
-        return finish(slot, count, graphicsUse);
+        return finish(slot, count);
     }
 
-    private static Buffers.Slot selectSlot(VulkanDeviceContext ctx, Buffers buffers, int count) {
-        Buffers.Slot slot = buffers.slot;
-        if (slot != null) ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
-        if (slot == null || count > slot.capacity) {
-            if (slot != null) slot.destroy();
-            slot = createSlot(ctx, Math.max(Buffers.MIN_CAPACITY, (int) (count * Buffers.GROWTH)));
-            buffers.slot = slot;
-        }
-        return slot;
-    }
-
-    private static Prepared finish(Buffers.Slot slot, int count, GraphicsUse graphicsUse) {
+    private static Prepared finish(Slot slot, int count) {
         if (count > 0) {
             slot.instanceBuffer.flush(0L, (long) count * VkAccelerationStructureInstanceKHR.SIZEOF);
         }
-        slot.graphicsUse.mark(graphicsUse);
         return new Prepared(slot.accel, slot.instanceBuffer, slot.scratch, count,
                 "frame TLAS " + count + " instances");
     }
@@ -225,12 +190,16 @@ public final class TlasBuilder {
         }
     }
 
-    private static Buffers.Slot createSlot(VulkanDeviceContext ctx, int capacity) {
+    /**
+     * Allocate this frame's TLAS sized exactly to {@code capacity}, retiring it once the frame completes.
+     * A zero-instance scene still needs a buffer the build can address, so the allocation is never empty.
+     */
+    private static Slot createSlot(VulkanDeviceContext ctx, int capacity, GraphicsUse graphicsUse) {
         VkDevice vk = ctx.vk();
-        String label = "TLAS buffers (" + capacity + " instance capacity)";
-        Buffers.Slot slot = new Buffers.Slot();
-        slot.capacity = capacity;
-        slot.instanceBuffer = ctx.createAlignedBuffer((long) VkAccelerationStructureInstanceKHR.SIZEOF * capacity,
+        String label = "frame TLAS (" + capacity + " instances)";
+        Slot slot = new Slot();
+        slot.instanceBuffer = ctx.createAlignedBuffer(
+                (long) VkAccelerationStructureInstanceKHR.SIZEOF * Math.max(1, capacity),
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true,
                 label + " instance buffer", INSTANCE_ADDRESS_ALIGNMENT);
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -258,6 +227,8 @@ public final class TlasBuilder {
             slot.accel = new RtAccel(vk, handle,
                     new VulkanDeviceAddress(vkGetAccelerationStructureDeviceAddressKHR(vk, addressInfo)), backing);
         }
+        // Registered only once every member exists, so retirement never runs against a half-built slot.
+        graphicsUse.whenComplete(slot::destroy);
         return slot;
     }
 

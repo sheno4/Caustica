@@ -43,11 +43,10 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
  */
 public final class RtGpuExecutor {
     private static final int MAX_BUILD_BATCH = 128;
-    private static final Job STOP = new Job(null, null, null, null, null, 0L);
+    private static final Job STOP = new Job(null, null, null, null, null);
     private static final long BUILD_READ_STAGES =
             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
                     | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-    static final long ASYNC_RECORDER_WAIT_STAGES = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
     private final VulkanDeviceContext ctx;
     private final VulkanQueueRef computeQueue;
@@ -99,20 +98,7 @@ public final class RtGpuExecutor {
         }
         long value = nextBuildValue.incrementAndGet();
         Build build = new Build(value);
-        jobs.add(new Job(cancelled, record, afterSuccess, finished, build, 0L));
-        return build;
-    }
-
-    /** Enqueue a build that waits on the source resident's last graphics use without a host wait. */
-    public synchronized Build submitAfterGraphics(TrackedGraphicsUse sourceUse, BooleanSupplier cancelled,
-                                                   Consumer<VkCommandBuffer> record, Runnable afterSuccess,
-                                                   BiConsumer<Build, Throwable> finished) {
-        assertRenderThread();
-        checkExecutorFailure();
-        if (closed) throw new IllegalStateException("RT GPU executor is closed");
-        long value = nextBuildValue.incrementAndGet();
-        Build build = new Build(value);
-        jobs.add(new Job(cancelled, record, afterSuccess, finished, build, sourceUse.value));
+        jobs.add(new Job(cancelled, record, afterSuccess, finished, build));
         return build;
     }
 
@@ -171,12 +157,6 @@ public final class RtGpuExecutor {
         return new GraphicsUseWaiter(queryTimeline(graphicsTimeline));
     }
 
-    /** Latest recorded frame token that can reference currently published RT state. */
-    public GraphicsUse latestGraphicsUse() {
-        assertRenderThread();
-        return new GraphicsUse(this, latestGraphicsUseValue.get());
-    }
-
     /** Rethrow a latched executor failure on the calling thread. */
     public void throwIfFailed() {
         checkExecutorFailure();
@@ -203,11 +183,6 @@ public final class RtGpuExecutor {
         synchronized (destroyJobs) {
             destroyJobs.add(new DestroyJob(lastUseValue, destroy));
         }
-    }
-
-    /** Queue destruction of a completed build result that was never visible to graphics. */
-    public void retireUnpublished(Runnable destroy) {
-        enqueueDestroyAfterGraphicsValue(0L, destroy);
     }
 
     public boolean hasPendingDestroys() {
@@ -425,12 +400,6 @@ public final class RtGpuExecutor {
         }
     }
 
-    static long maxGraphicsWait(List<Long> waits) {
-        long result = 0L;
-        for (long wait : waits) result = Math.max(result, wait);
-        return result;
-    }
-
     private void execute(List<Job> batch) {
         VkCommandBuffer cmd = null;
         boolean submitted = false;
@@ -461,15 +430,8 @@ public final class RtGpuExecutor {
                     // proposal tables). Signal only after every command in the batch, not merely the
                     // AS-build stage, so a graphics wait cannot overtake such a copy.
                     .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-            long graphicsWait = maxGraphicsWait(batch.stream().map(Job::graphicsWaitValue).toList());
             VkSubmitInfo2.Buffer submit = VkSubmitInfo2.calloc(1, stack).sType$Default()
                     .pCommandBufferInfos(command).pSignalSemaphoreInfos(signal);
-            if (graphicsWait != 0L) {
-                VkSemaphoreSubmitInfo.Buffer wait = VkSemaphoreSubmitInfo.calloc(1, stack).sType$Default()
-                        .semaphore(graphicsTimeline).value(graphicsWait)
-                        .stageMask(ASYNC_RECORDER_WAIT_STAGES);
-                submit.pWaitSemaphoreInfos(wait);
-            }
             VulkanDiagnostics.noteQueueSubmission(computeQueue.queue(), "Caustica compute queue");
             synchronized (ctx.deviceQueueHostLock()) {
                 ctx.checkDeviceResult(VK13.vkQueueSubmit2(
@@ -656,11 +618,6 @@ public final class RtGpuExecutor {
             if (failure != null) throw new IllegalStateException("graphics submission callback failed", failure);
         }
 
-        public void awaitCompletion() {
-            owner.assertRenderThread();
-            owner.graphicsUseWaiter().awaitValue(value);
-        }
-
         @Override
         public void whenComplete(Runnable callback) {
             owner.retireAfterGraphics(this, callback);
@@ -764,7 +721,7 @@ public final class RtGpuExecutor {
     }
 
     private record Job(BooleanSupplier cancelled, Consumer<VkCommandBuffer> record, Runnable afterSuccess,
-                       BiConsumer<Build, Throwable> finished, Build build, long graphicsWaitValue) {
+                       BiConsumer<Build, Throwable> finished, Build build) {
     }
 
     private record DestroyJob(long lastUseValue, Runnable destroy) {

@@ -163,20 +163,12 @@ public final class RtFrameRenderer {
     private final RtTelemetry telemetry;
     // recordFrame mutates this only on the render thread; each renderer owns an independent sequence.
     private final RtJitter jitter;
-    // World push data lives in one host-visible BDA buffer; only its address and a small hot subset are
-    // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
-    // Exact graphics completion guards the host write, so the buffer is reused directly.
-    private PushBuffer pushBuffer;
+    // World push data lives in a host-visible BDA buffer allocated for the frame that writes it; only its
+    // address and a small hot subset are pushed inline (the full generated structure exceeds NVIDIA's
+    // 256-byte push-constant ceiling). The allocation retires with the frame, so no write ever lands on
+    // memory the GPU still reads.
     private final RtFrameResources frameResources;
 
-    private static final class PushBuffer {
-        final GpuBuffer buffer;
-        final RtGpuExecutor.TrackedGraphicsUse graphicsUse = new RtGpuExecutor.TrackedGraphicsUse();
-
-        PushBuffer(GpuBuffer buffer) {
-            this.buffer = buffer;
-        }
-    }
     // Motion-vector reprojection state: the previous frame's camera-relative view-projection and
     // camera position, read into the push constant each frame then advanced at frame end.
     private final Matrix4f mvPrevProjView = new Matrix4f();
@@ -553,16 +545,7 @@ public final class RtFrameRenderer {
     }
 
     private RtProgramBackend.Published ensureWorld(VulkanDeviceContext ctx) {
-        ensurePushBuffer(ctx);
         return programs.active();
-    }
-
-    private void ensurePushBuffer(VulkanDeviceContext ctx) {
-        if (pushBuffer != null) {
-            return;
-        }
-        pushBuffer = new PushBuffer(ctx.createBuffer(WORLD_PUSH_SIZE,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push"));
     }
     /**
      * Invalidates temporal consumers before the host replaces pack-owned images. Descriptor leases and
@@ -732,7 +715,6 @@ public final class RtFrameRenderer {
         RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
         presentationResources().exposure().beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
-        PushBuffer framePush = null;
         GpuBuffer continuationQueue = null;
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
@@ -755,11 +737,11 @@ public final class RtFrameRenderer {
                 jitterY = jitter.jitterPixelsY() * jitterSignY();
             }
 
-            graphicsUseWaiter.await(pushBuffer.graphicsUse);
-            framePush = pushBuffer;
-            continuationQueue = traceResources().acquireContinuationQueue(graphicsUseWaiter);
+            GpuBuffer pushBuf = ctx.createBuffer(WORLD_PUSH_SIZE,
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push");
+            graphicsUse.whenComplete(pushBuf::destroy);
+            continuationQueue = traceResources().acquireContinuationQueue(ctx, graphicsUse);
             VK10.vkCmdFillBuffer(cmd, continuationQueue.handle(), 0L, continuationQueue.size(), 0);
-            GpuBuffer pushBuf = pushBuffer.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
@@ -976,8 +958,6 @@ public final class RtFrameRenderer {
         submission.execute(cmd);
         graphicsUse.commandsAccepted();
         // Submission makes every frame-owned address reachable until the final overlay consumer.
-        framePush.graphicsUse.mark(graphicsUse);
-        traceResources().markContinuationUse(graphicsUse);
         presentationResources().exposure().markStateReadbackUse(graphicsUse);
         presenter.publish(new RtFramePresenter.RenderedFrame(
                 presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().linearDepth(),
@@ -1082,10 +1062,6 @@ public final class RtFrameRenderer {
         rayReconstruction.destroyAfterDeviceIdle();
         presenter.invalidateRenderedFrame();
         frameResources.destroy();
-        if (pushBuffer != null) {
-            pushBuffer.buffer.destroy();
-            pushBuffer = null;
-        }
         mvHasPrev = false;
         lastLightingFrame = -1L;
         lastLightingOrigin = null;
