@@ -87,13 +87,16 @@ tasks.named("clean") {
 	dependsOn(":packages:minecraft-client:clean")
 }
 
-for (String taskName : ["jar", "sourcesJar", "test", "compileShaders", "runClient", "runServer",
-		"overlayHeapAbiTest", "verifyEmbeddedApi", "verifyRtBindingsGeneration"]) {
+def registerMinecraftClientTask = { String taskName ->
+	def targetTask = ":packages:minecraft-client:${taskName}"
 	tasks.register(taskName) {
 		group = taskName.startsWith("run") ? "fabric" : "build"
-		dependsOn(":packages:minecraft-client:${taskName}")
+		dependsOn(targetTask)
 	}
 }
+
+["jar", "sourcesJar", "test", "compileShaders", "runClient", "runServer",
+		"overlayHeapAbiTest", "verifyEmbeddedApi", "verifyRtBindingsGeneration"].each(registerMinecraftClientTask)
 
 tasks.register("examplesCheck") {
 	group = "verification"
