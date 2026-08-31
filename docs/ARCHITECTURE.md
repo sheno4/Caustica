@@ -21,7 +21,7 @@ The physical projects under `packages/` enforce the reusable boundaries:
 | `renderer-runtime` | Generic frame recording/resources/statistics, lifecycle coordination, pass scheduling, telemetry, capture, and the host callback SPI |
 | `renderer-denoising` | Renderer-owned temporal-denoiser contracts, frame inputs, reset semantics, and borrowed Vulkan resource descriptions |
 | `nvidia-ngx` | NGX, DLSS Ray Reconstruction, and DLSS Frame Generation integration |
-| `nvidia-nrd` | Pinned NRD/NRI Vulkan backend and native packaging |
+| `nvidia-nrd` | Pinned `third_party/NRD` subrepository, NRI Vulkan backend, and native packaging |
 | `minecraft-api`, `minecraft-adapter` | Loader-neutral Minecraft world/resource epochs, world sessions, scene borrowing, and environment selection |
 | `minecraft-content` | Host-free Minecraft material analysis and texture-page planning/compilation |
 | `minecraft-rendering` | Minecraft-independent terrain/entity/material/light/sky rendering and the host-free frame/capture seams |

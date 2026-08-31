@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(NRD_SDK "" CACHE PATH "Exact NVIDIA NRD source checkout")
+set(NRD_SDK "" CACHE PATH "Pinned NVIDIA NRD subrepository checkout")
 set(CAUSTICA_NRD_REVISION "" CACHE STRING "Expected NVIDIA NRD source revision")
 set(CAUSTICA_NRI_REVISION "" CACHE STRING "Expected NVIDIA NRI source revision")
 set(CAUSTICA_SHADERMAKE_REVISION "" CACHE STRING "Expected ShaderMake source revision")
@@ -13,7 +13,7 @@ set(CAUSTICA_MATHLIB_REVISION "" CACHE STRING "Expected MathLib source revision"
 set(CAUSTICA_VULKAN_HEADERS_REVISION "" CACHE STRING "Expected Vulkan-Headers source revision")
 set(CAUSTICA_VMA_REVISION "" CACHE STRING "Expected Vulkan Memory Allocator source revision")
 if(NOT IS_DIRECTORY "${NRD_SDK}")
-    message(FATAL_ERROR "NRD_SDK must name an existing NVIDIA NRD source checkout")
+    message(FATAL_ERROR "NRD_SDK must name the initialized NVIDIA NRD subrepository")
 endif()
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/NRD_REVISION" PINNED_NRD_REVISION)
@@ -25,7 +25,7 @@ execute_process(COMMAND git -C "${NRD_SDK}" rev-parse HEAD
     OUTPUT_VARIABLE ACTUAL_NRD_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE
     RESULT_VARIABLE NRD_GIT_RESULT)
 if(NOT NRD_GIT_RESULT EQUAL 0 OR NOT ACTUAL_NRD_REVISION STREQUAL PINNED_NRD_REVISION)
-    message(FATAL_ERROR "NRD_SDK must be the pinned checkout ${PINNED_NRD_REVISION}; found '${ACTUAL_NRD_REVISION}'")
+    message(FATAL_ERROR "NRD subrepository must be ${PINNED_NRD_REVISION}; found '${ACTUAL_NRD_REVISION}'")
 endif()
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/NRI_REVISION" PINNED_NRI_REVISION)

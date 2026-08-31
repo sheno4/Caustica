@@ -12,9 +12,12 @@ on:
       - "gradle/**"
       - "gradlew"
       - "gradlew.bat"
+      - ".gitmodules"
       - "native/**"
+      - "packages/**"
       - "shaders/**"
       - "src/**"
+      - "third_party/NRD"
   pull_request:
     paths:
       - ".github/workflows/**"
@@ -24,9 +27,12 @@ on:
       - "gradle/**"
       - "gradlew"
       - "gradlew.bat"
+      - ".gitmodules"
       - "native/**"
+      - "packages/**"
       - "shaders/**"
       - "src/**"
+      - "third_party/NRD"
 
 env:
   DLSS_SDK_REF: v310.7.0
@@ -47,6 +53,8 @@ jobs:
     steps:
       - name: Checkout Caustica
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Checkout DLSS SDK
         uses: actions/checkout@v4
@@ -133,6 +141,8 @@ jobs:
     steps:
       - name: Checkout Caustica
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Checkout DLSS SDK
         uses: actions/checkout@v4
@@ -218,6 +228,8 @@ jobs:
     steps:
       - name: Checkout Caustica
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Checkout DLSS SDK
         uses: actions/checkout@v4

@@ -1,5 +1,14 @@
 # Developer Guide
 
+Initialize the pinned NRD source subrepository after cloning:
+
+```bash
+git submodule update --init third_party/NRD
+```
+
+The Gradle native build uses `third_party/NRD` by default and verifies its exact revision. `-PnrdSdk` or
+`NRD_SDK` may point at another checkout for local integration testing, but the same pinned revision is required.
+
 ## Windows
 
 1. Install the Vulkan SDK from <https://vulkan.lunarg.com/sdk/home>.

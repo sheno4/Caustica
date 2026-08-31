@@ -1,0 +1,3 @@
+[submodule "third_party/NRD"]
+	path = third_party/NRD
+	url = https://github.com/NVIDIA-RTX/NRD.git

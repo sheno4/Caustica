@@ -26,7 +26,10 @@ def nativeBuildRoot = layout.buildDirectory.dir("native/nrd_shim-pinned")
 def nativeArtifactRoot = layout.buildDirectory.dir("native/nrd_shim-artifacts")
 def nativeResourceRoot = layout.buildDirectory.dir("generated/nrd-natives")
 def nativeDependencyRoot = layout.buildDirectory.dir("native/exact-deps")
-def nrdSdk = providers.gradleProperty("nrdSdk").orElse(providers.environmentVariable("NRD_SDK"))
+def repositoryNrdSdk = rootProject.layout.projectDirectory.dir("third_party/NRD")
+def nrdSdk = providers.gradleProperty("nrdSdk")
+        .orElse(providers.environmentVariable("NRD_SDK"))
+        .orElse(providers.provider { repositoryNrdSdk.asFile.absolutePath })
 def currentPlatform = {
     def os = org.gradle.internal.os.OperatingSystem.current()
     def arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT)
@@ -38,9 +41,12 @@ def currentPlatform = {
 
 tasks.register("configureNrdNative", Exec) {
     group = "build"
-    description = "Configures the explicit, pinned SPIR-V-only NRD/NRI Vulkan shim build."
+    description = "Configures the pinned SPIR-V-only NRD/NRI Vulkan shim from the NRD submodule."
     onlyIf {
-        if (!nrdSdk.present) throw new GradleException("Set -PnrdSdk=<NRD checkout> or NRD_SDK. No SDK is downloaded automatically.")
+        if (!file(nrdSdk.get()).isDirectory()) {
+            throw new GradleException(
+                    "NRD checkout is missing. Run: git submodule update --init third_party/NRD")
+        }
         true
     }
     inputs.dir("native/nrd_shim")
@@ -126,7 +132,8 @@ artifacts { nrdNatives(nrdNativeJar) }
 
 def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
     inputs.files("build.gradle", "native/nrd_shim/CMakeLists.txt", "native/nrd_shim/nrd_shim.h",
-            "native/nrd_shim/nrd_shim.cpp", "native/nrd_shim/NRD_REVISION", "native/nrd_shim/NRI_REVISION")
+            "native/nrd_shim/nrd_shim.cpp", "native/nrd_shim/NRD_REVISION", "native/nrd_shim/NRI_REVISION",
+            rootProject.file(".gitmodules"))
     doLast {
         def cmake = file("native/nrd_shim/CMakeLists.txt").text
         def header = file("native/nrd_shim/nrd_shim.h").text
@@ -134,8 +141,13 @@ def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
         def build = file("build.gradle").text
         def revision = file("native/nrd_shim/NRD_REVISION").text.trim()
         def nri = file("native/nrd_shim/NRI_REVISION").text.trim()
+        def submodules = rootProject.file(".gitmodules").text
         if (revision != nrdRevision) throw new GradleException("NRD pin drifted: ${revision}")
         if (nri != nriRevision) throw new GradleException("NRI pin drifted: ${nri}")
+        if (!submodules.contains('path = third_party/NRD')
+                || !submodules.contains('url = https://github.com/NVIDIA-RTX/NRD.git')) {
+            throw new GradleException("NRD must remain an official tracked submodule")
+        }
         ["NRD_EMBEDS_DXBC_SHADERS OFF", "NRD_EMBEDS_DXIL_SHADERS OFF", "NRD_EMBEDS_SPIRV_SHADERS ON",
          "NRD_NRI ON", "NRI_STATIC_LIBRARY ON", "NRI_ENABLE_D3D11_SUPPORT OFF",
          "NRI_ENABLE_D3D12_SUPPORT OFF", "NRI_ENABLE_VK_SUPPORT ON",
