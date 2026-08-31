@@ -40,6 +40,16 @@ public struct WorldPayload {
     public float guideContinuationIor;
     public uint guideContinuationVolumeActive;
     public uint guideContinuationEvent;
+    public float guideContinuationWeight;
+    public float3 guideAlternateOrigin;
+    public float3 guideAlternateDirection;
+    public float3 guideAlternateAbsorption;
+    public float guideAlternateIor;
+    public uint guideAlternateVolumeActive;
+    public uint guideAlternateEvent;
+    public float guideAlternateWeight;
+    public float guideBaseWeight;
+    public float guideTransmissionWeight;
     public float signalHitDistance;
     public uint firstLobeEvent;
 };

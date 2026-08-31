@@ -1009,6 +1009,10 @@ public final class RtFrameRenderer {
         target.putLong(base + RtBindings.WORLD_PUSH_ADDRESS_OFFSET, worldPushAddress.value());
         target.putLong(base + RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
                 continuationQueue.deviceAddress().value());
+        target.putFloat(base + RtBindings.WORLD_RECONSTRUCTION_MICRO_JITTER_SCALE_OFFSET,
+                denoiser.settings().route() == DenoiserRoute.RAY_RECONSTRUCTION ? 0.1f : 0.0f);
+        target.putLong(base + RtBindings.WORLD_STABLE_PLANE_BUFFER_ADDRESS_OFFSET,
+                traceResources().stablePlaneBuffer().deviceAddress().value());
         target.putInt(base + RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET, storageIndex(traceImages().traceColor()));
         target.putInt(base + RtBindings.WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET,
                 storageIndex(traceImages().stablePlaneMetadata()));

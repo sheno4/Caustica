@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.PackedPathSegmentData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.StablePlaneRecordData;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -11,5 +12,12 @@ final class RtPathQueueAbiTest {
         assertEquals(48, PackedPathSegmentData.BYTE_SIZE);
         assertEquals(1920L * 1080L * 2L * PackedPathSegmentData.BYTE_SIZE,
                 TraceResources.continuationBytes(1920, 1080));
+    }
+
+    @Test
+    void stablePlaneCapacityUsesThreeReflectedRecordsPerPixel() {
+        assertEquals(112, StablePlaneRecordData.BYTE_SIZE);
+        assertEquals(1920L * 1080L * 3L * StablePlaneRecordData.BYTE_SIZE,
+                TraceResources.stablePlaneBytes(1920, 1080));
     }
 }

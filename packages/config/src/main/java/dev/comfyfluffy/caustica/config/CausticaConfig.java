@@ -781,7 +781,9 @@ public final class CausticaConfig {
         }
 
         public static final class DlssRr {
-            public static final IntSetting PRESET = intValue("caustica.rt.dlssRr.preset", "dlss-rr.preset", 0);
+            public static final List<Integer> PRESET_STEPS = List.of(0, 4, 5);
+            public static final IntSetting PRESET = intChoice(
+                    "caustica.rt.dlssRr.preset", "dlss-rr.preset", 5, PRESET_STEPS);
 
             // NVSDK_NGX_PerfQuality_Value. Per NVIDIA's DLSS-RR programming guide, Ray Reconstruction only
             // supports Performance(0), Balanced(1), Quality(2), Ultra-Performance(3), and DLAA(5) —
@@ -789,7 +791,7 @@ public final class CausticaConfig {
             // zeroed render size for it) and is deliberately excluded here.
             public static final List<Integer> QUALITY_STEPS = List.of(3, 0, 1, 2, 5);
             public static final IntSetting QUALITY =
-                    intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 0, QUALITY_STEPS).inGroup("upscaling");
+                    intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 1, QUALITY_STEPS).inGroup("upscaling");
 
             private DlssRr() {
             }

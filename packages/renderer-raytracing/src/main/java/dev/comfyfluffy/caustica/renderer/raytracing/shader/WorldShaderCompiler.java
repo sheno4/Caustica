@@ -58,7 +58,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "retained_lights.slang", "surface_bsdf.slang", "path_queue_types.slang",
             "retained_path_queue.slang", "retained_indirect.slang", "retained_trace_policy.slang",
             "retained_trace_ordinary.slang", "retained_trace_reordered.slang", "stable_planes.slang",
-            "nrd_signals.slang");
+            "stable_plane_types.slang", "nrd_signals.slang");
     private static final List<String> API_MODULES = List.of(
             "caustica_api.slang", "caustica_color.slang", "caustica_coverage.slang",
             "caustica_environment.slang", "caustica_resources.slang", "caustica_surface.slang",

@@ -62,7 +62,7 @@ def worldShaderNames = [
         "retained_indirect.slang", "retained_lights.slang", "retained_path_queue.slang",
         "retained_trace_ordinary.slang", "retained_trace_policy.slang",
         "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "sky_miss.slang",
-        "stable_planes.slang", "surface_bsdf.slang", "nrd_signals.slang",
+        "stable_planes.slang", "stable_plane_types.slang", "surface_bsdf.slang", "nrd_signals.slang",
         "world_common.slang", "world_minimal.slang"
 ] as Set
 
@@ -88,7 +88,8 @@ def rayTracingRecordSpecs = [
         "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedGeometryRecordData|false",
         "buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedLightRecordData|false",
         "buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.renderer.raytracing.gen|NeeAtStateData|false",
-        "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.renderer.raytracing.gen|PackedPathSegmentData|false"
+        "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.renderer.raytracing.gen|PackedPathSegmentData|false",
+        "buffer|stablePlaneRecordLayoutProbe|StablePlaneRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|StablePlaneRecordData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateRayTracingRecords = tasks.register("generateRayTracingRecords", GenerateShaderRecords) {
@@ -168,8 +169,7 @@ def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
                 "WORLD_NRD_STABLE_RADIANCE_INDEX_OFFSET = 88",
                 "WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET = 92", "WORLD_INITIAL_VOLUME_ACTIVE_OFFSET = 96",
                 "WORLD_INITIAL_VOLUME_BINDING_OFFSET = 104", "WORLD_INITIAL_VOLUME_INSTANCE_OFFSET = 112",
-                "WORLD_NEE_AT_STATE_ADDRESS_OFFSET = 120", "WORLD_NRD_SIGNAL_ENCODING_OFFSET = 128",
-                "WORLD_PUSH_CONSTANT_SIZE = 136"
+                "WORLD_NEE_AT_STATE_ADDRESS_OFFSET = 120", "WORLD_NRD_SIGNAL_ENCODING_OFFSET = 128"
         ]
         def missing = requiredBindings.findAll { !bindings.contains(it) }
         if (!missing.empty) throw new GradleException("world root ABI drifted: ${missing}")
@@ -391,7 +391,8 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
             it.startsWith(generatedRecordClassRoot) && it.endsWith("Data.class")
         } as Set
         def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData",
-                "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData"].collect {
+                "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData",
+                "StablePlaneRecordData"].collect {
             "${generatedRecordClassRoot}${it}.class"
         } as Set
         def packagedShaders = names.findAll {

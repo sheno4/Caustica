@@ -302,8 +302,8 @@ NGX_SHIM_EXPORT int ngxshim_query_optimal_dlssd(unsigned int displayWidth, unsig
     return (int) r;
 }
 
-// Creates a DLSS Ray Reconstruction feature for DL-unified denoising, packed roughness, and linear
-// view depth. Each feature owns its mutable parameter block; the capability block remains query-only.
+// Creates a DLSS Ray Reconstruction feature for DL-unified denoising, packed roughness, and reverse
+// hardware depth. Each feature owns its mutable parameter block; the capability block remains query-only.
 NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
                                            unsigned int renderWidth, unsigned int renderHeight,
                                            unsigned int displayWidth, unsigned int displayHeight,
@@ -332,7 +332,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
     std::memset(&createParams, 0, sizeof(createParams));
     createParams.InDenoiseMode = NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;
     createParams.InRoughnessMode = NVSDK_NGX_DLSS_Roughness_Mode_Packed; // roughness from normals.w
-    createParams.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_Linear;
+    createParams.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_HW;
     createParams.InWidth = renderWidth;
     createParams.InHeight = renderHeight;
     createParams.InTargetWidth = displayWidth;

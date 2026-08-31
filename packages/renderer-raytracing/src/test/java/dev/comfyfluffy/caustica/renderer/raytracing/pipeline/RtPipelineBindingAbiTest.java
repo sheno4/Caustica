@@ -38,7 +38,9 @@ final class RtPipelineBindingAbiTest {
         assertEquals(112, RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET);
         assertEquals(120, RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET);
         assertEquals(128, RtBindings.WORLD_NRD_SIGNAL_ENCODING_OFFSET);
-        assertEquals(136, WORLD_PUSH_CONSTANT_SIZE);
+        assertEquals(132, RtBindings.WORLD_RECONSTRUCTION_MICRO_JITTER_SCALE_OFFSET);
+        assertEquals(136, RtBindings.WORLD_STABLE_PLANE_BUFFER_ADDRESS_OFFSET);
+        assertEquals(144, WORLD_PUSH_CONSTANT_SIZE);
     }
 
     @Test

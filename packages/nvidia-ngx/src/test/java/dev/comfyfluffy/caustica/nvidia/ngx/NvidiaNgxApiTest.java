@@ -22,6 +22,12 @@ final class NvidiaNgxApiTest {
     }
 
     @Test
+    void rayReconstructionRejectsUnsupportedNgxModes() {
+        assertThrows(IllegalArgumentException.class, () -> new DlssRayReconstruction.Settings(true, 4, 5));
+        assertThrows(IllegalArgumentException.class, () -> new DlssRayReconstruction.Settings(true, 1, 6));
+    }
+
+    @Test
     void superResolutionRejectsUnsupportedNgxModes() {
         assertThrows(IllegalArgumentException.class, () -> new DlssSuperResolution.Settings(true, 4, 0));
         assertThrows(IllegalArgumentException.class, () -> new DlssSuperResolution.Settings(true, 6, 0));

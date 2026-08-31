@@ -16,7 +16,9 @@ public final class DlssSuperResolution {
     private static final Logger LOGGER = LoggerFactory.getLogger(DlssSuperResolution.class);
     private static final int FEATURE_FLAG_IS_HDR = 1 << 0;
     private static final int FEATURE_FLAG_MV_LOW_RES = 1 << 1;
-    private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES;
+    private static final int FEATURE_FLAG_DEPTH_INVERTED = 1 << 3;
+    private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES
+            | FEATURE_FLAG_DEPTH_INVERTED;
 
     public record Settings(boolean enabled, int quality, int preset) {
         public Settings {

@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.PackedPathSegmentData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.StablePlaneRecordData;
 import org.lwjgl.vulkan.VK10;
 
 /** Owns extent-keyed trace images and continuation queues. */
@@ -13,6 +14,7 @@ public final class TraceResources {
 
     private TraceExtent extent;
     private TraceImages images;
+    private GpuBuffer stablePlaneBuffer;
 
     public boolean hasDisplayExtent(int width, int height) {
         return extent != null && extent.displayWidth() == width && extent.displayHeight() == height;
@@ -30,6 +32,13 @@ public final class TraceResources {
             throw new IllegalStateException("Trace resources are not sized");
         }
         return images;
+    }
+
+    public GpuBuffer stablePlaneBuffer() {
+        if (stablePlaneBuffer == null) {
+            throw new IllegalStateException("Trace resources are not sized");
+        }
+        return stablePlaneBuffer;
     }
 
     /** Replaces the allocation after the caller has drained prior GPU use. */
@@ -77,6 +86,9 @@ public final class TraceResources {
         GpuImage reconstructedColor = context.createStorageImage(displayWidth, displayHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                 "reconstruction output " + displayWidth + "x" + displayHeight);
+        stablePlaneBuffer = context.createBuffer(stablePlaneBytes(renderWidth, renderHeight),
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                false, "stable planes " + renderWidth + "x" + renderHeight + "x3");
         images = new TraceImages(traceColor, stablePlaneMetadata,
                 normalRoughness, diffuseAlbedo, linearDepth, motion,
                 specularAlbedo, specularMotion, diffuseRadianceHitDistance,
@@ -120,6 +132,10 @@ public final class TraceResources {
             images.reconstructedColor().destroy();
             images = null;
         }
+        if (stablePlaneBuffer != null) {
+            stablePlaneBuffer.destroy();
+            stablePlaneBuffer = null;
+        }
         extent = null;
     }
 
@@ -127,5 +143,10 @@ public final class TraceResources {
         long pixels = Math.multiplyExact((long) width, (long) height);
         return Math.multiplyExact(Math.multiplyExact(pixels, PATH_RECORDS_PER_PIXEL),
                 PackedPathSegmentData.BYTE_SIZE);
+    }
+
+    static long stablePlaneBytes(int width, int height) {
+        long pixels = Math.multiplyExact((long) width, (long) height);
+        return Math.multiplyExact(Math.multiplyExact(pixels, 3L), StablePlaneRecordData.BYTE_SIZE);
     }
 }

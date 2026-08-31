@@ -21,6 +21,14 @@ public final class DlssRayReconstruction {
     private static final Logger LOGGER = LoggerFactory.getLogger(DlssRayReconstruction.class);
 
     public record Settings(boolean enabled, int quality, int preset) {
+        public Settings {
+            if (quality < 0 || quality > 5 || quality == 4) {
+                throw new IllegalArgumentException("unsupported DLSS-RR quality " + quality);
+            }
+            if (preset != 0 && preset != 4 && preset != 5) {
+                throw new IllegalArgumentException("unsupported DLSS-RR render preset " + preset);
+            }
+        }
     }
 
     private final NgxRuntime runtime;
@@ -36,11 +44,13 @@ public final class DlssRayReconstruction {
     }
 
     // DLSS feature flags. IsHDR (bit 0): color is scene-linear ACEScg HDR (rgba16f). MVLowRes (bit 1):
-    // motion vectors are at render/input resolution, not display. Depth is positive linear view depth
-    // and MVs are unjittered. DLSS-RR does not support the exposure or auto-exposure options.
+    // motion vectors are at render/input resolution, not display. Depth is reverse hardware depth and
+    // MVs are unjittered. DLSS-RR does not support the exposure or auto-exposure options.
     private static final int FEATURE_FLAG_IS_HDR = 1 << 0;
     private static final int FEATURE_FLAG_MV_LOW_RES = 1 << 1;
-    private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES;
+    private static final int FEATURE_FLAG_DEPTH_INVERTED = 1 << 3;
+    private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES
+            | FEATURE_FLAG_DEPTH_INVERTED;
     // 0 = let the RR DLL pick its per-mode default preset.
     private int renderPreset() {
         return settings.preset();

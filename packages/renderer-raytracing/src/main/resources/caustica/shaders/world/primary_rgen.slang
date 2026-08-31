@@ -10,6 +10,7 @@ import retained_lights;
 import retained_path_queue;
 import path_queue_types;
 import stable_planes;
+import stable_plane_types;
 import nrd_signals;
 
 uint primarySeed(uint2 pixel, uint frameIndex) {
@@ -40,150 +41,351 @@ VolumeProperties initialVolumeProperties<TComposition : IComposition>(float3 pos
 struct StablePlaneEndpoint {
     float3 virtualPosition;
     float3 previousVirtualPosition;
-    StablePlaneReflection reflection0;
-    StablePlaneReflection reflection1;
-    StablePlaneReflection reflection2;
-    uint reflectionCount;
+    float3 terminalRayDirection;
+    float3x3 imageTransform;
+    WorldPayload terminal;
     bool containsTransmission;
     uint deltaChainDepth;
+    uint branchId;
+    uint firstEvent;
+    float branchWeight;
+    float firstSpecularHitDistance;
+    bool sky;
+    bool available;
 };
 
-StablePlaneEndpoint primaryStablePlaneEndpoint(WorldPayload primary) {
+StablePlaneEndpoint primaryStablePlaneEndpoint(WorldPayload primary, WorldPush frame,
+        float3 cameraDirection) {
     StablePlaneEndpoint result = {};
+    result.terminal = primary;
+    result.imageTransform = float3x3(1.0);
+    result.terminalRayDirection = cameraDirection;
+    result.available = true;
+    result.branchId = 0u;
     if ((primary.pathFlags & WORLD_PATH_MISS) == 0u && primary.hitDistance >= 0.0) {
         result.virtualPosition = primary.hitPosition;
         result.previousVirtualPosition = primary.previousHitPosition;
+    } else {
+        result.sky = true;
+        result.virtualPosition = frame.camOffset + cameraDirection * 10000.0;
+        result.previousVirtualPosition = result.virtualPosition;
     }
     return result;
 }
 
 void stablePlaneAppendReflection(inout StablePlaneEndpoint endpoint, WorldPayload payload) {
-    StablePlaneReflection plane;
-    plane.currentPosition = payload.hitPosition;
-    plane.previousPosition = payload.previousHitPosition;
-    plane.currentNormal = unpackNormalOct(payload.guideNormal);
-    plane.previousNormal = unpackNormalOct(payload.previousGuideNormal);
-    if (endpoint.reflectionCount == 0u) endpoint.reflection0 = plane;
-    else if (endpoint.reflectionCount == 1u) endpoint.reflection1 = plane;
-    else endpoint.reflection2 = plane;
-    endpoint.reflectionCount++;
+    float3 n = unpackNormalOct(payload.guideNormal);
+    float3x3 reflection = float3x3(
+            1.0 - 2.0 * n.x * n.x, -2.0 * n.x * n.y, -2.0 * n.x * n.z,
+            -2.0 * n.y * n.x, 1.0 - 2.0 * n.y * n.y, -2.0 * n.y * n.z,
+            -2.0 * n.z * n.x, -2.0 * n.z * n.y, 1.0 - 2.0 * n.z * n.z);
+    endpoint.imageTransform = mul(endpoint.imageTransform, reflection);
 }
 
-StablePlaneEndpoint stablePlaneEndpoint(WorldPayload primary, WorldPush frame) {
-    StablePlaneEndpoint result = primaryStablePlaneEndpoint(primary);
-    float3 previousCamera = frame.camOffset - frame.camDelta;
+float3x3 stablePlaneRotationFromTo(float3 fromDirection, float3 toDirection) {
+    float3 from = normalize(fromDirection);
+    float3 to = normalize(toDirection);
+    float cosine = clamp(dot(from, to), -1.0, 1.0);
+    float3 crossValue = cross(from, to);
+    float sine = length(crossValue);
+    if (sine < 1.0e-5) {
+        if (cosine > 0.0) return float3x3(1.0);
+        float3 axis = normalize(abs(from.z) < 0.9
+                ? cross(from, float3(0.0, 0.0, 1.0))
+                : cross(from, float3(0.0, 1.0, 0.0)));
+        return float3x3(
+                2.0 * axis.x * axis.x - 1.0, 2.0 * axis.x * axis.y, 2.0 * axis.x * axis.z,
+                2.0 * axis.y * axis.x, 2.0 * axis.y * axis.y - 1.0, 2.0 * axis.y * axis.z,
+                2.0 * axis.z * axis.x, 2.0 * axis.z * axis.y, 2.0 * axis.z * axis.z - 1.0);
+    }
+    float3 axis = crossValue / sine;
+    float oneMinusCosine = 1.0 - cosine;
+    return float3x3(
+            cosine + axis.x * axis.x * oneMinusCosine,
+            axis.x * axis.y * oneMinusCosine - axis.z * sine,
+            axis.x * axis.z * oneMinusCosine + axis.y * sine,
+            axis.y * axis.x * oneMinusCosine + axis.z * sine,
+            cosine + axis.y * axis.y * oneMinusCosine,
+            axis.y * axis.z * oneMinusCosine - axis.x * sine,
+            axis.z * axis.x * oneMinusCosine - axis.y * sine,
+            axis.z * axis.y * oneMinusCosine + axis.x * sine,
+            cosine + axis.z * axis.z * oneMinusCosine);
+}
+
+StablePlaneEndpoint stablePlaneEndpoint(WorldPayload primary, WorldPush frame,
+        float3 cameraDirection, bool alternateFirst) {
+    StablePlaneEndpoint result = {};
+    uint initialEvent = alternateFirst
+            ? primary.guideAlternateEvent : primary.guideContinuationEvent;
+    if (initialEvent == WORLD_GUIDE_EVENT_NONE) return result;
+    result.available = true;
+    result.imageTransform = float3x3(1.0);
+    result.terminalRayDirection = cameraDirection;
+    result.firstEvent = initialEvent;
+    result.branchWeight = alternateFirst
+            ? primary.guideAlternateWeight : primary.guideContinuationWeight;
     float currentPathLength = max(primary.hitDistance, 0.0);
-    float previousPathLength = primary.hitDistance >= 0.0
-            ? length(primary.previousHitPosition - previousCamera) : 0.0;
-    float3 previousSegmentPosition = primary.previousHitPosition;
     WorldPayload current = primary;
     float tMin = 0.001 / max(
             neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit, 1.0e-8);
     for (uint segment = 0u; segment < STABLE_PLANE_MAX_DELTA_SEGMENTS; segment++) {
-        if ((current.pathFlags & WORLD_PATH_GUIDE_CONTINUATION) == 0u) break;
-        if (current.guideContinuationEvent == WORLD_GUIDE_EVENT_REFLECTION) {
+        uint event = segment == 0u && alternateFirst
+                ? current.guideAlternateEvent : current.guideContinuationEvent;
+        if (event == WORLD_GUIDE_EVENT_NONE) break;
+        if (segment > 0u) result.branchWeight *= current.guideContinuationWeight;
+        if (event == WORLD_GUIDE_EVENT_REFLECTION) {
             stablePlaneAppendReflection(result, current);
-        } else if (current.guideContinuationEvent == WORLD_GUIDE_EVENT_TRANSMISSION) {
+        } else if (event == WORLD_GUIDE_EVENT_TRANSMISSION) {
             result.containsTransmission = true;
         }
+        result.branchId = (result.branchId << 2u) | event;
         RayDesc ray;
-        ray.Origin = current.guideContinuationOrigin;
-        ray.Direction = current.guideContinuationDirection;
+        ray.Origin = segment == 0u && alternateFirst
+                ? current.guideAlternateOrigin : current.guideContinuationOrigin;
+        ray.Direction = segment == 0u && alternateFirst
+                ? current.guideAlternateDirection : current.guideContinuationDirection;
+        if (event == WORLD_GUIDE_EVENT_TRANSMISSION) {
+            result.imageTransform = mul(result.imageTransform,
+                    stablePlaneRotationFromTo(ray.Direction, result.terminalRayDirection));
+        }
         ray.TMin = tMin;
         ray.TMax = 10000.0;
         WorldPayload next = {};
         next.hitDistance = -1.0;
         next.seed = current.seed ^ retainedLightHash(0xa511e9b3u + segment);
-        next.volumeAbsorption = current.guideContinuationAbsorption;
-        next.volumeIor = current.guideContinuationIor;
+        next.volumeAbsorption = segment == 0u && alternateFirst
+                ? current.guideAlternateAbsorption : current.guideContinuationAbsorption;
+        next.volumeIor = segment == 0u && alternateFirst
+                ? current.guideAlternateIor : current.guideContinuationIor;
+        uint volumeActive = segment == 0u && alternateFirst
+                ? current.guideAlternateVolumeActive : current.guideContinuationVolumeActive;
         next.pathFlags = WORLD_PATH_GUIDE
-                | (current.guideContinuationVolumeActive != 0u ? WORLD_PATH_VOLUME_ACTIVE : 0u);
+                | (volumeActive != 0u ? WORLD_PATH_VOLUME_ACTIVE : 0u);
         TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, WORLD_RAY_MASK_SECONDARY,
                 0u, 2u, 1u, ray, next);
+        if (segment == 0u && event == WORLD_GUIDE_EVENT_REFLECTION
+                && next.hitDistance > 0.0) {
+            result.firstSpecularHitDistance = next.hitDistance;
+        }
         if (next.hitDistance >= 0.0) {
             currentPathLength += next.hitDistance;
-            previousPathLength += length(next.previousHitPosition - previousSegmentPosition);
-            previousSegmentPosition = next.previousHitPosition;
         }
         current = next;
+        result.terminalRayDirection = ray.Direction;
         result.deltaChainDepth++;
         if ((current.pathFlags & WORLD_PATH_MISS) != 0u || current.hitDistance < 0.0) break;
     }
-    if ((current.pathFlags & (WORLD_PATH_MISS | WORLD_PATH_GUIDE_CONTINUATION)) != 0u
-            || current.hitDistance < 0.0) {
-        return primaryStablePlaneEndpoint(primary);
-    }
-    float3 unfoldedCurrent = stablePlaneUnfoldPoint(current.hitPosition, false,
-            result.reflection0, result.reflection1, result.reflection2, result.reflectionCount);
-    float3 unfoldedPrevious = stablePlaneUnfoldPoint(current.previousHitPosition, true,
-            result.reflection0, result.reflection1, result.reflection2, result.reflectionCount);
-    if (!result.containsTransmission) {
-        result.virtualPosition = unfoldedCurrent;
-        result.previousVirtualPosition = unfoldedPrevious;
-    } else {
-        // Refraction keeps an optical-path approximation until the plane ABI carries an interface
-        // Jacobian. Reflection interfaces are unfolded first, retaining coherent tangential motion.
-        float3 currentDirection = normalize(unfoldedCurrent - frame.camOffset);
-        float3 previousDirection = normalize(unfoldedPrevious - previousCamera);
-        result.virtualPosition = frame.camOffset + currentDirection * currentPathLength;
-        result.previousVirtualPosition = previousCamera + previousDirection * previousPathLength;
-    }
+    result.terminal = current;
+    result.sky = (current.pathFlags & WORLD_PATH_MISS) != 0u || current.hitDistance < 0.0;
+    float sceneLength = result.sky ? 10000.0 : currentPathLength;
+    result.virtualPosition = frame.camOffset + cameraDirection * sceneLength;
+    float3 worldMotion = result.sky ? float3(0.0)
+            : current.previousHitPosition - current.hitPosition;
+    result.previousVirtualPosition = result.virtualPosition
+            + mul(result.imageTransform, worldMotion);
     return result;
+}
+
+float3 stablePlaneEndpointNormal(StablePlaneEndpoint endpoint, float3 stableSkyAlbedo,
+        out float roughness, out float3 diffuseEstimate, out float3 specularEstimate) {
+    float3 normal;
+    if (endpoint.sky) {
+        float3 skyRadiance = max(endpoint.terminal.radiance, float3(0.0));
+        float skyMaximum = max(skyRadiance.x, max(skyRadiance.y, skyRadiance.z));
+        float3 skyAlbedo = sqrt(skyRadiance / (float3(1.0) + skyMaximum));
+        normal = -endpoint.terminalRayDirection;
+        roughness = 1.0;
+        diffuseEstimate = any(skyRadiance > 0.0) ? skyAlbedo : stableSkyAlbedo;
+        specularEstimate = float3(0.0);
+    } else {
+        normal = unpackNormalOct(endpoint.terminal.guideNormal);
+        roughness = endpoint.terminal.roughness;
+        diffuseEstimate = retainedUnpackRgb9e5(endpoint.terminal.guideAlbedo);
+        specularEstimate = retainedUnpackRgb9e5(endpoint.terminal.guideSpecularAlbedo);
+    }
+    return normalize(mul(endpoint.imageTransform, normal));
+}
+
+void stablePlaneDepthMotion(StablePlaneEndpoint endpoint, uint2 extent, WorldPush frame,
+        out float depth, out float viewZ, out float2 motion) {
+    depth = 0.0;
+    viewZ = 65504.0;
+    motion = float2(0.0);
+    float4 currentClip = mul(frame.curViewProj,
+            float4(endpoint.virtualPosition - frame.camOffset, 1.0));
+    float4 previousClip = mul(frame.prevViewProj,
+            float4(endpoint.previousVirtualPosition - frame.camOffset + frame.camDelta, 1.0));
+    if (!endpoint.sky && currentClip.w > 0.0) {
+        depth = saturate(currentClip.z / currentClip.w);
+        viewZ = currentClip.w;
+    }
+    if (currentClip.w > 0.0 && previousClip.w > 0.0) {
+        motion = (previousClip.xy / previousClip.w - currentClip.xy / currentClip.w)
+                * 0.5 * float2(extent);
+    }
+}
+
+void stablePlaneWriteRecord(uint2 pixel, uint2 extent, uint planeIndex,
+        StablePlaneEndpoint endpoint, bool dominant, float3 normal, float roughness,
+        float3 diffuseEstimate, float3 specularEstimate, float3 noisyDiffuse,
+        float3 noisySpecular, float dominantSpecularHitDistance) {
+    StablePlaneRecord record = stablePlaneInvalidRecord();
+    if (endpoint.available) {
+        record.currentVirtualPosition = endpoint.virtualPosition;
+        record.roughness = roughness;
+        record.previousVirtualPosition = endpoint.previousVirtualPosition;
+        record.throughputLuminance = endpoint.branchWeight;
+        record.normal = normal;
+        record.diffuseHitDistance = dominant ? endpoint.terminal.diffuseHitDistance : 0.0;
+        record.diffuseBsdfEstimate = diffuseEstimate;
+        record.specularHitDistance = dominant ? dominantSpecularHitDistance : 0.0;
+        record.specularBsdfEstimate = specularEstimate;
+        record.branchWeight = endpoint.branchWeight;
+        record.noisyDiffuseRadiance = noisyDiffuse;
+        record.noisySpecularRadiance = noisySpecular;
+        record.flags = (endpoint.sky ? STABLE_PLANE_FLAG_SKY : STABLE_PLANE_FLAG_VALID)
+                | (dominant ? STABLE_PLANE_FLAG_DOMINANT : 0u)
+                | (endpoint.containsTransmission ? STABLE_PLANE_FLAG_TRANSMISSION : 0u)
+                | (min(endpoint.deltaChainDepth, 255u) << 8u);
+        record.branchId = endpoint.branchId;
+    }
+    stablePlaneStoreRecord(pixel, extent, planeIndex, record);
 }
 
 void writePrimaryStablePlane<TComposition : IComposition>(uint2 pixel, uint2 extent,
         WorldPush frame, WorldPayload primary, float3 radiance, float3 unexposedStableRadiance,
-        float3 unexposedDiffuse, float3 unexposedSpecular) {
-    StablePlaneEndpoint endpoint = stablePlaneEndpoint(primary, frame);
-    float3 normal = float3(0.0);
+        float3 unexposedDiffuse, float3 unexposedSpecular, float3 cameraDirection) {
+    StablePlaneEndpoint endpoints[STABLE_PLANE_COUNT];
+    endpoints[0] = primaryStablePlaneEndpoint(primary, frame, cameraDirection);
+    endpoints[1] = stablePlaneEndpoint(primary, frame, cameraDirection, false);
+    endpoints[2] = stablePlaneEndpoint(primary, frame, cameraDirection, true);
+    bool primaryReplacement = endpoints[1].available && !endpoints[2].available
+            && endpoints[1].firstEvent == WORLD_GUIDE_EVENT_REFLECTION
+            && primary.guideBaseWeight <= 1.0e-5
+            && primary.guideTransmissionWeight <= 0.0;
+    if (primaryReplacement) {
+        endpoints[0] = endpoints[1];
+        endpoints[0].branchWeight = 1.0;
+        endpoints[1] = {};
+    }
+    endpoints[0].branchWeight = max(0.0,
+            1.0 - endpoints[1].branchWeight - endpoints[2].branchWeight);
+
+    uint dominantIndex = 0u;
+    if (endpoints[1].available && endpoints[1].branchWeight > endpoints[0].branchWeight) {
+        dominantIndex = 1u;
+    }
+    if (endpoints[2].available
+            && endpoints[2].branchWeight > endpoints[dominantIndex].branchWeight) {
+        dominantIndex = 2u;
+    }
+
+    float3 stableAlbedo = sqrt(unexposedStableRadiance
+            / (float3(1.0) + max(unexposedStableRadiance.x,
+                    max(unexposedStableRadiance.y, unexposedStableRadiance.z))));
+    float stableAlbedoAverage = dot(stableAlbedo, float3(1.0 / 3.0));
+    float weights[STABLE_PLANE_COUNT];
+    float weightSum = 0.0;
+    for (uint planeIndex = 0u; planeIndex < STABLE_PLANE_COUNT; planeIndex++) {
+        weights[planeIndex] = endpoints[planeIndex].available
+                ? endpoints[planeIndex].branchWeight * 0.2 + 0.01 : 0.0;
+        if (planeIndex == dominantIndex) weights[planeIndex] += 0.05;
+        weightSum += weights[planeIndex];
+    }
+    float3 normals[STABLE_PLANE_COUNT];
+    float roughnesses[STABLE_PLANE_COUNT];
+    float3 diffuseEstimates[STABLE_PLANE_COUNT];
+    float3 specularEstimates[STABLE_PLANE_COUNT];
+    float3 normal = float3(0.0, 0.0, 1.0e-6);
+    float roughness = 0.0;
     float3 albedo = float3(0.0);
     float3 specularAlbedo = float3(0.0);
-    float depth = 0.0;
-    float2 motion = float2(0.0);
-    float2 specularMotion = float2(0.0);
-    bool primaryValid = (primary.pathFlags & WORLD_PATH_MISS) == 0u && primary.hitDistance >= 0.0;
-    if (primaryValid) {
-        normal = unpackNormalOct(primary.guideNormal);
-        albedo = retainedUnpackRgb9e5(primary.guideAlbedo);
-        specularAlbedo = retainedUnpackRgb9e5(primary.guideSpecularAlbedo);
-        float3 currentCameraRelative = primary.hitPosition - frame.camOffset;
-        float4 currentClip = mul(frame.curViewProj, float4(currentCameraRelative, 1.0));
-        if (currentClip.w > 0.0) depth = currentClip.w;
-        float3 previousCameraRelative = primary.previousHitPosition
-                - frame.camOffset + frame.camDelta;
-        float4 previousClip = mul(frame.prevViewProj, float4(previousCameraRelative, 1.0));
-        if (previousClip.w > 0.0 && currentClip.w > 0.0) {
-            motion = (previousClip.xy / previousClip.w - currentClip.xy / currentClip.w)
-                    * 0.5 * float2(extent);
-        }
-        if (endpoint.reflectionCount > 0u && !endpoint.containsTransmission) {
-            float4 currentVirtualClip = mul(frame.curViewProj,
-                    float4(endpoint.virtualPosition - frame.camOffset, 1.0));
-            float4 previousVirtualClip = mul(frame.prevViewProj,
-                    float4(endpoint.previousVirtualPosition - frame.camOffset + frame.camDelta, 1.0));
-            if (currentVirtualClip.w > 0.0 && previousVirtualClip.w > 0.0) {
-                specularMotion = (previousVirtualClip.xy / previousVirtualClip.w
-                        - currentVirtualClip.xy / currentVirtualClip.w)
-                        * 0.5 * float2(extent);
+    for (uint planeIndex = 0u; planeIndex < STABLE_PLANE_COUNT; planeIndex++) {
+        if (!endpoints[planeIndex].available) continue;
+        normals[planeIndex] = stablePlaneEndpointNormal(endpoints[planeIndex], stableAlbedo,
+                roughnesses[planeIndex], diffuseEstimates[planeIndex],
+                specularEstimates[planeIndex]);
+        if (endpoints[planeIndex].sky) continue;
+        float weight = weights[planeIndex] / max(weightSum, 1.0e-6);
+        normal += normals[planeIndex] * weight;
+        roughness += roughnesses[planeIndex] * weight;
+        albedo += diffuseEstimates[planeIndex] * weight;
+        specularAlbedo += specularEstimates[planeIndex] * weight;
+    }
+    normal = normalize(normal);
+    float3 stableAlbedoGreyMix = lerp(stableAlbedo, float3(0.5), 0.2);
+    float stableMix = stableAlbedoAverage
+            / (dot(albedo, float3(1.0 / 3.0)) + sqrt(stableAlbedoAverage) + 1.0e-7);
+    albedo = lerp(albedo, stableAlbedoGreyMix, saturate(stableMix));
+    if (dot(albedo + specularAlbedo, float3(1.0 / 3.0)) < 0.05) {
+        albedo += float3(0.05);
+    }
+
+    float depth;
+    float viewZ;
+    float2 motion;
+    stablePlaneDepthMotion(endpoints[dominantIndex], extent, frame, depth, viewZ, motion);
+    float2 specularMotion = motion;
+    float dominantSpecularHitDistance = 0.0;
+    bool primarySurface = (primary.pathFlags & WORLD_PATH_MISS) == 0u
+            && primary.hitDistance >= 0.0;
+    if (primarySurface && roughness < 0.25) {
+        for (uint planeIndex = 1u; planeIndex < STABLE_PLANE_COUNT; planeIndex++) {
+            if (endpoints[planeIndex].available
+                    && endpoints[planeIndex].firstEvent == WORLD_GUIDE_EVENT_REFLECTION
+                    && endpoints[planeIndex].firstSpecularHitDistance > 0.001) {
+                dominantSpecularHitDistance = endpoints[planeIndex].firstSpecularHitDistance;
+                float3 imagePosition = primary.hitPosition + cameraDirection
+                        * endpoints[planeIndex].firstSpecularHitDistance;
+                float4 currentClip = mul(frame.curViewProj,
+                        float4(imagePosition - frame.camOffset, 1.0));
+                float4 previousClip = mul(frame.prevViewProj,
+                        float4(imagePosition - frame.camOffset + frame.camDelta, 1.0));
+                if (currentClip.w > 0.0 && previousClip.w > 0.0) {
+                    specularMotion = (previousClip.xy / previousClip.w
+                            - currentClip.xy / currentClip.w) * 0.5 * float2(extent);
+                }
+                break;
             }
         }
     }
+
+    for (uint planeIndex = 0u; planeIndex < STABLE_PLANE_COUNT; planeIndex++) {
+        if (!endpoints[planeIndex].available) {
+            stablePlaneStoreRecord(pixel, extent, planeIndex, stablePlaneInvalidRecord());
+            continue;
+        }
+        stablePlaneWriteRecord(pixel, extent, planeIndex, endpoints[planeIndex],
+                planeIndex == dominantIndex, normals[planeIndex], roughnesses[planeIndex],
+                diffuseEstimates[planeIndex], specularEstimates[planeIndex],
+                planeIndex == 0u ? unexposedDiffuse : float3(0.0),
+                planeIndex == 0u ? unexposedSpecular : float3(0.0),
+                dominantSpecularHitDistance);
+    }
+
+    bool dominantValid = !endpoints[dominantIndex].sky;
     StablePlaneSample plane = {};
     plane.radiance = radiance;
     plane.normal = normal;
-    plane.roughness = primary.roughness;
+    plane.roughness = roughness;
     plane.diffuseAlbedo = albedo;
     plane.specularAlbedo = specularAlbedo;
     plane.primaryDepth = depth;
     plane.primaryMotion = motion;
     plane.specularMotion = specularMotion;
     plane.emissive = (primary.pathFlags & WORLD_PATH_EMISSIVE) != 0u;
-    plane.valid = primaryValid;
-    plane.deltaChainDepth = endpoint.deltaChainDepth;
-    plane.reflectionCount = endpoint.reflectionCount;
-    plane.containsTransmission = endpoint.containsTransmission;
+    plane.valid = dominantValid;
     stablePlaneWrite(pixel, plane);
-    nrdWritePrimarySignals(pixel, primaryValid, depth, primary.roughness,
+    uint availableCount = 0u;
+    for (uint planeIndex = 0u; planeIndex < STABLE_PLANE_COUNT; planeIndex++) {
+        availableCount += endpoints[planeIndex].available ? 1u : 0u;
+    }
+    worldFloat4StorageImage(worldBindings.resources.stablePlaneMetadataImage)[pixel] = float4(
+            float(availableCount) / float(STABLE_PLANE_COUNT), float(dominantIndex) * 0.5,
+            float(min(endpoints[dominantIndex].deltaChainDepth,
+                    STABLE_PLANE_MAX_DELTA_SEGMENTS)) / float(STABLE_PLANE_MAX_DELTA_SEGMENTS),
+            endpoints[dominantIndex].containsTransmission ? 1.0 : 0.0);
+    nrdWritePrimarySignals(pixel, dominantValid, viewZ, roughness,
             unexposedDiffuse, unexposedSpecular, unexposedStableRadiance,
             primary.diffuseHitDistance, 0.0, albedo, specularAlbedo);
 }
@@ -196,7 +398,14 @@ public void runPrimary<TComposition : IComposition>() {
     uint pixelIndex = pixel.y * extent.x + pixel.x;
 
     float2 uv = (float2(pixel) + 0.5) / float2(extent);
-    float2 clip = uv * 2.0 - 1.0 + frame.jitter * (2.0 / float2(extent));
+    uint microSeed = primarySeed(pixel, frame.frameIndex ^ 0x68bc21ebu);
+    float2 microJitter = (float2(
+            retainedLightHash(microSeed),
+            retainedLightHash(microSeed ^ 0x9e3779b9u))
+            * (1.0 / 4294967296.0) - 0.5)
+            * worldBindings.reconstructionMicroJitterScale;
+    float2 clip = uv * 2.0 - 1.0
+            + (frame.jitter + microJitter) * (2.0 / float2(extent));
     float4 farPoint = mul(frame.invViewProj, float4(clip, 0.0, 1.0));
     farPoint.xyz /= farPoint.w;
 
@@ -248,7 +457,7 @@ public void runPrimary<TComposition : IComposition>() {
     float3 radiance = clamp(unexposedRadiance * frame.preExposure,
             float3(0.0), float3(HALF_MAX));
     writePrimaryStablePlane<TComposition>(pixel, extent, frame, payload, radiance,
-            unexposedStableRadiance, unexposedDiffuse, unexposedSpecular);
+            unexposedStableRadiance, unexposedDiffuse, unexposedSpecular, ray.Direction);
 }
 
 [shader("raygeneration")]

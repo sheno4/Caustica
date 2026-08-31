@@ -44,6 +44,12 @@ public void runRetainedIndirect<TComposition : IComposition,
             recordIndex = linkedRecord;
             continue;
         }
+        uint branchSignalPlane = 0u;
+        if (firstLobe == EVENT_GLOSSY) {
+            branchSignalPlane = stablePlaneForEvent(pixel, extent,
+                    (state.firstLobeEvent & EVENT_TRANSMISSION) != 0u
+                            ? WORLD_GUIDE_EVENT_TRANSMISSION : WORLD_GUIDE_EVENT_REFLECTION);
+        }
         float3 throughput = state.throughput;
 
         for (uint bounce = 1u; bounce <= frame.maxBounces; bounce++) {
@@ -87,12 +93,16 @@ public void runRetainedIndirect<TComposition : IComposition,
                     ? 0.0 : state.signalHitDistance + max(payload.hitDistance, 0.0);
             if (firstLobe == EVENT_DIFFUSE) {
                 diffuseRadiance += contribution;
+                stablePlaneAccumulateSignals(pixel, extent, branchSignalPlane,
+                        contribution, 0.0, float3(0.0), 0.0);
                 float contributionWeight = nrdLuminance(
                         nrdDemodulate(contribution, diffuseBsdfEstimate));
                 diffuseHitDistanceSum += contributionWeight * signalHitDistance;
                 diffuseHitDistanceWeight += contributionWeight;
             } else {
                 specularRadiance += contribution;
+                stablePlaneAccumulateSignals(pixel, extent, branchSignalPlane,
+                        float3(0.0), 0.0, contribution, signalHitDistance);
                 if (signalHitDistance > 0.0 && any(contribution > 0.0)) {
                     specularHitDistance = specularHitDistance > 0.0
                             ? min(specularHitDistance, signalHitDistance) : signalHitDistance;
@@ -123,4 +133,5 @@ public void runRetainedIndirect<TComposition : IComposition,
     nrdAddIndirectSignals(pixel, diffuseRadiance, diffuseHitDistance,
             specularRadiance, specularHitDistance, diffuseBsdfEstimate,
             specularBsdfEstimate, normalRoughness.w);
+    stablePlaneFinalizeGuides(pixel, extent, frame);
 }

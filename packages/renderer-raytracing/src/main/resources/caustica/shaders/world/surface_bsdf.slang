@@ -175,6 +175,20 @@ public float4 surfaceLobeProbabilities(SurfaceClosure surface, float outgoingCos
     return probabilities;
 }
 
+public void surfaceDenoiserEstimates(SurfaceClosure surface, float3 outgoingDirection,
+        out float3 diffuseEstimate, out float3 specularEstimate) {
+    float cosine = clamp(dot(surface.shadingNormal, outgoingDirection), 0.0, 1.0);
+    float3 fresnel = surfaceFresnelSchlick(cosine, surface.specularF0);
+    float3 sheetReflection;
+    float3 sheetTransmission;
+    thinSheetFactors(fresnel, surface.thinTransmissionColor,
+            sheetReflection, sheetTransmission);
+    float thinWeight = clamp(surface.thinTransmissionWeight, 0.0, 1.0);
+    diffuseEstimate = max(surface.diffuseAlbedo * (float3(1.0) - fresnel), float3(0.0));
+    specularEstimate = max(lerp(fresnel, sheetReflection, thinWeight)
+            + sheetTransmission * thinWeight, float3(0.0));
+}
+
 public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     BsdfEvaluation result;
     result.value = float3(0.0);

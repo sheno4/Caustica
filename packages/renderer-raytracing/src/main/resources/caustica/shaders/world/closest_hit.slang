@@ -147,6 +147,11 @@ void retainedSelectStablePlaneContinuation<TComposition : IComposition>(inout Wo
     payload.guideContinuationIor = payload.volumeIor;
     payload.guideContinuationVolumeActive =
             (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u ? 1u : 0u;
+    payload.guideContinuationWeight = 0.0;
+    payload.guideAlternateEvent = WORLD_GUIDE_EVENT_NONE;
+    payload.guideAlternateWeight = 0.0;
+    payload.guideBaseWeight = 1.0;
+    payload.guideTransmissionWeight = 0.0;
     if (surface.specular_roughness > 0.08) return;
 
     float3 incident = -input.outgoingDirection;
@@ -192,33 +197,63 @@ void retainedSelectStablePlaneContinuation<TComposition : IComposition>(inout Wo
         transmissionScore = probabilities.w;
     }
 
-    float3 direction;
-    if (reflectionScore >= transmissionScore && reflectionScore >= diffuseScore
-            && reflectionScore > 0.0) {
-        direction = normalize(reflect(incident, closure.shadingNormal));
-        payload.guideContinuationEvent = WORLD_GUIDE_EVENT_REFLECTION;
-    } else if (transmissionScore > reflectionScore && transmissionScore >= diffuseScore) {
-        direction = normalize(transmitted);
-        payload.guideContinuationEvent = WORLD_GUIDE_EVENT_TRANSMISSION;
-        if (volumeBoundary && worldHitEntering()) {
-            payload.guideContinuationAbsorption =
-                    max(targetVolume.absorptionCoefficient, float3(0.0));
-            payload.guideContinuationIor = etaTransmitted;
-            payload.guideContinuationVolumeActive = 1u;
-        } else if (volumeBoundary) {
-            payload.guideContinuationAbsorption = float3(0.0);
-            payload.guideContinuationIor = 1.0;
-            payload.guideContinuationVolumeActive = 0u;
-        }
-    } else {
-        return;
-    }
+    payload.guideBaseWeight = diffuseScore;
+    payload.guideTransmissionWeight = transmissionScore;
 
     float epsilon = 0.002 / max(input.metersPerSceneUnit, 1.0e-8);
-    float3 offsetNormal = dot(input.geometricNormal, direction) >= 0.0
+    float3 reflectionDirection = normalize(reflect(incident, closure.shadingNormal));
+    float3 transmissionDirection = dot(transmitted, transmitted) > 0.0
+            ? normalize(transmitted) : incident;
+    bool firstReflection = reflectionScore >= transmissionScore;
+    float firstWeight = firstReflection ? reflectionScore : transmissionScore;
+    float secondWeight = firstReflection ? transmissionScore : reflectionScore;
+    if (firstWeight <= 0.001) return;
+
+    float3 firstDirection = firstReflection ? reflectionDirection : transmissionDirection;
+    float3 firstOffsetNormal = dot(input.geometricNormal, firstDirection) >= 0.0
             ? input.geometricNormal : -input.geometricNormal;
-    payload.guideContinuationOrigin = input.position + offsetNormal * epsilon;
-    payload.guideContinuationDirection = direction;
+    payload.guideContinuationOrigin = input.position + firstOffsetNormal * epsilon;
+    payload.guideContinuationDirection = firstDirection;
+    payload.guideContinuationEvent = firstReflection
+            ? WORLD_GUIDE_EVENT_REFLECTION : WORLD_GUIDE_EVENT_TRANSMISSION;
+    payload.guideContinuationWeight = firstWeight;
+    if (!firstReflection && volumeBoundary && worldHitEntering()) {
+        payload.guideContinuationAbsorption =
+                max(targetVolume.absorptionCoefficient, float3(0.0));
+        payload.guideContinuationIor = etaTransmitted;
+        payload.guideContinuationVolumeActive = 1u;
+    } else if (!firstReflection && volumeBoundary) {
+        payload.guideContinuationAbsorption = float3(0.0);
+        payload.guideContinuationIor = 1.0;
+        payload.guideContinuationVolumeActive = 0u;
+    }
+
+    if (secondWeight > 0.001) {
+        bool alternateReflection = !firstReflection;
+        float3 alternateDirection = alternateReflection
+                ? reflectionDirection : transmissionDirection;
+        float3 alternateOffsetNormal = dot(input.geometricNormal, alternateDirection) >= 0.0
+                ? input.geometricNormal : -input.geometricNormal;
+        payload.guideAlternateOrigin = input.position + alternateOffsetNormal * epsilon;
+        payload.guideAlternateDirection = alternateDirection;
+        payload.guideAlternateAbsorption = payload.volumeAbsorption;
+        payload.guideAlternateIor = payload.volumeIor;
+        payload.guideAlternateVolumeActive =
+                (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u ? 1u : 0u;
+        payload.guideAlternateEvent = alternateReflection
+                ? WORLD_GUIDE_EVENT_REFLECTION : WORLD_GUIDE_EVENT_TRANSMISSION;
+        payload.guideAlternateWeight = secondWeight;
+        if (!alternateReflection && volumeBoundary && worldHitEntering()) {
+            payload.guideAlternateAbsorption =
+                    max(targetVolume.absorptionCoefficient, float3(0.0));
+            payload.guideAlternateIor = etaTransmitted;
+            payload.guideAlternateVolumeActive = 1u;
+        } else if (!alternateReflection && volumeBoundary) {
+            payload.guideAlternateAbsorption = float3(0.0);
+            payload.guideAlternateIor = 1.0;
+            payload.guideAlternateVolumeActive = 0u;
+        }
+    }
     payload.pathFlags |= WORLD_PATH_GUIDE_CONTINUATION;
 }
 
@@ -358,8 +393,12 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     float3 previousNormal = any(surface.previous_geometry_normal != 0.0)
             ? normalize(surface.previous_geometry_normal) : input.previousGeometricNormal;
     payload.previousGuideNormal = packNormalOct(previousNormal);
-    payload.guideAlbedo = retainedPackRgb9e5(clamp(closure.diffuseAlbedo, 0.0, 1.0));
-    payload.guideSpecularAlbedo = retainedPackRgb9e5(closure.specularF0);
+    float3 diffuseEstimate;
+    float3 specularEstimate;
+    surfaceDenoiserEstimates(closure, input.outgoingDirection,
+            diffuseEstimate, specularEstimate);
+    payload.guideAlbedo = retainedPackRgb9e5(diffuseEstimate);
+    payload.guideSpecularAlbedo = retainedPackRgb9e5(specularEstimate);
     payload.pathFlags &= ~WORLD_PATH_MISS;
     retainedSelectStablePlaneContinuation<TComposition>(payload, record, input, surface, closure);
     float3 emission = max(surface.emission_color, float3(0.0))

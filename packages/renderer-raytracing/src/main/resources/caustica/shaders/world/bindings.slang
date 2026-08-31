@@ -47,6 +47,8 @@ public struct WorldBindingRoots {
     public uint64_t initialVolumeInstance;
     public uint64_t neeAtStateAddress;
     public uint nrdSignalEncoding;
+    public float reconstructionMicroJitterScale;
+    public uint64_t stablePlaneBufferAddress;
 };
 
 public RaytracingAccelerationStructure worldAccelerationStructure(WorldBindingRoots roots) {
