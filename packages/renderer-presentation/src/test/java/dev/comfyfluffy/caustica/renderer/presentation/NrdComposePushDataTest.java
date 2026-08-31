@@ -10,19 +10,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class NrdComposePushDataTest {
     @Test
-    void reflectedRootCarriesSixHeapIndicesExposureAndSignalEncoding() {
+    void reflectedRootCarriesPlaneExchangeAddressesImagesAndMode() {
         ByteBuffer data = ByteBuffer.allocateDirect(NrdComposePushData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new NrdComposePushData(3, 5, 7, 11, 13, 17, 2.5f, 1).write(data);
+        new NrdComposePushData(3L, 5L, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 2, 1, 0).write(data);
 
-        assertEquals(32, NrdComposePushData.BYTE_SIZE);
-        assertEquals(3, data.getInt(0));
-        assertEquals(5, data.getInt(4));
-        assertEquals(7, data.getInt(8));
-        assertEquals(11, data.getInt(12));
-        assertEquals(13, data.getInt(16));
-        assertEquals(17, data.getInt(20));
-        assertEquals(2.5f, data.getFloat(24));
-        assertEquals(1, data.getInt(28));
+        assertEquals(72, NrdComposePushData.BYTE_SIZE);
+        assertEquals(3L, data.getLong(0));
+        assertEquals(5L, data.getLong(8));
+        assertEquals(7, data.getInt(16));
+        assertEquals(31, data.getInt(44));
+        assertEquals(41, data.getInt(52));
+        assertEquals(2, data.getInt(56));
+        assertEquals(1, data.getInt(60));
+        assertEquals(0, data.getInt(64));
     }
 }

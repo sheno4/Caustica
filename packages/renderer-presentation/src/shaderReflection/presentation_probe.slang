@@ -53,6 +53,18 @@ void probePresentPush(uint3 id : SV_DispatchThreadID) {
 void probeNrdComposePush(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
         float sink = float(nrdComposePushProbe.denoisedDiffuseImageIndex)
-                + nrdComposePushProbe.preExposure;
+                + float(nrdComposePushProbe.mode);
+    }
+}
+
+struct NrdPlaneFrameLayoutProbe { NrdPlaneFrame values[2]; };
+[[vk::binding(1, 0)]] StructuredBuffer<NrdPlaneFrameLayoutProbe, Std430DataLayout> nrdPlaneFrameLayoutProbe;
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeNrdPlaneFrame(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        float sink = nrdPlaneFrameLayoutProbe[0].values[0].currentViewProjection[0][0]
+                + nrdPlaneFrameLayoutProbe[0].values[1].radianceClampRange;
     }
 }

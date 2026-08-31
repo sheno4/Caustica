@@ -58,8 +58,8 @@ public final class TraceResources {
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide normal roughness " + renderWidth + "x" + renderHeight);
         GpuImage diffuseAlbedo = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide diffuse albedo " + renderWidth + "x" + renderHeight);
-        GpuImage linearDepth = context.createStorageImage(renderWidth, renderHeight,
-                VK10.VK_FORMAT_R32_SFLOAT, "guide view depth " + renderWidth + "x" + renderHeight);
+        GpuImage depth = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R32_SFLOAT, "guide reverse depth " + renderWidth + "x" + renderHeight);
         GpuImage motion = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderWidth + "x" + renderHeight);
         GpuImage specularAlbedo = context.createStorageImage(renderWidth, renderHeight,
@@ -74,6 +74,12 @@ public final class TraceResources {
                 "NRD specular radiance hit distance " + renderWidth + "x" + renderHeight);
         GpuImage nrdViewZ = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R32_SFLOAT, "NRD view Z " + renderWidth + "x" + renderHeight);
+        GpuImage nrdMotion = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "NRD 2.5D motion " + renderWidth + "x" + renderHeight);
+        GpuImage nrdDisocclusionThresholdMix = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16_SFLOAT,
+                "NRD disocclusion threshold mix " + renderWidth + "x" + renderHeight);
         GpuImage denoisedDiffuseRadianceHitDistance = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                 "NRD denoised diffuse radiance hit distance " + renderWidth + "x" + renderHeight);
@@ -90,9 +96,10 @@ public final class TraceResources {
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 false, "stable planes " + renderWidth + "x" + renderHeight + "x3");
         images = new TraceImages(traceColor, stablePlaneMetadata,
-                normalRoughness, diffuseAlbedo, linearDepth, motion,
+                normalRoughness, diffuseAlbedo, depth, motion,
                 specularAlbedo, specularMotion, diffuseRadianceHitDistance,
-                specularRadianceHitDistance, nrdViewZ, denoisedDiffuseRadianceHitDistance,
+                specularRadianceHitDistance, nrdViewZ, nrdMotion, nrdDisocclusionThresholdMix,
+                denoisedDiffuseRadianceHitDistance,
                 denoisedSpecularRadianceHitDistance, nrdStableRadiance, reconstructedColor);
         extent = wanted;
     }
@@ -119,13 +126,15 @@ public final class TraceResources {
             images.stablePlaneMetadata().destroy();
             images.normalRoughness().destroy();
             images.diffuseAlbedo().destroy();
-            images.linearDepth().destroy();
+            images.depth().destroy();
             images.motion().destroy();
             images.specularAlbedo().destroy();
             images.specularMotion().destroy();
             images.diffuseRadianceHitDistance().destroy();
             images.specularRadianceHitDistance().destroy();
             images.nrdViewZ().destroy();
+            images.nrdMotion().destroy();
+            images.nrdDisocclusionThresholdMix().destroy();
             images.denoisedDiffuseRadianceHitDistance().destroy();
             images.denoisedSpecularRadianceHitDistance().destroy();
             images.nrdStableRadiance().destroy();

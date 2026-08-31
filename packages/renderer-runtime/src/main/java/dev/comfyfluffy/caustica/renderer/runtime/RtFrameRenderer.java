@@ -11,6 +11,8 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserReset;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
+import dev.comfyfluffy.caustica.renderer.presentation.RtNrdComposePipeline;
+import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdPlaneFrameData;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
@@ -82,9 +84,9 @@ import java.util.Optional;
  * raw presentation, NRD temporal denoising, or DLSS Ray Reconstruction, then copy the display-mapped
  * result back to the world target at the end-of-world seam. Gated by {@code -Dcaustica.rt=true}.
  *
- * <p>Raw and NRD routes trace at display resolution; NRD and DLSS-RR use per-frame sub-pixel camera
- * jitter. DLSS-RR ({@link DlssRayReconstruction}) alone selects a lower render extent and reconstructs
- * to display resolution. A failed RR evaluation falls back to a linear upscale of the noisy trace.
+ * <p>NRD and DLSS-RR use per-frame sub-pixel camera jitter. Ray Reconstruction or the configured
+ * neutral temporal upscaler may select a lower render extent and reconstruct to display resolution.
+ * A failed reconstruction evaluation falls back to a linear upscale of the noisy trace.
  *
  * <p>Traces the active retained scene with perspective camera rays (camera matrices captured
  * each frame via {@link #captureFrame}); writes nothing until a scene is available.
@@ -645,9 +647,9 @@ public final class RtFrameRenderer {
     }
 
     private boolean recordTemporalDenoiser(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer,
-                                        boolean historyContinuous,
-                                        float jitterX, float jitterY) {
-        DenoiserBackend backend = denoiser.backend();
+                                           MemoryStack stack, RtGpuExecutor.GraphicsUse graphicsUse,
+                                           boolean historyContinuous, float jitterX, float jitterY,
+                                           Float3 cameraOffset, GpuImage output) {
         DenoiserReset frameReset = denoiser.frameReset(historyContinuous);
         boolean reset = frameReset == DenoiserReset.CLEAR_AND_RESTART;
         Matrix4f previousWorldToView = nrdPreviousWorldToView(reset, frameViewRotation,
@@ -665,24 +667,54 @@ public final class RtFrameRenderer {
                 frameViewRotation.get(new float[16]), previousWorldToView.get(new float[16]),
                 frameProjection.get(new float[16]), previousViewToClip.get(new float[16]),
                 jitterX, jitterY, previousJitterX, previousJitterY,
-                inverseWidth, inverseHeight, 0.0f, NRD_DENOISING_RANGE,
-                0.01f, 0.02f, frameTimeMilliseconds, (int) (frameCounter & 0x7fff_ffffL),
-                false, false, false,
+                inverseWidth, inverseHeight, 1.0f, NRD_DENOISING_RANGE,
+                0.03f, 0.2f, frameTimeMilliseconds, (int) (frameCounter & 0x7fff_ffffL),
+                false, true, false,
                 frameReset);
         DenoiserInputs inputs = new DenoiserInputs(
                 denoiserImage(traceImages().diffuseRadianceHitDistance()),
                 denoiserImage(traceImages().specularRadianceHitDistance()),
                 denoiserImage(traceImages().normalRoughness()),
                 denoiserImage(traceImages().nrdViewZ()),
-                denoiserImage(traceImages().motion()),
+                denoiserImage(traceImages().nrdMotion()),
                 denoiserImage(traceImages().denoisedDiffuseRadianceHitDistance()),
                 denoiserImage(traceImages().denoisedSpecularRadianceHitDistance()),
-                Optional.empty(), Optional.empty());
-        ctx.invalidateDescriptorHeapsForExternalCommand(commandBuffer);
-        try {
-            backend.record(new DenoiserFrame(commandBuffer.address(), common, inputs));
-        } finally {
-            ctx.bindDescriptorHeaps(commandBuffer);
+                Optional.of(denoiserImage(traceImages().nrdDisocclusionThresholdMix())), Optional.empty());
+
+        GpuBuffer frameBuffer = ctx.createBuffer(NrdPlaneFrameData.BYTE_SIZE,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "NRD stable-plane frame");
+        graphicsUse.whenComplete(frameBuffer::destroy);
+        ByteBuffer frameData = MemoryUtil.memByteBuffer(frameBuffer.mapped(), NrdPlaneFrameData.BYTE_SIZE)
+                .order(ByteOrder.nativeOrder());
+        new NrdPlaneFrameData(mvCurProjView, mvPushMatrix,
+                new NrdPlaneFrameData.Float3(cameraOffset.x(), cameraOffset.y(), cameraOffset.z()),
+                presentationResources().exposure().preExposure(),
+                new NrdPlaneFrameData.Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
+                128.0f, traceExtent().renderWidth(), traceExtent().renderHeight()).write(frameData);
+        frameBuffer.flush(0L, NrdPlaneFrameData.BYTE_SIZE);
+
+        long stablePlaneAddress = traceResources().stablePlaneBuffer().deviceAddress().value();
+        long frameAddress = frameBuffer.deviceAddress().value();
+        RtNrdComposePipeline.Exchange exchange = new RtNrdComposePipeline.Exchange(output,
+                traceImages().diffuseRadianceHitDistance(), traceImages().specularRadianceHitDistance(),
+                traceImages().normalRoughness(), traceImages().nrdViewZ(), traceImages().nrdMotion(),
+                traceImages().nrdDisocclusionThresholdMix(),
+                traceImages().denoisedDiffuseRadianceHitDistance(),
+                traceImages().denoisedSpecularRadianceHitDistance(), traceImages().nrdStableRadiance());
+        for (int plane = RtDenoiserState.PLANE_COUNT - 1; plane >= 0; plane--) {
+            presentationResources().nrdComposePipeline().prepare(commandBuffer,
+                    stablePlaneAddress, frameAddress, plane, nrdSignalEncoding(), exchange);
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
+            ctx.invalidateDescriptorHeapsForExternalCommand(commandBuffer);
+            try {
+                denoiser.backend(plane).record(new DenoiserFrame(commandBuffer.address(), common, inputs));
+            } finally {
+                ctx.bindDescriptorHeaps(commandBuffer);
+            }
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
+            presentationResources().nrdComposePipeline().merge(commandBuffer,
+                    stablePlaneAddress, frameAddress, plane, nrdSignalEncoding(), exchange);
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
         }
         denoiser.frameRecorded();
         previousDenoiserFrameNanos = now;
@@ -769,12 +801,12 @@ public final class RtFrameRenderer {
             EnvironmentBinding<?> environment = scenes.content(entryScene).environment();
             EnvironmentPush environmentState = environmentPush(environment,
                     environment == null ? 0 : services.programs().resolve(environment.implementation()));
+            Float3 cameraOffset = new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
+                    sceneOrigin.relativeY(snapshot.cameraY()), sceneOrigin.relativeZ(snapshot.cameraZ()));
 
             new WorldPushData(
                     frameInvViewProj,
-                    new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
-                            sceneOrigin.relativeY(snapshot.cameraY()),
-                            sceneOrigin.relativeZ(snapshot.cameraZ())),
+                    cameraOffset,
                     (int) frameCounter,
                     mvPushMatrix,
                     new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
@@ -854,7 +886,7 @@ public final class RtFrameRenderer {
                             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.dlssRr")) {
                                 outputReady = rayReconstruction.evaluate(cmd, traceImages().traceColor(),
-                                        traceImages().linearDepth(), traceImages().motion(),
+                                        traceImages().depth(), traceImages().motion(),
                                         traceImages().diffuseAlbedo(), traceImages().specularAlbedo(),
                                         traceImages().normalRoughness(), traceImages().specularMotion(),
                                         traceImages().reconstructedColor(), traceExtent().renderWidth(),
@@ -869,20 +901,11 @@ public final class RtFrameRenderer {
             } else if (denoiserRoute == DenoiserRoute.TEMPORAL_DENOISER) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD evaluate");
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.nrd")) {
-                    boolean temporalReset = recordTemporalDenoiser(ctx, cmd, lightingHistoryContinuous,
-                            jitterX, jitterY);
-                    VulkanBarriers.memoryBarrier(cmd, stack);
                     boolean upscale = upscaler.configured();
                     GpuImage composeOutput = upscale
                             ? traceImages().traceColor() : traceImages().reconstructedColor();
-                    presentationResources().nrdComposePipeline().dispatch(cmd,
-                            composeOutput,
-                            traceImages().denoisedDiffuseRadianceHitDistance(),
-                            traceImages().denoisedSpecularRadianceHitDistance(),
-                            traceImages().diffuseAlbedo(), traceImages().specularAlbedo(),
-                            traceImages().nrdStableRadiance(),
-                            presentationResources().exposure().preExposure(),
-                            nrdSignalEncoding());
+                    boolean temporalReset = recordTemporalDenoiser(ctx, cmd, stack, graphicsUse,
+                            lightingHistoryContinuous, jitterX, jitterY, cameraOffset, composeOutput);
                     if (!upscale) {
                         outputReady = true;
                     } else {
@@ -891,7 +914,7 @@ public final class RtFrameRenderer {
                         try (RtDebugLabels.Scope ignoredUpscale = RtDebugLabels.scope(ctx, cmd, "temporal upscale");
                              RtTelemetry.Scope ignoredUpscaleStats = telemetry.frame().stage("frame.upscale")) {
                             outputReady = upscaler.record(new RtUpscaler.Frame(cmd, composeOutput,
-                                    traceImages().linearDepth(), traceImages().motion(),
+                                    traceImages().depth(), traceImages().motion(),
                                     traceImages().reconstructedColor(),
                                     new RtUpscaler.Extent(traceExtent().renderWidth(), traceExtent().renderHeight(),
                                             traceExtent().displayWidth(), traceExtent().displayHeight()),
@@ -925,7 +948,7 @@ public final class RtFrameRenderer {
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.exposure")) {
                 presentationResources().exposure().record(ctx, cmd, stack, traceImages().reconstructedColor(),
-                        traceImages().linearDepth(), traceImages().diffuseAlbedo());
+                        traceImages().depth(), traceImages().diffuseAlbedo());
                 presentationResources().exposure().recordStateReadback(cmd, stack);
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // exposure image visible to downstream passes
@@ -955,7 +978,7 @@ public final class RtFrameRenderer {
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.debugPresent")) {
                     presentationResources().debugPresentPipeline().dispatch(cmd,
                             presentationResources().displayImage(), traceImages().normalRoughness(),
-                            traceImages().diffuseAlbedo(), traceImages().linearDepth(), traceImages().motion(),
+                            traceImages().diffuseAlbedo(), traceImages().depth(), traceImages().motion(),
                             traceImages().specularAlbedo(), traceImages().specularMotion(),
                             traceImages().reconstructedColor(), presentationResources().exposure().image(),
                             traceImages().traceColor(), traceImages().stablePlaneMetadata(),
@@ -987,7 +1010,7 @@ public final class RtFrameRenderer {
         // Submission makes every frame-owned address reachable until the final overlay consumer.
         presentationResources().exposure().markStateReadbackUse(graphicsUse);
         presenter.publish(new RtFramePresenter.RenderedFrame(
-                presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().linearDepth(),
+                presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().depth(),
                 traceExtent().renderWidth(), traceExtent().renderHeight(), mvCurProjView, mvPushMatrix,
                 CausticaConfig.Rt.Hdr.enabled() && debugView == 0));
     }
@@ -1018,7 +1041,7 @@ public final class RtFrameRenderer {
                 storageIndex(traceImages().stablePlaneMetadata()));
         target.putInt(base + RtBindings.WORLD_NORMAL_GUIDE_INDEX_OFFSET, storageIndex(traceImages().normalRoughness()));
         target.putInt(base + RtBindings.WORLD_ALBEDO_GUIDE_INDEX_OFFSET, storageIndex(traceImages().diffuseAlbedo()));
-        target.putInt(base + RtBindings.WORLD_DEPTH_GUIDE_INDEX_OFFSET, storageIndex(traceImages().linearDepth()));
+        target.putInt(base + RtBindings.WORLD_DEPTH_GUIDE_INDEX_OFFSET, storageIndex(traceImages().depth()));
         target.putInt(base + RtBindings.WORLD_MOTION_GUIDE_INDEX_OFFSET, storageIndex(traceImages().motion()));
         target.putInt(base + RtBindings.WORLD_SPECULAR_ALBEDO_GUIDE_INDEX_OFFSET,
                 storageIndex(traceImages().specularAlbedo()));

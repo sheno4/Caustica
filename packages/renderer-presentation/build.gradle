@@ -52,7 +52,8 @@ def presentationRecordSpecs = [
         "push|displayPushProbe|DisplayPush|dev.comfyfluffy.caustica.renderer.presentation.gen|DisplayPushData|false",
         "push|debugPresentPushProbe|DebugPresentPush|dev.comfyfluffy.caustica.renderer.presentation.gen|DebugPresentPushData|false",
         "push|presentPushProbe|PresentPush|dev.comfyfluffy.caustica.renderer.presentation.gen|PresentPushData|false",
-        "push|nrdComposePushProbe|NrdComposePush|dev.comfyfluffy.caustica.renderer.presentation.gen|NrdComposePushData|false"
+        "push|nrdComposePushProbe|NrdComposePush|dev.comfyfluffy.caustica.renderer.presentation.gen|NrdComposePushData|false",
+        "buffer|nrdPlaneFrameLayoutProbe|NrdPlaneFrame|dev.comfyfluffy.caustica.renderer.presentation.gen|NrdPlaneFrameData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generatePresentationRecords = tasks.register("generatePresentationRecords", GenerateShaderRecords) {
@@ -85,12 +86,7 @@ def verifyPresentationAbi = tasks.register("verifyPresentationAbi") {
                     "putLong(48, exposureStateAddress())", "putInt(56, debugView())",
                     "putFloat(64, centerWeightFloor())"],
             PresentPushData: ["BYTE_SIZE = 12", "putInt(0, outputImageIndex())",
-                    "putInt(4, sourceImageIndex())", "putFloat(8, uiNits())"],
-            NrdComposePushData: ["BYTE_SIZE = 32", "putInt(0, outputImageIndex())",
-                    "putInt(4, denoisedDiffuseImageIndex())",
-                    "putInt(12, stableRadianceImageIndex())",
-                    "putInt(20, specularAlbedoImageIndex())", "putFloat(24, preExposure())",
-                    "putInt(28, signalEncoding())"]
+                    "putInt(4, sourceImageIndex())", "putFloat(8, uiNits())"]
     ]
     inputs.dir(generatedRecordRoot)
     doLast {
@@ -156,7 +152,7 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
         }
         def generated = ["ExposureStateData", "ExposureHistPushData", "ExposureResolvePushData",
                          "DisplayPushData", "DebugPresentPushData", "PresentPushData",
-                         "NrdComposePushData"].collect {
+                         "NrdComposePushData", "NrdPlaneFrameData"].collect {
             "dev/comfyfluffy/caustica/renderer/presentation/gen/" + it + ".class"
         } as Set
         def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/renderer/presentation/gen/")

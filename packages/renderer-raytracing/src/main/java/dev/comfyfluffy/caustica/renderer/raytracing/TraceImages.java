@@ -10,13 +10,15 @@ public record TraceImages(
         GpuImage stablePlaneMetadata,
         GpuImage normalRoughness,
         GpuImage diffuseAlbedo,
-        GpuImage linearDepth,
+        GpuImage depth,
         GpuImage motion,
         GpuImage specularAlbedo,
         GpuImage specularMotion,
         GpuImage diffuseRadianceHitDistance,
         GpuImage specularRadianceHitDistance,
         GpuImage nrdViewZ,
+        GpuImage nrdMotion,
+        GpuImage nrdDisocclusionThresholdMix,
         GpuImage denoisedDiffuseRadianceHitDistance,
         GpuImage denoisedSpecularRadianceHitDistance,
         GpuImage nrdStableRadiance,
@@ -26,13 +28,15 @@ public record TraceImages(
         Objects.requireNonNull(stablePlaneMetadata, "stablePlaneMetadata");
         Objects.requireNonNull(normalRoughness, "normalRoughness");
         Objects.requireNonNull(diffuseAlbedo, "diffuseAlbedo");
-        Objects.requireNonNull(linearDepth, "linearDepth");
+        Objects.requireNonNull(depth, "depth");
         Objects.requireNonNull(motion, "motion");
         Objects.requireNonNull(specularAlbedo, "specularAlbedo");
         Objects.requireNonNull(specularMotion, "specularMotion");
         Objects.requireNonNull(diffuseRadianceHitDistance, "diffuseRadianceHitDistance");
         Objects.requireNonNull(specularRadianceHitDistance, "specularRadianceHitDistance");
         Objects.requireNonNull(nrdViewZ, "nrdViewZ");
+        Objects.requireNonNull(nrdMotion, "nrdMotion");
+        Objects.requireNonNull(nrdDisocclusionThresholdMix, "nrdDisocclusionThresholdMix");
         Objects.requireNonNull(denoisedDiffuseRadianceHitDistance, "denoisedDiffuseRadianceHitDistance");
         Objects.requireNonNull(denoisedSpecularRadianceHitDistance, "denoisedSpecularRadianceHitDistance");
         Objects.requireNonNull(nrdStableRadiance, "nrdStableRadiance");

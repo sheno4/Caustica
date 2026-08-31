@@ -180,7 +180,7 @@ public void stablePlaneFinalizeGuides(uint2 pixel, uint2 extent, WorldPush frame
     RWTexture2D<float4> output = worldFloat4StorageImage(worldBindings.resources.outputImage);
     float4 color = output[pixel];
     float maximum = max(color.x, max(color.y, color.z));
-    float brightnessLimit = max(frame.preExposure * 4096.0, 1.0);
+    float brightnessLimit = max(frame.preExposure * 0.18 * 4096.0, 1.0);
     if (maximum > brightnessLimit) color.xyz *= brightnessLimit / maximum;
     output[pixel] = color;
 }
