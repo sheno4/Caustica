@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.engine.scene;
 
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import dev.comfyfluffy.caustica.engine.session.EnvironmentSelectionScope;
 
@@ -19,7 +20,9 @@ public final class SceneEnvironmentContributionChannel implements EnvironmentSel
         this.scene = scene;
     }
 
-    @Override public void select(EnvironmentBinding<?> binding) { directory.selectEnvironment(this, binding); }
+    @Override public RetainedPublication select(EnvironmentBinding<?> binding) {
+        return directory.selectEnvironment(this, binding);
+    }
     public void invalidate() { directory.invalidate(this); }
     public void drain() { directory.drain(this); }
 }

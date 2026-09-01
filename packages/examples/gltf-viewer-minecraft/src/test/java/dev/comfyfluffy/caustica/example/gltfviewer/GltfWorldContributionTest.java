@@ -122,7 +122,7 @@ final class GltfWorldContributionTest {
         private CaptureGeometry(List<String> order) { this.order = order; }
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> type) { return new MeshId<>() { }; }
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
                 RetainedBatch<Operation> batch) {
             batches.add(batch);
             order.add("geometry");
@@ -130,7 +130,7 @@ final class GltfWorldContributionTest {
             publications.add(publication);
             return publication;
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
                 List<RetainedBatch<Operation>> accepted) {
             batches.addAll(accepted);
             order.add("geometry");
@@ -138,7 +138,7 @@ final class GltfWorldContributionTest {
             publications.add(publication);
             return publication;
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
                 List<RetainedBatch<Operation>> geometryBatches,
                 dev.comfyfluffy.caustica.api.light.LightChannel lights,
                 RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
@@ -205,11 +205,13 @@ final class GltfWorldContributionTest {
             return new MinecraftDimensionKey(ResourceId.of("minecraft", "overworld"));
         }
         @Override public ResourcePackEpoch resourcePackEpoch() { return new ResourcePackEpoch(1); }
-        @Override public MinecraftEnvironmentSelector environment() { return binding -> { }; }
+        @Override public MinecraftEnvironmentSelector environment() {
+            return binding -> dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
+        }
     }
 
     private static final class TestPublication
-            implements dev.comfyfluffy.caustica.api.geometry.GeometryPublication {
+            implements dev.comfyfluffy.caustica.api.retained.RetainedPublication {
         private final List<Runnable> callbacks = new ArrayList<>();
         private boolean visible;
         @Override public boolean isVisible() { return visible; }

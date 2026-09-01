@@ -33,7 +33,7 @@ final class MinecraftEntityGeometryTest {
         var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> new Uploaded(0x900L));
         var key = new MinecraftEntityGeometry.Key(2, 1);
 
-        dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication;
+        dev.comfyfluffy.caustica.api.retained.RetainedPublication publication;
         try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
             geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 2, 3), 0xff);
             publication = updates.submit();
@@ -487,7 +487,7 @@ final class MinecraftEntityGeometryTest {
 
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
 
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
                 RetainedBatch<Operation> batch) {
             if (rejectNext) {
                 rejectNext = false;
@@ -497,7 +497,7 @@ final class MinecraftEntityGeometryTest {
             return publication;
         }
 
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
                 List<RetainedBatch<Operation>> group) {
             if (rejectNextGroup) {
                 rejectNextGroup = false;
@@ -506,7 +506,7 @@ final class MinecraftEntityGeometryTest {
             groups.add(List.copyOf(group));
             return publication;
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroupWithLatest(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroupWithLatest(
                 List<RetainedBatch<Operation>> group, List<GeometryChannel.LatestInstance> latest) {
             if (rejectNextGroup) {
                 rejectNextGroup = false;
@@ -516,7 +516,7 @@ final class MinecraftEntityGeometryTest {
             latestGroups.add(List.copyOf(latest));
             return publication;
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
                 List<RetainedBatch<Operation>> geometryBatches,
                 dev.comfyfluffy.caustica.api.light.LightChannel lights,
                 RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
@@ -525,7 +525,7 @@ final class MinecraftEntityGeometryTest {
     }
 
     private static final class TestPublication
-            implements dev.comfyfluffy.caustica.api.geometry.GeometryPublication {
+            implements dev.comfyfluffy.caustica.api.retained.RetainedPublication {
         private final List<Runnable> callbacks = new ArrayList<>();
         private boolean visible;
         @Override public boolean isVisible() { return visible; }

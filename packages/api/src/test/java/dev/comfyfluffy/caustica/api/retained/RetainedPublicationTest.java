@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.geometry;
+package dev.comfyfluffy.caustica.api.retained;
 
 import org.junit.jupiter.api.Test;
 
@@ -7,10 +7,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-final class GeometryPublicationTest {
+final class RetainedPublicationTest {
     @Test
     void alreadyVisibleRunsCallbacksImmediately() {
-        GeometryPublication publication = GeometryPublication.alreadyVisible();
+        RetainedPublication publication = RetainedPublication.alreadyVisible();
         AtomicInteger callbacks = new AtomicInteger();
 
         publication.whenVisible(callbacks::incrementAndGet);

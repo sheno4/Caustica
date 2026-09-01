@@ -2,7 +2,7 @@
 
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -1324,7 +1324,7 @@ public final class RtTerrain {
                                       List<PublishedEmpty> readyEmpty) { }
 
     private record SubmittedGeometryGroup(List<PendingGeometryGroup> groups,
-                                          GeometryPublication receipt, long submittedNanos) { }
+                                          RetainedPublication receipt, long submittedNanos) { }
 
     private record PublishedPut(long key, long token,
                                 Object extractionStamp, Object readyStamp, long workerCompletedNanos) { }
@@ -1490,7 +1490,7 @@ public final class RtTerrain {
                 recordTerrainLatency("terrainPendingToSubmit", group.enqueuedNanos(), submittedNanos);
             }
         }
-        GeometryPublication receipt = retainedGeometry.submitGroup(submitted.stream()
+        RetainedPublication receipt = retainedGeometry.submitGroup(submitted.stream()
                 .map(PendingGeometryGroup::operations)
                 .toList());
         long acceptedNanos = System.nanoTime();
@@ -1514,11 +1514,11 @@ public final class RtTerrain {
         instrumentation.set("terrainPendingGeometryGroups", pendingGeometryGroups.size());
     }
 
-    static boolean publicationPending(GeometryPublication publication) {
+    static boolean publicationPending(RetainedPublication publication) {
         return publication != null && !publication.isVisible();
     }
 
-    static boolean clearMustWait(GeometryPublication publication) {
+    static boolean clearMustWait(RetainedPublication publication) {
         return publicationPending(publication);
     }
 

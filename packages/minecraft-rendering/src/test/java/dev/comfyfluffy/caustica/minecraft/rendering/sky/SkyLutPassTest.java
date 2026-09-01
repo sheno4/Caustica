@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.MinecraftEnvironmentBindingData;
@@ -93,10 +94,12 @@ final class SkyLutPassTest {
         SkyLutPass.publishBinding(first, environment, binding -> {
             assertTrue(((TestGeneration) first).sealed);
             selected.add(binding);
+            return RetainedPublication.alreadyVisible();
         }, 0x1000L);
         SkyLutPass.publishBinding(second, environment, binding -> {
             assertTrue(((TestGeneration) second).sealed);
             selected.add(binding);
+            return RetainedPublication.alreadyVisible();
         }, 0x1000L);
 
         assertNotSame(ResourceRef.none(), first.reference());
@@ -126,6 +129,35 @@ final class SkyLutPassTest {
         assertEquals(0, closes.get());
         second.releaseBorrow();
         assertEquals(1, closes.get());
+    }
+
+    @Test void displacedGenerationsDropOnlyWhenReplacementBecomesVisible() {
+        var factory = new TestResourceFactory();
+        var first = (TestGeneration) factory.create();
+        var second = (TestGeneration) factory.create();
+        var third = (TestGeneration) factory.create();
+        var firstVisible = new TestPublication();
+        var secondVisible = new TestPublication();
+        var thirdVisible = new TestPublication();
+        List<ResourceGeneration> owned = new ArrayList<>();
+
+        SkyLutPass.trackReplacementPublication(owned, first, firstVisible);
+        SkyLutPass.trackReplacementPublication(owned, second, secondVisible);
+        assertFalse(first.dropped);
+        secondVisible.makeVisible();
+        assertTrue(first.dropped);
+        assertFalse(second.dropped);
+
+        SkyLutPass.trackReplacementPublication(owned, third, thirdVisible);
+        assertFalse(second.dropped);
+        thirdVisible.makeVisible();
+        assertTrue(second.dropped);
+        assertFalse(third.dropped);
+
+        SkyLutPass.dropAll(owned);
+        SkyLutPass.dropAll(owned);
+        assertTrue(third.dropped);
+        firstVisible.makeVisible();
     }
 
 
@@ -190,6 +222,21 @@ final class SkyLutPassTest {
                 callbackRun = true;
                 retired.run();
             }
+        }
+    }
+
+    private static final class TestPublication implements RetainedPublication {
+        private final List<Runnable> callbacks = new ArrayList<>();
+        private boolean visible;
+        @Override public boolean isVisible() { return visible; }
+        @Override public void whenVisible(Runnable callback) {
+            if (visible) callback.run();
+            else callbacks.add(callback);
+        }
+        void makeVisible() {
+            visible = true;
+            List.copyOf(callbacks).forEach(Runnable::run);
+            callbacks.clear();
         }
     }
 }

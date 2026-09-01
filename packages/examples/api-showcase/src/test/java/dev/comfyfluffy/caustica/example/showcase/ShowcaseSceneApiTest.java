@@ -194,7 +194,7 @@ final class ShowcaseSceneApiTest {
             return new InstanceId() { };
         }
 
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
                 RetainedBatch<Operation> batch) {
             if (rejectNext) {
                 rejectNext = false;
@@ -207,7 +207,7 @@ final class ShowcaseSceneApiTest {
             return publication;
         }
 
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
                 List<RetainedBatch<Operation>> batches) {
             if (rejectNext) {
                 rejectNext = false;
@@ -219,7 +219,7 @@ final class ShowcaseSceneApiTest {
             publications.add(publication);
             return publication;
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
                 List<RetainedBatch<Operation>> geometryBatches,
                 dev.comfyfluffy.caustica.api.light.LightChannel lights,
                 RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
@@ -228,7 +228,7 @@ final class ShowcaseSceneApiTest {
     }
 
     private static final class TestPublication
-            implements dev.comfyfluffy.caustica.api.geometry.GeometryPublication {
+            implements dev.comfyfluffy.caustica.api.retained.RetainedPublication {
         private final List<Runnable> callbacks = new ArrayList<>();
         private boolean visible;
         @Override public boolean isVisible() { return visible; }

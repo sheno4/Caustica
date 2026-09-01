@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.junit.jupiter.api.Test;
 
@@ -83,7 +83,7 @@ final class RtTerrainPublicationBackpressureTest {
         assertTrue(removals.contains(2L));
     }
 
-    private static final class MutablePublication implements GeometryPublication {
+    private static final class MutablePublication implements RetainedPublication {
         private final java.util.List<Runnable> callbacks = new java.util.ArrayList<>();
         private boolean visible;
         @Override public boolean isVisible() { return visible; }

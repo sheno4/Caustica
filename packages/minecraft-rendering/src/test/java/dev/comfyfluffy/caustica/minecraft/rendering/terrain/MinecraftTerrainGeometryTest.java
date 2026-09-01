@@ -374,7 +374,7 @@ final class MinecraftTerrainGeometryTest {
 
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) { return new MeshId<>() { }; }
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
                 RetainedBatch<Operation> batch) {
             if (rejectNext) {
                 rejectNext = false;
@@ -383,7 +383,7 @@ final class MinecraftTerrainGeometryTest {
             batches.add(batch);
             return publication;
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
                 List<RetainedBatch<Operation>> group) {
             if (rejectNext) {
                 rejectNext = false;
@@ -393,7 +393,7 @@ final class MinecraftTerrainGeometryTest {
             batches.addAll(group);
             return publication;
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
                 List<RetainedBatch<Operation>> group, LightChannel lights,
                 RetainedBatch<LightChannel.Operation> lightBatch) {
             if (rejectNext) {
@@ -408,7 +408,7 @@ final class MinecraftTerrainGeometryTest {
     }
 
     private static final class TestPublication
-            implements dev.comfyfluffy.caustica.api.geometry.GeometryPublication {
+            implements dev.comfyfluffy.caustica.api.retained.RetainedPublication {
         private final List<Runnable> callbacks = new ArrayList<>();
         private boolean visible;
         @Override public boolean isVisible() { return visible; }

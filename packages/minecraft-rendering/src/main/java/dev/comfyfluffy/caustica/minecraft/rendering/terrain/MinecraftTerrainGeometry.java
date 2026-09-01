@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
@@ -37,20 +37,20 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     }
 
     /** Atomically replaces and removes all sections named by one Minecraft extraction transaction. */
-    public synchronized GeometryPublication submit(List<Change> changes) {
+    public synchronized RetainedPublication submit(List<Change> changes) {
         return submitGroup(List.of(changes));
     }
 
     /** Publishes extraction transactions together as one atomic scene revision. */
-    public synchronized GeometryPublication submitGroup(List<? extends List<Change>> groups) {
+    public synchronized RetainedPublication submitGroup(List<? extends List<Change>> groups) {
         if (closed) throw new IllegalStateException("terrain geometry is closed");
-        if (groups.isEmpty()) return GeometryPublication.alreadyVisible();
+        if (groups.isEmpty()) return RetainedPublication.alreadyVisible();
         var batches = new ArrayList<RetainedBatch<GeometryChannel.Operation>>();
         var preparedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
         var displacedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
         var lightOperations = new ArrayList<LightChannel.Operation>();
         var committedSections = new LinkedHashMap<>(sections);
-        GeometryPublication publication;
+        RetainedPublication publication;
         try {
             for (List<Change> changes : groups) {
                 var batch = prepareBatch(changes, committedSections, preparedUploads, displacedUploads);
@@ -58,7 +58,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                 batches.add(RetainedBatch.of(batch.operations()));
                 lightOperations.addAll(batch.lightOperations());
             }
-            if (batches.isEmpty()) return GeometryPublication.alreadyVisible();
+            if (batches.isEmpty()) return RetainedPublication.alreadyVisible();
             publication = lightOperations.isEmpty()
                     ? channel.submitGroup(batches)
                     : channel.submitWithLights(batches, lights, RetainedBatch.of(lightOperations));
@@ -145,7 +145,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         }
         List<MinecraftTerrainUploader.UploadedSection> uploads = sections.values().stream()
                 .map(SectionIds::uploaded).toList();
-        GeometryPublication publication;
+        RetainedPublication publication;
         if (lightOperations.isEmpty()) publication = channel.submit(RetainedBatch.of(operations));
         else publication = channel.submitWithLights(List.of(RetainedBatch.of(operations)), lights,
                 RetainedBatch.of(lightOperations));

@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.engine.scene;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
@@ -9,6 +8,7 @@ import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
@@ -135,17 +135,17 @@ public final class SceneDirectory {
         return new LightRef(this, channel, ++nextIdentity);
     }
 
-    synchronized GeometryPublication submitGeometry(GeometryContributionChannel channel,
+    synchronized RetainedPublication submitGeometry(GeometryContributionChannel channel,
                                                      RetainedBatch<GeometryChannel.Operation> batch) {
         return submitGeometryGroup(channel, List.of(batch));
     }
 
-    synchronized GeometryPublication submitGeometryGroup(GeometryContributionChannel channel,
+    synchronized RetainedPublication submitGeometryGroup(GeometryContributionChannel channel,
                                                           List<RetainedBatch<GeometryChannel.Operation>> group) {
         return submitGeometryGroupWithLatest(channel, group, List.of());
     }
 
-    synchronized GeometryPublication submitGeometryGroupWithLatest(
+    synchronized RetainedPublication submitGeometryGroupWithLatest(
             GeometryContributionChannel channel,
             List<RetainedBatch<GeometryChannel.Operation>> group,
             List<GeometryChannel.LatestInstance> latestInstances) {
@@ -170,7 +170,7 @@ public final class SceneDirectory {
         if (group.isEmpty()) {
             backend.updateLatestInstanceTransforms(latest);
             instances = nextInstances;
-            return GeometryPublication.alreadyVisible();
+            return RetainedPublication.alreadyVisible();
         }
         long nextRevision = revision + 1;
         RetainedSceneGeometryDelta delta = geometryDelta(
@@ -217,7 +217,7 @@ public final class SceneDirectory {
                 latest.transform(), latest.mask(), prior.instanceData(), prior.primitiveLights());
     }
 
-    synchronized GeometryPublication submitGeometryAndLights(
+    synchronized RetainedPublication submitGeometryAndLights(
             GeometryContributionChannel geometryChannel, LightChannel lightChannel,
             List<RetainedBatch<GeometryChannel.Operation>> geometryGroup,
             RetainedBatch<LightChannel.Operation> lightBatch) {
@@ -336,7 +336,7 @@ public final class SceneDirectory {
         }
     }
 
-    synchronized void selectEnvironment(SceneEnvironmentContributionChannel channel,
+    synchronized RetainedPublication selectEnvironment(SceneEnvironmentContributionChannel channel,
                                         EnvironmentBinding<?> binding) {
         requireEnvironmentChannel(channel);
         if (!channel.accepting) throw new IllegalStateException("environment channel is invalidated");
@@ -352,9 +352,10 @@ public final class SceneDirectory {
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
         nextEnvironments.put(scene, selected);
         RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, lights, nextEnvironments);
+        PublicationReceipt receipt = new PublicationReceipt(failures);
         PendingPublication publication = beginPublication(channel);
         try {
-            backend.publishContent(next, () -> completePublication(publication));
+            backend.publishContent(next, () -> { receipt.publish(); completePublication(publication); });
         } catch (Throwable failure) {
             rejectPublication(publication);
             throw failure;
@@ -365,6 +366,7 @@ public final class SceneDirectory {
         environmentSelections = nextSelections;
         environments = nextEnvironments;
         revision++;
+        return receipt;
     }
 
     synchronized void quiesce(GeometryContributionChannel channel) {
@@ -750,7 +752,7 @@ public final class SceneDirectory {
         return last;
     }
 
-    private static final class PublicationReceipt implements GeometryPublication {
+    private static final class PublicationReceipt implements RetainedPublication {
         private final SceneRetirementFailureHandler failures;
         private final List<Runnable> callbacks = new ArrayList<>();
         private volatile boolean visible;

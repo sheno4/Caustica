@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.rendering.CelestialAtlasImage;
@@ -149,7 +150,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
         try {
             binding = createBinding(replacement.retain());
             generation = resourceFactory.create(binding::retire);
-            publishBinding(generation, environment, selector, binding.root.deviceRange().address().value());
+            RetainedPublication publication = publishBinding(
+                    generation, environment, selector, binding.root.deviceRange().address().value());
+            trackReplacementPublication(bindingGenerations, generation, publication);
             published = true;
         } catch (RuntimeException | Error failure) {
             if (generation != null) generation.drop();
@@ -162,17 +165,27 @@ public final class SkyLutPass implements Pass<PassFrame> {
         }
         SharedResource<AtlasEntry> previous = atlas;
         atlas = replacement;
-        bindingGenerations.add(generation);
         baked = false;
         if (previous != null) previous.close();
     }
 
-    static void publishBinding(ResourceGeneration generation,
-                               EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
-                               MinecraftEnvironmentSelector selector, long address) {
+    static RetainedPublication publishBinding(ResourceGeneration generation,
+                                              EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
+                                              MinecraftEnvironmentSelector selector, long address) {
         generation.seal();
-        selector.select(new EnvironmentBinding<>(environment,
+        return selector.select(new EnvironmentBinding<>(environment,
                 MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(address, generation.reference())));
+    }
+
+    static void trackReplacementPublication(List<ResourceGeneration> generations,
+                                            ResourceGeneration replacement,
+                                            RetainedPublication publication) {
+        List<ResourceGeneration> displaced;
+        synchronized (generations) {
+            displaced = List.copyOf(generations);
+            generations.add(replacement);
+        }
+        publication.whenVisible(() -> dropOwned(generations, displaced));
     }
 
     static boolean sameBindingEpoch(long image, long epoch, long nextImage, long nextEpoch) {
@@ -376,9 +389,22 @@ public final class SkyLutPass implements Pass<PassFrame> {
         resources.close();
     }
     static void dropAll(List<ResourceGeneration> generations) {
-        if (generations.isEmpty()) return;
-        List<ResourceGeneration> dropped = List.copyOf(generations);
-        generations.clear();
+        List<ResourceGeneration> dropped;
+        synchronized (generations) {
+            if (generations.isEmpty()) return;
+            dropped = List.copyOf(generations);
+            generations.clear();
+        }
+        for (ResourceGeneration generation : dropped) generation.drop();
+    }
+    private static void dropOwned(List<ResourceGeneration> generations,
+                                  List<ResourceGeneration> candidates) {
+        List<ResourceGeneration> dropped = new ArrayList<>();
+        synchronized (generations) {
+            for (ResourceGeneration generation : candidates) {
+                if (generations.remove(generation)) dropped.add(generation);
+            }
+        }
         for (ResourceGeneration generation : dropped) generation.drop();
     }
     private static void closeAll(AutoCloseable... resources) {

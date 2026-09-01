@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
@@ -40,7 +40,7 @@ final class ShowcaseScene {
     }
 
     /** Publishes one immutable generation containing the combined position and index upload buffer. */
-    GeometryPublication publishMesh(VulkanDeviceAddressRange currentPositions,
+    RetainedPublication publishMesh(VulkanDeviceAddressRange currentPositions,
                                      VulkanDeviceAddressRange indices, ResourceGeneration resource) {
         return publish(resource, reference -> geometry.submitGroup(List.of(
                 RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
@@ -49,7 +49,7 @@ final class ShowcaseScene {
     }
 
     /** Replaces the retained mesh streams while every existing placement remains resident. */
-    GeometryPublication replaceMesh(VulkanDeviceAddressRange currentPositions,
+    RetainedPublication replaceMesh(VulkanDeviceAddressRange currentPositions,
                                      VulkanDeviceAddressRange indices, long indexRevision,
                                      ResourceGeneration resource) {
         return publish(resource, reference -> geometry.submit(
@@ -58,7 +58,7 @@ final class ShowcaseScene {
     }
 
     /** Moves the existing placement, including between simultaneously resident scenes. */
-    GeometryPublication moveInstance(SceneId target, GeometryTransform transform) {
+    RetainedPublication moveInstance(SceneId target, GeometryTransform transform) {
         return geometry.submit(RetainedBatch.of(List.of(placement(target, transform))));
     }
 
@@ -97,19 +97,19 @@ final class ShowcaseScene {
 
     void stop() {
         ResourceGeneration previous = meshResource;
-        GeometryPublication publication = geometry.submit(RetainedBatch.of(List.of(
+        RetainedPublication publication = geometry.submit(RetainedBatch.of(List.of(
                 new GeometryChannel.DropInstance(instance),
                 new GeometryChannel.DropMesh<>(mesh))));
         meshResource = null;
         if (previous != null) publication.whenVisible(previous::drop);
     }
 
-    private GeometryPublication publish(ResourceGeneration next,
-                                        java.util.function.Function<ResourceRef, GeometryPublication> submit) {
+    private RetainedPublication publish(ResourceGeneration next,
+                                        java.util.function.Function<ResourceRef, RetainedPublication> submit) {
         boolean accepted = false;
         try {
             next.seal();
-            GeometryPublication publication = submit.apply(next.reference());
+            RetainedPublication publication = submit.apply(next.reference());
             accepted = true;
             ResourceGeneration previous = meshResource;
             meshResource = next;

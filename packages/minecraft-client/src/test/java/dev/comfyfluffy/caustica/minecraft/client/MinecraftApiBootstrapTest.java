@@ -61,7 +61,10 @@ final class MinecraftApiBootstrapTest {
 
         MinecraftWorldSession session = minecraftHost.openSession(
                 owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
-                    @Override public void select(dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) { }
+                    @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication select(
+                            dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
+                        return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
+                    }
                     @Override public void invalidate() { }
                     @Override public void drain() { }
                 }, new dev.comfyfluffy.caustica.api.scene.SceneId() { },
@@ -108,7 +111,10 @@ final class MinecraftApiBootstrapTest {
         session.processPendingChanges();
         MinecraftWorldSession minecraftSession = minecraftHost.openSession(
                 owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
-                    @Override public void select(dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) { }
+                    @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication select(
+                            dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
+                        return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
+                    }
                     @Override public void invalidate() { }
                     @Override public void drain() { }
                 }, new dev.comfyfluffy.caustica.api.scene.SceneId() { },

@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.engine.scene;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -27,17 +27,17 @@ public final class GeometryContributionChannel implements GeometryChannel {
         return directory.newMesh(this, type);
     }
     @Override public InstanceId newInstance() { return directory.newInstance(this); }
-    @Override public GeometryPublication submit(RetainedBatch<Operation> batch) {
+    @Override public RetainedPublication submit(RetainedBatch<Operation> batch) {
         return directory.submitGeometry(this, batch);
     }
-    @Override public GeometryPublication submitGroup(List<RetainedBatch<Operation>> batches) {
+    @Override public RetainedPublication submitGroup(List<RetainedBatch<Operation>> batches) {
         return directory.submitGeometryGroup(this, batches);
     }
-    @Override public GeometryPublication submitGroupWithLatest(
+    @Override public RetainedPublication submitGroupWithLatest(
             List<RetainedBatch<Operation>> batches, List<LatestInstance> latestInstances) {
         return directory.submitGeometryGroupWithLatest(this, batches, latestInstances);
     }
-    @Override public GeometryPublication submitWithLights(
+    @Override public RetainedPublication submitWithLights(
             List<RetainedBatch<Operation>> geometryBatches, LightChannel lights,
             RetainedBatch<LightChannel.Operation> lightBatch) {
         return directory.submitGeometryAndLights(this, lights, geometryBatches, lightBatch);

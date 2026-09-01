@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
@@ -102,7 +102,7 @@ final class ShowcasePasses {
         private boolean uploadSubmitted;
         private boolean uploadComplete;
         private boolean closed;
-        private GeometryPublication publication;
+        private RetainedPublication publication;
 
         private VulkanWorldMeshHandoff(GpuDevice gpu, ResourceFactory resources, ShowcaseScene scene) {
             this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");

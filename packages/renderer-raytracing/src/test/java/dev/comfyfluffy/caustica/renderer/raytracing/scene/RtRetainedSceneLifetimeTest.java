@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 
@@ -146,6 +149,34 @@ final class RtRetainedSceneLifetimeTest {
         assertEquals("submitted frame 1", secondFrame.get());
         secondFrame.close();
         assertEquals(1, releases.get());
+    }
+
+    @Test
+    void motionHistoryRetainsPositionGenerationsWithoutPinningTheSceneRootForNoneStreams() {
+        ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
+        var resources = directory.openFactory(new ContributionOwner(1));
+        AtomicInteger positionRetirements = new AtomicInteger();
+        var position = resources.create(positionRetirements::incrementAndGet);
+        position.seal();
+        ResourceLeaseSet frameResources = ResourceLeaseSet.capture(List.of(
+                position.reference(), ResourceRef.none()));
+        ResourceLeaseSet historyResources = frameResources.retainOnly(List.of(
+                position.reference(), ResourceRef.none()));
+        AtomicInteger rootRetirements = new AtomicInteger();
+        SharedResource<String> sceneRoot = SharedResource.owned(
+                "revision with explicit NONE positions", ignored -> rootRetirements.incrementAndGet());
+
+        position.drop();
+        sceneRoot.close();
+        frameResources.close();
+        directory.progress();
+
+        assertEquals(1, rootRetirements.get(), "motion history must not retain the scene root");
+        assertEquals(0, positionRetirements.get(), "motion history still owns the position generation");
+
+        historyResources.close();
+        directory.progress();
+        assertEquals(1, positionRetirements.get());
     }
 
     @Test

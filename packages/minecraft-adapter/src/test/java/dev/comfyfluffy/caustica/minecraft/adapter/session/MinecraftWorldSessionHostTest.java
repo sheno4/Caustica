@@ -150,7 +150,11 @@ final class MinecraftWorldSessionHostTest {
 
     private static MinecraftEnvironmentScope environmentScope(List<EnvironmentBinding<?>> selected) {
         return new MinecraftEnvironmentScope() {
-            @Override public void select(EnvironmentBinding<?> binding) { selected.add(binding); }
+            @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication select(
+                    EnvironmentBinding<?> binding) {
+                selected.add(binding);
+                return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
+            }
             @Override public void invalidate() { }
             @Override public void drain() { }
         };

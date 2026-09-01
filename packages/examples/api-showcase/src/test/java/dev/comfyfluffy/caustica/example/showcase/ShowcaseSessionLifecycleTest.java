@@ -96,7 +96,12 @@ final class ShowcaseSessionLifecycleTest {
                 return MinecraftDimensionKey.of("minecraft", "the_nether");
             }
             @Override public ResourcePackEpoch resourcePackEpoch() { return new ResourcePackEpoch(11L); }
-            @Override public MinecraftEnvironmentSelector environment() { return selected::set; }
+            @Override public MinecraftEnvironmentSelector environment() {
+                return binding -> {
+                    selected.set(binding);
+                    return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
+                };
+            }
         };
     }
 
@@ -133,17 +138,17 @@ final class ShowcaseSessionLifecycleTest {
             return new MeshId<>() { };
         }
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
                 RetainedBatch<Operation> batch) {
             batches.add(batch);
-            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
+            return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
                 List<RetainedBatch<Operation>> accepted) {
             batches.addAll(accepted);
-            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
+            return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
         }
-        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
+        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
                 List<RetainedBatch<Operation>> geometryBatches, LightChannel lights,
                 RetainedBatch<LightChannel.Operation> lightBatch) {
             throw new UnsupportedOperationException();

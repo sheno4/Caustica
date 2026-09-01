@@ -22,10 +22,10 @@ final class RetainedChannelContractTest {
     @Test
     void geometrySupportsAtomicIndependentRetirementGroupsWhileLightsStaySingleBatch()
             throws ReflectiveOperationException {
-        assertSame(dev.comfyfluffy.caustica.api.geometry.GeometryPublication.class,
+        assertSame(dev.comfyfluffy.caustica.api.retained.RetainedPublication.class,
                 GeometryChannel.class.getMethod("submit", RetainedBatch.class).getReturnType());
         var submitGroup = GeometryChannel.class.getMethod("submitGroup", List.class);
-        assertSame(dev.comfyfluffy.caustica.api.geometry.GeometryPublication.class,
+        assertSame(dev.comfyfluffy.caustica.api.retained.RetainedPublication.class,
                 submitGroup.getReturnType());
         assertTrue(Modifier.isAbstract(submitGroup.getModifiers()));
         assertSame(void.class, LightChannel.class.getMethod("submit", RetainedBatch.class).getReturnType());

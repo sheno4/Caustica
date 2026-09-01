@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api.geometry;
 
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -65,7 +66,7 @@ public interface GeometryChannel {
      *         contribution, names a stale selection reference, uses an identity from another render session,
      *         or supplies shader data with a mismatched schema token
      */
-    GeometryPublication submit(RetainedBatch<Operation> batch);
+    RetainedPublication submit(RetainedBatch<Operation> batch);
 
     /**
      * Applies several ordered batches as one atomic publication.
@@ -76,7 +77,7 @@ public interface GeometryChannel {
      *
      * <p>A group must contain at least one batch.
      */
-    GeometryPublication submitGroup(List<RetainedBatch<Operation>> batches);
+    RetainedPublication submitGroup(List<RetainedBatch<Operation>> batches);
 
     /**
      * Applies ordered geometry work and coalesced current-frame rigid placements together.
@@ -86,7 +87,7 @@ public interface GeometryChannel {
      * emitter map, and retained resources. Renderers may consume these placements for the current frame
      * before an ordered mesh publication becomes visible. At least one of the two lists must be non-empty.
      */
-    default GeometryPublication submitGroupWithLatest(List<RetainedBatch<Operation>> batches,
+    default RetainedPublication submitGroupWithLatest(List<RetainedBatch<Operation>> batches,
                                                       List<LatestInstance> latestInstances) {
         throw new UnsupportedOperationException("latest rigid placements are not supported by this channel");
     }
@@ -98,7 +99,7 @@ public interface GeometryChannel {
      * and light operations retain their referenced resource generations. The complete mutation is rejected if
      * either side is invalid; no intermediate geometry-only or light-only revision is observable.
      */
-    GeometryPublication submitWithLights(List<RetainedBatch<Operation>> geometryBatches,
+    RetainedPublication submitWithLights(List<RetainedBatch<Operation>> geometryBatches,
                                          LightChannel lights,
                                          RetainedBatch<LightChannel.Operation> lightBatch);
 

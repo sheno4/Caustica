@@ -543,6 +543,35 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void environmentReceiptTracksNativeVisibilityAndRunsEarlyAndLateCallbacks() {
+        ProgramFixture programs = new ProgramFixture();
+        EnvironmentId<EnvironmentBindingData> environment =
+                programs.environment(new ContributionOwner(1)).exports();
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        backend.completeAll();
+        directory.progress();
+        SceneEnvironmentContributionChannel environments =
+                directory.openEnvironment(new ContributionOwner(2), scene);
+        AtomicInteger callbacks = new AtomicInteger();
+
+        var publication = environments.select(
+                EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(7)));
+        publication.whenVisible(callbacks::incrementAndGet);
+
+        assertFalse(publication.isVisible());
+        assertEquals(0, callbacks.get());
+        backend.completeAll();
+        directory.progress();
+        assertTrue(publication.isVisible());
+        assertEquals(1, callbacks.get());
+
+        publication.whenVisible(callbacks::incrementAndGet);
+        assertEquals(2, callbacks.get());
+    }
+
+    @Test
     void visibilityCallbackFailureIsReportedWithoutBlockingOtherCallbacksOrProgress() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));

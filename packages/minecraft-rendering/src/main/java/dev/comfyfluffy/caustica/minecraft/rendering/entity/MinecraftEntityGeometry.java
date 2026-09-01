@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
@@ -65,7 +65,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             operations.add(new GeometryChannel.SetMesh<>(target.mesh, uploaded.build()));
             operations.add(new GeometryChannel.SetInstance<>(target.instance, scene, target.mesh, transform, mask,
                     uploaded.instanceData()));
-            GeometryPublication publication;
+            RetainedPublication publication;
             if (pendingGroup != null) {
                 pendingGroup.batches.add(RetainedBatch.of(operations));
                 pendingGroup.introduced.add(uploaded);
@@ -158,7 +158,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     }
 
     public interface UpdateGroup extends AutoCloseable {
-        GeometryPublication submit();
+        RetainedPublication submit();
         @Override void close();
     }
 
@@ -176,12 +176,12 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                             resident.transform, resident.mask, resident.uploaded)));
         }
 
-        @Override public GeometryPublication submit() {
+        @Override public RetainedPublication submit() {
             synchronized (MinecraftEntityGeometry.this) {
                 requireActive();
                 try {
-                    GeometryPublication publication = batches.isEmpty() && latestInstances.isEmpty()
-                            ? GeometryPublication.alreadyVisible()
+                    RetainedPublication publication = batches.isEmpty() && latestInstances.isEmpty()
+                            ? RetainedPublication.alreadyVisible()
                             : channel.submitGroupWithLatest(batches, List.copyOf(latestInstances.values()));
                     publication.whenVisible(() -> displaced.forEach(
                             MinecraftEntityUploader.UploadedEntity::close));

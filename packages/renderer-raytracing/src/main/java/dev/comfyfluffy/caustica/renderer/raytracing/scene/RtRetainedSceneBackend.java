@@ -1197,14 +1197,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     List<ResourceRef> positions = entry.getValue().instances.stream().map(instance ->
                             instance.nativeInstance.mesh.logical.build().positions().resource()).toList();
                     ResourceLeaseSet positionResources = resources.retainOnly(positions);
-                    SharedResource<SceneRevisionRoot> legacyRoot = null;
                     SharedResource<SceneMotionHistory> replacement = null;
                     try {
-                        if (positions.stream().anyMatch(resource -> resource == ResourceRef.none())) {
-                            // Legacy streams have no independent lease, so their publication retirement
-                            // callback must remain deferred until this history generation is unused.
-                            legacyRoot = root.retain();
-                        }
                         Map<Long, MotionInstanceHistory> historyInstances = new LinkedHashMap<>();
                         for (FrameInstanceSnapshot instance : entry.getValue().instances) {
                             NativeInstance nativeInstance = instance.nativeInstance;
@@ -1215,12 +1209,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                                     MotionTopology.capture(build), build.positions()));
                         }
                         SceneMotionHistory history = new SceneMotionHistory(Map.copyOf(historyInstances),
-                                positionResources, legacyRoot);
+                                positionResources);
                         replacement = SharedResource.owned(history, SceneMotionHistory::close);
                         positionResources = null;
-                        legacyRoot = null;
                     } finally {
-                        if (legacyRoot != null) legacyRoot.close();
                         if (positionResources != null) positionResources.close();
                     }
                     SharedResource<SceneMotionHistory> previous =
@@ -1341,25 +1333,15 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private static final class SceneMotionHistory implements AutoCloseable {
         final Map<Long, MotionInstanceHistory> instances;
         final ResourceLeaseSet positionResources;
-        final SharedResource<SceneRevisionRoot> legacyRoot;
 
         SceneMotionHistory(Map<Long, MotionInstanceHistory> instances,
-                           ResourceLeaseSet positionResources,
-                           SharedResource<SceneRevisionRoot> legacyRoot) {
+                           ResourceLeaseSet positionResources) {
             this.instances = instances;
             this.positionResources = positionResources;
-            this.legacyRoot = legacyRoot;
         }
 
         @Override public void close() {
-            Throwable failure = null;
-            try {
-                positionResources.close();
-            } catch (Throwable releaseFailure) {
-                failure = releaseFailure;
-            }
-            if (legacyRoot != null) closeAll(List.of(legacyRoot), failure);
-            throwFailure(failure, "motion history release failed");
+            positionResources.close();
         }
     }
 
