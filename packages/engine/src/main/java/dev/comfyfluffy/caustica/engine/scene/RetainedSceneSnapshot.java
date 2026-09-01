@@ -39,11 +39,9 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
         return true;
     }
 
-    public record Mesh(long identity, MeshBuild<?> build, MeshBuild.Stream previousPositions,
-                       List<GeometryPrograms> geometryPrograms) {
+    public record Mesh(long identity, MeshBuild<?> build, List<GeometryPrograms> geometryPrograms) {
         public Mesh {
             java.util.Objects.requireNonNull(build, "build");
-            java.util.Objects.requireNonNull(previousPositions, "previousPositions");
             geometryPrograms = List.copyOf(geometryPrograms);
             if (geometryPrograms.size() != build.geometries().size()) {
                 throw new IllegalArgumentException("each geometry needs one resolved program entry");

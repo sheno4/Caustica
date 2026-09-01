@@ -798,7 +798,7 @@ public final class RtFrameRenderer {
             double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
             Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                     sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
-            EnvironmentBinding<?> environment = scenes.content(entryScene).environment();
+            EnvironmentBinding<?> environment = scenes.content(entryScene, graphicsUse).environment();
             EnvironmentPush environmentState = environmentPush(environment,
                     environment == null ? 0 : services.programs().resolve(environment.implementation()));
             Float3 cameraOffset = new Float3(sceneOrigin.relativeX(snapshot.cameraX()),

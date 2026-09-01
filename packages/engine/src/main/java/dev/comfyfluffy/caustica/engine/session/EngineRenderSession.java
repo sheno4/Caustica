@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
+import dev.comfyfluffy.caustica.api.resource.ResourceChannel;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -171,5 +172,6 @@ public final class EngineRenderSession implements AutoCloseable {
         @Override public PassChannel passes() { return scope.passes(); }
         @Override public GeometryChannel geometry() { return scope.geometry(); }
         @Override public LightChannel lights() { return scope.lights(); }
+        @Override public ResourceChannel resources() { return scope.resources(); }
     }
 }

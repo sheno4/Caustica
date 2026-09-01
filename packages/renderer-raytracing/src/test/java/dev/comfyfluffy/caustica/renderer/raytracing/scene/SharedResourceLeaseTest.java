@@ -11,16 +11,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-final class SharedResourceOwnerTest {
+final class SharedResourceLeaseTest {
     @Test
-    void disposesOnceWhenTheLastReferenceCloses() {
+    void disposesOnceWhenTheLastLeaseCloses() {
         Object resource = new Object();
         AtomicInteger disposals = new AtomicInteger();
-        SharedResourceOwner<Object> owner = new SharedResourceOwner<>(resource, ignored -> disposals.incrementAndGet());
-        SharedResourceLease<Object> first = owner.retain();
+        SharedResourceLease<Object> root = SharedResourceLease.owned(
+                resource, ignored -> disposals.incrementAndGet());
+        SharedResourceLease<Object> first = root.retain();
         SharedResourceLease<Object> second = first.retain();
 
-        owner.close();
+        root.close();
         first.close();
 
         assertEquals(0, disposals.get());
@@ -32,50 +33,41 @@ final class SharedResourceOwnerTest {
     }
 
     @Test
-    void transferMovesAReferenceWithoutExtendingItsLifetime() {
+    void closeIsIdempotentAndClosedLeaseCannotBeUsed() {
         AtomicInteger disposals = new AtomicInteger();
-        SharedResourceOwner<Object> owner = new SharedResourceOwner<>(new Object(), ignored -> disposals.incrementAndGet());
+        SharedResourceLease<Object> lease = SharedResourceLease.owned(
+                new Object(), ignored -> disposals.incrementAndGet());
 
-        SharedResourceLease<Object> lease = owner.transfer();
-
-        assertThrows(IllegalStateException.class, owner::get);
-        assertThrows(IllegalStateException.class, owner::retain);
-        assertThrows(IllegalStateException.class, owner::close);
-        assertEquals(0, disposals.get());
-
-        SharedResourceLease<Object> moved = lease.transfer();
-
-        assertThrows(IllegalStateException.class, lease::get);
-        assertThrows(IllegalStateException.class, lease::retain);
-        assertThrows(IllegalStateException.class, lease::close);
-
-        moved.close();
+        lease.close();
+        lease.close();
 
         assertEquals(1, disposals.get());
+        assertThrows(IllegalStateException.class, lease::get);
+        assertThrows(IllegalStateException.class, lease::retain);
     }
 
     @Test
-    void doubleCloseIsRejected() {
-        SharedResourceOwner<Object> owner = new SharedResourceOwner<>(new Object(), ignored -> { });
-        SharedResourceLease<Object> lease = owner.retain();
+    void disposerReceivesTheOwnedValue() {
+        Object resource = new Object();
+        List<Object> disposed = new ArrayList<>();
+        SharedResourceLease<Object> lease = SharedResourceLease.owned(resource, disposed::add);
 
-        owner.close();
         lease.close();
 
-        assertThrows(IllegalStateException.class, owner::close);
-        assertThrows(IllegalStateException.class, lease::close);
+        assertEquals(List.of(resource), disposed);
     }
 
     @Test
     void concurrentLastReleasesDisposeExactlyOnce() throws InterruptedException {
         int leaseCount = 32;
         AtomicInteger disposals = new AtomicInteger();
-        SharedResourceOwner<Object> owner = new SharedResourceOwner<>(new Object(), ignored -> disposals.incrementAndGet());
+        SharedResourceLease<Object> root = SharedResourceLease.owned(
+                new Object(), ignored -> disposals.incrementAndGet());
         List<SharedResourceLease<Object>> leases = new ArrayList<>();
         for (int index = 0; index < leaseCount; index++) {
-            leases.add(owner.retain());
+            leases.add(root.retain());
         }
-        owner.close();
+        root.close();
 
         CountDownLatch ready = new CountDownLatch(leaseCount);
         CountDownLatch start = new CountDownLatch(1);

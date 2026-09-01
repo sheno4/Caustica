@@ -160,6 +160,7 @@ final class GltfWorldContributionTest {
                 @Override public PassChannel passes() { return null; }
                 @Override public GeometryChannel geometry() { return geometry; }
                 @Override public LightChannel lights() { return null; }
+                @Override public dev.comfyfluffy.caustica.api.resource.ResourceChannel resources() { return null; }
             };
         }
         @Override public SceneId scene() { return SCENE; }

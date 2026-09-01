@@ -163,6 +163,8 @@ final class MinecraftWorldSessionHostTest {
         private final PassChannel passes = service(PassChannel.class);
         private final GeometryChannel geometry = service(GeometryChannel.class);
         private final LightChannel lights = service(LightChannel.class);
+        private final dev.comfyfluffy.caustica.api.resource.ResourceChannel resources =
+                service(dev.comfyfluffy.caustica.api.resource.ResourceChannel.class);
 
         private TestScope(String id, List<String> events) { this.id = id; this.events = events; }
         @Override public GpuDevice gpu() { return service(GpuDevice.class); }
@@ -170,6 +172,7 @@ final class MinecraftWorldSessionHostTest {
         @Override public PassChannel passes() { return passes; }
         @Override public GeometryChannel geometry() { return geometry; }
         @Override public LightChannel lights() { return lights; }
+        @Override public dev.comfyfluffy.caustica.api.resource.ResourceChannel resources() { return resources; }
         @Override public void quiesce() { events.add(id + ":quiesce"); }
         @Override public void invalidate() { events.add(id + ":invalidate"); }
         @Override public void drain() { events.add(id + ":drain"); }

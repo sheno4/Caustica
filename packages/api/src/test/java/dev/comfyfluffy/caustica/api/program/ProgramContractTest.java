@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.api.program;
 
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -11,6 +12,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -113,5 +115,21 @@ final class ProgramContractTest {
         assertThrows(IllegalArgumentException.class, () -> second.require(data));
         org.junit.jupiter.api.Assertions.assertNotSame(first, second);
         org.junit.jupiter.api.Assertions.assertEquals(-1L, data.bits());
+    }
+
+    @Test
+    void shaderDataCarriesIndependentResourceGenerationIdentity() {
+        ShaderDataType<Object> type = ShaderDataType.create("pointer data");
+        ResourceRef firstResource = new ResourceRef() { };
+        ResourceRef secondResource = new ResourceRef() { };
+
+        ShaderData<Object> first = type.data(0x1234L, firstResource);
+        ShaderData<Object> second = type.data(0x1234L, secondResource);
+
+        assertSame(firstResource, first.resource());
+        assertSame(secondResource, second.resource());
+        assertNotEquals(first, second);
+        assertSame(ResourceRef.none(), type.data(7L).resource());
+        assertSame(ResourceRef.none(), new ShaderData<>(type, 7L).resource());
     }
 }

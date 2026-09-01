@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.api.geometry;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 
 import java.util.List;
@@ -11,8 +12,9 @@ import java.util.Objects;
 /**
  * Triangle acceleration-structure input retained by the renderer.
  *
- * <p>Streams refer to source-owned Vulkan buffers. Their bytes remain unchanged until the batch which
- * introduced this build retires. The buffers have
+ * <p>Streams refer to source-owned Vulkan buffers. A stream with an independent resource reference remains
+ * immutable until that generation retires. A stream using {@link ResourceRef#none()} remains unchanged
+ * until the batch which introduced the build retires. The buffers have
  * {@code VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR} and
  * {@code VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT} usage.
  *
@@ -23,10 +25,10 @@ import java.util.Objects;
  * than {@code vertexCount}; this is a source assertion because the renderer cannot inspect source-owned
  * buffers while validating the build description.
  *
- * <p>Sources provide only the current position stream. When the same mesh ID is replaced with compatible
- * topology, the engine retains the preceding generation's current positions as deformation history.
- * A first generation or an incompatible replacement uses its current positions as history and therefore
- * reports zero vertex deformation.
+ * <p>Sources provide only the current position stream. For motion, the renderer selects positions from the
+ * corresponding mesh in the previous submitted/rendered frame when topology is compatible. A first frame or
+ * an incompatible prior frame uses the current positions as history and therefore reports zero vertex
+ * deformation.
  *
  * @param <N> data schema accepted by every surface and volume slot for each mesh placement
  */
@@ -74,14 +76,22 @@ public record MeshBuild<N>(Stream positions,
      *
      * @param bytes device-address range beginning at the first element
      * @param byteStride byte distance between elements
+     * @param resource immutable generation containing every byte transitively reachable through the stream;
+     *                 address equality does not imply resource identity
      */
-    public record Stream(VulkanDeviceAddressRange bytes, int byteStride) {
+    public record Stream(VulkanDeviceAddressRange bytes, int byteStride, ResourceRef resource) {
         public Stream {
             Objects.requireNonNull(bytes, "bytes");
+            Objects.requireNonNull(resource, "resource");
             if (byteStride <= 0) throw new IllegalArgumentException("byteStride must be positive");
             if ((bytes.address().value() & 3L) != 0L) {
                 throw new IllegalArgumentException("the first stream element must be four-byte aligned");
             }
+        }
+
+        /** Creates a stream whose containing retained batch supplies the lifetime. */
+        public Stream(VulkanDeviceAddressRange bytes, int byteStride) {
+            this(bytes, byteStride, ResourceRef.none());
         }
 
         public long byteSize() { return bytes.byteSize(); }

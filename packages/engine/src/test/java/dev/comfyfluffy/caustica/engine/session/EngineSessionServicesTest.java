@@ -27,6 +27,7 @@ import org.lwjgl.vulkan.VkDevice;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -98,9 +99,18 @@ final class EngineSessionServicesTest {
         assertNotSame(first.geometry(), second.geometry());
         assertNotSame(first.lights(), second.lights());
         assertNotSame(first.passes(), second.passes());
+        assertNotSame(first.resources(), second.resources());
         assertThrows(IllegalStateException.class, services::close);
 
-        teardown(first);
+        AtomicInteger retired = new AtomicInteger();
+        var generation = first.resources().create(retired::incrementAndGet);
+        first.quiesce();
+        generation.seal();
+        first.invalidate();
+        assertEquals(0, retired.get());
+        first.drain();
+        assertEquals(1, retired.get());
+        first.close();
         teardown(second);
         services.progress();
         services.close();

@@ -26,6 +26,7 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTUR
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRRayTracingPositionFetch.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR;
@@ -112,11 +113,13 @@ public final class RtAccel {
         private final int triangleCount;
         private final String label;
         private final List<GeometryRange> geometryRanges;
+        private final BlasOperation operation;
 
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
                              VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr, int maxVertex,
-                             int vertexStride, List<GeometryRange> geometryRanges, String label) {
+                             int vertexStride, List<GeometryRange> geometryRanges, String label,
+                             BlasOperation operation) {
             this.accel = accel;
             this.scratch = scratch;
             this.externalBacking = externalBacking;
@@ -127,7 +130,11 @@ public final class RtAccel {
             this.triangleCount = geometryRanges.stream().mapToInt(GeometryRange::triangleCount).sum();
             this.label = label;
             this.geometryRanges = List.copyOf(geometryRanges);
+            this.operation = operation;
         }
+
+        /** BUILD or copy-on-write UPDATE command recorded for this destination generation. */
+        public BlasOperation operation() { return operation; }
 
         private void freeTransientBuildResources() {
             scratch.destroy();
@@ -149,10 +156,9 @@ public final class RtAccel {
     public static final int SBT_HIT_GROUP_COUNT = SBT_CLASSES * 2;
 
     /**
-     * Initial BUILD for a caller-owned persistent BLAS that will never be updated in place. The caller
-     * retains {@code accel} + {@code backing}, retires {@code scratch} after the build completes, and later
-     * destroys the pair with {@link #destroyCallerOwnedAccel}. This avoids ALLOW_UPDATE overhead for
-     * immutable cached geometry.
+     * Caller-owned persistent BLAS generation and its pending BUILD or UPDATE. The caller retains
+     * {@code accel} + {@code backing}, retires {@code scratch} after the operation completes, and later
+     * destroys the pair with {@link #destroyCallerOwnedAccel}.
      */
     public record PersistentBuild(PreparedBlas op, RtAccel accel, GpuBuffer backing, GpuBuffer scratch) {
     }
@@ -171,14 +177,77 @@ public final class RtAccel {
         public int triangleCount() { return indexCount / 3; }
     }
 
+    /** Geometry properties that Vulkan requires to remain identical between BUILD and UPDATE. */
+    public record BlasLayout(int vertexStride, int vertexCount, List<GeometryRange> geometryRanges) {
+        public BlasLayout {
+            if (vertexStride < 3 * Float.BYTES) {
+                throw new IllegalArgumentException("vertexStride must contain a float3 position");
+            }
+            if (vertexCount <= 0) throw new IllegalArgumentException("vertexCount must be positive");
+            geometryRanges = List.copyOf(geometryRanges);
+            if (geometryRanges.isEmpty()) throw new IllegalArgumentException("a BLAS needs at least one geometry");
+        }
+    }
+
+    public enum BlasOperationMode { BUILD, UPDATE }
+
+    /** Explicit Vulkan operation contract; UPDATE always reads a distinct source generation. */
+    public record BlasOperation(BlasOperationMode mode, long sourceHandle, boolean updateable,
+                                BlasLayout layout) {
+        public BlasOperation {
+            java.util.Objects.requireNonNull(mode, "mode");
+            java.util.Objects.requireNonNull(layout, "layout");
+            if (mode == BlasOperationMode.BUILD && sourceHandle != 0L) {
+                throw new IllegalArgumentException("BUILD must not name a source acceleration structure");
+            }
+            if (mode == BlasOperationMode.UPDATE && (sourceHandle == 0L || !updateable)) {
+                throw new IllegalArgumentException("UPDATE needs an updateable source acceleration structure");
+            }
+        }
+    }
+
+    static BlasOperation initialBuildOperation(BlasLayout layout, boolean updateable) {
+        return new BlasOperation(BlasOperationMode.BUILD, 0L, updateable, layout);
+    }
+
+    static BlasOperation cowUpdateOperation(BlasOperation source, long sourceHandle) {
+        if (!source.updateable()) {
+            throw new IllegalArgumentException("source BLAS was not built with ALLOW_UPDATE");
+        }
+        return new BlasOperation(BlasOperationMode.UPDATE, sourceHandle, true, source.layout());
+    }
+
     /** Prepare a non-updatable persistent BLAS whose Vulkan geometry order matches {@code ranges}. */
     public static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx,
                                                              VulkanDeviceAddress vertexAddr, int vertexStride,
                                                              int vertexCount, VulkanDeviceAddress indexAddr,
                                                              List<GeometryRange> ranges,
                                                              String label) {
+        return preparePersistentBlasBuild(ctx, vertexAddr, vertexStride, vertexCount, indexAddr,
+                ranges, false, label);
+    }
+
+    /** Prepare an updateable initial BUILD for a persistent copy-on-write BLAS lineage. */
+    public static PersistentBuild prepareUpdateablePersistentBlasBuild(VulkanDeviceContext ctx,
+                                                                       VulkanDeviceAddress vertexAddr,
+                                                                       int vertexStride, int vertexCount,
+                                                                       VulkanDeviceAddress indexAddr,
+                                                                       List<GeometryRange> ranges,
+                                                                       String label) {
+        return preparePersistentBlasBuild(ctx, vertexAddr, vertexStride, vertexCount, indexAddr,
+                ranges, true, label);
+    }
+
+    private static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx,
+                                                               VulkanDeviceAddress vertexAddr,
+                                                               int vertexStride, int vertexCount,
+                                                               VulkanDeviceAddress indexAddr,
+                                                               List<GeometryRange> ranges,
+                                                               boolean updateable, String label) {
         List<GeometryRange> ordered = List.copyOf(ranges);
         if (ordered.isEmpty()) throw new IllegalArgumentException("a BLAS needs at least one geometry");
+        BlasLayout layout = new BlasLayout(vertexStride, vertexCount, ordered);
+        BlasOperation operation = initialBuildOperation(layout, updateable);
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "multi-geometry BLAS");
         GpuBuffer backing = null;
@@ -186,14 +255,52 @@ public final class RtAccel {
         RtAccel accel = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryGeometryRangeBlasSizes(vk, stack,
-                    vertexAddr, vertexStride, indexAddr, vertexCount, ordered);
+                    vertexAddr, indexAddr, layout, updateable);
             backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false,
                     debugLabel);
             PreparedBlas op = new PreparedBlas(accel, scratch, backing, vertexAddr, indexAddr,
-                    vertexCount - 1, vertexStride, ordered, debugLabel);
+                    vertexCount - 1, vertexStride, ordered, debugLabel, operation);
+            return new PersistentBuild(op, accel, backing, scratch);
+        } catch (Throwable failure) {
+            if (accel != null) accel.destroy();
+            if (scratch != null) scratch.destroy();
+            if (backing != null) backing.destroy();
+            throw failure;
+        }
+    }
+
+    /**
+     * Prepare an UPDATE into a fresh persistent destination. The source acceleration structure and its
+     * input buffers must remain alive until the recorded UPDATE completes.
+     */
+    public static PersistentBuild preparePersistentBlasUpdate(VulkanDeviceContext ctx,
+                                                               PreparedBlas source,
+                                                               VulkanDeviceAddress vertexAddr,
+                                                               VulkanDeviceAddress indexAddr,
+                                                               String label) {
+        java.util.Objects.requireNonNull(source, "source");
+        BlasOperation operation = cowUpdateOperation(source.operation, source.accel.handle);
+        BlasLayout layout = operation.layout();
+        VkDevice vk = ctx.vk();
+        String debugLabel = labelOr(label, "multi-geometry BLAS update");
+        GpuBuffer backing = null;
+        GpuBuffer scratch = null;
+        RtAccel accel = null;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryGeometryRangeBlasSizes(vk, stack,
+                    vertexAddr, indexAddr, layout, true);
+            backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
+                    debugLabel + " backing");
+            scratch = createScratchBuffer(ctx, sizes.updateScratchSize(), debugLabel + " update scratch");
+            accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false,
+                    debugLabel);
+            PreparedBlas op = new PreparedBlas(accel, scratch, backing, vertexAddr, indexAddr,
+                    layout.vertexCount() - 1, layout.vertexStride(), layout.geometryRanges(), debugLabel,
+                    operation);
             return new PersistentBuild(op, accel, backing, scratch);
         } catch (Throwable failure) {
             if (accel != null) accel.destroy();
@@ -239,7 +346,7 @@ public final class RtAccel {
         return sizes;
     }
 
-    private static int buildFlags(boolean allowUpdate) {
+    static int buildFlags(boolean allowUpdate) {
         return buildFlags(allowUpdate, false);
     }
 
@@ -345,21 +452,19 @@ public final class RtAccel {
     }
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryGeometryRangeBlasSizes(
-            VkDevice vk, MemoryStack stack, VulkanDeviceAddress vertexAddr, int vertexStride,
-            VulkanDeviceAddress indexAddr,
-            int vertexCount,
-        List<GeometryRange> ranges) {
+            VkDevice vk, MemoryStack stack, VulkanDeviceAddress vertexAddr,
+            VulkanDeviceAddress indexAddr, BlasLayout layout, boolean updateable) {
         VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
-                vertexAddr, vertexStride, indexAddr, vertexCount, ranges);
+                vertexAddr, layout.vertexStride(), indexAddr, layout.vertexCount(), layout.geometryRanges());
         java.nio.IntBuffer maxPrimitives = null;
         try {
-            maxPrimitives = MemoryUtil.memAllocInt(ranges.size());
+            maxPrimitives = MemoryUtil.memAllocInt(layout.geometryRanges().size());
             VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
                     VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
             build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                    .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                    .flags(buildFlags(updateable)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                     .geometryCount(geometries.capacity()).pGeometries(geometries);
-            for (GeometryRange range : ranges) maxPrimitives.put(range.triangleCount());
+            for (GeometryRange range : layout.geometryRanges()) maxPrimitives.put(range.triangleCount());
             maxPrimitives.flip();
             VkAccelerationStructureBuildSizesInfoKHR sizes =
                     VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
@@ -380,9 +485,11 @@ public final class RtAccel {
         }
     }
 
-    /** Record labelled BLAS builds into the command buffer. */
+    /** Record labelled BLAS BUILD and UPDATE operations into the command buffer. */
     public static void recordBlasBuilds(VulkanDeviceContext ctx, VkCommandBuffer cmd, List<PreparedBlas> blas) {
-        String label = blas.size() == 1 ? blas.get(0).label + " build" : "BLAS builds " + blas.size();
+        String label = blas.size() == 1
+                ? blas.get(0).label + " " + blas.get(0).operation.mode().name().toLowerCase(java.util.Locale.ROOT)
+                : "BLAS operations " + blas.size();
         try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, label)) {
             recordBlasBuildsRaw(ctx, cmd, blas);
         }
@@ -405,8 +512,12 @@ public final class RtAccel {
             VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
                     VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
             build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                    .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                    .flags(buildFlags(b.operation.updateable()))
+                    .mode(b.operation.mode() == BlasOperationMode.BUILD
+                            ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR)
                     .geometryCount(geometries.capacity()).pGeometries(geometries)
+                    .srcAccelerationStructure(b.operation.sourceHandle())
                     .dstAccelerationStructure(b.accel.handle);
             build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch).value());
             PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());

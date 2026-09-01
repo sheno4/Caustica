@@ -5,13 +5,14 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
+import dev.comfyfluffy.caustica.api.resource.ResourceChannel;
 
 /**
  * Live services and the automatic ownership scope for one render session.
  *
- * <p>Every pass, retained mutation identity, and program registration created through these services
- * belongs to this contribution context. Explicit closes and drops remain available for replacement during
- * the session. Merely allocating an identity is enough for the scope to own it. At session end the host
+ * <p>Every pass, retained mutation identity, program registration, and resource generation created through
+ * these services belongs to this contribution context. Explicit closes and drops remain available for
+ * replacement during the session. Merely allocating an identity is enough for the scope to own it. At session end the host
  * performs this order on its session-control thread, without overlapping stop or close calls:
  *
  * <ol>
@@ -52,4 +53,6 @@ public interface RenderSessionContext {
     GeometryChannel geometry();
 
     LightChannel lights();
+
+    ResourceChannel resources();
 }

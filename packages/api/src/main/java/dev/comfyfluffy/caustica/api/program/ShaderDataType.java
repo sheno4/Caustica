@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.api.program;
 
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+
 import java.util.Objects;
 
 /**
@@ -28,6 +30,11 @@ public final class ShaderDataType<T> {
     /** Wraps bits using this schema. */
     public ShaderData<T> data(long bits) {
         return new ShaderData<>(this, bits);
+    }
+
+    /** Wraps bits and the immutable resource generation transitively reachable through them. */
+    public ShaderData<T> data(long bits, ResourceRef resource) {
+        return new ShaderData<>(this, bits, resource);
     }
 
     /**

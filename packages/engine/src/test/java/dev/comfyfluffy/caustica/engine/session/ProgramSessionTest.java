@@ -15,6 +15,7 @@ import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramContributionChannel;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
+import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -45,7 +46,7 @@ final class ProgramSessionTest {
     void registrationIsAtomicTypedAndPublishesBeforeReadyCallback() {
         ManualBackend backend = new ManualBackend();
         List<Throwable> failures = new ArrayList<>();
-        ProgramSession session = new ProgramSession(backend, failures::add);
+        ProgramSession session = new ProgramSession(resources(), backend, failures::add);
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         List<String> events = new ArrayList<>();
 
@@ -88,7 +89,7 @@ final class ProgramSessionTest {
     @Test
     void failedRegistrationPublishesNothingAndLaterRegistrationUsesLastGoodBase() {
         ManualBackend backend = new ManualBackend();
-        ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
+        ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         List<String> retired = new ArrayList<>();
         ProgramRegistration<SurfaceId<Binding, Instance>> first = channel.register(
@@ -131,7 +132,7 @@ final class ProgramSessionTest {
     @Test
     void removingAnotherOwnerDoesNotRetargetRetainedProgramSlots() {
         ManualBackend backend = new ManualBackend();
-        ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
+        ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel removableOwner = session.openChannel(new ContributionOwner(1));
         ProgramContributionChannel geometryOwner = session.openChannel(new ContributionOwner(2));
 
@@ -176,7 +177,7 @@ final class ProgramSessionTest {
     @Test
     void closeLinearizesOnEitherSideOfPublicationAndRetiresAfterDisplacedProgram() {
         ManualBackend backend = new ManualBackend();
-        ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
+        ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         List<String> retired = new ArrayList<>();
 
@@ -220,7 +221,7 @@ final class ProgramSessionTest {
     @Test
     void ownerDrainForcesPublishedUseRetirementAfterRemovalPublication() {
         ManualBackend backend = new ManualBackend();
-        ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
+        ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         AtomicInteger retired = new AtomicInteger();
         channel.register(builder -> builder.surface(surface("sample.Ready", retired::incrementAndGet)));
@@ -241,7 +242,7 @@ final class ProgramSessionTest {
     @Test
     void declarationsSerializeAcrossThreadsAndTypeConflictTakesNoRetirementOwnership() throws Exception {
         ManualBackend backend = new ManualBackend();
-        ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
+        ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel first = session.openChannel(new ContributionOwner(1));
         ProgramContributionChannel second = session.openChannel(new ContributionOwner(2));
         AtomicInteger inside = new AtomicInteger();
@@ -278,7 +279,7 @@ final class ProgramSessionTest {
     @Test
     void ownerInvalidationCancelsPendingSetsAndRejectsNewDeclarations() {
         ManualBackend backend = new ManualBackend();
-        ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
+        ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         AtomicInteger retired = new AtomicInteger();
         ProgramRegistration<?> registration = channel.register(
@@ -301,7 +302,7 @@ final class ProgramSessionTest {
     void callbackFailureDoesNotBlockLaterTicketOrRetirementCallbacks() {
         ManualBackend backend = new ManualBackend();
         List<Throwable> failures = new ArrayList<>();
-        ProgramSession session = new ProgramSession(backend, failures::add);
+        ProgramSession session = new ProgramSession(resources(), backend, failures::add);
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         List<String> callbacks = new ArrayList<>();
         ProgramRegistration<?> registration = channel.register(builder -> {
@@ -325,6 +326,130 @@ final class ProgramSessionTest {
         assertTrue(session.isDrained(channel));
     }
 
+    @Test
+    void implementationResourcesRejectUnsealedAndForeignReferencesAndRollBackEarlierAcquisitions() {
+        ResourceDirectory resources = resources();
+        ContributionOwner owner = new ContributionOwner(1);
+        ProgramSession session = new ProgramSession(
+                resources, new ManualBackend(), failure -> { throw new AssertionError(failure); });
+        ProgramContributionChannel channel = session.openChannel(owner);
+        var resourceChannel = resources.openChannel(owner);
+        AtomicInteger firstRetired = new AtomicInteger();
+        var first = resourceChannel.create(firstRetired::incrementAndGet);
+        first.seal();
+        var unsealed = resourceChannel.create();
+
+        assertThrows(IllegalStateException.class, () -> channel.register(builder -> {
+            builder.surface(new SurfaceDefinition<>(shader("first", "sample.ResourceFirst"), null,
+                    IMPLEMENTATION.data(1, first.reference()), BINDING, INSTANCE, () -> { }));
+            return builder.volume(new VolumeDefinition<>(shader("second", "sample.ResourceSecond"),
+                    IMPLEMENTATION.data(2, unsealed.reference()), BINDING, INSTANCE, () -> { }));
+        }));
+        first.drop();
+        resources.progress();
+        assertEquals(1, firstRetired.get(), "a rejected declaration must release earlier acquisitions");
+
+        var sameSessionForeignOwner = resources.openChannel(new ContributionOwner(2)).create();
+        sameSessionForeignOwner.seal();
+        assertThrows(IllegalArgumentException.class, () -> channel.register(builder -> builder.surface(
+                new SurfaceDefinition<>(shader("foreign_owner", "sample.ForeignOwner"), null,
+                        IMPLEMENTATION.data(3, sameSessionForeignOwner.reference()),
+                        BINDING, INSTANCE, () -> { }))));
+
+        ResourceDirectory foreignDirectory = resources();
+        var foreignSession = foreignDirectory.openChannel(owner).create();
+        foreignSession.seal();
+        assertThrows(IllegalArgumentException.class, () -> channel.register(builder -> builder.surface(
+                new SurfaceDefinition<>(shader("foreign_session", "sample.ForeignSession"), null,
+                        IMPLEMENTATION.data(4, foreignSession.reference()),
+                        BINDING, INSTANCE, () -> { }))));
+    }
+
+    @Test
+    void sharedImplementationGenerationRetiresAfterPublishedProgramUseAndDefinitionCallbacks() {
+        ResourceDirectory resources = resources();
+        ContributionOwner owner = new ContributionOwner(1);
+        ManualBackend backend = new ManualBackend();
+        ProgramSession session = new ProgramSession(
+                resources, backend, failure -> { throw new AssertionError(failure); });
+        ProgramContributionChannel channel = session.openChannel(owner);
+        List<String> events = new ArrayList<>();
+        var generation = resources.openChannel(owner).create(() -> events.add("resource"));
+        generation.seal();
+
+        ProgramRegistration<?> registration = channel.register(builder -> {
+            builder.surface(new SurfaceDefinition<>(shader("surface_root", "sample.ResourceSurface"), null,
+                    IMPLEMENTATION.data(1, generation.reference()), BINDING, INSTANCE,
+                    () -> events.add("surface")));
+            return builder.volume(new VolumeDefinition<>(shader("volume_root", "sample.ResourceVolume"),
+                    IMPLEMENTATION.data(2, generation.reference()), BINDING, INSTANCE,
+                    () -> events.add("volume")));
+        });
+        generation.drop();
+        resources.progress();
+        assertTrue(events.isEmpty());
+
+        session.progress();
+        backend.succeed();
+        session.progress();
+        registration.close();
+        session.progress();
+        backend.succeed();
+        session.progress();
+        resources.progress();
+        assertTrue(events.isEmpty(), "published use still owns the implementation generation");
+
+        backend.retireLatestPrevious();
+        session.progress();
+        assertEquals(List.of("surface", "volume"), events);
+        resources.progress();
+        assertEquals(List.of("surface", "volume", "resource"), events);
+    }
+
+    @Test
+    void failedAndCancelledCompilationsHoldImplementationGenerationsUntilCompletion() {
+        ResourceDirectory resources = resources();
+        ContributionOwner owner = new ContributionOwner(1);
+        ManualBackend backend = new ManualBackend();
+        ProgramSession session = new ProgramSession(
+                resources, backend, failure -> { throw new AssertionError(failure); });
+        ProgramContributionChannel channel = session.openChannel(owner);
+        List<String> retired = new ArrayList<>();
+
+        var failedRoot = resources.openChannel(owner).create(() -> retired.add("failed-resource"));
+        failedRoot.seal();
+        channel.register(builder -> builder.surface(new SurfaceDefinition<>(
+                shader("failed_root", "sample.FailedResource"), null,
+                IMPLEMENTATION.data(1, failedRoot.reference()), BINDING, INSTANCE,
+                () -> retired.add("failed-definition"))));
+        failedRoot.drop();
+        session.progress();
+        backend.fail("failed");
+        resources.progress();
+        assertTrue(retired.isEmpty());
+        session.progress();
+        resources.progress();
+        assertEquals(List.of("failed-definition", "failed-resource"), retired);
+
+        var cancelledRoot = resources.openChannel(owner).create(() -> retired.add("cancelled-resource"));
+        cancelledRoot.seal();
+        ProgramRegistration<?> cancelled = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
+                shader("cancelled_root", "sample.CancelledResource"), null,
+                IMPLEMENTATION.data(2, cancelledRoot.reference()), BINDING, INSTANCE,
+                () -> retired.add("cancelled-definition"))));
+        cancelledRoot.drop();
+        session.progress();
+        cancelled.close();
+        resources.progress();
+        assertEquals(List.of("failed-definition", "failed-resource"), retired,
+                "cancellation must retain resources while its compile is in flight");
+        backend.succeed();
+        session.progress();
+        resources.progress();
+        assertEquals(List.of("failed-definition", "failed-resource",
+                "cancelled-definition", "cancelled-resource"), retired);
+    }
+
     private static SurfaceDefinition<Binding, Instance> surface(
             String type, Runnable retired) {
         return new SurfaceDefinition<>(shader(type.substring(type.lastIndexOf('.') + 1).toLowerCase(), type),
@@ -337,6 +462,10 @@ final class ProgramSessionTest {
 
     private static ShaderDefinition shader(String module, String type) {
         return new ShaderDefinition(ShaderSource.classpath(ProgramSessionTest.class, "/shaders"), module, type);
+    }
+
+    private static ResourceDirectory resources() {
+        return new ResourceDirectory(failure -> { throw new AssertionError(failure); });
     }
 
     private static void await(CountDownLatch latch) {

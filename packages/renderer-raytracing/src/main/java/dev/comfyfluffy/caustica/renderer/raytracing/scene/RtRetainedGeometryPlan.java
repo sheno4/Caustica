@@ -58,27 +58,52 @@ public final class RtRetainedGeometryPlan {
                 && blasRanges(previous).equals(blasRanges(next));
     }
 
+    /** A BLAS can be updated when only its vertex generation changes and its UPDATE layout stays identical. */
+    public static boolean canRefitBlas(MeshBuild<?> previous, MeshBuild<?> next) {
+        return !previous.positions().equals(next.positions())
+                && previous.positions().byteStride() == next.positions().byteStride()
+                && RetainedSceneSnapshot.vertexTopologyCompatible(previous, next)
+                && blasRanges(previous).equals(blasRanges(next));
+    }
+
     public static List<GeometryRecord> records(RetainedSceneSnapshot.Mesh mesh,
                                                RetainedSceneSnapshot.Instance placement,
                                                GeometryTransform previousTransform) {
-        return records(mesh, placement, previousTransform, mesh.previousPositions());
+        return records(mesh, placement, previousTransform, mesh.build().positions());
     }
 
     public static List<GeometryRecord> records(RetainedSceneSnapshot.Mesh mesh,
                                                RetainedSceneSnapshot.Instance placement,
                                                GeometryTransform previousTransform,
                                                MeshBuild.Stream previousPositions) {
-        List<GeometryRecord> records = new ArrayList<>(mesh.build().geometries().size());
+        List<ResolvedGeometry> geometries = new ArrayList<>(mesh.build().geometries().size());
         for (int i = 0; i < mesh.build().geometries().size(); i++) {
             MeshBuild.Geometry<?> geometry = mesh.build().geometries().get(i);
             RetainedSceneSnapshot.GeometryPrograms programs = mesh.geometryPrograms().get(i);
-            int surface = programs.surfaceImplementation();
+            geometries.add(new ResolvedGeometry(geometry, programs.surfaceImplementation(),
+                    programs.volumeImplementation(), geometry.surface() == null ? 0L
+                    : geometry.surface().bindingData().bits(), geometry.volume() == null ? 0L
+                    : geometry.volume().bindingData().bits()));
+        }
+        return records(new ResolvedMesh(mesh.build(), geometries),
+                new ResolvedPlacement(placement.transform(), placement.instanceData().bits()),
+                previousTransform, previousPositions);
+    }
+
+    /** Builds shader records only from resource availability already latched for this frame. */
+    public static List<GeometryRecord> records(ResolvedMesh mesh, ResolvedPlacement placement,
+                                               GeometryTransform previousTransform,
+                                               MeshBuild.Stream previousPositions) {
+        List<GeometryRecord> records = new ArrayList<>(mesh.geometries().size());
+        for (ResolvedGeometry resolved : mesh.geometries()) {
+            MeshBuild.Geometry<?> geometry = resolved.geometry();
+            int surface = resolved.surfaceImplementation();
             MeshBuild.CoveragePolicy coveragePolicy = geometry.surface() == null
                     ? null : geometry.surface().coverage();
             boolean cutout = coveragePolicy instanceof MeshBuild.CoveragePolicy.Cutout;
             boolean stochastic = coveragePolicy instanceof MeshBuild.CoveragePolicy.Stochastic;
             int coverage = cutout || stochastic ? surface : 0;
-            int volume = programs.volumeImplementation();
+            int volume = resolved.volumeImplementation();
             int flags = (geometry.surface() == null ? 0 : HAS_SURFACE)
                     | (geometry.volume() == null ? 0 : HAS_VOLUME)
                     | (cutout ? CUTOUT : 0)
@@ -89,14 +114,40 @@ public final class RtRetainedGeometryPlan {
                     ? ((MeshBuild.CoveragePolicy.Stochastic) coveragePolicy).guideAlphaCutoff()
                     : 0.0f;
             records.add(new GeometryRecord(surface, coverage, volume, flags,
-                    geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
-                    geometry.volume() == null ? 0L : geometry.volume().bindingData().bits(),
-                    placement.instanceData().bits(), alphaCutoff, placement.transform(), previousTransform,
+                    resolved.surfaceBinding(), resolved.volumeBinding(), placement.instanceData(),
+                    alphaCutoff, placement.transform(), previousTransform,
                     previousPositions.bytes().address(), previousPositions.byteStride(),
                     mesh.build().indices().bytes().address(), geometry.firstIndex(),
                     null, 0));
         }
         return List.copyOf(records);
+    }
+
+    public record ResolvedMesh(MeshBuild<?> build, List<ResolvedGeometry> geometries) {
+        public ResolvedMesh {
+            java.util.Objects.requireNonNull(build, "build");
+            geometries = List.copyOf(geometries);
+            if (geometries.size() != build.geometries().size()) {
+                throw new IllegalArgumentException("each geometry needs one resolved frame entry");
+            }
+        }
+    }
+
+    public record ResolvedGeometry(MeshBuild.Geometry<?> geometry,
+                                   int surfaceImplementation, int volumeImplementation,
+                                   long surfaceBinding, long volumeBinding) {
+        public ResolvedGeometry {
+            java.util.Objects.requireNonNull(geometry, "geometry");
+            if (surfaceImplementation < 0 || volumeImplementation < 0) {
+                throw new IllegalArgumentException("implementation indices must be non-negative");
+            }
+        }
+    }
+
+    public record ResolvedPlacement(GeometryTransform transform, long instanceData) {
+        public ResolvedPlacement {
+            java.util.Objects.requireNonNull(transform, "transform");
+        }
     }
 
     public static ByteBuffer pack(List<GeometryRecord> records, SceneOrigin origin) {

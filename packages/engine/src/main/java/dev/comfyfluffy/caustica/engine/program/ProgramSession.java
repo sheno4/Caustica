@@ -12,10 +12,14 @@ import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.engine.resource.ResourceLease;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +37,7 @@ import java.util.function.Function;
  * callbacks, and starts the next isolated compilation.
  */
 public final class ProgramSession {
+    private final ResourceDirectory resources;
     private final ProgramBackend backend;
     private final ProgramEngineFailureHandler failures;
     private final List<Registration<?>> accepted = new ArrayList<>();
@@ -44,7 +49,9 @@ public final class ProgramSession {
     private final int[] nextDeclarationSequences = new int[ProgramKey.Kind.values().length];
     private boolean declarationActive;
 
-    public ProgramSession(ProgramBackend backend, ProgramEngineFailureHandler failures) {
+    public ProgramSession(ResourceDirectory resources, ProgramBackend backend,
+                          ProgramEngineFailureHandler failures) {
+        this.resources = Objects.requireNonNull(resources, "resources");
         this.backend = Objects.requireNonNull(backend, "backend");
         this.failures = Objects.requireNonNull(failures, "failures");
     }
@@ -174,10 +181,18 @@ public final class ProgramSession {
         }
         requireNoTypeConflicts(builder.declarations);
 
-        Registration<E> registration = new Registration<>(this, channel, exports, builder.declarations);
-        builder.declarations.forEach(declarationValue -> declarationValue.reference().registration = registration);
-        accepted.add(registration);
-        return registration;
+        List<ResourceLease> resourceLeases = acquireImplementationResources(channel, builder.declarations);
+        try {
+            Registration<E> registration = new Registration<>(
+                    this, channel, exports, builder.declarations, resourceLeases);
+            builder.declarations.forEach(
+                    declarationValue -> declarationValue.reference().registration = registration);
+            accepted.add(registration);
+            return registration;
+        } catch (Throwable failure) {
+            resourceLeases.forEach(ResourceLease::close);
+            throw failure;
+        }
     }
 
     synchronized void quiesce(ProgramContributionChannel channel) {
@@ -250,6 +265,8 @@ public final class ProgramSession {
                         registration.fail(failed.failure());
                         accepted.remove(registration);
                         retire(registration);
+                    } else if (registration.closed) {
+                        retire(registration);
                     }
                 } else {
                     failures.report(new IllegalStateException(
@@ -263,6 +280,9 @@ public final class ProgramSession {
                     ((ProgramBackend.Compilation.Succeeded) event.result).program();
             if (!valid(event.request)) {
                 candidate.close();
+                if (event.request.introduced != null && event.request.introduced.closed) {
+                    retire(event.request.introduced);
+                }
                 return;
             }
 
@@ -328,9 +348,27 @@ public final class ProgramSession {
             registration.retired = true;
             accepted.remove(registration);
         }
+        registration.resourceLeases.forEach(ResourceLease::close);
         for (Declaration declaration : registration.declarations) {
             Runnable callback = declaration.retired();
             if (callback != null) enqueue(registration.channel, callback);
+        }
+    }
+
+    private List<ResourceLease> acquireImplementationResources(
+            ProgramContributionChannel channel, List<Declaration> declarations) {
+        Map<ResourceRef, Boolean> acquired = new IdentityHashMap<>();
+        List<ResourceLease> leases = new ArrayList<>();
+        try {
+            for (Declaration declaration : declarations) {
+                ResourceRef reference = declaration.implementationDataResource();
+                if (reference == ResourceRef.none() || acquired.put(reference, Boolean.TRUE) != null) continue;
+                leases.add(resources.acquire(channel.owner, reference));
+            }
+            return List.copyOf(leases);
+        } catch (Throwable failure) {
+            leases.forEach(ResourceLease::close);
+            throw failure;
         }
     }
 
@@ -414,6 +452,7 @@ public final class ProgramSession {
         ProgramComposition.Declaration external();
         List<ShaderDefinition> shaders();
         Runnable retired();
+        ResourceRef implementationDataResource();
     }
 
     private record SurfaceDeclaration(SurfaceReference reference, SurfaceDefinition<?, ?> definition)
@@ -426,6 +465,9 @@ public final class ProgramSession {
                     : List.of(definition.surface(), definition.coverage());
         }
         @Override public Runnable retired() { return definition.retired(); }
+        @Override public ResourceRef implementationDataResource() {
+            return definition.implementationData().resource();
+        }
     }
 
     private record VolumeDeclaration(VolumeReference reference, VolumeDefinition<?, ?> definition)
@@ -435,6 +477,9 @@ public final class ProgramSession {
         }
         @Override public List<ShaderDefinition> shaders() { return List.of(definition.implementation()); }
         @Override public Runnable retired() { return definition.retired(); }
+        @Override public ResourceRef implementationDataResource() {
+            return definition.implementationData().resource();
+        }
     }
 
     private record EnvironmentDeclaration(EnvironmentReference reference, EnvironmentDefinition<?> definition)
@@ -444,6 +489,7 @@ public final class ProgramSession {
         }
         @Override public List<ShaderDefinition> shaders() { return List.of(definition.implementation()); }
         @Override public Runnable retired() { return null; }
+        @Override public ResourceRef implementationDataResource() { return ResourceRef.none(); }
     }
 
     private final class Builder implements ProgramBuilder {
@@ -494,6 +540,7 @@ public final class ProgramSession {
         private final ProgramContributionChannel channel;
         private final E exports;
         private final List<Declaration> declarations;
+        private final List<ResourceLease> resourceLeases;
         private final List<Consumer<? super Completion>> observers = new ArrayList<>();
         private RegistrationStatus status = RegistrationStatus.PENDING;
         private Completion completion;
@@ -502,11 +549,13 @@ public final class ProgramSession {
         private boolean published;
 
         private Registration(ProgramSession session, ProgramContributionChannel channel,
-                             E exports, List<Declaration> declarations) {
+                             E exports, List<Declaration> declarations,
+                             List<ResourceLease> resourceLeases) {
             this.session = session;
             this.channel = channel;
             this.exports = exports;
             this.declarations = List.copyOf(declarations);
+            this.resourceLeases = resourceLeases;
         }
 
         @Override public E exports() { return exports; }
@@ -527,7 +576,9 @@ public final class ProgramSession {
                 closed = true;
                 if (status == RegistrationStatus.PENDING) {
                     complete(RegistrationStatus.CANCELLED, new Cancelled());
-                    session.retire(this);
+                    if (session.inFlight == null || !session.inFlight.target.contains(this)) {
+                        session.retire(this);
+                    }
                 }
             }
         }

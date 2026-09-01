@@ -136,6 +136,8 @@ final class EngineRenderSessionTest {
         private final PassChannel passes = stub(PassChannel.class);
         private final GeometryChannel geometry = stub(GeometryChannel.class);
         private final LightChannel lights = stub(LightChannel.class);
+        private final dev.comfyfluffy.caustica.api.resource.ResourceChannel resources =
+                stub(dev.comfyfluffy.caustica.api.resource.ResourceChannel.class);
 
         private TestScope(String name, List<String> events) {
             this.name = name;
@@ -147,6 +149,7 @@ final class EngineRenderSessionTest {
         @Override public PassChannel passes() { return passes; }
         @Override public GeometryChannel geometry() { return geometry; }
         @Override public LightChannel lights() { return lights; }
+        @Override public dev.comfyfluffy.caustica.api.resource.ResourceChannel resources() { return resources; }
         @Override public void quiesce() { events.add(name + ":quiesce"); }
         @Override public void invalidate() { events.add(name + ":invalidate"); }
         @Override public void drain() { events.add(name + ":drain"); }

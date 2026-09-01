@@ -3,15 +3,16 @@ package dev.comfyfluffy.caustica.engine.scene;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 /** Owner-scoped light mutation capability for one retained scene directory. */
 public final class LightContributionChannel implements LightChannel {
     final SceneDirectory directory;
-    final Object owner;
+    final ContributionOwner owner;
     boolean acceptingIdentities = true;
     boolean acceptingSubmissions = true;
 
-    LightContributionChannel(SceneDirectory directory, Object owner) {
+    LightContributionChannel(SceneDirectory directory, ContributionOwner owner) {
         this.directory = directory;
         this.owner = owner;
     }

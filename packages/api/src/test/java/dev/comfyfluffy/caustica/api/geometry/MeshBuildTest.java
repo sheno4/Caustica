@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -12,6 +13,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MeshBuildTest {
@@ -25,6 +28,21 @@ final class MeshBuildTest {
         var stream = new MeshBuild.Stream(range(0x1000L, 96L).slice(32L, 64L), 16);
         assertEquals(new VulkanDeviceAddress(0x1020L), stream.bytes().address());
         assertEquals(64L, stream.byteSize());
+        assertSame(ResourceRef.none(), stream.resource());
+    }
+
+    @Test
+    void streamCarriesResourceIdentityIndependentlyOfItsAddress() {
+        ResourceRef firstResource = new ResourceRef() { };
+        ResourceRef secondResource = new ResourceRef() { };
+        VulkanDeviceAddressRange bytes = range(0x1000L, 64L);
+
+        MeshBuild.Stream first = new MeshBuild.Stream(bytes, 16, firstResource);
+        MeshBuild.Stream second = new MeshBuild.Stream(bytes, 16, secondResource);
+
+        assertSame(firstResource, first.resource());
+        assertSame(secondResource, second.resource());
+        assertNotEquals(first, second);
     }
 
     @Test

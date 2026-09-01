@@ -5,11 +5,12 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
+import dev.comfyfluffy.caustica.api.resource.ResourceChannel;
 
 /**
  * Owner-scoped services and lifecycle controls supplied by the renderer implementation.
  *
- * <p>The session core exposes only the five service accessors to extension code. The remaining methods are
+ * <p>The session core exposes only the six service accessors to extension code. The remaining methods are
  * host controls invoked in the API's teardown order. Implementations enforce owner-local identities and
  * release their bookkeeping from {@link #close()} after the contribution's final callback.
  */
@@ -23,6 +24,8 @@ public interface ContributionScope extends AutoCloseable {
     GeometryChannel geometry();
 
     LightChannel lights();
+
+    ResourceChannel resources();
 
     /** Reject new scoped registrations, stop future pass callbacks, and wait for callbacks already running. */
     void quiesce();

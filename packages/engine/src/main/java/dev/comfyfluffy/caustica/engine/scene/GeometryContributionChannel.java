@@ -7,17 +7,18 @@ import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.List;
 
 /** Owner-scoped geometry mutation capability for one retained scene directory. */
 public final class GeometryContributionChannel implements GeometryChannel {
     final SceneDirectory directory;
-    final Object owner;
+    final ContributionOwner owner;
     boolean acceptingIdentities = true;
     boolean acceptingSubmissions = true;
 
-    GeometryContributionChannel(SceneDirectory directory, Object owner) {
+    GeometryContributionChannel(SceneDirectory directory, ContributionOwner owner) {
         this.directory = directory;
         this.owner = owner;
     }

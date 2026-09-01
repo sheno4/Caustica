@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.api.retained;
 
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -19,19 +22,20 @@ import java.util.Objects;
  *
  * Acceptance is decided before {@code submit} returns and rejection is reported by throwing. After an
  * accepted drop returns, the caller may discard its id. Rejection does not transfer the callback or source
- * resources. Every accepted callback is scheduled exactly once and never runs inline.
+ * resources covered by this batch. Every accepted callback is scheduled exactly once and never runs inline.
  *
- * <p>{@link #retired()} is the one asynchronous signal: it runs once every value this batch introduced has
- * later been replaced, dropped, discarded because a GPU build failed, or removed by a scene cascade, and no
+ * <p>{@link #retired()} is the batch's asynchronous signal: it runs once every value this batch introduced
+ * has later been replaced, dropped, discarded because a GPU build failed, or removed by a scene cascade, and no
  * submitted GPU work still reads it. Those are different instants, usually frames apart. A batch that
  * only drops values may use a no-op callback; the earlier batches that introduced those values report their
  * retirement.
  *
  * <h2>Batch-scoped retirement</h2>
  *
- * The callback runs after the last value introduced by the batch retires. If two resources should be
- * reclaimed independently, submit them in separate batches; if an allocation is shared across batches,
- * the source refcounts those borrows in their callbacks.
+ * The callback is an exactly-once fan-in for the retained logical values introduced by the batch. It also
+ * covers storage reached through values carrying {@link ResourceRef#none()}. A non-NONE
+ * {@link ResourceGeneration} has its own retirement callback and may be shared across any number of
+ * operations and batches; its retirement is independent of every batch callback.
  *
  * <h2>Ordering</h2>
  *

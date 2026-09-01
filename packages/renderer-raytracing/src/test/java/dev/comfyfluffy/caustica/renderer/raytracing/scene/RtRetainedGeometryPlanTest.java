@@ -49,10 +49,9 @@ final class RtRetainedGeometryPlanTest {
                         new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22),
                         new MeshBuild.CoveragePolicy.Stochastic(0.35f)));
-        MeshBuild.Stream acceptedPredecessor = stream(0x9000, 256, 20);
         MeshBuild.Stream renderedPredecessor = stream(0xa000, 256, 24);
         var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
-                1, build, acceptedPredecessor, List.of(
+                1, build, List.of(
                 new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
                 new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)));
         var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
@@ -75,6 +74,28 @@ final class RtRetainedGeometryPlanTest {
     }
 
     @Test
+    void ordinaryRecordsUseCurrentPositions() {
+        MeshBuild<Instance> build = build(new MeshBuild.IndexRevision(7), 0x1000,
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(11),
+                        new MeshBuild.CoveragePolicy.Opaque()),
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22),
+                        new MeshBuild.CoveragePolicy.Opaque()));
+        var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
+                1, build, List.of(
+                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
+                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)));
+        var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
+                1, new dev.comfyfluffy.caustica.api.scene.SceneId() { }, 1,
+                GeometryTransform.translation(0, 0, 0), 0xff, BINDING.data(0), List.of());
+
+        var record = RtRetainedGeometryPlan.records(mesh, instance,
+                GeometryTransform.translation(0, 0, 0)).getFirst();
+
+        assertEquals(build.positions().bytes().address(), record.previousPositionAddress());
+        assertEquals(build.positions().byteStride(), record.previousPositionStride());
+    }
+
+    @Test
     void reuseRequiresStableInputsRevisionAndGeometryShapeButNotBindingWords() {
         MeshBuild<Instance> first = build(new MeshBuild.IndexRevision(9), 0x1000,
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1), new MeshBuild.CoveragePolicy.Opaque()),
@@ -93,6 +114,32 @@ final class RtRetainedGeometryPlanTest {
         assertFalse(RtRetainedGeometryPlan.canReuseBlas(first, movedPositions));
         assertFalse(RtRetainedGeometryPlan.canReuseBlas(first,
                 build(null, 0x1000,
+                        new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(10),
+                                new MeshBuild.CoveragePolicy.Opaque()),
+                        new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(20),
+                                new MeshBuild.CoveragePolicy.Cutout(0.75f)))));
+    }
+
+    @Test
+    void refitRequiresChangedPositionsAndAnIdenticalUpdateLayout() {
+        MeshBuild<Instance> first = build(new MeshBuild.IndexRevision(9), 0x1000,
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1), new MeshBuild.CoveragePolicy.Opaque()),
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(2),
+                        new MeshBuild.CoveragePolicy.Cutout(0.25f)));
+        MeshBuild<Instance> moved = build(new MeshBuild.IndexRevision(9), 0x3000,
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(10), new MeshBuild.CoveragePolicy.Opaque()),
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(20),
+                        new MeshBuild.CoveragePolicy.Cutout(0.75f)));
+        MeshBuild<Instance> changedTraversal = build(new MeshBuild.IndexRevision(9), 0x3000,
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(10), new MeshBuild.CoveragePolicy.Opaque()),
+                new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(20),
+                        new MeshBuild.CoveragePolicy.Opaque()));
+
+        assertTrue(RtRetainedGeometryPlan.canRefitBlas(first, moved));
+        assertFalse(RtRetainedGeometryPlan.canRefitBlas(first, first));
+        assertFalse(RtRetainedGeometryPlan.canRefitBlas(first, changedTraversal));
+        assertFalse(RtRetainedGeometryPlan.canRefitBlas(first,
+                build(new MeshBuild.IndexRevision(10), 0x3000,
                         new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(10),
                                 new MeshBuild.CoveragePolicy.Opaque()),
                         new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(20),
