@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.resource;
 
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import org.junit.jupiter.api.Test;
 
@@ -19,8 +20,9 @@ final class ResourceDirectoryTest {
     void droppedUnusedGenerationRetiresOnlyThroughProgress() {
         AtomicInteger retired = new AtomicInteger();
         ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        ResourceContributionChannel channel = directory.openChannel(new ContributionOwner(1));
-        var generation = channel.create(retired::incrementAndGet);
+        ContributionOwner owner = new ContributionOwner(1);
+        ResourceFactory factory = directory.openFactory(owner);
+        var generation = factory.create(retired::incrementAndGet);
 
         generation.drop();
         generation.drop();
@@ -29,7 +31,7 @@ final class ResourceDirectoryTest {
         directory.progress();
         assertEquals(1, retired.get());
         assertDoesNotThrow(generation::drop);
-        channel.drain();
+        directory.drain(owner);
         directory.close();
     }
 
@@ -38,8 +40,8 @@ final class ResourceDirectoryTest {
         AtomicInteger retired = new AtomicInteger();
         ContributionOwner owner = new ContributionOwner(1);
         ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        ResourceContributionChannel channel = directory.openChannel(owner);
-        var generation = channel.create(retired::incrementAndGet);
+        ResourceFactory factory = directory.openFactory(owner);
+        var generation = factory.create(retired::incrementAndGet);
 
         assertThrows(IllegalStateException.class,
                 () -> directory.acquire(owner, generation.reference()));
@@ -70,8 +72,8 @@ final class ResourceDirectoryTest {
         ContributionOwner secondOwner = new ContributionOwner(2);
         ResourceDirectory firstDirectory = new ResourceDirectory(failure -> { });
         ResourceDirectory secondDirectory = new ResourceDirectory(failure -> { });
-        var first = firstDirectory.openChannel(firstOwner).create();
-        var second = firstDirectory.openChannel(firstOwner).create();
+        var first = firstDirectory.openFactory(firstOwner).create();
+        var second = firstDirectory.openFactory(firstOwner).create();
         first.seal();
         second.seal();
 
@@ -106,7 +108,7 @@ final class ResourceDirectoryTest {
     void trustedStaticAcquisitionRoutesThroughTheIssuingDirectory() {
         ContributionOwner owner = new ContributionOwner(1);
         ResourceDirectory directory = new ResourceDirectory(failure -> { });
-        var generation = directory.openChannel(owner).create();
+        var generation = directory.openFactory(owner).create();
         assertThrows(IllegalStateException.class,
                 () -> ResourceLease.tryAcquire(generation.reference()));
         assertThrows(IllegalArgumentException.class,
@@ -124,19 +126,22 @@ final class ResourceDirectoryTest {
     void invalidationDropsAllOwnerGenerationsAndDrainRunsCallbacksInOrder() {
         List<Integer> retired = new ArrayList<>();
         ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        ResourceContributionChannel channel = directory.openChannel(new ContributionOwner(1));
-        var created = channel.create(() -> retired.add(1));
-        var sealed = channel.create(() -> retired.add(2));
+        ContributionOwner owner = new ContributionOwner(1);
+        ResourceFactory factory = directory.openFactory(owner);
+        ResourceFactory secondFactory = directory.openFactory(owner);
+        var created = factory.create(() -> retired.add(1));
+        var sealed = secondFactory.create(() -> retired.add(2));
         sealed.seal();
 
-        channel.quiesce();
-        assertThrows(IllegalStateException.class, () -> channel.create(() -> { }));
+        directory.quiesce(owner);
+        assertThrows(IllegalStateException.class, () -> factory.create(() -> { }));
+        assertThrows(IllegalStateException.class, () -> secondFactory.create(() -> { }));
         created.seal();
-        channel.invalidate();
+        directory.invalidate(owner);
         assertThrows(IllegalStateException.class, created::seal);
         assertEquals(List.of(), retired);
 
-        channel.drain();
+        directory.drain(owner);
         assertEquals(List.of(1, 2), retired);
         directory.close();
     }
@@ -147,9 +152,10 @@ final class ResourceDirectoryTest {
         List<Throwable> failures = new ArrayList<>();
         AtomicInteger retired = new AtomicInteger();
         ResourceDirectory directory = new ResourceDirectory(failures::add);
-        ResourceContributionChannel channel = directory.openChannel(new ContributionOwner(1));
-        var failing = channel.create(() -> { throw expected; });
-        var succeeding = channel.create(retired::incrementAndGet);
+        ContributionOwner owner = new ContributionOwner(1);
+        ResourceFactory factory = directory.openFactory(owner);
+        var failing = factory.create(() -> { throw expected; });
+        var succeeding = factory.create(retired::incrementAndGet);
         failing.drop();
         succeeding.drop();
 
@@ -157,6 +163,26 @@ final class ResourceDirectoryTest {
 
         assertEquals(List.of(expected), failures);
         assertEquals(1, retired.get());
-        channel.drain();
+        directory.drain(owner);
+    }
+
+    @Test
+    void drainSettlesFrameHeldLeaseBeforeWaiting() {
+        AtomicInteger retired = new AtomicInteger();
+        AtomicInteger settlements = new AtomicInteger();
+        ContributionOwner owner = new ContributionOwner(1);
+        ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
+        var generation = directory.openFactory(owner).create(retired::incrementAndGet);
+        generation.seal();
+        ResourceLease frameLease = directory.acquire(owner, generation.reference());
+        directory.invalidate(owner);
+
+        directory.drain(owner, () -> {
+            settlements.incrementAndGet();
+            frameLease.close();
+        });
+
+        assertEquals(1, settlements.get());
+        assertEquals(1, retired.get());
     }
 }

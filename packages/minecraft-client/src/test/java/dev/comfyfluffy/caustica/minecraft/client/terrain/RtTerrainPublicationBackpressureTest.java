@@ -11,11 +11,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtTerrainPublicationBackpressureTest {
     @Test
     void pendingReceiptKeepsTheSubmittedGroupInFlight() {
-        boolean[] visible = {false};
-        GeometryPublication publication = () -> visible[0];
+        MutablePublication publication = new MutablePublication();
 
         assertTrue(RtTerrain.publicationPending(publication));
-        visible[0] = true;
+        publication.makeVisible();
         assertFalse(RtTerrain.publicationPending(publication));
     }
 
@@ -43,11 +42,10 @@ final class RtTerrainPublicationBackpressureTest {
 
     @Test
     void fullClearAndNoWorldWaitForAnInvisibleAcceptedPublication() {
-        boolean[] visible = {false};
-        GeometryPublication publication = () -> visible[0];
+        MutablePublication publication = new MutablePublication();
 
         assertTrue(RtTerrain.clearMustWait(publication));
-        visible[0] = true;
+        publication.makeVisible();
         assertFalse(RtTerrain.clearMustWait(publication));
     }
 
@@ -83,6 +81,21 @@ final class RtTerrainPublicationBackpressureTest {
         assertEquals(2, admitted);
         assertEquals(2, removals.size());
         assertTrue(removals.contains(2L));
+    }
+
+    private static final class MutablePublication implements GeometryPublication {
+        private final java.util.List<Runnable> callbacks = new java.util.ArrayList<>();
+        private boolean visible;
+        @Override public boolean isVisible() { return visible; }
+        @Override public void whenVisible(Runnable callback) {
+            if (visible) callback.run();
+            else callbacks.add(callback);
+        }
+        void makeVisible() {
+            visible = true;
+            callbacks.forEach(Runnable::run);
+            callbacks.clear();
+        }
     }
 
     @Test

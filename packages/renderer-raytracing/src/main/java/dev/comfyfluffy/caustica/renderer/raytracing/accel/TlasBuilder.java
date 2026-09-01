@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;

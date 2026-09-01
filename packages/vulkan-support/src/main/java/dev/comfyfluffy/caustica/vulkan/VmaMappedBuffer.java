@@ -45,7 +45,12 @@ public final class VmaMappedBuffer implements AutoCloseable {
      * combined with {@code VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT}.
      */
     public static VmaMappedBuffer create(GpuDevice gpu, long byteSize, int usage, String label) {
-        return create(gpu, byteSize, usage, 0L, label);
+        return create(gpu, byteSize, usage, 0L, label, false);
+    }
+
+    /** Allocates mapped memory shared by the graphics and renderer async-compute queue families. */
+    public static VmaMappedBuffer createAsync(GpuDevice gpu, long byteSize, int usage, String label) {
+        return create(gpu, byteSize, usage, 0L, label, true);
     }
 
     /**
@@ -54,6 +59,11 @@ public final class VmaMappedBuffer implements AutoCloseable {
      */
     public static VmaMappedBuffer create(GpuDevice gpu, long byteSize, int usage,
                                          long allocationAlignment, String label) {
+        return create(gpu, byteSize, usage, allocationAlignment, label, false);
+    }
+
+    private static VmaMappedBuffer create(GpuDevice gpu, long byteSize, int usage,
+                                          long allocationAlignment, String label, boolean asyncShared) {
         Objects.requireNonNull(gpu, "gpu");
         Objects.requireNonNull(label, "label");
         if (byteSize <= 0L) throw new IllegalArgumentException("byteSize must be positive");
@@ -71,6 +81,9 @@ public final class VmaMappedBuffer implements AutoCloseable {
                     .size(byteSize)
                     .usage(usage | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
+            if (asyncShared) {
+                configureAsyncSharing(bufferInfo, stack, gpu.asyncBufferSharingQueueFamilies());
+            }
             VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
                     .usage(Vma.VMA_MEMORY_USAGE_AUTO)
                     .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
@@ -102,6 +115,22 @@ public final class VmaMappedBuffer implements AutoCloseable {
             if (buffer != 0L) Vma.vmaDestroyBuffer(gpu.vmaAllocator(), buffer, allocation);
             throw failure;
         }
+    }
+
+    static void configureAsyncSharing(VkBufferCreateInfo bufferInfo, MemoryStack stack, int[] queueFamilies) {
+        int[] sharedFamilies = asyncSharingFamilies(queueFamilies);
+        if (sharedFamilies.length > 0) {
+            bufferInfo.sharingMode(VK10.VK_SHARING_MODE_CONCURRENT)
+                    .pQueueFamilyIndices(stack.ints(sharedFamilies));
+        }
+    }
+
+    static int[] asyncSharingFamilies(int[] queueFamilies) {
+        Objects.requireNonNull(queueFamilies, "queueFamilies");
+        if (queueFamilies.length == 0) {
+            throw new IllegalArgumentException("async buffer needs at least one queue family");
+        }
+        return queueFamilies.length == 1 ? new int[0] : queueFamilies.clone();
     }
 
     /** Raw {@code VkBuffer} handle for Vulkan calls that consume the native non-dispatchable handle. */

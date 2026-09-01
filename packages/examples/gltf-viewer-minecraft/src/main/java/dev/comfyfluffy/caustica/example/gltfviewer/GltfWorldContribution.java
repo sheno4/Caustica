@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfMeshUploader;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfPrimitiveUploader;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfProgramContent;
@@ -77,14 +78,17 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
     private void replace() {
         assets.reload();
         GeometryChannel geometry = context.renderSession().geometry();
+        ResourceFactory resources = context.renderSession().resources();
+        Live previous = live;
         List<GeometryChannel.Operation> operations = dropOperations(live);
         List<GltfPrimitiveUploader.Uploaded> uploads = new ArrayList<>();
         List<MeshId<GltfProgramExports.InstanceData>> meshes = new ArrayList<>();
         List<InstanceId> instances = new ArrayList<>();
+        boolean accepted = false;
         try {
             GltfScene scene = assets.current();
             for (GltfScene.Primitive primitive : scene.primitives()) {
-                GltfPrimitiveUploader.Uploaded upload = uploader.upload(primitive);
+                GltfPrimitiveUploader.Uploaded upload = uploader.upload(resources, primitive);
                 uploads.add(upload);
                 MeshId<GltfProgramExports.InstanceData> mesh = geometry.newMesh(GltfProgramExports.INSTANCE);
                 meshes.add(mesh);
@@ -93,7 +97,8 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                         : new MeshBuild.CoveragePolicy.Opaque();
                 MeshBuild.SurfaceSlot<GltfProgramExports.PrimitiveData, GltfProgramExports.InstanceData> slot =
                         new MeshBuild.SurfaceSlot<>(programs.material(),
-                                GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value()), coverage);
+                                GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
+                                        upload.primitiveDataResource()), coverage);
                 MeshBuild<GltfProgramExports.InstanceData> build = new MeshBuild<>(
                         upload.positionsStream(), upload.indexStream(), upload.vertexCount(),
                         new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
@@ -112,12 +117,13 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
             }
 
             GltfScene.Primitive portal = portalCube();
-            GltfPrimitiveUploader.Uploaded portalUpload = uploader.upload(portal);
+            GltfPrimitiveUploader.Uploaded portalUpload = uploader.upload(resources, portal);
             uploads.add(portalUpload);
             MeshId<GltfProgramExports.InstanceData> portalMesh = geometry.newMesh(GltfProgramExports.INSTANCE);
             meshes.add(portalMesh);
             var portalSlot = new MeshBuild.SurfaceSlot<>(programs.portal(),
-                    GltfProgramExports.PRIMITIVE.data(portalUpload.primitiveDataAddress().value()),
+                    GltfProgramExports.PRIMITIVE.data(portalUpload.primitiveDataAddress().value(),
+                            portalUpload.primitiveDataResource()),
                     new MeshBuild.CoveragePolicy.Opaque());
             operations.add(new GeometryChannel.SetMesh<>(portalMesh, new MeshBuild<>(
                     portalUpload.positionsStream(), portalUpload.indexStream(), portalUpload.vertexCount(),
@@ -131,12 +137,13 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                         GltfProgramExports.INSTANCE.data(0L)));
             }
 
-            Live next = new Live(List.copyOf(meshes), List.copyOf(instances));
-            geometry.submit(new RetainedBatch<>(operations, () -> uploads.forEach(
-                    GltfPrimitiveUploader.Uploaded::destroy)));
+            Live next = new Live(List.copyOf(meshes), List.copyOf(instances), List.copyOf(uploads));
+            var publication = geometry.submit(RetainedBatch.of(operations));
+            accepted = true;
             live = next;
+            publication.whenVisible(previous::dropResources);
         } catch (RuntimeException | Error failure) {
-            uploads.forEach(GltfPrimitiveUploader.Uploaded::destroy);
+            if (!accepted) uploads.forEach(GltfPrimitiveUploader.Uploaded::drop);
             throw failure;
         }
     }
@@ -147,8 +154,11 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
         stopped = true;
         try {
             if (live != Live.EMPTY) {
-                context.renderSession().geometry().submit(RetainedBatch.of(dropOperations(live)));
+                Live previous = live;
+                var publication = context.renderSession().geometry().submit(
+                        RetainedBatch.of(dropOperations(previous)));
                 live = Live.EMPTY;
+                publication.whenVisible(previous::dropResources);
             }
         } finally {
             programRegistration.close();
@@ -180,7 +190,12 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                 : GltfViewerAnchorBlockEntity.loadedAnchors(minecraft.level, block);
     }
 
-    private record Live(List<MeshId<GltfProgramExports.InstanceData>> meshes, List<InstanceId> instances) {
-        private static final Live EMPTY = new Live(List.of(), List.of());
+    private record Live(List<MeshId<GltfProgramExports.InstanceData>> meshes, List<InstanceId> instances,
+                        List<GltfPrimitiveUploader.Uploaded> uploads) {
+        private static final Live EMPTY = new Live(List.of(), List.of(), List.of());
+
+        void dropResources() {
+            uploads.forEach(GltfPrimitiveUploader.Uploaded::drop);
+        }
     }
 }

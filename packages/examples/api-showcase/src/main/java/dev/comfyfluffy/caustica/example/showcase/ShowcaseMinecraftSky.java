@@ -20,9 +20,8 @@ final class ShowcaseMinecraftSky {
         this.resources = Objects.requireNonNull(resources, "resources");
     }
 
-    EnvironmentBinding<ShowcasePrograms.EnvironmentBindingData> binding(
-            ShowcasePrograms programs, Runnable retired) {
-        return programs.environmentBinding(implementation(programs.exports()), bindingWord(), retired);
+    EnvironmentBinding<ShowcasePrograms.EnvironmentBindingData> binding(ShowcasePrograms programs) {
+        return programs.environmentBinding(implementation(programs.exports()), bindingWord());
     }
 
     long bindingWord() {

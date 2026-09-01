@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.sky;
 
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftSkyFrame;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
@@ -28,10 +29,11 @@ public final class MinecraftSkyCatalog {
     public SkyLutPass create(MinecraftDimensionKey dimension, GpuDevice gpu,
                              Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames,
                              EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
-                             MinecraftEnvironmentSelector selector, long resourcePackEpoch) {
+                             MinecraftEnvironmentSelector selector, ResourceFactory resources,
+                             long resourcePackEpoch) {
         Factory factory = factories.get(dimension.id());
         return factory == null ? null : factory.create(gpu, options, frames, environment, selector,
-                resourcePackEpoch);
+                resources, resourcePackEpoch);
     }
 
     @FunctionalInterface
@@ -39,6 +41,7 @@ public final class MinecraftSkyCatalog {
         SkyLutPass create(GpuDevice gpu, Supplier<OptionValues> options,
                           Supplier<MinecraftSkyFrame> frames,
                           EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
-                          MinecraftEnvironmentSelector selector, long resourcePackEpoch);
+                          MinecraftEnvironmentSelector selector, ResourceFactory resources,
+                          long resourcePackEpoch);
     }
 }

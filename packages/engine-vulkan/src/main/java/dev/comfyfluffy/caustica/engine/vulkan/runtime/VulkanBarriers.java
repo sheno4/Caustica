@@ -67,6 +67,19 @@ public final class VulkanBarriers {
         VK13.vkCmdPipelineBarrier2(commandBuffer, worldResourcesToPrimaryDependency(stack));
     }
 
+    /** Makes an earlier BLAS build or update visible to an UPDATE that reads it as its source. */
+    public static void accelerationStructureBuildToUpdate(VkCommandBuffer commandBuffer, MemoryStack stack) {
+        VK13.vkCmdPipelineBarrier2(commandBuffer, accelerationStructureBuildToUpdateDependency(stack));
+    }
+
+    static VkDependencyInfo accelerationStructureBuildToUpdateDependency(MemoryStack stack) {
+        return dependency(stack,
+                VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    }
+
     static VkDependencyInfo worldResourcesToPrimaryDependency(MemoryStack stack) {
         return dependency(stack,
                 VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

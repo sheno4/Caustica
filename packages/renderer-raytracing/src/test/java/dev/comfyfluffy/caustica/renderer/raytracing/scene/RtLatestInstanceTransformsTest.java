@@ -45,6 +45,23 @@ final class RtLatestInstanceTransformsTest {
         assertEquals(first, second);
     }
 
+    @Test
+    void preparedOrderedUpdateDoesNotBecomeVisibleBeforeAcceptance() {
+        RtLatestInstanceTransforms transforms = new RtLatestInstanceTransforms();
+        RetainedSceneSnapshot.Instance published = instance(1, 7, 0, 0xff);
+        transforms.acceptSnapshot(List.of(published));
+        transforms.acceptLatest(List.of(update(1, 2, 0xff)));
+        RetainedSceneSnapshot.Instance replacement = instance(1, 7, 3, 0xff);
+
+        RtLatestInstanceTransforms.Update prepared = transforms.prepareSnapshot(List.of(replacement));
+        assertEquals(GeometryTransform.translation(2, 0, 0),
+                transforms.resolve(replacement).transform());
+
+        transforms.apply(prepared);
+        assertEquals(GeometryTransform.translation(3, 0, 0),
+                transforms.resolve(replacement).transform());
+    }
+
     private static RetainedInstanceTransform update(long identity, double x, int mask) {
         return new RetainedInstanceTransform(identity, GeometryTransform.translation(x, 0, 0), mask);
     }

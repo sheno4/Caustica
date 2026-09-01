@@ -15,14 +15,12 @@ import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Queue;
 import java.util.Set;
 
 /** Host-owned scenes and the session-wide retained geometry/light collections targeting them. */
@@ -38,8 +36,7 @@ public final class SceneDirectory {
     private Map<SceneRef, EnvironmentValue> environments = new LinkedHashMap<>();
     private Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>>
             environmentSelections = new LinkedHashMap<>();
-    private final Queue<CallbackTask> callbacks = new ArrayDeque<>();
-    private final Set<BatchLifetime> batchLifetimes = new LinkedHashSet<>();
+    private final Set<PendingPublication> publications = new LinkedHashSet<>();
     private boolean backendProgressAvailable;
     private long nextIdentity;
     private long revision;
@@ -58,7 +55,7 @@ public final class SceneDirectory {
         SceneRef scene = new SceneRef(this, ++nextIdentity);
         scenes.put(scene, Boolean.TRUE);
         try {
-            publish(List.of(), null);
+            publish();
         } catch (Throwable failure) {
             scenes.remove(scene);
             throw failure;
@@ -74,23 +71,10 @@ public final class SceneDirectory {
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
         Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>>
                 nextEnvironmentSelections = new LinkedHashMap<>(environmentSelections);
-        List<RetainedValue> removed = new ArrayList<>();
-        nextInstances.entrySet().removeIf(entry -> {
-            if (entry.getValue().scene != scene) return false;
-            removed.add(entry.getValue());
-            return true;
-        });
-        nextLights.entrySet().removeIf(entry -> {
-            if (entry.getValue().scene != scene) return false;
-            removed.add(entry.getValue());
-            return true;
-        });
-        EnvironmentValue environment = nextEnvironments.remove(scene);
-        if (environment != null) removed.add(environment);
-        LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue> selections =
-                nextEnvironmentSelections.remove(scene);
-        List<EnvironmentValue> dormant = selections == null ? List.of() : selections.values().stream()
-                .filter(value -> value != environment).toList();
+        nextInstances.entrySet().removeIf(entry -> entry.getValue().scene == scene);
+        nextLights.entrySet().removeIf(entry -> entry.getValue().scene == scene);
+        nextEnvironments.remove(scene);
+        nextEnvironmentSelections.remove(scene);
         Map<InstanceRef, InstanceValue> previousInstances = instances;
         Map<LightRef, LightValue> previousLights = lights;
         Map<SceneRef, EnvironmentValue> previousEnvironments = environments;
@@ -102,7 +86,7 @@ public final class SceneDirectory {
         environments = nextEnvironments;
         environmentSelections = nextEnvironmentSelections;
         try {
-            publish(removed, null);
+            publish();
         } catch (Throwable failure) {
             scenes.put(scene, Boolean.TRUE);
             instances = previousInstances;
@@ -111,7 +95,6 @@ public final class SceneDirectory {
             environmentSelections = previousEnvironmentSelections;
             throw failure;
         }
-        dormant.forEach(value -> value.batchLifetime.releaseValue(this));
     }
 
     public synchronized GeometryContributionChannel openGeometry(ContributionOwner owner) {
@@ -131,25 +114,10 @@ public final class SceneDirectory {
 
     public synchronized RetainedSceneSnapshot snapshot() { return snapshot(revision); }
 
-    /** Advances native publications and runs their serialized retirement callbacks. */
+    /** Advances native publications. */
     public void progress() {
         synchronized (this) { backendProgressAvailable = false; }
         backend.progress();
-        while (true) {
-            CallbackTask callback;
-            synchronized (this) { callback = callbacks.poll(); }
-            if (callback == null) return;
-            try {
-                callback.callback.run();
-            } catch (Throwable failure) {
-                failures.report(failure);
-            } finally {
-                synchronized (this) {
-                    if (callback.completedLifetime != null) batchLifetimes.remove(callback.completedLifetime);
-                    notifyAll();
-                }
-            }
-        }
     }
 
     synchronized <N> MeshId<N> newMesh(GeometryContributionChannel channel, ShaderDataType<N> type) {
@@ -191,15 +159,11 @@ public final class SceneDirectory {
                 .flatMap(batch -> batch.operations().stream())
                 .toList();
         validateGeometry(channel, operations);
-        List<BatchLifetime> submittedLifetimes = group.stream()
-                .map(batch -> new BatchLifetime(channel, batch.retired()))
-                .toList();
         Map<MeshRef, MeshValue> nextMeshes = new LinkedHashMap<>(meshes);
         Map<InstanceRef, InstanceValue> nextInstances = new LinkedHashMap<>(instances);
-        List<RetainedValue> removed = new ArrayList<>();
         for (int batchIndex = 0; batchIndex < group.size(); batchIndex++) {
-            applyGeometry(group.get(batchIndex).operations(), submittedLifetimes.get(batchIndex),
-                    nextMeshes, nextInstances, removed);
+            applyGeometry(group.get(batchIndex).operations(),
+                    nextMeshes, nextInstances);
         }
         List<RetainedInstanceTransform> latest = applyLatestInstances(
                 channel, latestInstances, nextInstances);
@@ -211,18 +175,22 @@ public final class SceneDirectory {
         long nextRevision = revision + 1;
         RetainedSceneGeometryDelta delta = geometryDelta(
                 nextRevision, operations, latestInstances, nextInstances);
-        PublicationReceipt receipt = new PublicationReceipt();
+        PublicationReceipt receipt = new PublicationReceipt(failures);
+        PendingPublication publication = beginPublication(channel);
         Map<LightRef, LightValue> currentLights = lights;
         Map<SceneRef, EnvironmentValue> currentEnvironments = environments;
-        backend.publishGeometry(delta,
-                () -> snapshot(nextRevision, nextMeshes, nextInstances, currentLights, currentEnvironments),
-                receipt::publish, () -> enqueueRelease(removed));
+        try {
+            backend.publishGeometry(delta,
+                    () -> snapshot(nextRevision, nextMeshes, nextInstances, currentLights, currentEnvironments),
+                    () -> { receipt.publish(); completePublication(publication); });
+        } catch (Throwable failure) {
+            rejectPublication(publication);
+            throw failure;
+        }
         backend.updateLatestInstanceTransforms(latest);
-        batchLifetimes.addAll(submittedLifetimes);
         meshes = nextMeshes;
         instances = nextInstances;
         revision++;
-        submittedLifetimes.forEach(batchLifetime -> batchLifetime.seal(this));
         return receipt;
     }
 
@@ -237,7 +205,7 @@ public final class SceneDirectory {
             if (current == null) throw new IllegalArgumentException("latest placement names an absent instance");
             GeometryChannel.SetInstance<?> prior = current.operation;
             GeometryChannel.SetInstance<?> replacement = withLatestPlacement(prior, latest);
-            nextInstances.put(instance, new InstanceValue(current.batchLifetime, current.scene, current.mesh, replacement));
+            nextInstances.put(instance, new InstanceValue(current.scene, current.mesh, replacement));
             result.add(new RetainedInstanceTransform(instance.identity, latest.transform(), latest.mask()));
         }
         return List.copyOf(result);
@@ -272,38 +240,33 @@ public final class SceneDirectory {
         validateGeometry(geometryChannel, geometryOperations);
         validateLights(ownedLights, lightBatch.operations());
 
-        List<BatchLifetime> geometryLifetimes = geometryGroup.stream()
-                .map(batch -> new BatchLifetime(geometryChannel, batch.retired()))
-                .toList();
-        BatchLifetime lightLifetime = new BatchLifetime(ownedLights, lightBatch.retired());
         Map<MeshRef, MeshValue> nextMeshes = new LinkedHashMap<>(meshes);
         Map<InstanceRef, InstanceValue> nextInstances = new LinkedHashMap<>(instances);
-        List<RetainedValue> removedGeometry = new ArrayList<>();
         for (int batchIndex = 0; batchIndex < geometryGroup.size(); batchIndex++) {
-            applyGeometry(geometryGroup.get(batchIndex).operations(), geometryLifetimes.get(batchIndex),
-                    nextMeshes, nextInstances, removedGeometry);
+            applyGeometry(geometryGroup.get(batchIndex).operations(),
+                    nextMeshes, nextInstances);
         }
         Map<LightRef, LightValue> nextLights = new LinkedHashMap<>(lights);
-        List<RetainedValue> removedLights = new ArrayList<>();
-        applyLights(lightBatch.operations(), lightLifetime, nextLights, removedLights);
+        applyLights(lightBatch.operations(), nextLights);
 
         long nextRevision = revision + 1;
         RetainedSceneGeometryDelta geometryDelta = geometryDelta(nextRevision, geometryOperations);
         RetainedSceneContentSnapshot content = contentSnapshot(nextRevision, nextLights, environments);
-        PublicationReceipt receipt = new PublicationReceipt();
+        PublicationReceipt receipt = new PublicationReceipt(failures);
+        PendingPublication publication = beginPublication(geometryChannel, ownedLights);
         Map<SceneRef, EnvironmentValue> currentEnvironments = environments;
-        backend.publishGeometryAndContent(geometryDelta, content,
-                () -> snapshot(nextRevision, nextMeshes, nextInstances, nextLights, currentEnvironments),
-                receipt::publish, () -> enqueueRelease(removedGeometry),
-                () -> enqueueRelease(removedLights));
-        batchLifetimes.addAll(geometryLifetimes);
-        batchLifetimes.add(lightLifetime);
+        try {
+            backend.publishGeometryAndContent(geometryDelta, content,
+                    () -> snapshot(nextRevision, nextMeshes, nextInstances, nextLights, currentEnvironments),
+                    () -> { receipt.publish(); completePublication(publication); });
+        } catch (Throwable failure) {
+            rejectPublication(publication);
+            throw failure;
+        }
         meshes = nextMeshes;
         instances = nextInstances;
         lights = nextLights;
         revision++;
-        geometryLifetimes.forEach(batchLifetime -> batchLifetime.seal(this));
-        lightLifetime.seal(this);
         return receipt;
     }
 
@@ -312,16 +275,18 @@ public final class SceneDirectory {
         requireSubmission(channel);
         Objects.requireNonNull(batch, "batch");
         validateLights(channel, batch.operations());
-        BatchLifetime batchLifetime = new BatchLifetime(channel, batch.retired());
         Map<LightRef, LightValue> nextLights = new LinkedHashMap<>(lights);
-        List<RetainedValue> removed = new ArrayList<>();
-        applyLights(batch.operations(), batchLifetime, nextLights, removed);
+        applyLights(batch.operations(), nextLights);
         RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, nextLights, environments);
-        backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
-        batchLifetimes.add(batchLifetime);
+        PendingPublication publication = beginPublication(channel);
+        try {
+            backend.publishContent(next, () -> completePublication(publication));
+        } catch (Throwable failure) {
+            rejectPublication(publication);
+            throw failure;
+        }
         lights = nextLights;
         revision++;
-        batchLifetime.seal(this);
     }
 
     private void validateLights(LightContributionChannel channel,
@@ -336,40 +301,37 @@ public final class SceneDirectory {
         }
     }
 
-    private static void applyLights(List<LightChannel.Operation> operations, BatchLifetime batchLifetime,
-                                    Map<LightRef, LightValue> nextLights,
-                                    List<RetainedValue> removed) {
+    private static void applyLights(List<LightChannel.Operation> operations,
+                                    Map<LightRef, LightValue> nextLights) {
         for (LightChannel.Operation operation : operations) {
             if (operation instanceof LightChannel.SetLight set) {
-                replace(nextLights, (LightRef) set.light(),
-                        new LightValue(batchLifetime, (SceneRef) set.scene(), set.descriptor()), removed);
+                nextLights.put((LightRef) set.light(),
+                        new LightValue((SceneRef) set.scene(), set.descriptor()));
             } else if (operation instanceof LightChannel.DropLight drop) {
-                remove(nextLights, (LightRef) drop.light(), removed);
+                nextLights.remove((LightRef) drop.light());
             }
         }
     }
 
-    private static void applyGeometry(List<GeometryChannel.Operation> operations, BatchLifetime batchLifetime,
+    private static void applyGeometry(List<GeometryChannel.Operation> operations,
                                       Map<MeshRef, MeshValue> nextMeshes,
-                                      Map<InstanceRef, InstanceValue> nextInstances,
-                                      List<RetainedValue> removed) {
+                                      Map<InstanceRef, InstanceValue> nextInstances) {
         for (GeometryChannel.Operation operation : operations) {
             if (operation instanceof GeometryChannel.SetMesh<?> set) {
                 MeshRef mesh = (MeshRef) set.mesh();
-                replace(nextMeshes, mesh, new MeshValue(batchLifetime, set.build()), removed);
+                nextMeshes.put(mesh, new MeshValue(set.build()));
             } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
                 MeshRef mesh = (MeshRef) drop.mesh();
-                remove(nextMeshes, mesh, removed);
+                nextMeshes.remove(mesh);
                 nextInstances.entrySet().removeIf(entry -> {
                     if (entry.getValue().mesh != mesh) return false;
-                    removed.add(entry.getValue());
                     return true;
                 });
             } else if (operation instanceof GeometryChannel.SetInstance<?> set) {
-                replace(nextInstances, (InstanceRef) set.instance(),
-                        new InstanceValue(batchLifetime, (SceneRef) set.scene(), (MeshRef) set.mesh(), set), removed);
+                nextInstances.put((InstanceRef) set.instance(),
+                        new InstanceValue((SceneRef) set.scene(), (MeshRef) set.mesh(), set));
             } else if (operation instanceof GeometryChannel.DropInstance drop) {
-                remove(nextInstances, (InstanceRef) drop.instance(), removed);
+                nextInstances.remove((InstanceRef) drop.instance());
             }
         }
     }
@@ -382,36 +344,27 @@ public final class SceneDirectory {
         SceneRef scene = requireLiveScene(channel.scene);
         programs.validateEnvironment(binding.implementation(), binding.bindingData());
         resources.validate(channel.owner, binding.bindingData().resource());
-        BatchLifetime batchLifetime = new BatchLifetime(channel, binding.retired());
-        batchLifetime.retainValue();
         LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue> selections =
                 new LinkedHashMap<>(environmentSelections.getOrDefault(scene, new LinkedHashMap<>()));
-        EnvironmentValue replaced = selections.remove(channel);
-        EnvironmentValue selected = new EnvironmentValue(batchLifetime, binding);
+        selections.remove(channel);
+        EnvironmentValue selected = new EnvironmentValue(binding);
         selections.put(channel, selected);
-        EnvironmentValue previous = environments.get(scene);
-        boolean previousSurvives = previous != null && selections.containsValue(previous);
-        // A surviving slot and the retiring publication independently keep the displaced binding alive.
-        if (previousSurvives) previous.batchLifetime.retainValue();
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
         nextEnvironments.put(scene, selected);
-        List<RetainedValue> removed = previous != null ? List.of(previous) : List.of();
         RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, lights, nextEnvironments);
+        PendingPublication publication = beginPublication(channel);
         try {
-            backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
+            backend.publishContent(next, () -> completePublication(publication));
         } catch (Throwable failure) {
-            if (previousSurvives) previous.batchLifetime.releaseValue(this);
+            rejectPublication(publication);
             throw failure;
         }
-        batchLifetimes.add(batchLifetime);
         Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>> nextSelections =
                 new LinkedHashMap<>(environmentSelections);
         nextSelections.put(scene, selections);
         environmentSelections = nextSelections;
         environments = nextEnvironments;
         revision++;
-        batchLifetime.seal(this);
-        if (replaced != null && replaced != previous) replaced.batchLifetime.releaseValue(this);
     }
 
     synchronized void quiesce(GeometryContributionChannel channel) {
@@ -428,19 +381,24 @@ public final class SceneDirectory {
         channel.acceptingSubmissions = false;
         Map<MeshRef, MeshValue> nextMeshes = new LinkedHashMap<>(meshes);
         Map<InstanceRef, InstanceValue> nextInstances = new LinkedHashMap<>(instances);
-        List<RetainedValue> removed = new ArrayList<>();
+        int previousMeshCount = nextMeshes.size();
+        int previousInstanceCount = nextInstances.size();
         Set<MeshRef> ownedMeshes = new LinkedHashSet<>();
         nextMeshes.entrySet().removeIf(entry -> {
             if (entry.getKey().owner != channel) return false;
-            ownedMeshes.add(entry.getKey()); removed.add(entry.getValue()); return true;
+            ownedMeshes.add(entry.getKey()); return true;
         });
-        nextInstances.entrySet().removeIf(entry -> {
-            if (entry.getKey().owner != channel && !ownedMeshes.contains(entry.getValue().mesh)) return false;
-            removed.add(entry.getValue()); return true;
-        });
-        if (removed.isEmpty()) return;
+        nextInstances.entrySet().removeIf(entry -> entry.getKey().owner == channel
+                || ownedMeshes.contains(entry.getValue().mesh));
+        if (nextMeshes.size() == previousMeshCount && nextInstances.size() == previousInstanceCount) return;
         RetainedSceneSnapshot next = snapshot(revision + 1, nextMeshes, nextInstances, lights);
-        backend.publish(next, () -> { }, () -> enqueueRelease(removed));
+        PendingPublication publication = beginPublication(channel);
+        try {
+            backend.publish(next, () -> completePublication(publication));
+        } catch (Throwable failure) {
+            rejectPublication(publication);
+            throw failure;
+        }
         meshes = nextMeshes; instances = nextInstances; revision++;
     }
 
@@ -448,14 +406,17 @@ public final class SceneDirectory {
         quiesce(channel);
         channel.acceptingSubmissions = false;
         Map<LightRef, LightValue> nextLights = new LinkedHashMap<>(lights);
-        List<RetainedValue> removed = new ArrayList<>();
-        nextLights.entrySet().removeIf(entry -> {
-            if (entry.getKey().owner != channel) return false;
-            removed.add(entry.getValue()); return true;
-        });
-        if (removed.isEmpty()) return;
+        int previousLightCount = nextLights.size();
+        nextLights.entrySet().removeIf(entry -> entry.getKey().owner == channel);
+        if (nextLights.size() == previousLightCount) return;
         RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, nextLights, environments);
-        backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
+        PendingPublication publication = beginPublication(channel);
+        try {
+            backend.publishContent(next, () -> completePublication(publication));
+        } catch (Throwable failure) {
+            rejectPublication(publication);
+            throw failure;
+        }
         lights = nextLights; revision++;
     }
 
@@ -476,7 +437,6 @@ public final class SceneDirectory {
         else nextSelections.put(scene, nextSceneSelections);
         if (removed != current) {
             environmentSelections = nextSelections;
-            removed.batchLifetime.releaseValue(this);
             return;
         }
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
@@ -484,9 +444,11 @@ public final class SceneDirectory {
         if (restored == null) nextEnvironments.remove(scene);
         else nextEnvironments.put(scene, restored);
         RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, lights, nextEnvironments);
+        PendingPublication publication = beginPublication(channel);
         try {
-            backend.publishContent(next, () -> { }, () -> enqueueRelease(List.of(current)));
+            backend.publishContent(next, () -> completePublication(publication));
         } catch (Throwable failure) {
+            rejectPublication(publication);
             channel.accepting = true;
             throw failure;
         }
@@ -505,16 +467,38 @@ public final class SceneDirectory {
         progress();
     }
 
+    /** Makes frame-held resource leases eligible for an owner retirement drain. */
+    public void settleFrameUses() {
+        backend.settleFrameUses();
+        progress();
+        resources.progress();
+    }
+
     private void drainOwner(Object owner) {
         while (true) {
             progress();
             synchronized (this) {
-                if (batchLifetimes.stream().noneMatch(batch -> batch.owner == owner)) return;
-                if (!callbacks.isEmpty()) continue;
+                if (publications.stream().noneMatch(publication -> publication.owners.contains(owner))) return;
                 if (backendProgressAvailable) continue;
                 awaitChange();
             }
         }
+    }
+
+    private synchronized PendingPublication beginPublication(Object... owners) {
+        PendingPublication publication = new PendingPublication(Set.of(owners));
+        publications.add(publication);
+        return publication;
+    }
+
+    private synchronized void completePublication(PendingPublication publication) {
+        publications.remove(publication);
+        notifyAll();
+    }
+
+    private synchronized void rejectPublication(PendingPublication publication) {
+        publications.remove(publication);
+        notifyAll();
     }
 
     private synchronized void signalBackendProgress() {
@@ -692,21 +676,10 @@ public final class SceneDirectory {
                         entry.getKey().identity, entry.getValue().scene, entry.getValue().descriptor)).toList());
     }
 
-    private void publish(List<RetainedValue> removed, BatchLifetime batchLifetime) {
+    private void publish() {
         RetainedSceneSnapshot next = snapshot(revision + 1);
-        backend.publish(next, () -> { }, () -> enqueueRelease(removed));
+        backend.publish(next, () -> { });
         revision++;
-        if (batchLifetime != null) batchLifetime.seal(this);
-    }
-
-    private synchronized void enqueueRelease(List<RetainedValue> values) {
-        callbacks.add(new CallbackTask(
-                null, () -> values.forEach(value -> value.batchLifetime.releaseValue(this))));
-        notifyAll();
-    }
-    private synchronized void enqueue(BatchLifetime batchLifetime, Runnable callback) {
-        callbacks.add(new CallbackTask(batchLifetime, callback));
-        notifyAll();
     }
 
     private void awaitChange() {
@@ -771,62 +744,66 @@ public final class SceneDirectory {
             throw new IllegalArgumentException("foreign environment channel");
     }
 
-    private static <K, V extends RetainedValue> void replace(Map<K, V> map, K key, V value,
-                                                              List<RetainedValue> removed) {
-        value.batchLifetime.retainValue();
-        V previous = map.put(key, value);
-        if (previous != null) removed.add(previous);
-    }
-    private static <K, V extends RetainedValue> void remove(Map<K, V> map, K key,
-                                                             List<RetainedValue> removed) {
-        V previous = map.remove(key);
-        if (previous != null) removed.add(previous);
-    }
-
     private static <K, V> V lastValue(LinkedHashMap<K, V> values) {
         V last = null;
         for (V value : values.values()) last = value;
         return last;
     }
 
-    /** Exactly-once callback fan-in for retained logical values introduced together. */
-    private static final class BatchLifetime {
-        private final Object owner;
-        private final Runnable callback;
-        private int retainedValues;
-        private boolean sealed;
-        private boolean scheduled;
-        BatchLifetime(Object owner, Runnable callback) { this.owner = owner; this.callback = callback; }
-        void retainValue() { retainedValues++; }
-        void releaseValue(SceneDirectory directory) { retainedValues--; scheduleIfDone(directory); }
-        void seal(SceneDirectory directory) { sealed = true; scheduleIfDone(directory); }
-        private void scheduleIfDone(SceneDirectory directory) {
-            if (sealed && retainedValues == 0 && !scheduled) {
-                scheduled = true;
-                directory.enqueue(this, callback);
+    private static final class PublicationReceipt implements GeometryPublication {
+        private final SceneRetirementFailureHandler failures;
+        private final List<Runnable> callbacks = new ArrayList<>();
+        private volatile boolean visible;
+
+        PublicationReceipt(SceneRetirementFailureHandler failures) {
+            this.failures = failures;
+        }
+
+        @Override public boolean isVisible() { return visible; }
+
+        @Override public void whenVisible(Runnable callback) {
+            Objects.requireNonNull(callback, "callback");
+            synchronized (this) {
+                if (!visible) {
+                    callbacks.add(callback);
+                    return;
+                }
+            }
+            invoke(callback);
+        }
+
+        void publish() {
+            List<Runnable> ready;
+            synchronized (this) {
+                if (visible) return;
+                visible = true;
+                ready = List.copyOf(callbacks);
+                callbacks.clear();
+            }
+            ready.forEach(this::invoke);
+        }
+
+        private void invoke(Runnable callback) {
+            try {
+                callback.run();
+            } catch (Throwable failure) {
+                failures.report(failure);
             }
         }
     }
-    private static final class PublicationReceipt implements GeometryPublication {
-        private volatile boolean visible;
-        @Override public boolean isVisible() { return visible; }
-        void publish() { visible = true; }
-    }
-    private record CallbackTask(BatchLifetime completedLifetime, Runnable callback) { }
-    private abstract static class RetainedValue { final BatchLifetime batchLifetime; RetainedValue(BatchLifetime batchLifetime) { this.batchLifetime = batchLifetime; } }
-    private static final class MeshValue extends RetainedValue { final MeshBuild<?> build; MeshValue(BatchLifetime batchLifetime, MeshBuild<?> b) { super(batchLifetime); build=b; } }
-    private static final class InstanceValue extends RetainedValue {
+    private record PendingPublication(Set<Object> owners) { }
+    private static final class MeshValue { final MeshBuild<?> build; MeshValue(MeshBuild<?> b) { build=b; } }
+    private static final class InstanceValue {
         final SceneRef scene; final MeshRef mesh; final GeometryChannel.SetInstance<?> operation;
-        InstanceValue(BatchLifetime batchLifetime, SceneRef s, MeshRef m, GeometryChannel.SetInstance<?> o) { super(batchLifetime);scene=s;mesh=m;operation=o; }
+        InstanceValue(SceneRef s, MeshRef m, GeometryChannel.SetInstance<?> o) { scene=s;mesh=m;operation=o; }
     }
-    private static final class LightValue extends RetainedValue {
+    private static final class LightValue {
         final SceneRef scene; final dev.comfyfluffy.caustica.api.light.LightDescriptor descriptor;
-        LightValue(BatchLifetime batchLifetime, SceneRef s, dev.comfyfluffy.caustica.api.light.LightDescriptor d) { super(batchLifetime);scene=s;descriptor=d; }
+        LightValue(SceneRef s, dev.comfyfluffy.caustica.api.light.LightDescriptor d) { scene=s;descriptor=d; }
     }
-    private static final class EnvironmentValue extends RetainedValue {
+    private static final class EnvironmentValue {
         final EnvironmentBinding<?> binding;
-        EnvironmentValue(BatchLifetime batchLifetime, EnvironmentBinding<?> binding) {
-            super(batchLifetime);
+        EnvironmentValue(EnvironmentBinding<?> binding) {
             this.binding = binding;
         }
     }

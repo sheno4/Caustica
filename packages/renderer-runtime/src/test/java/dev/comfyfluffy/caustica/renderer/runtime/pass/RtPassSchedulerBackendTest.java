@@ -157,6 +157,7 @@ final class RtPassSchedulerBackendTest {
     private static final class FakeGpu implements GpuDevice {
         @Override public VkDevice vk() { return null; }
         @Override public long vmaAllocator() { return 0L; }
+        @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
         @Override public void retireAfterUse(Runnable cleanup) { throw new AssertionError(); }
     }

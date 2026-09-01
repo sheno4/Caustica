@@ -34,15 +34,12 @@ final class EngineWorldSessionTest {
         renderHost.api().sessions().add(context -> contribution("core", events));
 
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
                 snapshots.add(snapshot);
                 published.run();
-                retired.run();
             }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                                 Runnable retired) {
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
                 published.run();
-                retired.run();
             }
         };
         EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
@@ -75,12 +72,11 @@ final class EngineWorldSessionTest {
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         renderHost.api().sessions().add(context -> contribution("core", events));
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
-                published.run(); retired.run();
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
+                published.run();
             }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                                 Runnable retired) {
-                published.run(); retired.run();
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
+                published.run();
             }
             @Override public void prepareForSessionClose() { throw new IllegalStateException("settle"); }
         };
@@ -117,12 +113,11 @@ final class EngineWorldSessionTest {
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         renderHost.api().sessions().add(context -> { throw new IllegalStateException("open"); });
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
-                published.run(); retired.run();
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
+                published.run();
             }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                                 Runnable retired) {
-                published.run(); retired.run();
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
+                published.run();
             }
             @Override public void prepareForSessionClose() { throw new IllegalArgumentException("settle"); }
         };
@@ -140,13 +135,12 @@ final class EngineWorldSessionTest {
         private final List<Runnable> completed = new ArrayList<>();
         private boolean prepared;
 
-        @Override public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable published,
-                                                   Runnable retired) {
-            pending.add(() -> { published.run(); retired.run(); });
+        @Override public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable published) {
+            pending.add(published);
         }
         @Override public synchronized void publishContent(RetainedSceneContentSnapshot snapshot,
-                                                          Runnable published, Runnable retired) {
-            pending.add(() -> { published.run(); retired.run(); });
+                                                          Runnable published) {
+            pending.add(published);
         }
         @Override public synchronized void prepareForSessionClose() {
             prepared = true;
@@ -173,6 +167,7 @@ final class EngineWorldSessionTest {
     private static final GpuDevice GPU = new GpuDevice() {
         @Override public VkDevice vk() { return null; }
         @Override public long vmaAllocator() { return 0; }
+        @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
         @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
     };

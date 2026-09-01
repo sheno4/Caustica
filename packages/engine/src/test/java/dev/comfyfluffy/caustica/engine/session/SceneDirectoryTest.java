@@ -78,7 +78,7 @@ final class SceneDirectoryTest {
         SceneId scene = directory.createScene();
         ContributionOwner owner = new ContributionOwner(2);
         GeometryContributionChannel geometry = directory.openGeometry(owner);
-        var resourceChannel = resources.openChannel(owner);
+        var resourceChannel = resources.openFactory(owner);
         ResourceGeneration positions = resourceChannel.create();
         ResourceGeneration indices = resourceChannel.create();
         ResourceGeneration surfaceData = resourceChannel.create();
@@ -121,7 +121,7 @@ final class SceneDirectoryTest {
         SceneDirectory directory = directory(programs, resources, new SceneBackend());
         ContributionOwner geometryOwner = new ContributionOwner(2);
         GeometryContributionChannel geometry = directory.openGeometry(geometryOwner);
-        ResourceGeneration foreign = resources.openChannel(new ContributionOwner(3)).create();
+        ResourceGeneration foreign = resources.openFactory(new ContributionOwner(3)).create();
         foreign.seal();
         MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
         MeshBuild<Instance> build = mesh(surface, null, foreign.reference(), ResourceRef.none(),
@@ -142,7 +142,7 @@ final class SceneDirectoryTest {
         SceneId scene = directory.createScene();
         ContributionOwner owner = new ContributionOwner(2);
         SceneEnvironmentContributionChannel environments = directory.openEnvironment(owner, scene);
-        ResourceGeneration data = resources.openChannel(owner).create();
+        ResourceGeneration data = resources.openFactory(owner).create();
         EnvironmentBinding<EnvironmentBindingData> binding = EnvironmentBinding.of(
                 environment, ENVIRONMENT_BINDING.data(5, data.reference()));
 
@@ -164,7 +164,7 @@ final class SceneDirectoryTest {
         SceneId scene = directory.createScene();
         ContributionOwner owner = new ContributionOwner(2);
         GeometryContributionChannel geometry = directory.openGeometry(owner);
-        ResourceGeneration data = resources.openChannel(owner).create();
+        ResourceGeneration data = resources.openFactory(owner).create();
         data.seal();
         MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
         var instance = geometry.newInstance();
@@ -200,15 +200,14 @@ final class SceneDirectoryTest {
         GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
         MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
         AtomicBoolean retired = new AtomicBoolean();
-        geometry.submit(new RetainedBatch<>(
-                List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
-                () -> retired.set(true)));
+        geometry.submit(RetainedBatch.of(
+                List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))));
         geometry.invalidate();
 
         directory.prepareForSessionClose();
         geometry.drain();
 
-        assertTrue(retired.get());
+        assertFalse(retired.get());
     }
 
     @Test
@@ -285,8 +284,7 @@ final class SceneDirectoryTest {
                 directory.openEnvironment(new ContributionOwner(2), scene);
         AtomicInteger firstRetired = new AtomicInteger();
 
-        channel.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(7),
-                firstRetired::incrementAndGet));
+        channel.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(7)));
         assertEquals(environment, directory.snapshot().scenes().getFirst().environment().implementation());
         assertThrows(IllegalArgumentException.class, () -> channel.select(mismatchedBinding(environment)));
         EnvironmentId<EnvironmentBindingData> foreign =
@@ -300,7 +298,7 @@ final class SceneDirectoryTest {
         channel.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(9)));
         backend.retireLatest();
         directory.progress();
-        assertEquals(1, firstRetired.get());
+        assertEquals(0, firstRetired.get());
 
         channel.invalidate();
         backend.retireLatest();
@@ -323,8 +321,7 @@ final class SceneDirectoryTest {
                 directory.openEnvironment(new ContributionOwner(3), scene);
         AtomicInteger firstOriginalRetired = new AtomicInteger();
 
-        first.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(10),
-                firstOriginalRetired::incrementAndGet));
+        first.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(10)));
         second.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(20)));
         assertEquals(20, selectedEnvironmentBits(directory));
 
@@ -335,7 +332,7 @@ final class SceneDirectoryTest {
 
         backend.retire(2);
         directory.progress();
-        assertEquals(1, firstOriginalRetired.get());
+        assertEquals(0, firstOriginalRetired.get());
         backend.retireLatest();
         directory.progress();
         first.drain();
@@ -363,8 +360,7 @@ final class SceneDirectoryTest {
                 directory.openEnvironment(new ContributionOwner(3), scene);
         AtomicInteger retired = new AtomicInteger();
 
-        first.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(10),
-                retired::incrementAndGet));
+        first.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(10)));
         second.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(20)));
         first.invalidate();
         directory.progress();
@@ -373,7 +369,7 @@ final class SceneDirectoryTest {
         backend.retire(2);
         directory.progress();
         first.drain();
-        assertEquals(1, retired.get());
+        assertEquals(0, retired.get());
         assertEquals(20, selectedEnvironmentBits(directory));
     }
 
@@ -522,6 +518,65 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void geometryReceiptRunsCallbacksRegisteredBeforeAndAfterVisibility() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        backend.completeAll();
+        directory.progress();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        AtomicInteger callbacks = new AtomicInteger();
+        var publication = geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.SetMesh<>(mesh, mesh(surface)))));
+
+        publication.whenVisible(callbacks::incrementAndGet);
+        assertEquals(0, callbacks.get());
+        backend.completeAll();
+        directory.progress();
+        assertEquals(1, callbacks.get());
+
+        publication.whenVisible(callbacks::incrementAndGet);
+        assertEquals(2, callbacks.get());
+    }
+
+    @Test
+    void visibilityCallbackFailureIsReportedWithoutBlockingOtherCallbacksOrProgress() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        List<Throwable> failures = new ArrayList<>();
+        SceneDirectory directory = new SceneDirectory(programs.session, programs.resources, backend,
+                failures::add);
+        directory.createScene();
+        backend.completeAll();
+        directory.progress();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        AtomicInteger callbacks = new AtomicInteger();
+        RuntimeException callbackFailure = new RuntimeException("visibility callback");
+        var publication = geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.SetMesh<>(mesh, mesh(surface)))));
+        publication.whenVisible(() -> { throw callbackFailure; });
+        publication.whenVisible(callbacks::incrementAndGet);
+
+        backend.completeAll();
+        directory.progress();
+
+        assertEquals(List.of(callbackFailure), failures);
+        assertEquals(1, callbacks.get());
+        assertTrue(publication.isVisible());
+
+        RuntimeException lateFailure = new RuntimeException("late visibility callback");
+        publication.whenVisible(() -> { throw lateFailure; });
+        publication.whenVisible(callbacks::incrementAndGet);
+        assertEquals(List.of(callbackFailure, lateFailure), failures);
+        assertEquals(2, callbacks.get());
+    }
+
+    @Test
     void groupedGeometryPreservesIndependentRetirementLifetimes() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
@@ -535,23 +590,21 @@ final class SceneDirectoryTest {
         AtomicInteger instanceRetired = new AtomicInteger();
 
         geometry.submitGroup(List.of(
-                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
-                        meshRetired::incrementAndGet),
-                new RetainedBatch<>(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
-                        GeometryTransform.translation(1, 2, 3), 0xff, INSTANCE.data(7))),
-                        instanceRetired::incrementAndGet)));
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))),
+                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        GeometryTransform.translation(1, 2, 3), 0xff, INSTANCE.data(7))))));
 
         geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropInstance(instance))));
         backend.retireLatest();
         directory.progress();
         assertEquals(0, meshRetired.get());
-        assertEquals(1, instanceRetired.get());
+        assertEquals(0, instanceRetired.get());
 
         geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
         backend.retireLatest();
         directory.progress();
-        assertEquals(1, meshRetired.get());
-        assertEquals(1, instanceRetired.get());
+        assertEquals(0, meshRetired.get());
+        assertEquals(0, instanceRetired.get());
     }
 
     @Test
@@ -570,11 +623,9 @@ final class SceneDirectoryTest {
         long revision = directory.snapshot().revision();
 
         assertThrows(IllegalArgumentException.class, () -> geometry.submitGroup(List.of(
-                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
-                        retired::incrementAndGet),
-                new RetainedBatch<>(List.of(new GeometryChannel.SetInstance<>(instance, foreignScene, mesh,
-                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0))),
-                        retired::incrementAndGet))));
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))),
+                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, foreignScene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0)))))));
 
         assertEquals(publications, backend.snapshots.size());
         assertEquals(revision, directory.snapshot().revision());
@@ -598,11 +649,9 @@ final class SceneDirectoryTest {
         backend.rejectNext = true;
 
         assertThrows(IllegalStateException.class, () -> geometry.submitGroup(List.of(
-                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
-                        retired::incrementAndGet),
-                new RetainedBatch<>(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
-                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0))),
-                        retired::incrementAndGet))));
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))),
+                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0)))))));
 
         assertEquals(publications, backend.snapshots.size());
         assertEquals(0, directory.snapshot().meshes().size());
@@ -655,17 +704,15 @@ final class SceneDirectoryTest {
         AtomicInteger geometryRetired = new AtomicInteger();
         AtomicInteger lightRetired = new AtomicInteger();
 
-        geometry.submitWithLights(List.of(new RetainedBatch<>(List.of(
+        geometry.submitWithLights(List.of(RetainedBatch.of(List.of(
                         new GeometryChannel.SetMesh<>(mesh, mesh(surface)),
                         new GeometryChannel.SetInstance<>(instance, scene, mesh,
                                 GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0),
                                 new PrimitiveLightMap(List.of(
-                                        new PrimitiveLightMap.Range(0, 1, light))))),
-                        geometryRetired::incrementAndGet)), lights,
-                new RetainedBatch<>(List.of(new LightChannel.SetLight(light, scene,
+                                        new PrimitiveLightMap.Range(0, 1, light))))))), lights,
+                RetainedBatch.of(List.of(new LightChannel.SetLight(light, scene,
                         new LightDescriptor.Parallelogram(
-                                0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1))),
-                        lightRetired::incrementAndGet));
+                                0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1)))));
 
         RetainedSceneSnapshot combined = backend.snapshots.getLast();
         assertEquals(1, combined.instances().size());
@@ -679,8 +726,8 @@ final class SceneDirectoryTest {
         backend.retireLatest();
         directory.progress();
 
-        assertEquals(1, geometryRetired.get());
-        assertEquals(1, lightRetired.get());
+        assertEquals(0, geometryRetired.get());
+        assertEquals(0, lightRetired.get());
     }
 
     @Test
@@ -773,10 +820,10 @@ final class SceneDirectoryTest {
         AtomicInteger retired = new AtomicInteger();
         int publications = backend.snapshots.size();
 
-        assertThrows(IllegalArgumentException.class, () -> geometry.submit(new RetainedBatch<>(List.of(
+        assertThrows(IllegalArgumentException.class, () -> geometry.submit(RetainedBatch.of(List.of(
                 new GeometryChannel.SetMesh<>(mesh, mesh(surface)),
                 new GeometryChannel.SetInstance<>(instance, foreignScene, mesh, GeometryTransform.translation(0, 0, 0),
-                        0xff, INSTANCE.data(0))), retired::incrementAndGet)));
+                        0xff, INSTANCE.data(0))))));
 
         assertEquals(publications, backend.snapshots.size());
         assertEquals(0, directory.snapshot().meshes().size());
@@ -795,8 +842,8 @@ final class SceneDirectoryTest {
         AtomicInteger retired = new AtomicInteger();
         backend.rejectNext = true;
 
-        assertThrows(IllegalStateException.class, () -> geometry.submit(new RetainedBatch<>(
-                List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))), retired::incrementAndGet)));
+        assertThrows(IllegalStateException.class, () -> geometry.submit(RetainedBatch.of(
+                List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))))));
 
         assertEquals(0, directory.snapshot().meshes().size());
         directory.progress();
@@ -814,10 +861,9 @@ final class SceneDirectoryTest {
         AtomicInteger retired = new AtomicInteger();
         backend.rejectNext = true;
 
-        assertThrows(IllegalStateException.class, () -> lights.submit(new RetainedBatch<>(List.of(
+        assertThrows(IllegalStateException.class, () -> lights.submit(RetainedBatch.of(List.of(
                 new LightChannel.SetLight(light, scene,
-                        new LightDescriptor.Spot(0, 1, 0, 0, -1, 0, 10, 0.5, 1, 1, 1))),
-                retired::incrementAndGet)));
+                        new LightDescriptor.Spot(0, 1, 0, 0, -1, 0, 10, 0.5, 1, 1, 1))))));
 
         assertEquals(0, directory.snapshot().lights().size());
         directory.progress();
@@ -838,13 +884,12 @@ final class SceneDirectoryTest {
         var light = lights.newLight();
         AtomicInteger geometryRetired = new AtomicInteger();
         AtomicInteger lightRetired = new AtomicInteger();
-        geometry.submit(new RetainedBatch<>(List.of(
+        geometry.submit(RetainedBatch.of(List.of(
                 new GeometryChannel.SetMesh<>(mesh, mesh(surface)),
                 new GeometryChannel.SetInstance<>(instance, scene, mesh, GeometryTransform.translation(0, 0, 0),
-                        0xff, INSTANCE.data(0))), geometryRetired::incrementAndGet));
-        lights.submit(new RetainedBatch<>(List.of(new LightChannel.SetLight(light, scene,
-                new LightDescriptor.Spot(0, 1, 0, 0, -1, 0, 10, 0.5, 1, 1, 1))),
-                lightRetired::incrementAndGet));
+                        0xff, INSTANCE.data(0)))));
+        lights.submit(RetainedBatch.of(List.of(new LightChannel.SetLight(light, scene,
+                new LightDescriptor.Spot(0, 1, 0, 0, -1, 0, 10, 0.5, 1, 1, 1)))));
 
         directory.dropScene(scene);
         assertEquals(1, directory.snapshot().meshes().size());
@@ -853,12 +898,12 @@ final class SceneDirectoryTest {
         backend.retireLatest();
         directory.progress();
         assertEquals(0, geometryRetired.get(), "mesh from the same batch is still retained");
-        assertEquals(1, lightRetired.get());
+        assertEquals(0, lightRetired.get());
 
         geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
         backend.retireLatest();
         directory.progress();
-        assertEquals(1, geometryRetired.get());
+        assertEquals(0, geometryRetired.get());
     }
 
     private static MeshBuild<Instance> mesh(SurfaceId<Binding, Instance> surface) {
@@ -891,7 +936,7 @@ final class SceneDirectoryTest {
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static EnvironmentBinding<?> mismatchedBinding(EnvironmentId<?> environment) {
         return new EnvironmentBinding((EnvironmentId) environment,
-                ShaderDataType.create("wrong").data(0), () -> { });
+                ShaderDataType.create("wrong").data(0));
     }
 
     private static SceneDirectory directory(ProgramFixture programs, RetainedSceneBackend backend) {
@@ -914,7 +959,7 @@ final class SceneDirectoryTest {
             ProgramContributionChannel channel = session.openChannel(owner);
             var registration = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                     new ShaderDefinition(ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
-                            "surface", "test.Surface"), null, IMPLEMENTATION.data(0), BINDING, INSTANCE, () -> { })));
+                            "surface", "test.Surface"), null, IMPLEMENTATION.data(0), BINDING, INSTANCE)));
             session.progress();
             session.progress();
             return registration.exports();
@@ -923,8 +968,7 @@ final class SceneDirectoryTest {
             ProgramContributionChannel channel = session.openChannel(owner);
             var registration = channel.register(builder -> builder.volume(new VolumeDefinition<>(
                     new ShaderDefinition(ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
-                            "volume", "test.Volume"), IMPLEMENTATION.data(0), BINDING, INSTANCE,
-                    () -> { })));
+                            "volume", "test.Volume"), IMPLEMENTATION.data(0), BINDING, INSTANCE)));
             session.progress();
             session.progress();
             return registration.exports();
@@ -963,23 +1007,21 @@ final class SceneDirectoryTest {
         private final List<Runnable> retirements = new ArrayList<>();
         private final List<RetainedInstanceTransform> latestTransforms = new ArrayList<>();
         private boolean rejectNext;
-        @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published,
-                                      Runnable previousRetired) {
+        @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
             if (rejectNext) {
                 rejectNext = false;
                 throw new IllegalStateException("rejected native publication");
             }
             snapshots.add(snapshot); revisions.add(snapshot.revision());
-            published.run(); retirements.add(previousRetired);
+            published.run(); retirements.add(() -> { });
         }
-        @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                             Runnable previousRetired) {
+        @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
             if (rejectNext) {
                 rejectNext = false;
                 throw new IllegalStateException("rejected native publication");
             }
             contentSnapshots.add(snapshot); revisions.add(snapshot.revision());
-            published.run(); retirements.add(previousRetired);
+            published.run(); retirements.add(() -> { });
         }
         @Override public void updateLatestInstanceTransforms(List<RetainedInstanceTransform> transforms) {
             latestTransforms.addAll(transforms);
@@ -996,21 +1038,13 @@ final class SceneDirectoryTest {
         private Throwable fatalFailure;
 
         @Override
-        public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable published,
-                                         Runnable previousRetired) {
-            pending.add(() -> {
-                published.run();
-                previousRetired.run();
-            });
+        public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable published) {
+            pending.add(published);
         }
 
         @Override
-        public synchronized void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                                Runnable previousRetired) {
-            pending.add(() -> {
-                published.run();
-                previousRetired.run();
-            });
+        public synchronized void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
+            pending.add(published);
         }
 
         @Override

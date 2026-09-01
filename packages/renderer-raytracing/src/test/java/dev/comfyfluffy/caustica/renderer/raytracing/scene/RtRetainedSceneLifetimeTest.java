@@ -1,8 +1,10 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -96,10 +98,10 @@ final class RtRetainedSceneLifetimeTest {
     @Test
     void terminalFrameRootsRetireDisplacedSnapshotBeforeContributionDrain() {
         AtomicInteger retirements = new AtomicInteger();
-        SharedResourceLease<String> published = SharedResourceLease.owned(
+        SharedResource<String> published = SharedResource.owned(
                 "revision-1", ignored -> retirements.incrementAndGet());
-        SharedResourceLease<String> frame = published.retain();
-        SharedResourceLease<String> history = published.retain();
+        SharedResource<String> frame = published.retain();
+        SharedResource<String> history = published.retain();
         published.close();
         Map<Object, AutoCloseable> frames = new LinkedHashMap<>();
         Map<Object, AutoCloseable> histories = new LinkedHashMap<>();
@@ -117,9 +119,9 @@ final class RtRetainedSceneLifetimeTest {
     @Test
     void displacedMotionHistoryLivesUntilItsOverlappingFrameCompletes() {
         AtomicInteger releases = new AtomicInteger();
-        SharedResourceLease<String> mappedHistory = SharedResourceLease.owned(
+        SharedResource<String> mappedHistory = SharedResource.owned(
                 "submitted frame 1", ignored -> releases.incrementAndGet());
-        SharedResourceLease<String> overlappingFrame = mappedHistory.retain();
+        SharedResource<String> overlappingFrame = mappedHistory.retain();
 
         mappedHistory.close();
 
@@ -132,10 +134,10 @@ final class RtRetainedSceneLifetimeTest {
     @Test
     void displacedMotionHistoryWaitsForEveryOverlappingConsumer() {
         AtomicInteger releases = new AtomicInteger();
-        SharedResourceLease<String> mappedHistory = SharedResourceLease.owned(
+        SharedResource<String> mappedHistory = SharedResource.owned(
                 "submitted frame 1", ignored -> releases.incrementAndGet());
-        SharedResourceLease<String> firstFrame = mappedHistory.retain();
-        SharedResourceLease<String> secondFrame = mappedHistory.retain();
+        SharedResource<String> firstFrame = mappedHistory.retain();
+        SharedResource<String> secondFrame = mappedHistory.retain();
 
         mappedHistory.close();
         firstFrame.close();
@@ -149,7 +151,7 @@ final class RtRetainedSceneLifetimeTest {
     @Test
     void terminalFrameRootReleaseDoesNotRetireCurrentPublication() {
         AtomicInteger retirements = new AtomicInteger();
-        SharedResourceLease<String> current = SharedResourceLease.owned(
+        SharedResource<String> current = SharedResource.owned(
                 "revision-2", ignored -> retirements.incrementAndGet());
         Map<Object, AutoCloseable> frames = new LinkedHashMap<>();
         frames.put(new Object(), current.retain());
@@ -223,5 +225,45 @@ final class RtRetainedSceneLifetimeTest {
         RtRetainedSceneBackend.suppressCleanupFailure(rejection, () -> { throw rejection; });
 
         assertEquals(0, rejection.getSuppressed().length);
+    }
+
+    @Test
+    void failedOwnershipWrapperDisposesTheUnhandedResource() {
+        AtomicInteger disposals = new AtomicInteger();
+        RuntimeException allocationFailure = new RuntimeException("wrapper allocation");
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
+                RtRetainedSceneBackend.handoffResource("native allocation",
+                        ignored -> disposals.incrementAndGet(), ignored -> { throw allocationFailure; }));
+
+        assertSame(allocationFailure, thrown);
+        assertEquals(1, disposals.get());
+    }
+
+    @Test
+    void publicationIsTrackedBeforeAcceptanceCanComplete() {
+        ArrayDeque<Object> queue = new ArrayDeque<>();
+        Object publication = new Object();
+
+        RtRetainedSceneBackend.queueBeforeAcceptance(queue, publication,
+                () -> assertSame(publication, queue.getLast()));
+
+        assertSame(publication, queue.getLast());
+    }
+
+    @Test
+    void rejectedAcceptanceRollsBackItsQueueSlot() {
+        ArrayDeque<Object> queue = new ArrayDeque<>();
+        Object predecessor = new Object();
+        Object publication = new Object();
+        RuntimeException rejection = new RuntimeException("rejected");
+        queue.add(predecessor);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
+                RtRetainedSceneBackend.queueBeforeAcceptance(
+                        queue, publication, () -> { throw rejection; }));
+
+        assertSame(rejection, thrown);
+        assertEquals(List.of(predecessor), List.copyOf(queue));
     }
 }

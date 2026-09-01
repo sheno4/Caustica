@@ -54,6 +54,7 @@ final class ShowcaseDescriptorTableTest {
         private final List<Runnable> retirements = new ArrayList<>();
         @Override public VkDevice vk() { throw new AssertionError(); }
         @Override public long vmaAllocator() { throw new AssertionError(); }
+        @Override public int[] asyncBufferSharingQueueFamilies() { throw new AssertionError(); }
         @Override public GpuDescriptorHeap descriptorHeap() { return heap; }
         @Override public void retireAfterUse(Runnable cleanup) { retirements.add(cleanup); }
     }

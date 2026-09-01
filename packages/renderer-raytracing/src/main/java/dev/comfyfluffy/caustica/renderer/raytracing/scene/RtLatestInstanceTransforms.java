@@ -13,13 +13,24 @@ import java.util.Set;
 
 /** Latest accepted rigid placements applied independently of ordered mesh publication. */
 final class RtLatestInstanceTransforms {
-    private final Map<Long, State> states = new HashMap<>();
+    private Map<Long, State> states = new HashMap<>();
 
     void acceptSnapshot(List<RetainedSceneSnapshot.Instance> instances) {
-        for (RetainedSceneSnapshot.Instance instance : instances) acceptOrdered(instance);
+        apply(prepareSnapshot(instances));
     }
 
     void acceptMutations(List<RetainedSceneGeometryDelta.Mutation> mutations) {
+        apply(prepareMutations(mutations));
+    }
+
+    Update prepareSnapshot(List<RetainedSceneSnapshot.Instance> instances) {
+        Map<Long, State> next = copyStates();
+        for (RetainedSceneSnapshot.Instance instance : instances) acceptOrdered(next, instance);
+        return new Update(next);
+    }
+
+    Update prepareMutations(List<RetainedSceneGeometryDelta.Mutation> mutations) {
+        Map<Long, State> next = copyStates();
         Set<Long> dropped = new HashSet<>();
         for (RetainedSceneGeometryDelta.Mutation mutation : mutations) {
             if (mutation instanceof RetainedSceneGeometryDelta.DropInstance drop) {
@@ -27,13 +38,18 @@ final class RtLatestInstanceTransforms {
             } else if (mutation instanceof RetainedSceneGeometryDelta.SetInstance set) {
                 if (dropped.remove(set.instance().identity())) {
                     RetainedSceneSnapshot.Instance instance = set.instance();
-                    states.put(instance.identity(), new State(
+                    next.put(instance.identity(), new State(
                             instance.transform(), instance.mask(), false));
                 } else {
-                    acceptOrdered(set.instance());
+                    acceptOrdered(next, set.instance());
                 }
             }
         }
+        return new Update(next);
+    }
+
+    void apply(Update update) {
+        states = update.states;
     }
 
     void acceptLatest(List<RetainedInstanceTransform> transforms) {
@@ -62,7 +78,14 @@ final class RtLatestInstanceTransforms {
         states.keySet().retainAll(identities);
     }
 
-    private void acceptOrdered(RetainedSceneSnapshot.Instance instance) {
+    private Map<Long, State> copyStates() {
+        Map<Long, State> copy = new HashMap<>();
+        states.forEach((identity, state) -> copy.put(identity,
+                new State(state.current, state.mask, state.active)));
+        return copy;
+    }
+
+    private static void acceptOrdered(Map<Long, State> states, RetainedSceneSnapshot.Instance instance) {
         State prior = states.get(instance.identity());
         if (prior == null) {
             states.put(instance.identity(), new State(
@@ -75,6 +98,8 @@ final class RtLatestInstanceTransforms {
             prior.active = false;
         }
     }
+
+    record Update(Map<Long, State> states) { }
 
     private static final class State {
         GeometryTransform current;

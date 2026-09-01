@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.api.resource;
 
-/** Contribution-owned creation and lifetime authority for immutable resource generations. */
-public interface ResourceChannel {
+/** Contribution-owned creation authority for immutable resource generations. */
+public interface ResourceFactory {
     /**
      * Create an unsealed generation carrying one producer lifetime claim.
      *

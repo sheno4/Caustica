@@ -56,7 +56,7 @@ import java.util.UUID;
  * Dynamic entities as real ray-traced {@code ModelPart} geometry. Each frame, every model entity is
  * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into neutral scene meshes.
  * {@link MinecraftEntityGeometry} owns their retained mesh and instance identities while the uploader
- * owns source buffers until their introducing retained batches retire. This producer retains Minecraft
+ * owns each current uploaded generation until its replacement becomes visible. This producer retains Minecraft
  * capture state, mesh change detection, and stale-entry eviction state.
  * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
  * ignores) are skipped.

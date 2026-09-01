@@ -34,7 +34,7 @@ import java.util.function.Function;
  *
  * <p>Declarations are accepted synchronously. {@link #progress()} is the session-control-thread boundary
  * which consumes asynchronous compiler results, publishes last-good compositions, invokes serialized
- * callbacks, and starts the next isolated compilation.
+ * readiness callbacks, and starts the next isolated compilation.
  */
 public final class ProgramSession {
     private final ResourceDirectory resources;
@@ -62,7 +62,7 @@ public final class ProgramSession {
     }
 
     /**
-     * Advances compilation/publication and runs queued readiness and retirement callbacks in FIFO order.
+     * Advances compilation/publication and runs queued readiness and internal release work in FIFO order.
      * Call only from the render session's callback/control thread.
      */
     public void progress() {
@@ -76,8 +76,8 @@ public final class ProgramSession {
     }
 
     /**
-     * Whether this owner has no accepted registration, compiler candidate, readiness callback, or retirement
-     * callback left. Session teardown waits for this before invoking the contribution's final close.
+     * Whether this owner has no accepted registration, compiler candidate, or readiness callback left.
+     * Session teardown waits for this before invoking the contribution's final close.
      */
     public synchronized boolean isDrained(ProgramContributionChannel channel) {
         requireChannel(channel);
@@ -87,7 +87,7 @@ public final class ProgramSession {
                 && callbacks.stream().noneMatch(callback -> callback.channel == channel);
     }
 
-    /** Advances publication and waits for this owner's compiler and retirement work to drain. */
+    /** Advances publication and waits for this owner's compiler and published program uses to drain. */
     public void drain(ProgramContributionChannel channel) {
         while (true) {
             progress();
@@ -349,10 +349,6 @@ public final class ProgramSession {
             accepted.remove(registration);
         }
         registration.resourceLeases.forEach(ResourceLease::close);
-        for (Declaration declaration : registration.declarations) {
-            Runnable callback = declaration.retired();
-            if (callback != null) enqueue(registration.channel, callback);
-        }
     }
 
     private List<ResourceLease> acquireImplementationResources(
@@ -451,7 +447,6 @@ public final class ProgramSession {
         Reference reference();
         ProgramComposition.Declaration external();
         List<ShaderDefinition> shaders();
-        Runnable retired();
         ResourceRef implementationDataResource();
     }
 
@@ -464,7 +459,6 @@ public final class ProgramSession {
             return definition.coverage() == null ? List.of(definition.surface())
                     : List.of(definition.surface(), definition.coverage());
         }
-        @Override public Runnable retired() { return definition.retired(); }
         @Override public ResourceRef implementationDataResource() {
             return definition.implementationData().resource();
         }
@@ -476,7 +470,6 @@ public final class ProgramSession {
             return new ProgramComposition.Volume(reference.key, definition);
         }
         @Override public List<ShaderDefinition> shaders() { return List.of(definition.implementation()); }
-        @Override public Runnable retired() { return definition.retired(); }
         @Override public ResourceRef implementationDataResource() {
             return definition.implementationData().resource();
         }
@@ -488,7 +481,6 @@ public final class ProgramSession {
             return new ProgramComposition.Environment(reference.key, definition);
         }
         @Override public List<ShaderDefinition> shaders() { return List.of(definition.implementation()); }
-        @Override public Runnable retired() { return null; }
         @Override public ResourceRef implementationDataResource() { return ResourceRef.none(); }
     }
 

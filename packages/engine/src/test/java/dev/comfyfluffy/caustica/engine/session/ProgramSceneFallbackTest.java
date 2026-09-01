@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
@@ -52,9 +53,9 @@ final class ProgramSceneFallbackTest {
         ProgramRegistration<Exports> registration = programChannel.register(builder -> new Exports(
                 builder.surface(new SurfaceDefinition<>(shader("surface", "test.Surface"),
                         shader("coverage", "test.Coverage"), IMPLEMENTATION.data(11),
-                        BINDING, INSTANCE, () -> { })),
+                        BINDING, INSTANCE)),
                 builder.volume(new VolumeDefinition<>(shader("volume", "test.Volume"),
-                        IMPLEMENTATION.data(12), BINDING, INSTANCE, () -> { }))));
+                        IMPLEMENTATION.data(12), BINDING, INSTANCE))));
         progress(programs);
 
         CapturingSceneBackend scenesBackend = new CapturingSceneBackend();
@@ -100,9 +101,11 @@ final class ProgramSceneFallbackTest {
     private static MeshBuild<Instance> mesh(Exports exports) {
         return new MeshBuild<>(
                 new MeshBuild.Stream(new VulkanDeviceAddressRange(
-                        new VulkanDeviceAddress(0x1000), 3L * 3L * Float.BYTES), 3 * Float.BYTES),
+                        new VulkanDeviceAddress(0x1000), 3L * 3L * Float.BYTES), 3 * Float.BYTES,
+                        ResourceRef.none()),
                 new MeshBuild.Stream(new VulkanDeviceAddressRange(
-                        new VulkanDeviceAddress(0x2000), 3L * Integer.BYTES), Integer.BYTES),
+                        new VulkanDeviceAddress(0x2000), 3L * Integer.BYTES), Integer.BYTES,
+                        ResourceRef.none()),
                 3, new MeshBuild.IndexRevision(1), List.of(new MeshBuild.Geometry<>(
                         new MeshBuild.SurfaceSlot<>(exports.surface(), BINDING.data(21),
                                 new MeshBuild.CoveragePolicy.Cutout(0.5f)),
@@ -136,17 +139,14 @@ final class ProgramSceneFallbackTest {
         private final List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
 
         @Override
-        public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable previousRetired) {
+        public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
             snapshots.add(snapshot);
             published.run();
-            previousRetired.run();
         }
 
         @Override
-        public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                   Runnable previousRetired) {
+        public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
             published.run();
-            previousRetired.run();
         }
     }
 }

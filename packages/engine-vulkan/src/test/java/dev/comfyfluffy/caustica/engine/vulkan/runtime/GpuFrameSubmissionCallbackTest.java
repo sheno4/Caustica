@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class GpuFrameSubmissionCallbackTest {
     @Test
     void acceptedCommandsPublishCallbacksOnceInRegistrationOrder() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         List<String> events = new ArrayList<>();
         use.whenSubmitted(() -> events.add("first"));
         use.whenSubmitted(() -> events.add("second"));
@@ -26,7 +26,7 @@ final class GpuFrameSubmissionCallbackTest {
 
     @Test
     void abandonedCommandsDiscardSubmissionCallbacks() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         List<String> events = new ArrayList<>();
         use.whenSubmitted(() -> events.add("unexpected"));
 
@@ -39,7 +39,7 @@ final class GpuFrameSubmissionCallbackTest {
 
     @Test
     void acceptedCommandsSignalEvenWhenPublicationCallbackFails() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         List<String> events = new ArrayList<>();
         use.whenSubmitted(() -> {
             events.add("callback");
@@ -59,7 +59,7 @@ final class GpuFrameSubmissionCallbackTest {
 
     @Test
     void acceptedCommandsTransferKeepAliveToTimelineCompletion() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         AtomicInteger releases = new AtomicInteger();
         List<Runnable> completions = new ArrayList<>();
         use.keepAlive(releases::incrementAndGet);
@@ -75,7 +75,7 @@ final class GpuFrameSubmissionCallbackTest {
 
     @Test
     void abandonedCommandsReleaseKeepAliveImmediately() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         AtomicInteger releases = new AtomicInteger();
         List<Runnable> completions = new ArrayList<>();
         use.keepAlive(releases::incrementAndGet);
@@ -88,7 +88,7 @@ final class GpuFrameSubmissionCallbackTest {
 
     @Test
     void keepAliveReleaseFailureDoesNotSkipOtherReleases() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         AtomicInteger releases = new AtomicInteger();
         List<Runnable> completions = new ArrayList<>();
         use.keepAlive(() -> { throw new Exception("first"); });
@@ -104,7 +104,7 @@ final class GpuFrameSubmissionCallbackTest {
 
     @Test
     void acceptedCompletionCallbacksRunAfterTimelineInRegistrationOrder() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         List<String> events = new ArrayList<>();
         List<Runnable> completions = new ArrayList<>();
         use.whenComplete(() -> events.add("first"));
@@ -121,7 +121,7 @@ final class GpuFrameSubmissionCallbackTest {
 
     @Test
     void abandonedCompletionCallbacksRunDuringResolutionInRegistrationOrder() {
-        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        GraphicsUse use = new GraphicsUse(null, 1L);
         List<String> events = new ArrayList<>();
         List<Runnable> completions = new ArrayList<>();
         use.whenComplete(() -> events.add("first"));

@@ -40,6 +40,7 @@ dependencies {
     api project(":packages:engine-vulkan")
     api project(":packages:slang-runtime")
     implementation project(":packages:vulkan-support")
+    implementation project(":packages:api-support")
     implementation "org.slf4j:slf4j-api:2.0.17"
 
     runtimeOnly project(":packages:shader-api")
@@ -298,7 +299,7 @@ def verifyRendererRayTracingDependencies = tasks.register("verifyRendererRayTrac
     description = "Verifies the ray-tracing shader compiler's physical package dependencies."
     doLast {
         def allowedProjects = [project.path, ":packages:engine", ":packages:engine-vulkan",
-                               ":packages:slang-runtime", ":packages:vulkan-support",
+                               ":packages:slang-runtime", ":packages:vulkan-support", ":packages:api-support",
                                ":packages:shader-api", ":packages:features-builtin"] as Set
         def violations = []
         configurations.matching { it.canBeResolved }.each { configuration ->

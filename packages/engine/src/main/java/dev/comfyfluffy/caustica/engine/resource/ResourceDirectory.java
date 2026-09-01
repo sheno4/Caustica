@@ -1,10 +1,13 @@
 package dev.comfyfluffy.caustica.engine.resource;
 
 import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Optional;
@@ -15,6 +18,9 @@ import java.util.function.Consumer;
 /** Session-wide immutable resource generations and serialized retirement delivery. */
 public final class ResourceDirectory implements AutoCloseable {
     private final Consumer<Throwable> failures;
+    private final Set<ContributionOwner> owners = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<ContributionOwner> acceptingOwners =
+            Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<ResourceState> resources = new LinkedHashSet<>();
     private final Queue<ResourceState> callbacks = new ArrayDeque<>();
     private long nextIdentity;
@@ -24,16 +30,22 @@ public final class ResourceDirectory implements AutoCloseable {
         this.failures = Objects.requireNonNull(failures, "failures");
     }
 
-    public synchronized ResourceContributionChannel openChannel(ContributionOwner owner) {
+    public synchronized ResourceFactory openFactory(ContributionOwner owner) {
         if (closed) throw new IllegalStateException("resource directory is closed");
-        return new ResourceContributionChannel(this, Objects.requireNonNull(owner, "owner"));
+        owner = Objects.requireNonNull(owner, "owner");
+        if (owners.add(owner)) acceptingOwners.add(owner);
+        ContributionOwner boundOwner = owner;
+        return retired -> create(boundOwner, retired);
     }
 
-    synchronized ResourceGeneration create(ResourceContributionChannel channel, Runnable retired) {
-        requireChannel(channel);
+    private synchronized ResourceGeneration create(ContributionOwner owner, Runnable retired) {
         if (closed) throw new IllegalStateException("resource directory is closed");
-        if (!channel.accepting) throw new IllegalStateException("resource creation is quiesced");
-        ResourceState state = new ResourceState(this, channel.owner, ++nextIdentity, retired);
+        requireOwner(owner);
+        if (!acceptingOwners.contains(owner)) {
+            throw new IllegalStateException("resource creation is quiesced");
+        }
+        ResourceState state = new ResourceState(
+                this, owner, ++nextIdentity, Objects.requireNonNull(retired, "retired"));
         resources.add(state);
         return new Generation(state);
     }
@@ -96,25 +108,38 @@ public final class ResourceDirectory implements AutoCloseable {
         notifyAll();
     }
 
-    synchronized void quiesce(ResourceContributionChannel channel) {
-        requireChannel(channel);
-        channel.accepting = false;
+    public synchronized void quiesce(ContributionOwner owner) {
+        requireOwner(owner);
+        acceptingOwners.remove(owner);
     }
 
-    synchronized void invalidate(ResourceContributionChannel channel) {
-        quiesce(channel);
-        resources.stream().filter(state -> state.owner == channel.owner).toList().forEach(this::drop);
+    public synchronized void invalidate(ContributionOwner owner) {
+        quiesce(owner);
+        resources.stream().filter(state -> state.owner == owner).toList().forEach(this::drop);
     }
 
-    public void drain(ResourceContributionChannel channel) {
-        requireChannel(channel);
+    public void drain(ContributionOwner owner) {
+        drain(owner, () -> { });
+    }
+
+    /** Drains an owner, settling external frame leases once if ordinary progress cannot retire it. */
+    public void drain(ContributionOwner owner, Runnable settleFrameUses) {
+        requireOwner(owner);
+        Objects.requireNonNull(settleFrameUses, "settleFrameUses");
+        boolean settled = false;
         while (true) {
             progress();
             synchronized (this) {
-                if (resources.stream().noneMatch(state -> state.owner == channel.owner)) return;
+                if (resources.stream().noneMatch(state -> state.owner == owner)) return;
                 if (!callbacks.isEmpty()) continue;
-                awaitChange();
+                if (!settled) {
+                    settled = true;
+                } else {
+                    awaitChange();
+                    continue;
+                }
             }
+            settleFrameUses.run();
         }
     }
 
@@ -147,6 +172,8 @@ public final class ResourceDirectory implements AutoCloseable {
             throw new IllegalStateException("resource generations remain live");
         }
         closed = true;
+        owners.clear();
+        acceptingOwners.clear();
     }
 
     private synchronized void seal(ResourceState state) {
@@ -172,9 +199,9 @@ public final class ResourceDirectory implements AutoCloseable {
         }
     }
 
-    private void requireChannel(ResourceContributionChannel channel) {
-        if (channel == null || channel.directory != this) {
-            throw new IllegalArgumentException("foreign resource channel");
+    private synchronized void requireOwner(ContributionOwner owner) {
+        if (owner == null || !owners.contains(owner)) {
+            throw new IllegalArgumentException("resource owner is not registered with this session");
         }
     }
 

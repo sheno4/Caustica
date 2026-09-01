@@ -2,6 +2,8 @@ package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
@@ -43,13 +45,16 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     private final MinecraftMaterialLookup materials;
     private final MinecraftPrograms programs;
     private final EntityTextureResolver textures;
+    private final ResourceFactory resources;
 
     public MinecraftVulkanEntityUploader(GpuDevice gpu, MinecraftMaterialLookup materials,
-                                         MinecraftPrograms programs, EntityTextureResolver textures) {
+                                         MinecraftPrograms programs, EntityTextureResolver textures,
+                                         ResourceFactory resources) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
         this.materials = Objects.requireNonNull(materials, "materials");
         this.programs = Objects.requireNonNull(programs, "programs");
         this.textures = Objects.requireNonNull(textures, "textures");
+        this.resources = Objects.requireNonNull(resources, "resources");
     }
 
     @Override public UploadedEntity upload(MinecraftEntityMesh source) {
@@ -57,14 +62,14 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         int[] indices = source.indices();
         float[] uvs = source.uvs();
         float[] colors = source.vertexColors();
-        VmaMappedBuffer position = create((long) positions.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        VmaMappedBuffer position = createAsync((long) positions.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                 bytes -> {
                     for (float value : positions) bytes.putFloat(value);
                 });
         VmaMappedBuffer index = null, primitive = null, instance = null;
         TextureSet textureSet = null;
         try {
-            index = create((long) indices.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            index = createAsync((long) indices.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                     bytes -> {
                         for (int value : indices) bytes.putInt(value);
                     });
@@ -76,36 +81,61 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             instance = create(MinecraftInstanceData.BYTE_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     b -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,
                             new MinecraftInstanceData.SampledTexture2DIndex(0), 0).write(b));
-            return uploaded(source, position, index, primitive, instance, textureSet);
         } catch (RuntimeException | Error failure) {
             Throwable cleanup = closeAll(instance, primitive, index, textureSet, position);
             if (cleanup != null) failure.addSuppressed(cleanup);
             throw failure;
         }
+        return uploaded(source, position, index, primitive, instance, textureSet);
     }
 
     private UploadedEntity uploaded(MinecraftEntityMesh source, VmaMappedBuffer positions,
                                     VmaMappedBuffer indices, VmaMappedBuffer primitive,
                                     VmaMappedBuffer instance, TextureSet textureSet) {
-        List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
-        for (GeometryRange range : geometryRanges(source)) {
-            int first = range.firstTriangle(), end = range.endTriangle();
-            MinecraftEntityMesh.Triangle triangle = source.triangles().get(first);
-            ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
-                    primitive.deviceAddressAt((long) first * MinecraftPrimitiveData.BYTE_SIZE).value());
-            MeshBuild.CoveragePolicy policy = coveragePolicy(triangle.coverage());
-            var surface = triangle.material().program() == MinecraftEntityMesh.Program.PORTAL
-                    ? new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy)
-                    : new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
-            geometries.add(new MeshBuild.Geometry<>(surface, null, first * 3, (end - first) * 3));
+        ResourceGeneration positionGeneration = null;
+        ResourceGeneration indexGeneration = null;
+        ResourceGeneration bindingGeneration = null;
+        ResourceGeneration instanceGeneration = null;
+        try {
+            positionGeneration = resources.create(positions::close);
+            indexGeneration = resources.create(indices::close);
+            bindingGeneration = resources.create(() -> throwIfFailed(closeAll(textureSet, primitive)));
+            instanceGeneration = resources.create(instance::close);
+            List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
+            for (GeometryRange range : geometryRanges(source)) {
+                int first = range.firstTriangle(), end = range.endTriangle();
+                MinecraftEntityMesh.Triangle triangle = source.triangles().get(first);
+                ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
+                        primitive.deviceAddressAt((long) first * MinecraftPrimitiveData.BYTE_SIZE).value(),
+                        bindingGeneration.reference());
+                MeshBuild.CoveragePolicy policy = coveragePolicy(triangle.coverage());
+                var surface = triangle.material().program() == MinecraftEntityMesh.Program.PORTAL
+                        ? new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy)
+                        : new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
+                geometries.add(new MeshBuild.Geometry<>(surface, null, first * 3, (end - first) * 3));
+            }
+            MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
+                    new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration.reference()),
+                    new MeshBuild.Stream(indices.deviceRange(), 4, indexGeneration.reference()), source.vertexCount(),
+                    new MeshBuild.IndexRevision(source.indexRevision()), geometries);
+            ShaderData<MinecraftProgramTypes.InstanceData> instanceData = MinecraftProgramTypes.INSTANCE_DATA.data(
+                    instance.deviceRange().address().value(), instanceGeneration.reference());
+            positionGeneration.seal();
+            indexGeneration.seal();
+            bindingGeneration.seal();
+            instanceGeneration.seal();
+            return new Uploaded(build, instanceData, positionGeneration, indexGeneration,
+                    bindingGeneration, instanceGeneration);
+        } catch (RuntimeException | Error failure) {
+            Throwable cleanup = closeAll(
+                    positionGeneration == null ? positions : positionGeneration::drop,
+                    indexGeneration == null ? indices : indexGeneration::drop,
+                    bindingGeneration == null ? () -> throwIfFailed(closeAll(textureSet, primitive))
+                            : bindingGeneration::drop,
+                    instanceGeneration == null ? instance : instanceGeneration::drop);
+            if (cleanup != null) failure.addSuppressed(cleanup);
+            throw failure;
         }
-        MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
-                new MeshBuild.Stream(positions.deviceRange(), 12),
-                new MeshBuild.Stream(indices.deviceRange(), 4), source.vertexCount(),
-                new MeshBuild.IndexRevision(source.indexRevision()), geometries);
-        return new Uploaded(build, MinecraftProgramTypes.INSTANCE_DATA.data(
-                instance.deviceRange().address().value()),
-                positions, indices, primitive, instance, textureSet);
     }
 
     static MeshBuild.CoveragePolicy coveragePolicy(MinecraftEntityMesh.Coverage coverage) {
@@ -269,7 +299,17 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
 
     private VmaMappedBuffer create(long size, int extraUsage, Writer writer) {
-        VmaMappedBuffer buffer = VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft entity upload");
+        return create(size, extraUsage, writer, false);
+    }
+
+    private VmaMappedBuffer createAsync(long size, int extraUsage, Writer writer) {
+        return create(size, extraUsage, writer, true);
+    }
+
+    private VmaMappedBuffer create(long size, int extraUsage, Writer writer, boolean asyncShared) {
+        VmaMappedBuffer buffer = asyncShared
+                ? VmaMappedBuffer.createAsync(gpu, size, extraUsage, "Minecraft entity upload")
+                : VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft entity upload");
         try {
             ByteBuffer bytes = buffer.mapped().order(ByteOrder.LITTLE_ENDIAN);
             writer.write(bytes);
@@ -318,11 +358,15 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
     private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
                             ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                            VmaMappedBuffer positions, VmaMappedBuffer indices,
-                            VmaMappedBuffer primitive, VmaMappedBuffer instance,
-                            TextureSet textures) implements UploadedEntity {
+                            ResourceGeneration positionGeneration,
+                            ResourceGeneration indexGeneration,
+                            ResourceGeneration bindingGeneration,
+                            ResourceGeneration instanceGeneration) implements UploadedEntity {
         @Override public void close() {
-            throwIfFailed(closeAll(textures, instance, primitive, indices, positions));
+            positionGeneration.drop();
+            indexGeneration.drop();
+            bindingGeneration.drop();
+            instanceGeneration.drop();
         }
     }
     record GeometryRange(int firstTriangle, int endTriangle) { }

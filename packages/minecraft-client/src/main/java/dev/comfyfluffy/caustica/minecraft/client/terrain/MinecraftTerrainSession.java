@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.client.terrain;
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
@@ -16,10 +17,13 @@ public final class MinecraftTerrainSession {
     private final GpuDevice gpu;
     private final RtTerrain terrain;
     private final RtEntityTextures textures;
+    private final ResourceFactory resources;
     private MinecraftTerrainGeometry geometry;
 
-    public MinecraftTerrainSession(GpuDevice gpu, RtTerrain terrain, RtEntityTextures textures) {
+    public MinecraftTerrainSession(GpuDevice gpu, ResourceFactory resources,
+                                   RtTerrain terrain, RtEntityTextures textures) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
+        this.resources = java.util.Objects.requireNonNull(resources, "resources");
         this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
         this.textures = java.util.Objects.requireNonNull(textures, "textures");
     }
@@ -43,7 +47,7 @@ public final class MinecraftTerrainSession {
         var atlas = textures.contributeAtlas(TextureAtlas.LOCATION_BLOCKS);
         var borrowed = java.util.Objects.requireNonNull(textures.resolve(atlas),
                 "Minecraft block atlas must be available to terrain");
-        var uploader = new MinecraftVulkanTerrainUploader(gpu, programs, borrowed);
+        var uploader = new MinecraftVulkanTerrainUploader(gpu, programs, borrowed, resources);
         try {
             var next = new MinecraftTerrainGeometry(channel, lights, scene, uploader);
             terrain.bindGeometry(next);

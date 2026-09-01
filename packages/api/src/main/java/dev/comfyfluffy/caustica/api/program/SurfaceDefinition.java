@@ -14,10 +14,6 @@ import java.util.Objects;
  * and {@code instanceDataType} declare the schemas accepted by geometry slots and mesh placements selecting
  * this implementation. Their token identities survive Java generic erasure and are validated when geometry
  * is submitted. Material variants are extension data indexed from these roots; they are not renderer objects.
- * {@code retired} runs exactly once after the owning registration is removed, its compilation fails, or
- * its session ends, once no active or in-flight program can execute it and no
- * submitted GPU work can read the root. Retirement callbacks are serialized by the session, never run
- * inline with {@link ProgramBuilder#surface}, and must return promptly without throwing.
  *
  * @param <B> geometry-slot binding data schema
  * @param <N> mesh-placement instance data schema
@@ -25,31 +21,29 @@ import java.util.Objects;
 public record SurfaceDefinition<B, N>(ShaderDefinition surface, ShaderDefinition coverage,
                                       ShaderData<?> implementationData,
                                       ShaderDataType<B> bindingDataType,
-                                      ShaderDataType<N> instanceDataType,
-                                      Runnable retired) {
+                                      ShaderDataType<N> instanceDataType) {
     public SurfaceDefinition {
         Objects.requireNonNull(surface, "surface");
         Objects.requireNonNull(implementationData, "implementationData");
         Objects.requireNonNull(bindingDataType, "bindingDataType");
         Objects.requireNonNull(instanceDataType, "instanceDataType");
-        Objects.requireNonNull(retired, "retired");
     }
 
-    /** A definition whose source requires no separate retirement notification. */
+    /** Creates a definition with a traversal-safe coverage implementation. */
     public static <B, N> SurfaceDefinition<B, N> of(
             ShaderDefinition surface, ShaderDefinition coverage,
             ShaderData<?> implementationData, ShaderDataType<B> bindingDataType,
             ShaderDataType<N> instanceDataType) {
         Objects.requireNonNull(coverage, "coverage");
         return new SurfaceDefinition<>(surface, coverage, implementationData, bindingDataType,
-                instanceDataType, () -> { });
+                instanceDataType);
     }
 
-    /** An opaque-only definition whose source requires no separate retirement notification. */
+    /** Creates a definition that can only be used by opaque geometry. */
     public static <B, N> SurfaceDefinition<B, N> opaque(
             ShaderDefinition surface, ShaderData<?> implementationData,
             ShaderDataType<B> bindingDataType, ShaderDataType<N> instanceDataType) {
         return new SurfaceDefinition<>(surface, null, implementationData, bindingDataType,
-                instanceDataType, () -> { });
+                instanceDataType);
     }
 }

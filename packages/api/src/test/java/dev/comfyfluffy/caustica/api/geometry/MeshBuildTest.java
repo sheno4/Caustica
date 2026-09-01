@@ -24,8 +24,8 @@ final class MeshBuildTest {
     private static final ShaderDataType<Binding> BINDING = ShaderDataType.create("test binding");
 
     @Test
-    void streamOffsetParticipatesInTheEffectiveAddress() {
-        var stream = new MeshBuild.Stream(range(0x1000L, 96L).slice(32L, 64L), 16);
+    void sessionLivedStreamOffsetParticipatesInTheEffectiveAddress() {
+        var stream = stream(range(0x1000L, 96L).slice(32L, 64L), 16);
         assertEquals(new VulkanDeviceAddress(0x1020L), stream.bytes().address());
         assertEquals(64L, stream.byteSize());
         assertSame(ResourceRef.none(), stream.resource());
@@ -54,8 +54,8 @@ final class MeshBuildTest {
     @Test
     void rejectsPositionStrideThatIsNotAFloatMultiple() {
         assertThrows(IllegalArgumentException.class, () -> new MeshBuild<Instance>(
-                new MeshBuild.Stream(range(0x1000L, 38L), 13),
-                new MeshBuild.Stream(range(0x2000L, 12L), 4), 3, null,
+                stream(range(0x1000L, 38L), 13),
+                stream(range(0x2000L, 12L), 4), 3, null,
                 List.of(geometry(new SurfaceId<Binding, Instance>() { }, 0, 3))));
     }
 
@@ -74,8 +74,8 @@ final class MeshBuildTest {
     void rejectsOverlappingGeometrySlices() {
         SurfaceId<Binding, Instance> surface = new SurfaceId<>() { };
         assertThrows(IllegalArgumentException.class, () -> new MeshBuild<Instance>(
-                new MeshBuild.Stream(range(0x1000L, 36L), 12),
-                new MeshBuild.Stream(range(0x2000L, 24L), 4), 3,
+                stream(range(0x1000L, 36L), 12),
+                stream(range(0x2000L, 24L), 4), 3,
                 null,
                 List.of(geometry(surface, 0, 6), geometry(surface, 3, 3))));
     }
@@ -120,13 +120,17 @@ final class MeshBuildTest {
     private static MeshBuild<Instance> build(MeshBuild.IndexRevision revision) {
         SurfaceId<Binding, Instance> surface = new SurfaceId<>() { };
         return new MeshBuild<>(
-                new MeshBuild.Stream(range(0x1000L, 36L), 12),
-                new MeshBuild.Stream(range(0x2000L, 12L), 4), 3, revision,
+                stream(range(0x1000L, 36L), 12),
+                stream(range(0x2000L, 12L), 4), 3, revision,
                 List.of(geometry(surface, 0, 3)));
     }
 
     private static VulkanDeviceAddressRange range(long address, long byteSize) {
         return new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), byteSize);
+    }
+
+    private static MeshBuild.Stream stream(VulkanDeviceAddressRange bytes, int byteStride) {
+        return new MeshBuild.Stream(bytes, byteStride, ResourceRef.none());
     }
 
     private static MeshBuild.Geometry<Instance> geometry(

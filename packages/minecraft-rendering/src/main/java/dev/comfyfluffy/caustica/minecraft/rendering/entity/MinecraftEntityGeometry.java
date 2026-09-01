@@ -32,7 +32,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         this.uploader = Objects.requireNonNull(uploader, "uploader");
     }
 
-    /** Stages independently retired updates so one capture frame becomes one atomic scene publication. */
+    /** Stages updates so one capture frame becomes one atomic scene publication. */
     public synchronized UpdateGroup beginUpdateGroup() {
         requireRunning();
         if (pendingGroup != null) throw new IllegalStateException("an entity update group is already active");
@@ -57,20 +57,36 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         }
         Resident target = prior != null ? prior : new Resident(channel.newInstance(),
                 channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA));
+        MinecraftEntityUploader.UploadedEntity displacedUpload = prior == null ? null : prior.uploaded;
         MinecraftEntityUploader.UploadedEntity uploaded = uploader.upload(mesh);
-        Lease lease = new Lease(uploaded);
-        Runnable retirement = lease.retain();
-        boolean staged = false;
+        boolean accepted = false;
         try {
             var operations = new ArrayList<GeometryChannel.Operation>(2);
             operations.add(new GeometryChannel.SetMesh<>(target.mesh, uploaded.build()));
             operations.add(new GeometryChannel.SetInstance<>(target.instance, scene, target.mesh, transform, mask,
                     uploaded.instanceData()));
-            submit(new RetainedBatch<>(operations, retirement), lease::reject);
-            staged = true;
-            if (prior != null) submitLatest(target, transform, mask);
+            GeometryPublication publication;
+            if (pendingGroup != null) {
+                pendingGroup.batches.add(RetainedBatch.of(operations));
+                pendingGroup.introduced.add(uploaded);
+                if (displacedUpload != null) pendingGroup.displaced.add(displacedUpload);
+                publication = null;
+            } else if (prior != null) {
+                GeometryChannel.LatestInstance latest = new GeometryChannel.LatestInstance(
+                        target.instance, transform, mask);
+                publication = channel.submitGroupWithLatest(
+                        List.of(RetainedBatch.of(operations)), List.of(latest));
+            } else {
+                publication = channel.submit(RetainedBatch.of(operations));
+            }
+            accepted = publication != null;
+            if (prior != null && pendingGroup != null) submitLatest(target, transform, mask);
+            target.uploaded = uploaded;
+            if (publication != null && displacedUpload != null) publication.whenVisible(displacedUpload::close);
         } catch (RuntimeException | Error failure) {
-            if (!staged) lease.reject(failure);
+            if (!accepted) {
+                try { uploaded.close(); } catch (Throwable closeFailure) { failure.addSuppressed(closeFailure); }
+            }
             throw failure;
         }
         target.revision = revision;
@@ -106,7 +122,12 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         var operations = new ArrayList<GeometryChannel.Operation>(2);
         operations.add(new GeometryChannel.DropInstance(resident.instance));
         operations.add(new GeometryChannel.DropMesh<>(resident.mesh));
-        submit(RetainedBatch.of(operations), failure -> { });
+        if (pendingGroup != null) {
+            pendingGroup.batches.add(RetainedBatch.of(operations));
+            pendingGroup.displaced.add(resident.uploaded);
+        } else {
+            channel.submit(RetainedBatch.of(operations)).whenVisible(resident.uploaded::close);
+        }
         residents.remove(key);
     }
 
@@ -119,7 +140,10 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                 operations.add(new GeometryChannel.DropInstance(resident.instance));
                 operations.add(new GeometryChannel.DropMesh<>(resident.mesh));
             }
-            channel.submit(RetainedBatch.of(operations));
+            List<MinecraftEntityUploader.UploadedEntity> uploads = residents.values().stream()
+                    .map(resident -> resident.uploaded).toList();
+            channel.submit(RetainedBatch.of(operations)).whenVisible(
+                    () -> uploads.forEach(MinecraftEntityUploader.UploadedEntity::close));
         }
         residents.clear();
         stopped = true;
@@ -133,16 +157,6 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         if (stopped) throw new IllegalStateException("entity geometry is stopped");
     }
 
-    private void submit(RetainedBatch<GeometryChannel.Operation> batch,
-                        java.util.function.Consumer<Throwable> rejected) {
-        if (pendingGroup != null) {
-            pendingGroup.batches.add(batch);
-            pendingGroup.rejections.add(rejected);
-        } else {
-            channel.submit(batch);
-        }
-    }
-
     public interface UpdateGroup extends AutoCloseable {
         GeometryPublication submit();
         @Override void close();
@@ -151,14 +165,15 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     private final class PendingGroup implements UpdateGroup {
         final Map<Key, ResidentSnapshot> residentSnapshot = new LinkedHashMap<>();
         final List<RetainedBatch<GeometryChannel.Operation>> batches = new ArrayList<>();
-        final List<java.util.function.Consumer<Throwable>> rejections = new ArrayList<>();
+        final List<MinecraftEntityUploader.UploadedEntity> introduced = new ArrayList<>();
+        final List<MinecraftEntityUploader.UploadedEntity> displaced = new ArrayList<>();
         final Map<InstanceId, GeometryChannel.LatestInstance> latestInstances = new IdentityHashMap<>();
         boolean finished;
 
         PendingGroup() {
             residents.forEach((key, resident) -> residentSnapshot.put(key,
                     new ResidentSnapshot(resident.instance, resident.mesh, resident.revision,
-                            resident.transform, resident.mask)));
+                            resident.transform, resident.mask, resident.uploaded)));
         }
 
         @Override public GeometryPublication submit() {
@@ -168,6 +183,8 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                     GeometryPublication publication = batches.isEmpty() && latestInstances.isEmpty()
                             ? GeometryPublication.alreadyVisible()
                             : channel.submitGroupWithLatest(batches, List.copyOf(latestInstances.values()));
+                    publication.whenVisible(() -> displaced.forEach(
+                            MinecraftEntityUploader.UploadedEntity::close));
                     finished = true;
                     pendingGroup = null;
                     return publication;
@@ -187,8 +204,9 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         }
 
         private void rollback(Throwable failure) {
-            for (int index = rejections.size() - 1; index >= 0; index--) {
-                rejections.get(index).accept(failure);
+            for (int index = introduced.size() - 1; index >= 0; index--) {
+                try { introduced.get(index).close(); }
+                catch (Throwable closeFailure) { failure.addSuppressed(closeFailure); }
             }
             residents.clear();
             residentSnapshot.forEach((key, snapshot) -> residents.put(key, snapshot.restore()));
@@ -202,12 +220,14 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     }
 
     private record ResidentSnapshot(InstanceId instance, MeshId<MinecraftProgramTypes.InstanceData> mesh,
-                                    MeshRevision revision, GeometryTransform transform, int mask) {
+                                    MeshRevision revision, GeometryTransform transform, int mask,
+                                    MinecraftEntityUploader.UploadedEntity uploaded) {
         Resident restore() {
             Resident resident = new Resident(instance, mesh);
             resident.revision = revision;
             resident.transform = transform;
             resident.mask = mask;
+            resident.uploaded = uploaded;
             return resident;
         }
     }
@@ -223,6 +243,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         MeshRevision revision;
         GeometryTransform transform;
         int mask;
+        MinecraftEntityUploader.UploadedEntity uploaded;
 
         Resident(InstanceId instance, MeshId<MinecraftProgramTypes.InstanceData> mesh) {
             this.instance = instance;
@@ -230,41 +251,4 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         }
     }
 
-    /** One uploaded allocation may be retained by overlapping mesh and transform replacement batches. */
-    private static final class Lease {
-        final MinecraftEntityUploader.UploadedEntity uploaded;
-        int references;
-
-        Lease(MinecraftEntityUploader.UploadedEntity uploaded) {
-            this.uploaded = uploaded;
-        }
-
-        synchronized Runnable retain() {
-            references++;
-            return this::release;
-        }
-
-        synchronized void reject(Throwable failure) {
-            references--;
-            if (references == 0) close(failure);
-        }
-
-        private synchronized void release() {
-            if (--references == 0) {
-                try {
-                    uploaded.close();
-                } catch (Throwable ignored) {
-                    // Retained retirement must finish without escaping into the renderer.
-                }
-            }
-        }
-
-        private void close(Throwable failure) {
-            try {
-                uploaded.close();
-            } catch (Throwable closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
-        }
-    }
 }

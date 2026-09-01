@@ -70,7 +70,7 @@ final class ProgramContractTest {
 
 
     @Test
-    void implementationDefinitionsOwnTheirRetirementCallbacks() throws NoSuchMethodException {
+    void implementationDefinitionsExposeShaderAndDataSchemas() throws NoSuchMethodException {
         assertEquals(2, SurfaceDefinition.class.getTypeParameters().length);
         assertEquals(2, VolumeDefinition.class.getTypeParameters().length);
         assertSame(ShaderDefinition.class, SurfaceDefinition.class.getMethod("surface").getReturnType());
@@ -78,16 +78,14 @@ final class ProgramContractTest {
         assertSame(ShaderData.class, SurfaceDefinition.class.getMethod("implementationData").getReturnType());
         assertSame(ShaderDataType.class, SurfaceDefinition.class.getMethod("bindingDataType").getReturnType());
         assertSame(ShaderDataType.class, SurfaceDefinition.class.getMethod("instanceDataType").getReturnType());
-        assertSame(Runnable.class, SurfaceDefinition.class.getMethod("retired").getReturnType());
         assertSame(ShaderDefinition.class, VolumeDefinition.class.getMethod("implementation").getReturnType());
         assertSame(ShaderData.class, VolumeDefinition.class.getMethod("implementationData").getReturnType());
         assertSame(ShaderDataType.class, VolumeDefinition.class.getMethod("bindingDataType").getReturnType());
         assertSame(ShaderDataType.class, VolumeDefinition.class.getMethod("instanceDataType").getReturnType());
-        assertSame(Runnable.class, VolumeDefinition.class.getMethod("retired").getReturnType());
     }
 
     @Test
-    void implementationDefinitionsOfferNoopRetirementFactories() {
+    void implementationDefinitionsOfferConvenienceFactories() {
         ShaderSource source = ShaderSource.classpath(ProgramContractTest.class, "/caustica/shaders/api");
         ShaderDefinition surface = new ShaderDefinition(source, "caustica_surface", "ISurfaceModel");
         ShaderDefinition coverage = new ShaderDefinition(source, "caustica_coverage", "ICoverageModel");
@@ -97,11 +95,10 @@ final class ProgramContractTest {
         ShaderDataType<Object> instanceType = ShaderDataType.create("instance");
         ShaderData<Object> implementationData = implementationType.data(7L);
 
-        SurfaceDefinition.of(surface, coverage, implementationData, bindingType, instanceType)
-                .retired().run();
+        SurfaceDefinition.of(surface, coverage, implementationData, bindingType, instanceType);
         assertNull(SurfaceDefinition.opaque(surface, implementationData, bindingType, instanceType)
                 .coverage());
-        VolumeDefinition.of(volume, implementationData, bindingType, instanceType).retired().run();
+        VolumeDefinition.of(volume, implementationData, bindingType, instanceType);
     }
 
     @Test
@@ -130,6 +127,5 @@ final class ProgramContractTest {
         assertSame(secondResource, second.resource());
         assertNotEquals(first, second);
         assertSame(ResourceRef.none(), type.data(7L).resource());
-        assertSame(ResourceRef.none(), new ShaderData<>(type, 7L).resource());
     }
 }

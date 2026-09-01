@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.renderer.presentation.gen.ExposureStateData;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -277,7 +278,7 @@ public final class RtExposure {
     }
 
     /** Attach the readback copy only after the command buffer has been accepted for frame submission. */
-    public void markStateReadbackUse(RtGpuExecutor.GraphicsUse graphicsUse) {
+    public void markStateReadbackUse(GraphicsUse graphicsUse) {
         if (pendingStateReadback == null) {
             return;
         }

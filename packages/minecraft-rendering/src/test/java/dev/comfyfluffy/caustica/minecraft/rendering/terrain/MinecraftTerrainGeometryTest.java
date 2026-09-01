@@ -11,12 +11,14 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -62,7 +64,7 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
-    void replacementIsOneAtomicMeshAndPlacementBatchAndRetiresTheUpload() {
+    void replacementIsOneAtomicMeshAndPlacementBatchAndKeepsTheCurrentUpload() {
         var channel = new RecordingChannel();
         var upload = new Uploaded(0x1000L);
         var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> upload);
@@ -77,8 +79,8 @@ final class MinecraftTerrainGeometryTest {
         assertEquals(-32.0, placement.transform().translationY());
         assertEquals(48.0, placement.transform().translationZ());
         assertFalse(upload.closed);
-        batch.retired().run();
-        assertTrue(upload.closed);
+        channel.publication.makeVisible();
+        assertFalse(upload.closed);
     }
 
     @Test
@@ -97,7 +99,7 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
-    void groupsTransactionsIntoOnePublicationWithIndependentRetirement() {
+    void groupsTransactionsIntoOnePublicationWithCurrentUploadOwnership() {
         var channel = new RecordingChannel();
         var first = new Uploaded(0x2100L);
         var second = new Uploaded(0x2200L);
@@ -110,11 +112,9 @@ final class MinecraftTerrainGeometryTest {
 
         assertEquals(1, channel.groups.size());
         assertEquals(2, channel.groups.getFirst().size());
-        channel.groups.getFirst().getFirst().retired().run();
-        assertTrue(first.closed);
+        channel.publication.makeVisible();
+        assertFalse(first.closed);
         assertFalse(second.closed);
-        channel.groups.getFirst().getLast().retired().run();
-        assertTrue(second.closed);
     }
 
     @Test
@@ -127,7 +127,7 @@ final class MinecraftTerrainGeometryTest {
 
         assertSame(channel.publication, publication);
         assertFalse(publication.isVisible());
-        channel.visible = true;
+        channel.publication.makeVisible();
         assertTrue(publication.isVisible());
     }
 
@@ -241,10 +241,11 @@ final class MinecraftTerrainGeometryTest {
     @Test
     void sharedAtlasDefersExactOnceCleanupUntilOwnerAndEveryUploadRetire() {
         AtomicInteger cleanups = new AtomicInteger();
-        var atlas = new MinecraftVulkanTerrainUploader.SharedAtlas(37, 41, () -> {
+        var atlasValue = new MinecraftVulkanTerrainUploader.SharedAtlas(37, 41, () -> {
             cleanups.incrementAndGet();
             throw new IllegalStateException("cleanup failure must not escape retirement");
         });
+        var atlas = SharedResource.owned(atlasValue, MinecraftVulkanTerrainUploader.SharedAtlas::cleanup);
         var first = atlas.retain();
         var second = atlas.retain();
 
@@ -279,15 +280,19 @@ final class MinecraftTerrainGeometryTest {
         var environment = new dev.comfyfluffy.caustica.api.program.EnvironmentId<
                 MinecraftProgramTypes.EnvironmentBindingData>() { };
         var programs = new MinecraftPrograms(materialSurface, waterSurface, portalSurface, waterVolume, environment);
+        var bindingResource = new dev.comfyfluffy.caustica.api.resource.ResourceRef() { };
 
         var geometries = MinecraftVulkanTerrainUploader.geometries(
-                source, programs, new VulkanDeviceAddress(0x4000L));
+                source, programs, new VulkanDeviceAddress(0x4000L), bindingResource);
 
         assertEquals(2, geometries.size());
         assertSame(materialSurface, geometries.get(0).surface().surface());
         assertEquals(0x4000L, geometries.get(0).surface().bindingData().bits());
         assertSame(waterSurface, geometries.get(1).surface().surface());
         assertSame(waterVolume, geometries.get(1).volume().volume());
+        assertSame(bindingResource, geometries.get(0).surface().bindingData().resource());
+        assertSame(bindingResource, geometries.get(1).surface().bindingData().resource());
+        assertSame(bindingResource, geometries.get(1).volume().bindingData().resource());
         assertEquals(0x4000L + MinecraftPrimitiveData.BYTE_SIZE,
                 geometries.get(1).surface().bindingData().bits());
         assertEquals(3, geometries.get(1).firstIndex());
@@ -327,9 +332,11 @@ final class MinecraftTerrainGeometryTest {
 
         @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(
-                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12);
+                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12,
+                    ResourceRef.none());
             var indices = new MeshBuild.Stream(
-                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4);
+                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4,
+                    ResourceRef.none());
             var surface = new MeshBuild.SurfaceSlot<>(new dev.comfyfluffy.caustica.api.program.SurfaceId<
                     MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
                     MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),
@@ -363,8 +370,7 @@ final class MinecraftTerrainGeometryTest {
         private final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
         private final List<RetainedBatch<LightChannel.Operation>> lightBatches = new ArrayList<>();
         private boolean rejectNext;
-        private boolean visible;
-        private final dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication = () -> visible;
+        private final TestPublication publication = new TestPublication();
 
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) { return new MeshId<>() { }; }
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
@@ -398,6 +404,22 @@ final class MinecraftTerrainGeometryTest {
             batches.addAll(group);
             lightBatches.add(lightBatch);
             return publication;
+        }
+    }
+
+    private static final class TestPublication
+            implements dev.comfyfluffy.caustica.api.geometry.GeometryPublication {
+        private final List<Runnable> callbacks = new ArrayList<>();
+        private boolean visible;
+        @Override public boolean isVisible() { return visible; }
+        @Override public void whenVisible(Runnable callback) {
+            if (visible) callback.run();
+            else callbacks.add(callback);
+        }
+        void makeVisible() {
+            visible = true;
+            callbacks.forEach(Runnable::run);
+            callbacks.clear();
         }
     }
 

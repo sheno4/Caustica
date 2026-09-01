@@ -11,6 +11,8 @@ import dev.comfyfluffy.caustica.api.pass.PassId;
 import dev.comfyfluffy.caustica.api.pass.PassPlacement;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
 import dev.comfyfluffy.caustica.example.showcase.gen.ShowcasePostPushData;
 import dev.comfyfluffy.caustica.example.showcase.gen.ShowcaseUiPushData;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
@@ -59,8 +61,9 @@ final class ShowcasePasses {
 
     private ShowcasePasses() { }
 
-    static Pass<PassFrame> worldResource(GpuDevice gpu, BooleanSupplier programReady, ShowcaseScene scene) {
-        return worldResource(programReady, new VulkanWorldMeshHandoff(gpu, scene));
+    static Pass<PassFrame> worldResource(GpuDevice gpu, ResourceFactory resources,
+                                         BooleanSupplier programReady, ShowcaseScene scene) {
+        return worldResource(programReady, new VulkanWorldMeshHandoff(gpu, resources, scene));
     }
 
     static Pass<PassFrame> worldResource(BooleanSupplier programReady, WorldMeshHandoff handoff) {
@@ -92,14 +95,18 @@ final class ShowcasePasses {
         private static final int TOTAL_BYTES = INDEX_OFFSET + INDEX_BYTES;
 
         private final GpuDevice gpu;
+        private final ResourceFactory resources;
         private final ShowcaseScene scene;
         private VmaMappedBuffer upload;
         private boolean uploadRecorded;
+        private boolean uploadSubmitted;
         private boolean uploadComplete;
+        private boolean closed;
         private GeometryPublication publication;
 
-        private VulkanWorldMeshHandoff(GpuDevice gpu, ShowcaseScene scene) {
+        private VulkanWorldMeshHandoff(GpuDevice gpu, ResourceFactory resources, ShowcaseScene scene) {
             this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
+            this.resources = java.util.Objects.requireNonNull(resources, "resources");
             this.scene = java.util.Objects.requireNonNull(scene, "scene");
         }
 
@@ -113,15 +120,18 @@ final class ShowcasePasses {
             if (uploadRecorded) {
                 if (!uploadComplete) return;
                 VmaMappedBuffer accepted = upload;
-                publication = scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
-                        accepted.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), accepted::close);
+                ResourceGeneration generation = resources.create(accepted::close);
                 upload = null;
+                publication = scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
+                        accepted.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), generation);
                 return;
             }
-            upload = VmaMappedBuffer.create(gpu, TOTAL_BYTES,
-                    VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                            | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                    "API showcase retained mesh");
+            if (upload == null) {
+                upload = VmaMappedBuffer.create(gpu, TOTAL_BYTES,
+                        VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                                | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                        "API showcase retained mesh");
+            }
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 ByteBuffer data = stack.calloc(TOTAL_BYTES);
                 putTrianglePositions(data, 0);
@@ -140,7 +150,16 @@ final class ShowcasePasses {
                         VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
             }
             uploadRecorded = true;
-            frame.gpuUse().whenComplete(() -> uploadComplete = true);
+            uploadSubmitted = false;
+            frame.gpuUse().whenSubmitted(() -> uploadSubmitted = true);
+            frame.gpuUse().whenComplete(() -> {
+                if (uploadSubmitted) uploadComplete = true;
+                else uploadRecorded = false;
+                if (closed && upload != null) {
+                    upload.close();
+                    upload = null;
+                }
+            });
         }
 
         private static void putTrianglePositions(ByteBuffer target, int offset) {
@@ -153,7 +172,8 @@ final class ShowcasePasses {
 
         @Override
         public void close() {
-            if (upload != null) {
+            closed = true;
+            if ((!uploadRecorded || uploadComplete) && upload != null) {
                 upload.close();
                 upload = null;
             }

@@ -51,8 +51,7 @@ public interface GeometryChannel {
      * across contributions in this render session; they remain non-owning references to implementations
      * whose issuer alone may remove them. Nothing is applied if anything throws.
      *
-     * <p>See {@link RetainedBatch} for what a batch guarantees, how to choose its granularity, and how its
-     * retirement callback follows retained logical values and NONE-owned storage.
+     * <p>See {@link RetainedBatch} for what a batch guarantees and how to choose its granularity.
      *
      * <p>Acceptance is synchronous. The returned receipt becomes visible only after the renderer commits
      * the accepted native scene publication.
@@ -69,13 +68,11 @@ public interface GeometryChannel {
     GeometryPublication submit(RetainedBatch<Operation> batch);
 
     /**
-     * Apply several independently-retired batches as one atomic publication.
+     * Applies several ordered batches as one atomic publication.
      *
      * <p>Operations apply in list order and become visible together. Validation and native acceptance cover
-     * the entire group: if anything throws, no batch is applied and no retirement callback is transferred.
-     * Each accepted batch keeps its own exactly-once callback for retained logical values and NONE-owned
-     * storage. Grouping does not combine those callback lifetimes. Non-NONE resource generations remain
-     * independently retired and may be shared across batches in the group.
+     * the entire group: if anything throws, no batch is applied. Resource generations referenced by the
+     * operations may be shared across batches in the group.
      *
      * <p>A group must contain at least one batch.
      */
@@ -86,7 +83,7 @@ public interface GeometryChannel {
      *
      * <p>{@code latestInstances} may only change the transform and visibility mask of a placement which
      * exists after {@code batches} are applied. It preserves that placement's scene, mesh, shader data,
-     * emitter map, and retained lifetime. Renderers may consume these placements for the current frame
+     * emitter map, and retained resources. Renderers may consume these placements for the current frame
      * before an ordered mesh publication becomes visible. At least one of the two lists must be non-empty.
      */
     default GeometryPublication submitGroupWithLatest(List<RetainedBatch<Operation>> batches,
@@ -98,8 +95,7 @@ public interface GeometryChannel {
      * Publishes geometry and its retained lights as one scene revision.
      *
      * <p>Both channels must come from the same contribution in the same render session. Geometry batches
-     * keep independent callbacks, and {@code lightBatch} keeps its own retirement callback. Non-NONE
-     * resource generations remain independent of those callbacks. The complete mutation is rejected if
+     * and light operations retain their referenced resource generations. The complete mutation is rejected if
      * either side is invalid; no intermediate geometry-only or light-only revision is observable.
      */
     GeometryPublication submitWithLights(List<RetainedBatch<Operation>> geometryBatches,
@@ -120,13 +116,10 @@ public interface GeometryChannel {
     }
 
     /**
-     * Retain or replace a mesh. A stream or geometry binding carrying {@link ResourceRef#none()} remains
-     * unchanged until this batch reports retirement. A non-NONE reference follows its
-     * {@link ResourceGeneration}'s independent lifetime and may be shared with other operations or batches.
-     * The batch remains alive while its logical build or NONE-owned storage is current, referenced by in-flight
-     * backend work, or selected as motion history from the previous submitted/rendered frame. Closing a
-     * scene removes placements in that scene, never this scene-independent mesh. A rejected submission
-     * changes nothing and does not take ownership of the callback.
+     * Retain or replace a mesh. A non-NONE stream or geometry-binding reference follows its
+     * {@link ResourceGeneration} lifetime and may be shared with other operations or batches. A NONE
+     * reference does not provide resource-lifetime tracking. Closing a scene removes placements in that
+     * scene, never this scene-independent mesh. A rejected submission changes nothing.
      */
     record SetMesh<N>(MeshId<N> mesh, MeshBuild<N> build) implements Operation {
         public SetMesh {
@@ -135,11 +128,7 @@ public interface GeometryChannel {
         }
     }
 
-    /**
-     * Remove a mesh and every placement of it, in every scene. The batch that retained its current build
-     * reports when its logical value and NONE-owned storage are free. Non-NONE resource generations retire
-     * independently.
-     */
+    /** Remove a mesh and every placement of it, in every scene. */
     record DropMesh<N>(MeshId<N> mesh) implements Operation {
         public DropMesh {
             Objects.requireNonNull(mesh, "mesh");
@@ -161,9 +150,8 @@ public interface GeometryChannel {
      * this placement only. It lets placements of one mesh use different shading data. Its schema must match
      * the one carried by the mesh ID and every shader slot in that mesh; the renderer checks token identity
      * synchronously even when raw Java types bypass compile-time checking. With
-     * {@link ResourceRef#none()}, the callback of the batch containing this operation covers storage reached
-     * through the word until the placement is replaced, dropped, or removed with its scene. A non-NONE
-     * resource generation has its own retirement callback and may be shared across placements and batches.
+     * {@link ResourceRef#none()}, the word provides no tracked resource lifetime. A non-NONE resource
+     * generation may be shared across placements and batches.
      *
      * <p>Shading only. The renderer derives motion vectors from this placement's current and previous
      * transforms, so rigid per-instance motion is handled, but a word that moves geometry — vertex

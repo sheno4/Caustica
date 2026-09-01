@@ -27,6 +27,7 @@ dependencies {
     api project(":packages:minecraft-api")
     api project(":packages:settings-api")
     implementation project(":packages:vulkan-support")
+    implementation project(":packages:api-support")
     slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
     api project(":packages:minecraft-content")
     implementation "org.slf4j:slf4j-api:2.0.17"
@@ -153,7 +154,7 @@ def verifyMinecraftRenderingDependencies = tasks.register("verifyMinecraftRender
     doLast {
         def allowed = [project.path, ":packages:api", ":packages:shader-api",
                        ":packages:minecraft-api", ":packages:minecraft-content", ":packages:settings-api",
-                       ":packages:vulkan-support"] as Set
+                       ":packages:vulkan-support", ":packages:api-support"] as Set
         def violations = []
         configurations.matching { it.canBeResolved }.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->

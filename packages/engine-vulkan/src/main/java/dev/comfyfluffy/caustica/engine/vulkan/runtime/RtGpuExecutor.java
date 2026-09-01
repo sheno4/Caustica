@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -56,7 +55,7 @@ public final class RtGpuExecutor {
     private final AtomicLong nextBuildValue = new AtomicLong();
     private final AtomicLong pendingPublishWaitValue = new AtomicLong();
     private final AtomicLong nextGraphicsValue = new AtomicLong();
-    private final AtomicLong latestGraphicsUseValue = new AtomicLong();
+    private final AtomicLong latestSubmittedGraphicsValue = new AtomicLong();
     private final ArrayList<DestroyJob> destroyJobs = new ArrayList<>();
     private final Object submissionLock = new Object();
     private long submittedBuildValue;
@@ -133,12 +132,12 @@ public final class RtGpuExecutor {
      */
     public void resolveGraphicsUse(GraphicsSubmission submission, GraphicsUse graphicsUse) {
         assertRenderThread();
-        if (graphicsUse.owner != this) {
+        if (graphicsUse.owner() != this) {
             throw new IllegalArgumentException("Graphics use belongs to a different Vulkan device");
         }
         graphicsUse.resolveSubmission(() -> {
-            enqueueGraphicsSignal(submission, graphicsTimeline, graphicsUse.value);
-            latestGraphicsUseValue.accumulateAndGet(graphicsUse.value, Math::max);
+            enqueueGraphicsSignal(submission, graphicsTimeline, graphicsUse.value());
+            latestSubmittedGraphicsValue.accumulateAndGet(graphicsUse.value(), Math::max);
         });
     }
 
@@ -162,9 +161,9 @@ public final class RtGpuExecutor {
         checkExecutorFailure();
     }
 
-    /** Destroy an owner once the specified frame token has completed. */
+    /** Destroy an owner once the specified submitted frame has completed. */
     public void retireAfterGraphics(GraphicsUse lastUse, Runnable destroy) {
-        enqueueDestroyAfterGraphicsValue(lastUse.value, destroy);
+        enqueueDestroyAfterGraphicsValue(lastUse.value(), destroy);
     }
 
     /** Destroy a tracked owner once its exact last frame use has completed. */
@@ -173,9 +172,9 @@ public final class RtGpuExecutor {
         trackedUse.whenMarksApplied(() -> enqueueDestroyAfterGraphicsValue(trackedUse.value, destroy));
     }
 
-    /** Retire extension-owned state after the latest graphics token reserved before this call. */
-    public void retireAfterLatestGraphicsUse(Runnable destroy) {
-        enqueueDestroyAfterGraphicsValue(latestGraphicsUseValue.get(), destroy);
+    /** Retire extension-owned state after the latest graphics submission accepted before this call. */
+    public void retireAfterLatestSubmittedGraphics(Runnable destroy) {
+        enqueueDestroyAfterGraphicsValue(latestSubmittedGraphicsValue.get(), destroy);
     }
 
     private void enqueueDestroyAfterGraphicsValue(long lastUseValue, Runnable destroy) {
@@ -185,7 +184,7 @@ public final class RtGpuExecutor {
         }
     }
 
-    private void keepAliveAfterGraphicsValue(long lastUseValue, Runnable release) {
+    void keepAliveAfterGraphicsValue(long lastUseValue, Runnable release) {
         synchronized (destroyJobs) {
             destroyJobs.add(new DestroyJob(lastUseValue, release));
         }
@@ -536,150 +535,6 @@ public final class RtGpuExecutor {
         }
     }
 
-    /** Immutable reservation for one graphics frame's completion on the shared RT graphics timeline. */
-    public static final class GraphicsUse implements GpuFrameUse {
-        private final RtGpuExecutor owner;
-        private final long value;
-        private final ArrayList<Runnable> submittedCallbacks = new ArrayList<>();
-        private final ArrayList<AutoCloseable> keepAlives = new ArrayList<>();
-        private boolean commandsAccepted;
-        private boolean submittedResolved;
-
-        GraphicsUse(RtGpuExecutor owner, long value) {
-            this.owner = owner;
-            this.value = value;
-        }
-
-        @Override
-        public void whenSubmitted(Runnable callback) {
-            if (submittedResolved) throw new IllegalStateException("graphics submission callbacks are resolved");
-            submittedCallbacks.add(java.util.Objects.requireNonNull(callback, "callback"));
-        }
-
-        /**
-         * Holds a lease while this frame is recording. Accepted commands transfer it to the graphics
-         * timeline; an abandoned frame releases it during submission resolution because the GPU never
-         * received commands that could read the leased resource.
-         */
-        public void keepAlive(AutoCloseable lease) {
-            if (submittedResolved) throw new IllegalStateException("graphics submission callbacks are resolved");
-            keepAlives.add(java.util.Objects.requireNonNull(lease, "lease"));
-        }
-
-        public void commandsAccepted() {
-            if (commandsAccepted || submittedResolved) {
-                throw new IllegalStateException("graphics commands are already resolved");
-            }
-            commandsAccepted = true;
-        }
-
-        void resolveSubmission() {
-            resolveSubmission(() -> { });
-        }
-
-        void resolveSubmission(Runnable signalAcceptedCommands) {
-            Consumer<Runnable> retire = owner == null
-                    ? Runnable::run
-                    : release -> owner.keepAliveAfterGraphicsValue(value, release);
-            resolveSubmission(signalAcceptedCommands, retire);
-        }
-
-        void resolveSubmission(Runnable signalAcceptedCommands, Consumer<Runnable> retireAcceptedKeepAlive) {
-            java.util.Objects.requireNonNull(signalAcceptedCommands, "signalAcceptedCommands");
-            java.util.Objects.requireNonNull(retireAcceptedKeepAlive, "retireAcceptedKeepAlive");
-            if (submittedResolved) {
-                throw new IllegalStateException("graphics submission callbacks are resolved");
-            }
-            boolean signal = commandsAccepted;
-            Throwable failure = null;
-            try {
-                if (signal) fireSubmittedCallbacks();
-                else discardSubmittedCallbacks();
-            } catch (Throwable callbackFailure) {
-                failure = callbackFailure;
-            }
-            Runnable releaseKeepAlives = takeKeepAliveRelease();
-            if (releaseKeepAlives != null) {
-                try {
-                    if (signal) retireAcceptedKeepAlive.accept(releaseKeepAlives);
-                    else releaseKeepAlives.run();
-                } catch (Throwable releaseFailure) {
-                    if (failure == null) failure = releaseFailure;
-                    else failure.addSuppressed(releaseFailure);
-                }
-            }
-            if (signal) {
-                try {
-                    signalAcceptedCommands.run();
-                } catch (Throwable signalFailure) {
-                    if (failure == null) failure = signalFailure;
-                    else failure.addSuppressed(signalFailure);
-                }
-            }
-            if (failure instanceof RuntimeException runtime) throw runtime;
-            if (failure instanceof Error error) throw error;
-            if (failure != null) throw new IllegalStateException("graphics-use resolution failed", failure);
-        }
-
-        private Runnable takeKeepAliveRelease() {
-            if (keepAlives.isEmpty()) return null;
-            List<AutoCloseable> releases = List.copyOf(keepAlives);
-            keepAlives.clear();
-            return () -> {
-                Throwable failure = null;
-                for (AutoCloseable release : releases) {
-                    try {
-                        release.close();
-                    } catch (Throwable releaseFailure) {
-                        if (failure == null) failure = releaseFailure;
-                        else failure.addSuppressed(releaseFailure);
-                    }
-                }
-                if (failure instanceof RuntimeException runtime) throw runtime;
-                if (failure instanceof Error error) throw error;
-                if (failure != null) throw new IllegalStateException("graphics keep-alive release failed", failure);
-            };
-        }
-
-        private void fireSubmittedCallbacks() {
-            if (!commandsAccepted || submittedResolved) {
-                throw new IllegalStateException("graphics commands were not accepted exactly once");
-            }
-            submittedResolved = true;
-            runSubmittedCallbacks();
-        }
-
-        private void discardSubmittedCallbacks() {
-            if (commandsAccepted || submittedResolved) {
-                throw new IllegalStateException("graphics commands are already resolved");
-            }
-            submittedResolved = true;
-            submittedCallbacks.clear();
-        }
-
-        private void runSubmittedCallbacks() {
-            Throwable failure = null;
-            for (Runnable callback : submittedCallbacks) {
-                try {
-                    callback.run();
-                } catch (Throwable callbackFailure) {
-                    if (failure == null) failure = callbackFailure;
-                    else failure.addSuppressed(callbackFailure);
-                }
-            }
-            submittedCallbacks.clear();
-            if (failure instanceof RuntimeException runtime) throw runtime;
-            if (failure instanceof Error error) throw error;
-            if (failure != null) throw new IllegalStateException("graphics submission callback failed", failure);
-        }
-
-        @Override
-        public void whenComplete(Runnable callback) {
-            java.util.Objects.requireNonNull(callback, "callback");
-            keepAlive(() -> callback.run());
-        }
-    }
-
     /** Mutable last-use owner embedded in reusable or asynchronously retired GPU resource slots. */
     public static final class TrackedGraphicsUse {
         private RtGpuExecutor owner;
@@ -698,19 +553,19 @@ public final class RtGpuExecutor {
          * place, which is correct: its commands never ran, so they never read this resource.
          */
         public void mark(GraphicsUse graphicsUse) {
-            graphicsUse.owner.assertRenderThread();
+            graphicsUse.owner().assertRenderThread();
             adopt(graphicsUse);
         }
 
         /** The device-independent half of {@link #mark}, so its ordering is testable without a device. */
         void adopt(GraphicsUse graphicsUse) {
-            if (owner != null && owner != graphicsUse.owner) {
+            if (owner != null && owner != graphicsUse.owner()) {
                 throw new IllegalArgumentException("Tracked graphics use belongs to a different Vulkan device");
             }
-            owner = graphicsUse.owner;
+            owner = graphicsUse.owner();
             pending = graphicsUse;
             graphicsUse.whenSubmitted(() -> {
-                value = Math.max(value, graphicsUse.value);
+                value = Math.max(value, graphicsUse.value());
                 pending = null;
             });
         }

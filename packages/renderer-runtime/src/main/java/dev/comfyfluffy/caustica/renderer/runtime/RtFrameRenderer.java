@@ -15,6 +15,7 @@ import dev.comfyfluffy.caustica.renderer.presentation.RtNrdComposePipeline;
 import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdPlaneFrameData;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
@@ -199,7 +200,7 @@ public final class RtFrameRenderer {
     private final Matrix4f historyViewRotation = new Matrix4f();
     private FrameSnapshot frameSnapshot;
 
-    private RtGpuExecutor.GraphicsUse pendingGraphicsUse;
+    private GraphicsUse pendingGraphicsUse;
     private RtRetainedSceneBackend.PreparedTrace currentTrace;
 
     public RtFrameRenderer(VulkanDeviceContext context, RtProgramBackend programs, RtRetainedSceneBackend scenes,
@@ -449,7 +450,7 @@ public final class RtFrameRenderer {
 
     /** Signals this frame's completion reservation after the host has recorded any UI consumers. */
     public void finishGraphicsUse() {
-        RtGpuExecutor.GraphicsUse graphicsUse = pendingGraphicsUse;
+        GraphicsUse graphicsUse = pendingGraphicsUse;
         if (graphicsUse == null) {
             return;
         }
@@ -647,7 +648,7 @@ public final class RtFrameRenderer {
     }
 
     private boolean recordTemporalDenoiser(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer,
-                                           MemoryStack stack, RtGpuExecutor.GraphicsUse graphicsUse,
+                                           MemoryStack stack, GraphicsUse graphicsUse,
                                            boolean historyContinuous, float jitterX, float jitterY,
                                            Float3 cameraOffset, GpuImage output) {
         DenoiserReset frameReset = denoiser.frameReset(historyContinuous);
@@ -750,7 +751,7 @@ public final class RtFrameRenderer {
         long dstImage = nativeColorImage;
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
-        RtGpuExecutor.GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse(submission);
+        GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse(submission);
         RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
         presentationResources().exposure().beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
@@ -1017,7 +1018,7 @@ public final class RtFrameRenderer {
     }
 
     private RtPassSchedulerBackend.FrameState passFrame(
-            VkCommandBuffer commandBuffer, RtGpuExecutor.GraphicsUse graphicsUse,
+            VkCommandBuffer commandBuffer, GraphicsUse graphicsUse,
             RtPassSchedulerBackend.UiState ui) {
         return new RtPassSchedulerBackend.FrameState(commandBuffer, graphicsUse, frameCounter,
                 frameSnapshot.view(), frameSnapshot.timeSeconds(), frameSnapshot.metersPerWorldUnit(),

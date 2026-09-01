@@ -4,6 +4,8 @@ import dev.comfyfluffy.caustica.api.vulkan.*;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.rendering.CelestialAtlasImage;
@@ -13,6 +15,7 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.*;
 import dev.comfyfluffy.caustica.settings.*;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.vulkan.*;
 import org.lwjgl.system.*;
 import org.lwjgl.vulkan.*;
@@ -58,25 +61,28 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private final Supplier<MinecraftSkyFrame> frames;
     private final EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment;
     private final MinecraftEnvironmentSelector selector;
+    private final ResourceFactory resourceFactory;
     private final VmaImage2D transmittance, multiScatter, skyView;
     private final VulkanSampler lutSampler, celestialSampler;
     private final VmaMappedBuffer skyInputs;
     private final ShaderObjectCompute transmittanceShader, multiScatterShader, skyViewShader;
-    private final ResourceLifetime resources;
+    private final SharedResource<AutoCloseable[]> resources;
     private final AtomicLong resourcePackEpoch;
-    private AtlasEntry atlas;
-    private boolean initialized, baked;
+    private final List<ResourceGeneration> bindingGenerations = new ArrayList<>();
+    private SharedResource<AtlasEntry> atlas;
+    private boolean initialized, baked, closed;
     private float bakedGroundAlbedo;
 
     public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
                       Supplier<MinecraftSkyFrame> frames,
                       EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
-                      MinecraftEnvironmentSelector selector, long epoch) {
+                      MinecraftEnvironmentSelector selector, ResourceFactory resourceFactory, long epoch) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
         this.options = Objects.requireNonNull(options, "options");
         this.frames = Objects.requireNonNull(frames, "frames");
         this.environment = Objects.requireNonNull(environment, "environment");
         this.selector = Objects.requireNonNull(selector, "selector");
+        this.resourceFactory = Objects.requireNonNull(resourceFactory, "resourceFactory");
         resourcePackEpoch = new AtomicLong(epoch);
         VmaImage2D t = null, m = null, v = null;
         VulkanSampler ls = null, cs = null;
@@ -103,7 +109,8 @@ public final class SkyLutPass implements Pass<PassFrame> {
         lutSampler = ls; celestialSampler = cs;
         skyInputs = si;
         transmittanceShader = ts; multiScatterShader = ms; skyViewShader = vs;
-        resources = new ResourceLifetime(si, v, m, t, cs, ls);
+        resources = SharedResource.owned(
+                new AutoCloseable[]{si, v, m, t, cs, ls}, SkyLutPass::closeAll);
     }
 
     public void invalidate(long epoch) { resourcePackEpoch.accumulateAndGet(epoch, Math::max); }
@@ -132,46 +139,59 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     private void ensureBinding(AtlasSnapshot snapshot) {
         long epoch = resourcePackEpoch.get();
-        if (atlas != null && sameBindingEpoch(atlas.image.vkImage(), atlas.epoch,
+        if (atlas != null && sameBindingEpoch(atlas.get().image.vkImage(), atlas.get().epoch,
                 snapshot.image().vkImage(), epoch)) return;
-        AtlasEntry replacement = AtlasEntry.create(
+        SharedResource<AtlasEntry> replacement = AtlasEntry.create(
                 gpu, snapshot.image(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
         BindingGeneration binding = null;
+        ResourceGeneration generation = null;
+        boolean published = false;
         try {
             binding = createBinding(replacement.retain());
-            selector.select(new EnvironmentBinding<>(environment,
-                    MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(
-                            binding.root.deviceRange().address().value()), binding::retire));
-            binding.published = true;
+            generation = resourceFactory.create(binding::retire);
+            publishBinding(generation, environment, selector, binding.root.deviceRange().address().value());
+            published = true;
+        } catch (RuntimeException | Error failure) {
+            if (generation != null) generation.drop();
+            throw failure;
         } finally {
-            if (binding == null || !binding.published) {
-                if (binding != null) binding.closeStrict();
-                replacement.release();
+            if (!published) {
+                if (binding != null && generation == null) binding.closeStrict();
+                replacement.close();
             }
         }
-        AtlasEntry previous = atlas;
+        SharedResource<AtlasEntry> previous = atlas;
         atlas = replacement;
+        bindingGenerations.add(generation);
         baked = false;
-        if (previous != null) previous.release();
+        if (previous != null) previous.close();
+    }
+
+    static void publishBinding(ResourceGeneration generation,
+                               EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
+                               MinecraftEnvironmentSelector selector, long address) {
+        generation.seal();
+        selector.select(new EnvironmentBinding<>(environment,
+                MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(address, generation.reference())));
     }
 
     static boolean sameBindingEpoch(long image, long epoch, long nextImage, long nextEpoch) {
         return image == nextImage && epoch == nextEpoch;
     }
 
-    private BindingGeneration createBinding(AtlasEntry atlasLease) {
+    private BindingGeneration createBinding(SharedResource<AtlasEntry> atlasLease) {
         VmaMappedBuffer root = null;
         try {
             root = createBuffer(MinecraftEnvironmentBindingData.BYTE_SIZE, bytes ->
                     new MinecraftEnvironmentBindingData(
                             sampled(skyView.sampledIndex()), sampled(transmittance.sampledIndex()),
-                            sampled(atlasLease.index()), sampler(lutSampler.index()),
+                            sampled(atlasLease.get().index()), sampler(lutSampler.index()),
                             sampler(celestialSampler.index()),
                             skyInputsAddress()).write(bytes));
             return new BindingGeneration(root, atlasLease, resources.retain());
         } catch (RuntimeException | Error failure) {
             closeAll(root);
-            atlasLease.release();
+            atlasLease.close();
             throw failure;
         }
     }
@@ -346,11 +366,20 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     @Override public void close() {
-        if (atlas != null) try { atlas.release(); }
+        if (closed) return;
+        closed = true;
+        dropAll(bindingGenerations);
+        if (atlas != null) try { atlas.close(); }
         catch (Throwable failure) { LOGGER.error("Sky atlas cleanup failed", failure); }
         atlas = null;
         closeAll(skyViewShader, multiScatterShader, transmittanceShader);
-        resources.release();
+        resources.close();
+    }
+    static void dropAll(List<ResourceGeneration> generations) {
+        if (generations.isEmpty()) return;
+        List<ResourceGeneration> dropped = List.copyOf(generations);
+        generations.clear();
+        for (ResourceGeneration generation : dropped) generation.drop();
     }
     private static void closeAll(AutoCloseable... resources) {
         for (AutoCloseable r : resources) if (r != null) try { r.close(); }
@@ -358,9 +387,12 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     private final class BindingGeneration {
-        final VmaMappedBuffer root; final AtlasEntry atlas; final ResourceLifetime resources;
-        boolean published, closed;
-        BindingGeneration(VmaMappedBuffer root, AtlasEntry atlas, ResourceLifetime resources) {
+        final VmaMappedBuffer root;
+        final SharedResource<AtlasEntry> atlas;
+        final SharedResource<AutoCloseable[]> resources;
+        boolean closed;
+        BindingGeneration(VmaMappedBuffer root, SharedResource<AtlasEntry> atlas,
+                          SharedResource<AutoCloseable[]> resources) {
             this.root = root; this.atlas = atlas; this.resources = resources;
         }
         void closeStrict() {
@@ -376,32 +408,21 @@ public final class SkyLutPass implements Pass<PassFrame> {
             if (closed) return null;
             closed = true;
             Throwable failure = cleanup(null, root::close);
-            failure = cleanup(failure, atlas::release);
-            failure = cleanup(failure, resources::release);
+            failure = cleanup(failure, atlas::close);
+            failure = cleanup(failure, resources::close);
             return failure;
-        }
-    }
-
-    static final class ResourceLifetime {
-        private final AutoCloseable[] resources;
-        private int references = 1;
-        ResourceLifetime(AutoCloseable... resources) { this.resources = resources; }
-        synchronized ResourceLifetime retain() { references++; return this; }
-        synchronized void release() {
-            if (--references == 0) closeAll(resources);
         }
     }
 
     private static final class AtlasEntry {
         final CelestialAtlasImage image; final long epoch;
         final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor;
-        int references = 1;
         AtlasEntry(CelestialAtlasImage image, long epoch,
                    GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor) {
             this.image = image; this.epoch = epoch; this.descriptor = descriptor;
         }
-        static AtlasEntry create(GpuDevice gpu, CelestialAtlasImage image,
-                                 int baseMipLevel, int mipLevels, long epoch) {
+        static SharedResource<AtlasEntry> create(GpuDevice gpu, CelestialAtlasImage image,
+                                                 int baseMipLevel, int mipLevels, long epoch) {
             image.retainViews();
             GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -417,16 +438,14 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 gpu.descriptorHeap().writer().writeResource(allocated, 0,
                         VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()
                                 .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(d -> d.pImage(info)));
-                return new AtlasEntry(image, epoch, allocated);
+                return SharedResource.owned(new AtlasEntry(image, epoch, allocated), AtlasEntry::close);
             } catch (RuntimeException | Error failure) {
                 if (range != null) range.destroy();
                 image.releaseViews();
                 throw failure;
             }
         }
-        synchronized AtlasEntry retain() { references++; return this; }
-        synchronized void release() {
-            if (--references != 0) return;
+        void close() {
             Throwable failure = cleanup(null, descriptor::destroy);
             failure = cleanup(failure, image::releaseViews);
             if (failure instanceof RuntimeException runtime) throw runtime;

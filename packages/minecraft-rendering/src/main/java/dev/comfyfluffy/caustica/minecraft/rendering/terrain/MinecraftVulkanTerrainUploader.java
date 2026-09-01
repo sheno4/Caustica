@@ -6,11 +6,15 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData;
 import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTexture;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
@@ -37,13 +41,16 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     private static final int TEXTURE_PRESENT = 1;
     private final GpuDevice gpu;
     private final MinecraftPrograms programs;
-    private final SharedAtlas atlas;
+    private final SharedResource<SharedAtlas> atlas;
+    private final ResourceFactory resources;
     private boolean closed;
 
     public MinecraftVulkanTerrainUploader(GpuDevice gpu, MinecraftPrograms programs,
-                                          BorrowedMinecraftTexture blockAtlas) {
+                                          BorrowedMinecraftTexture blockAtlas,
+                                          ResourceFactory resources) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
         this.programs = java.util.Objects.requireNonNull(programs, "programs");
+        this.resources = java.util.Objects.requireNonNull(resources, "resources");
         atlas = SharedAtlas.create(gpu, java.util.Objects.requireNonNull(blockAtlas, "blockAtlas"));
     }
 
@@ -53,7 +60,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         int[] indices = source.indices();
         float[] cornerUvs = source.cornerUvs();
         float[] primitive = source.primitiveData();
-        SharedAtlas.Lease atlasLease;
+        SharedResource<SharedAtlas> atlasLease;
         synchronized (this) {
             if (closed) throw new IllegalStateException("Minecraft terrain uploader is closed");
             atlasLease = atlas.retain();
@@ -63,26 +70,27 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         VmaMappedBuffer primitiveBuffer = null;
         VmaMappedBuffer instanceBuffer = null;
         try {
-            positionsBuffer = create((long) positions.length * Float.BYTES,
+            positionsBuffer = createAsync((long) positions.length * Float.BYTES,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                     bytes -> { for (float value : positions) bytes.putFloat(value); });
-            indicesBuffer = create((long) indices.length * Integer.BYTES,
+            indicesBuffer = createAsync((long) indices.length * Integer.BYTES,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                     bytes -> { for (int index : indices) bytes.putInt(index); });
             primitiveBuffer = create((long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     bytes -> writePrimitiveRecords(bytes, source.triangleCount(), positions, indices,
-                            cornerUvs, primitive, atlas.descriptorIndex(), atlas.samplerDescriptorIndex()));
+                            cornerUvs, primitive, atlasLease.get().descriptorIndex(),
+                            atlasLease.get().samplerDescriptorIndex()));
             instanceBuffer = create(MinecraftInstanceData.BYTE_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1f, 1f, 1f), 0,
                             new MinecraftInstanceData.SampledTexture2DIndex(0), 0f).write(bytes));
-            return uploaded(source, programs, positionsBuffer, indicesBuffer, primitiveBuffer, instanceBuffer,
-                    atlasLease);
         } catch (RuntimeException | Error failure) {
             Throwable cleanup = closeAll(instanceBuffer, primitiveBuffer, indicesBuffer, positionsBuffer, atlasLease);
             if (cleanup != null) failure.addSuppressed(cleanup);
             throw failure;
         }
+        return uploaded(source, programs, positionsBuffer, indicesBuffer, primitiveBuffer, instanceBuffer,
+                atlasLease);
     }
 
     static long primitiveRecordOffset(int firstIndex) {
@@ -90,12 +98,13 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     }
 
     static List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries(
-            MinecraftTerrainMesh source, MinecraftPrograms programs, VulkanDeviceAddress primitiveAddress) {
+            MinecraftTerrainMesh source, MinecraftPrograms programs, VulkanDeviceAddress primitiveAddress,
+            ResourceRef resource) {
         List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
         for (MinecraftTerrainMesh.Geometry geometry : source.geometries()) {
             long primitiveOffset = primitiveRecordOffset(geometry.firstIndex());
             ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
-                    primitiveAddress.addBytes(primitiveOffset).value());
+                    primitiveAddress.addBytes(primitiveOffset).value(), resource);
             MeshBuild.CoveragePolicy policy = coveragePolicy(geometry);
             var surface = switch (geometry.program()) {
                 case MATERIAL -> new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
@@ -120,16 +129,41 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     private UploadedSection uploaded(MinecraftTerrainMesh source, MinecraftPrograms programs,
                                      VmaMappedBuffer positions, VmaMappedBuffer indices,
                                      VmaMappedBuffer primitive, VmaMappedBuffer instance,
-                                     SharedAtlas.Lease atlasLease) {
-        List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = geometries(
-                source, programs, primitive.deviceRange().address());
-        MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
-                new MeshBuild.Stream(positions.deviceRange(), 12),
-                new MeshBuild.Stream(indices.deviceRange(), 4), source.vertexCount(),
-                new MeshBuild.IndexRevision(source.indexRevision()), geometries);
-        ShaderData<MinecraftProgramTypes.InstanceData> instanceData =
-                MinecraftProgramTypes.INSTANCE_DATA.data(instance.deviceRange().address().value());
-        return new Uploaded(build, instanceData, positions, indices, primitive, instance, atlasLease);
+                                     SharedResource<SharedAtlas> atlasLease) {
+        ResourceGeneration positionGeneration = null;
+        ResourceGeneration indexGeneration = null;
+        ResourceGeneration bindingGeneration = null;
+        ResourceGeneration instanceGeneration = null;
+        try {
+            positionGeneration = resources.create(positions::close);
+            indexGeneration = resources.create(indices::close);
+            bindingGeneration = resources.create(() -> throwIfFailed(closeAll(primitive, atlasLease)));
+            instanceGeneration = resources.create(instance::close);
+            List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = geometries(
+                    source, programs, primitive.deviceRange().address(), bindingGeneration.reference());
+            MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
+                    new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration.reference()),
+                    new MeshBuild.Stream(indices.deviceRange(), 4, indexGeneration.reference()), source.vertexCount(),
+                    new MeshBuild.IndexRevision(source.indexRevision()), geometries);
+            ShaderData<MinecraftProgramTypes.InstanceData> instanceData =
+                    MinecraftProgramTypes.INSTANCE_DATA.data(instance.deviceRange().address().value(),
+                            instanceGeneration.reference());
+            positionGeneration.seal();
+            indexGeneration.seal();
+            bindingGeneration.seal();
+            instanceGeneration.seal();
+            return new Uploaded(build, instanceData, positionGeneration, indexGeneration,
+                    bindingGeneration, instanceGeneration);
+        } catch (RuntimeException | Error failure) {
+            Throwable cleanup = closeAll(
+                    positionGeneration == null ? positions : positionGeneration::drop,
+                    indexGeneration == null ? indices : indexGeneration::drop,
+                    bindingGeneration == null ? () -> throwIfFailed(closeAll(primitive, atlasLease))
+                            : bindingGeneration::drop,
+                    instanceGeneration == null ? instance : instanceGeneration::drop);
+            if (cleanup != null) failure.addSuppressed(cleanup);
+            throw failure;
+        }
     }
 
     static void writePrimitiveRecords(ByteBuffer bytes, int triangles, float[] positions, int[] indices,
@@ -200,7 +234,17 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     record TangentBasis(MinecraftPrimitiveData.Float3 tangent, MinecraftPrimitiveData.Float3 bitangent) { }
 
     private VmaMappedBuffer create(long size, int extraUsage, Writer writer) {
-        VmaMappedBuffer buffer = VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft terrain upload");
+        return create(size, extraUsage, writer, false);
+    }
+
+    private VmaMappedBuffer createAsync(long size, int extraUsage, Writer writer) {
+        return create(size, extraUsage, writer, true);
+    }
+
+    private VmaMappedBuffer create(long size, int extraUsage, Writer writer, boolean asyncShared) {
+        VmaMappedBuffer buffer = asyncShared
+                ? VmaMappedBuffer.createAsync(gpu, size, extraUsage, "Minecraft terrain upload")
+                : VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft terrain upload");
         try {
             ByteBuffer bytes = buffer.mapped().order(ByteOrder.LITTLE_ENDIAN);
             writer.write(bytes);
@@ -220,20 +264,23 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
 
     private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
                             ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                            VmaMappedBuffer positions, VmaMappedBuffer indices, VmaMappedBuffer primitive,
-                            VmaMappedBuffer instance, SharedAtlas.Lease atlasLease)
+                            ResourceGeneration positionGeneration,
+                            ResourceGeneration indexGeneration,
+                            ResourceGeneration bindingGeneration,
+                            ResourceGeneration instanceGeneration)
             implements UploadedSection {
         @Override public void close() {
-            closeAll(instance, primitive, indices, positions, atlasLease);
+            positionGeneration.drop();
+            indexGeneration.drop();
+            bindingGeneration.drop();
+            instanceGeneration.drop();
         }
     }
 
-    static final class SharedAtlas implements AutoCloseable {
+    static final class SharedAtlas {
         private final int descriptorIndex;
         private final int samplerDescriptorIndex;
         private final Runnable cleanup;
-        private int references = 1;
-        private boolean ownerClosed;
 
         SharedAtlas(int descriptorIndex, int samplerDescriptorIndex, Runnable cleanup) {
             if (descriptorIndex < 0 || samplerDescriptorIndex < 0) {
@@ -244,7 +291,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             this.cleanup = java.util.Objects.requireNonNull(cleanup, "cleanup");
         }
 
-        static SharedAtlas create(GpuDevice gpu, BorrowedMinecraftTexture borrowed) {
+        static SharedResource<SharedAtlas> create(GpuDevice gpu, BorrowedMinecraftTexture borrowed) {
             GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
             GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -264,8 +311,9 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                         borrowed.sampler().write(VkSamplerCreateInfo.calloc(stack).sType$Default()));
                 GpuDescriptorRange<GpuDescriptorIndex.Resource> ownedRange = range;
                 GpuDescriptorRange<GpuDescriptorIndex.Sampler> ownedSamplerRange = samplerRange;
-                return new SharedAtlas(range.firstIndex().value(), samplerRange.firstIndex().value(),
+                SharedAtlas atlas = new SharedAtlas(range.firstIndex().value(), samplerRange.firstIndex().value(),
                         () -> throwIfFailed(closeAll(ownedRange::destroy, ownedSamplerRange::destroy, borrowed)));
+                return SharedResource.owned(atlas, SharedAtlas::cleanup);
             } catch (RuntimeException | Error failure) {
                 Throwable cleanup = closeAll(range == null ? null : range::destroy,
                         samplerRange == null ? null : samplerRange::destroy, borrowed);
@@ -282,40 +330,11 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             return samplerDescriptorIndex;
         }
 
-        synchronized Lease retain() {
-            if (ownerClosed) throw new IllegalStateException("Minecraft terrain atlas is closed");
-            references++;
-            return new Lease(this);
-        }
-
-        @Override public synchronized void close() {
-            if (ownerClosed) return;
-            ownerClosed = true;
-            release();
-        }
-
-        private synchronized void release() {
-            if (--references == 0) {
-                try {
-                    cleanup.run();
-                } catch (Throwable failure) {
-                    LOGGER.error("Minecraft terrain atlas cleanup failed", failure);
-                }
-            }
-        }
-
-        static final class Lease implements AutoCloseable {
-            private SharedAtlas owner;
-
-            private Lease(SharedAtlas owner) {
-                this.owner = owner;
-            }
-
-            @Override public synchronized void close() {
-                SharedAtlas current = owner;
-                if (current == null) return;
-                owner = null;
-                current.release();
+        void cleanup() {
+            try {
+                cleanup.run();
+            } catch (Throwable failure) {
+                LOGGER.error("Minecraft terrain atlas cleanup failed", failure);
             }
         }
     }

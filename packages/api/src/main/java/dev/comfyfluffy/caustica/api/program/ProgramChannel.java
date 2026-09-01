@@ -8,7 +8,6 @@ import java.util.function.Function;
  * <p>A declaration runs synchronously against a temporary {@link ProgramBuilder}. The builder issues the
  * typed ids returned through the declaration's export value, but none of its implementations are accepted
  * independently: returning from the declaration commits the whole set, and throwing abandons the whole set.
- * A rejected declaration does not take any definition retirement callback.
  *
  * <p>Compilation and publication remain asynchronous because all owners' accepted sets form one world
  * program. {@link ProgramRegistration#whenComplete} reports whether this complete set became part of an
@@ -34,12 +33,7 @@ public interface ProgramChannel {
      * <p>{@code declaration} must use the supplied builder only before it returns. Its non-null result is
      * exposed unchanged by {@link ProgramRegistration#exports()}, allowing a source-defined record to carry
      * all of the set's typed ids. If the declaration throws or returns {@code null}, no registration is
-     * created, every issued id is abandoned, and every definition retirement callback remains caller-owned.
-     *
-     * <p>After synchronous acceptance, the registration owns every definition retirement callback. Each
-     * callback is scheduled exactly once after the implementation is abandoned by failed compilation,
-     * removed with the registration, or removed with the session, and no active or in-flight program can
-     * execute it or read its implementation data. Callbacks never run inline with this method.
+     * created and every issued id is abandoned.
      *
      * @param declaration synchronous declaration of the set and its typed public exports
      * @param <E> source-defined export value, commonly an immutable record of program ids

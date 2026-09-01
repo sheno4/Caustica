@@ -1,5 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.sky;
 
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.MinecraftEnvironmentBindingData;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.SkyLutPushData;
@@ -9,16 +15,21 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.KHRSynchronization2;
 import org.lwjgl.vulkan.VK13;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class SkyLutPassTest {
@@ -63,12 +74,57 @@ final class SkyLutPassTest {
 
     @Test void selectedBindingLeaseDefersLutResourceClosure() {
         AtomicInteger closes = new AtomicInteger();
-        var lifetime = new SkyLutPass.ResourceLifetime(closes::incrementAndGet);
+        var lifetime = SharedResource.owned(new Object(), ignored -> closes.incrementAndGet());
         var bindingLease = lifetime.retain();
 
-        lifetime.release();
+        lifetime.close();
         assertEquals(0, closes.get());
-        bindingLease.release();
+        bindingLease.close();
+        assertEquals(1, closes.get());
+    }
+
+    @Test void publishedBindingsCarryExactDistinctSealedGenerationReferences() {
+        var factory = new TestResourceFactory();
+        var environment = new EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData>() { };
+        List<EnvironmentBinding<?>> selected = new ArrayList<>();
+        var first = factory.create();
+        var second = factory.create();
+
+        SkyLutPass.publishBinding(first, environment, binding -> {
+            assertTrue(((TestGeneration) first).sealed);
+            selected.add(binding);
+        }, 0x1000L);
+        SkyLutPass.publishBinding(second, environment, binding -> {
+            assertTrue(((TestGeneration) second).sealed);
+            selected.add(binding);
+        }, 0x1000L);
+
+        assertNotSame(ResourceRef.none(), first.reference());
+        assertNotSame(first.reference(), second.reference());
+        assertSame(first.reference(), selected.get(0).bindingData().resource());
+        assertSame(second.reference(), selected.get(1).bindingData().resource());
+    }
+
+    @Test void producerHandlesWaitForScopeDropAndFrameReleaseBeforeRetiringResources() {
+        AtomicInteger closes = new AtomicInteger();
+        var lifetime = SharedResource.owned(new Object(), ignored -> closes.incrementAndGet());
+        var factory = new TestResourceFactory();
+        var first = (TestGeneration) factory.create(lifetime.retain()::close);
+        var second = (TestGeneration) factory.create(lifetime.retain()::close);
+        first.borrow();
+        second.borrow();
+        List<ResourceGeneration> handles = new ArrayList<>(List.of(first, second));
+
+        SkyLutPass.dropAll(handles);
+        SkyLutPass.dropAll(handles);
+        lifetime.close();
+
+        assertTrue(first.dropped);
+        assertTrue(second.dropped);
+        assertEquals(0, closes.get());
+        first.releaseBorrow();
+        assertEquals(0, closes.get());
+        second.releaseBorrow();
         assertEquals(1, closes.get());
     }
 
@@ -106,5 +162,34 @@ final class SkyLutPassTest {
         assertEquals(.3f, state.starAngleRadians());
         assertEquals(1f, state.viewerAltitudeKm());
         assertEquals(6f, state.moonPhaseIndex());
+    }
+
+    private static final class TestResourceFactory implements ResourceFactory {
+        @Override public ResourceGeneration create(Runnable retired) {
+            return new TestGeneration(retired);
+        }
+    }
+
+    private static final class TestGeneration implements ResourceGeneration {
+        private final ResourceRef reference = new ResourceRef() { };
+        private final Runnable retired;
+        private int borrows;
+        private boolean sealed, dropped, callbackRun;
+        TestGeneration(Runnable retired) { this.retired = retired; }
+        @Override public ResourceRef reference() { return reference; }
+        @Override public void seal() { sealed = true; }
+        @Override public void drop() {
+            if (dropped) throw new AssertionError("generation dropped more than once");
+            dropped = true;
+            retireIfReady();
+        }
+        void borrow() { borrows++; }
+        void releaseBorrow() { borrows--; retireIfReady(); }
+        private void retireIfReady() {
+            if (dropped && borrows == 0 && !callbackRun) {
+                callbackRun = true;
+                retired.run();
+            }
+        }
     }
 }

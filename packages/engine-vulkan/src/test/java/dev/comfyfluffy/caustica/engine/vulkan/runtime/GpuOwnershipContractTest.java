@@ -21,7 +21,8 @@ final class GpuOwnershipContractTest {
         Set<String> deviceMethods = Arrays.stream(GpuDevice.class.getDeclaredMethods())
                 .map(method -> method.getName()).collect(Collectors.toSet());
 
-        assertEquals(Set.of("vk", "vmaAllocator", "descriptorHeap", "retireAfterUse"), deviceMethods);
+        assertEquals(Set.of("vk", "vmaAllocator", "asyncBufferSharingQueueFamilies",
+                "descriptorHeap", "retireAfterUse"), deviceMethods);
         assertFalse(Arrays.stream(dev.comfyfluffy.caustica.api.vulkan.GpuImage.class.getMethods())
                 .anyMatch(method -> method.getName().equals("destroy")));
         assertTrue(Arrays.stream(GpuImage.class.getMethods())

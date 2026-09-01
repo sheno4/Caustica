@@ -26,7 +26,8 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
                 context.scene(), renderSession.geometry());
         passes = List.of(
                 renderSession.passes().addWorldResourcePass(
-                        setup -> ShowcasePasses.worldResource(setup.gpu(), selections::ready, scene)),
+                        setup -> ShowcasePasses.worldResource(setup.gpu(), renderSession.resources(),
+                                selections::ready, scene)),
                 renderSession.passes().addPostEffectPass(
                         ShowcasePasses.POST_EFFECT, ShowcasePasses.POST_EFFECT_PLACEMENT,
                         setup -> ShowcasePasses.postEffect(setup.gpu(), options)),

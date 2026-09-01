@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.PackedPathSegmentData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.StablePlaneRecordData;
@@ -105,7 +105,7 @@ public final class TraceResources {
     }
 
     /** Allocates this frame's path continuation queue; it retires with the frame that traced against it. */
-    public GpuBuffer acquireContinuationQueue(VulkanDeviceContext context, RtGpuExecutor.GraphicsUse graphicsUse) {
+    public GpuBuffer acquireContinuationQueue(VulkanDeviceContext context, GraphicsUse graphicsUse) {
         TraceExtent current = extent();
         GpuBuffer queue = context.createBuffer(
                 continuationBytes(current.renderWidth(), current.renderHeight()),

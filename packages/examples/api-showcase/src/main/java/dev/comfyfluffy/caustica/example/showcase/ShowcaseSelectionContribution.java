@@ -42,7 +42,7 @@ final class ShowcaseSelectionContribution implements MinecraftWorldSessionContri
         if (!stopped && environmentPublished.compareAndSet(false, true)) {
             ShowcaseMinecraftSky sky = new ShowcaseMinecraftSky(
                     context.dimension(), context.resourcePackEpoch());
-            context.environment().select(sky.binding(programs, () -> { }));
+            context.environment().select(sky.binding(programs));
         }
     }
 

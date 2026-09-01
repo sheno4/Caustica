@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
-import dev.comfyfluffy.caustica.api.resource.ResourceChannel;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 
 /**
  * Live services and the automatic ownership scope for one render session.
@@ -54,5 +54,5 @@ public interface RenderSessionContext {
 
     LightChannel lights();
 
-    ResourceChannel resources();
+    ResourceFactory resources();
 }

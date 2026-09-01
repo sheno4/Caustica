@@ -36,23 +36,27 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
     private final MinecraftMaterialLookup lookup;
     private final MinecraftProgramResources.Epoch epoch;
     private final Runnable submitted;
+    private final Runnable completed;
     private List<ImageUpload> uploads;
     private boolean recorded;
+    private boolean accepted;
+    private boolean closed;
 
     MinecraftMaterialUploadPass(GpuDevice gpu, MinecraftProgramResources resources,
                                 MinecraftMaterialLookup lookup,
-                                Runnable submitted) {
+                                Runnable submitted, Runnable completed) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
         this.resources = java.util.Objects.requireNonNull(resources, "resources");
         this.lookup = java.util.Objects.requireNonNull(lookup, "lookup");
         this.submitted = java.util.Objects.requireNonNull(submitted, "submitted");
+        this.completed = java.util.Objects.requireNonNull(completed, "completed");
         List<ImageUpload> allocated = allocateUploads(lookup.textures());
         try {
             epoch = resources.createPreparedEpoch(lookup, allocated.stream()
                     .map(upload -> (MinecraftProgramResources.UploadedImage) upload.image()).toList());
             uploads = allocated;
         } catch (RuntimeException | Error failure) {
-            allocated.forEach(ImageUpload::destroy);
+            allocated.forEach(ImageUpload::destroyStaging);
             throw failure;
         }
     }
@@ -62,15 +66,24 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
     @Override
     public void record(PassFrame frame) {
         if (recorded) return;
-        recorded = true;
+        accepted = false;
         recordCopies(frame);
+        recorded = true;
 
-        List<VmaMappedHostBuffer> staging = uploads.stream().map(ImageUpload::staging).toList();
-        uploads = List.of();
-        frame.gpuUse().whenComplete(() -> staging.forEach(VmaMappedHostBuffer::close));
+        frame.gpuUse().whenComplete(() -> {
+            recorded = false;
+            if (!accepted) {
+                if (closed) finishClosedUpload();
+                return;
+            }
+            uploads.forEach(ImageUpload::destroyStaging);
+            uploads = List.of();
+            epoch.finishInitialization();
+            if (!closed) completed.run();
+        });
         frame.gpuUse().whenSubmitted(() -> {
-            resources.publishMaterialRecords(epoch, lookup);
-            submitted.run();
+            accepted = true;
+            if (!closed) submitted.run();
         });
     }
 
@@ -215,8 +228,15 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
 
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
+        if (!recorded) finishClosedUpload();
+    }
+
+    private void finishClosedUpload() {
         uploads.forEach(ImageUpload::destroyStaging);
         uploads = List.of();
+        epoch.finishInitialization();
     }
 
     private record ImageUpload(MinecraftMaterialTexture texture, Image image, VmaMappedHostBuffer staging) {

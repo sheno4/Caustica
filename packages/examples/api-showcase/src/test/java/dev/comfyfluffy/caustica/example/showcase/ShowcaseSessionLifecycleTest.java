@@ -8,7 +8,7 @@ import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.pass.*;
 import dev.comfyfluffy.caustica.api.program.*;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
-import dev.comfyfluffy.caustica.api.resource.ResourceChannel;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
@@ -46,7 +46,7 @@ final class ShowcaseSessionLifecycleTest {
                 throw new AssertionError("selection owner has no geometry mutation authority");
             }
             @Override public LightChannel lights() { return lights; }
-            @Override public ResourceChannel resources() { return null; }
+            @Override public ResourceFactory resources() { return null; }
         };
         RenderSessionContext geometryOwner = new RenderSessionContext() {
             @Override public GpuDevice gpu() { return GPU; }
@@ -58,7 +58,7 @@ final class ShowcaseSessionLifecycleTest {
             @Override public LightChannel lights() {
                 throw new AssertionError("geometry owner cannot mutate handed-off lights");
             }
-            @Override public ResourceChannel resources() { return null; }
+            @Override public ResourceFactory resources() { return null; }
         };
         MinecraftWorldSessionContext selectionWorld = world(selectionOwner, scene, selected);
         MinecraftWorldSessionContext geometryWorld = world(geometryOwner, scene, selected);
@@ -103,6 +103,7 @@ final class ShowcaseSessionLifecycleTest {
     private static final GpuDevice GPU = new GpuDevice() {
         @Override public VkDevice vk() { throw new AssertionError("test does not instantiate pass factories"); }
         @Override public long vmaAllocator() { throw new AssertionError(); }
+        @Override public int[] asyncBufferSharingQueueFamilies() { throw new AssertionError(); }
         @Override public GpuDescriptorHeap descriptorHeap() { throw new AssertionError(); }
         @Override public void retireAfterUse(Runnable cleanup) { throw new AssertionError(); }
     };

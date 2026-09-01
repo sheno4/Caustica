@@ -27,12 +27,15 @@ public final class ShaderDataType<T> {
         return new ShaderDataType<>(name);
     }
 
-    /** Wraps bits using this schema. */
+    /**
+     * Wraps inline scalar bits, or bits reaching storage guaranteed to live for the render session,
+     * using this schema.
+     */
     public ShaderData<T> data(long bits) {
-        return new ShaderData<>(this, bits);
+        return new ShaderData<>(this, bits, ResourceRef.none());
     }
 
-    /** Wraps bits and the immutable resource generation transitively reachable through them. */
+    /** Wraps bits and the resource generation keeping their reachable storage alive. */
     public ShaderData<T> data(long bits, ResourceRef resource) {
         return new ShaderData<>(this, bits, resource);
     }

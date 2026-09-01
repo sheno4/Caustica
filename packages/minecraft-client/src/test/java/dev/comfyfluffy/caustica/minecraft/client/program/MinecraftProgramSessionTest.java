@@ -42,7 +42,7 @@ final class MinecraftProgramSessionTest {
         var roots = new MinecraftProgramSession.Roots(
                 MinecraftProgramTypes.IMPLEMENTATION_DATA.data(11L),
                 MinecraftProgramTypes.PRIMITIVE_DATA.data(22L),
-                MinecraftProgramTypes.INSTANCE_DATA.data(33L), () -> { });
+                MinecraftProgramTypes.INSTANCE_DATA.data(33L));
         Pass<PassFrame> upload = new Pass<>() {
             @Override public void record(PassFrame frame) { events.add("upload"); }
             @Override public void close() { }
@@ -57,13 +57,12 @@ final class MinecraftProgramSessionTest {
     }
 
     @Test
-    void declaresOneAtomicSetWithNonzeroRootsAndOneEpochRetirement() {
+    void declaresOneAtomicSetWithNonzeroRoots() {
         CapturingChannel channel = new CapturingChannel();
-        AtomicInteger retirements = new AtomicInteger();
         var roots = new MinecraftProgramSession.Roots(
                 MinecraftProgramTypes.IMPLEMENTATION_DATA.data(11L),
                 MinecraftProgramTypes.PRIMITIVE_DATA.data(22L),
-                MinecraftProgramTypes.INSTANCE_DATA.data(33L), retirements::incrementAndGet);
+                MinecraftProgramTypes.INSTANCE_DATA.data(33L));
 
         ProgramRegistration<MinecraftPrograms> registration =
                 MinecraftProgramSession.registerPrograms(channel, roots);
@@ -76,10 +75,6 @@ final class MinecraftProgramSessionTest {
         assertEquals(11L, channel.volumes.getFirst().implementationData().bits());
         assertEquals("caustica_minecraft_overworld_sky",
                 channel.environments.getFirst().implementation().module());
-        assertSame(channel.surfaces.getFirst().retired(), roots.retirement());
-        channel.surfaces.forEach(value -> value.retired().run());
-        channel.volumes.forEach(value -> value.retired().run());
-        assertEquals(1, retirements.get());
         assertSame(registration.exports().environment(), channel.environmentId);
     }
 
@@ -88,7 +83,7 @@ final class MinecraftProgramSessionTest {
         assertThrows(IllegalArgumentException.class, () -> new MinecraftProgramSession.Roots(
                 MinecraftProgramTypes.IMPLEMENTATION_DATA.data(0L),
                 MinecraftProgramTypes.PRIMITIVE_DATA.data(2L),
-                MinecraftProgramTypes.INSTANCE_DATA.data(3L), () -> { }));
+                MinecraftProgramTypes.INSTANCE_DATA.data(3L)));
     }
 
     @Test

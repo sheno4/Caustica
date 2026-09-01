@@ -96,7 +96,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         java.util.Objects.requireNonNull(terrain, "terrain");
         java.util.Objects.requireNonNull(options, "options");
         java.util.Objects.requireNonNull(instrumentation, "instrumentation");
-        MinecraftProgramResources resources = new MinecraftProgramResources(context.renderSession().gpu());
+        MinecraftProgramResources resources = new MinecraftProgramResources(
+                context.renderSession().gpu(), context.renderSession().resources());
         MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
         MinecraftFrameCaptureInstaller.Lease frameCapture = null;
         MinecraftLightProvider lights = null;
@@ -147,12 +148,11 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         try {
             request.upload = context.renderSession().passes().addWorldResourcePass(
                     setup -> {
-                        prepared[0] = resources.prepareUpload(lookup, () -> uploadSubmitted(request));
+                        prepared[0] = resources.prepareUpload(lookup,
+                                () -> uploadSubmitted(request), () -> uploadCompleted(request));
                         return prepared[0].pass();
                     });
             request.prepared = java.util.Objects.requireNonNull(prepared[0], "upload factory result").epoch();
-            request.registration = registerPrograms(
-                    context.renderSession().program(), roots(request.prepared.gpu()));
         } catch (RuntimeException | Error failure) {
             if (request.prepared == null && prepared[0] != null) {
                 request.prepared = prepared[0].epoch();
@@ -165,13 +165,36 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         Pending displaced = pending;
         pending = request;
         if (displaced != null) displaced.close();
-        request.registration.whenComplete(completion -> completed(request, completion));
     }
 
     private synchronized void uploadSubmitted(Pending request) {
+        if (pending != request || stopped) return;
+        try {
+            resources.populateMaterialRecords(request.prepared.gpu(), request.lookup);
+        } catch (RuntimeException | Error failure) {
+            pending = null;
+            request.close();
+            CausticaMod.LOGGER.error("Minecraft material epoch {} could not populate its resources",
+                    request.generation, failure);
+        }
+    }
+
+    private synchronized void uploadCompleted(Pending request) {
         if (request.upload != null) {
             request.upload.close();
             request.upload = null;
+        }
+        if (pending != request || stopped) return;
+        try {
+            resources.seal(request.prepared.gpu());
+            request.registration = registerPrograms(
+                    context.renderSession().program(), roots(request.prepared.gpu()));
+            request.registration.whenComplete(completion -> completed(request, completion));
+        } catch (RuntimeException | Error failure) {
+            pending = null;
+            request.close();
+            CausticaMod.LOGGER.error("Minecraft material epoch {} could not publish its resources",
+                    request.generation, failure);
         }
     }
 
@@ -204,7 +227,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         if (displaced != null) displaced.stopSceneProducers();
 
         MinecraftTerrainSession terrainSession = new MinecraftTerrainSession(
-                context.renderSession().gpu(), terrain, entityTextures);
+                context.renderSession().gpu(), context.renderSession().resources(), terrain, entityTextures);
         MinecraftFrameSelectionInstaller.Lease frameSelection = null;
         MinecraftEntityGeometry entityGeometry = null;
         dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease = null;
@@ -220,7 +243,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     "frame selection lease");
             entityGeometry = new MinecraftEntityGeometry(context.renderSession().geometry(), context.scene(),
                     new MinecraftVulkanEntityUploader(context.renderSession().gpu(), request.lookup,
-                            programs, entityTextures));
+                            programs, entityTextures, context.renderSession().resources()));
             entityLease = java.util.Objects.requireNonNull(entityCapture.install(entityGeometry),
                     "entity capture lease");
         } catch (RuntimeException | Error failure) {
@@ -235,9 +258,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         ArrayList<RetiredPrograms> delayed = new ArrayList<>();
         if (displaced != null) {
             delayed.addAll(displaced.delayed);
-            delayed.add(new RetiredPrograms(displaced.sky, displaced.registration));
+            delayed.add(new RetiredPrograms(displaced.sky, displaced.registration, displaced.epoch));
         }
-        Active replacement = new Active(request.generation, registration, terrainSession,
+        Active replacement = new Active(request.generation, registration, request.prepared.gpu(), terrainSession,
                 frameSelector, frameSelection, entityGeometry, entityLease, sky, delayed);
         request.registration = null;
         request.prepared = null;
@@ -250,7 +273,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         if (!SKIES.supports(context.dimension())) return null;
         return context.renderSession().passes().addWorldResourcePass(setup -> {
             SkyLutPass sky = SKIES.create(context.dimension(), setup.gpu(), this::options,
-                    frames::skyFrame, programs.environment(), context.environment(), generation);
+                    frames::skyFrame, programs.environment(), context.environment(),
+                    context.renderSession().resources(), generation);
             return new FirstRecordPass(sky, () -> skySelected(generation));
         });
     }
@@ -261,7 +285,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     private static Roots roots(MinecraftProgramResources.Epoch epoch) {
         return new Roots(epoch.implementationData(), epoch.fallbackBindingData(),
-                epoch.fallbackInstanceData(), epoch.retirement());
+                epoch.fallbackInstanceData());
     }
 
     static ProgramRegistration<MinecraftPrograms> registerPrograms(ProgramChannel channel, Roots roots) {
@@ -270,7 +294,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             var material = new SurfaceDefinition<>(
                     SHADERS.definition("caustica_minecraft_surface", "MinecraftSurface"),
                     coverage, roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
-                    MinecraftProgramTypes.INSTANCE_DATA, roots.retirement());
+                    MinecraftProgramTypes.INSTANCE_DATA);
             return new MinecraftPrograms(builder.surface(material),
                     builder.surface(SurfaceDefinition.of(
                             SHADERS.definition("caustica_water_surface", "WaterSurface"),
@@ -321,12 +345,11 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     record Roots(ShaderData<MinecraftProgramTypes.ImplementationData> implementation,
                  ShaderData<MinecraftProgramTypes.PrimitiveData> fallbackBinding,
-                 ShaderData<MinecraftProgramTypes.InstanceData> fallbackInstance, Runnable retirement) {
+                 ShaderData<MinecraftProgramTypes.InstanceData> fallbackInstance) {
         Roots {
             java.util.Objects.requireNonNull(implementation, "implementation");
             java.util.Objects.requireNonNull(fallbackBinding, "fallbackBinding");
             java.util.Objects.requireNonNull(fallbackInstance, "fallbackInstance");
-            java.util.Objects.requireNonNull(retirement, "retirement");
             if (implementation.bits() == 0L || fallbackBinding.bits() == 0L || fallbackInstance.bits() == 0L) {
                 throw new IllegalArgumentException("Minecraft program roots must be nonzero");
             }
@@ -345,11 +368,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         }
         void close() {
             if (upload != null) upload.close();
-            if (registration != null) {
-                registration.close();
-            } else if (prepared != null) {
-                prepared.gpu().close();
-            }
+            if (registration != null) registration.close();
+            if (prepared != null) prepared.gpu().close();
             upload = null;
             registration = null;
             prepared = null;
@@ -359,6 +379,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final class Active {
         final long generation;
         final ProgramRegistration<MinecraftPrograms> registration;
+        final MinecraftProgramResources.Epoch epoch;
         final MinecraftTerrainSession terrain;
         final MinecraftFrameSelector frameSelector;
         final MinecraftFrameSelectionInstaller.Lease frameSelection;
@@ -368,6 +389,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         final ArrayList<RetiredPrograms> delayed;
         boolean producersStopped;
         Active(long generation, ProgramRegistration<MinecraftPrograms> registration,
+               MinecraftProgramResources.Epoch epoch,
                MinecraftTerrainSession terrain, MinecraftFrameSelector frameSelector,
                MinecraftFrameSelectionInstaller.Lease frameSelection,
                MinecraftEntityGeometry entityGeometry,
@@ -375,6 +397,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                PassRegistration sky, ArrayList<RetiredPrograms> delayed) {
             this.generation = generation;
             this.registration = registration;
+            this.epoch = epoch;
             this.terrain = terrain;
             this.frameSelector = frameSelector;
             this.frameSelection = frameSelection;
@@ -400,13 +423,16 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             if (sky != null) sky.close();
             releaseDisplacedPrograms();
             registration.close();
+            epoch.close();
         }
     }
 
-    private record RetiredPrograms(PassRegistration sky, ProgramRegistration<MinecraftPrograms> registration) {
+    private record RetiredPrograms(PassRegistration sky, ProgramRegistration<MinecraftPrograms> registration,
+                                   MinecraftProgramResources.Epoch epoch) {
         void close() {
             if (sky != null) sky.close();
             registration.close();
+            epoch.close();
         }
     }
 

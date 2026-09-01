@@ -50,15 +50,12 @@ final class MinecraftEngineWorldSessionTest {
         });
 
         RetainedSceneBackend sceneBackend = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
                 snapshots.add(snapshot);
                 published.run();
-                retired.run();
             }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                                 Runnable retired) {
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
                 published.run();
-                retired.run();
             }
         };
         MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU,
@@ -87,12 +84,11 @@ final class MinecraftEngineWorldSessionTest {
         minecraftHost.api().sessions().add(context -> minecraftContribution("minecraft", events));
         minecraftHost.api().sessions().add(context -> { throw new IllegalStateException("minecraft-open"); });
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
-                published.run(); retired.run();
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
+                published.run();
             }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                                 Runnable retired) {
-                published.run(); retired.run();
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
+                published.run();
             }
             @Override public void prepareForSessionClose() {
                 events.add("scene:settle");
@@ -131,6 +127,7 @@ final class MinecraftEngineWorldSessionTest {
     private static final GpuDevice GPU = new GpuDevice() {
         @Override public VkDevice vk() { return null; }
         @Override public long vmaAllocator() { return 0; }
+        @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
         @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
     };

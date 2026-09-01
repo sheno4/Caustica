@@ -93,4 +93,29 @@ final class VulkanBarriersTest {
                     barrier.dstAccessMask());
         }
     }
+
+    @Test
+    void accelerationStructureUpdateReadsEarlierBuildWrites() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkDependencyInfo dependency =
+                    VulkanBarriers.accelerationStructureBuildToUpdateDependency(stack);
+            VkMemoryBarrier2.Buffer barriers = dependency.pMemoryBarriers();
+
+            assertNotNull(barriers);
+            assertEquals(1, barriers.remaining());
+            VkMemoryBarrier2 barrier = barriers.get(0);
+            assertEquals(org.lwjgl.vulkan.KHRSynchronization2
+                            .VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                    barrier.srcStageMask());
+            assertEquals(org.lwjgl.vulkan.KHRSynchronization2
+                            .VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                    barrier.srcAccessMask());
+            assertEquals(org.lwjgl.vulkan.KHRSynchronization2
+                            .VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                    barrier.dstStageMask());
+            assertEquals(org.lwjgl.vulkan.KHRSynchronization2
+                            .VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+                    barrier.dstAccessMask());
+        }
+    }
 }

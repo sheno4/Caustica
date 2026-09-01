@@ -17,13 +17,13 @@ final class TrackedGraphicsUseTest {
     void abandonedFrameLeavesTheLastSubmittedValue() {
         RtGpuExecutor.TrackedGraphicsUse tracked = new RtGpuExecutor.TrackedGraphicsUse();
 
-        RtGpuExecutor.GraphicsUse submitted = new RtGpuExecutor.GraphicsUse(null, 7L);
+        GraphicsUse submitted = new GraphicsUse(null, 7L);
         tracked.adopt(submitted);
         submitted.commandsAccepted();
         submitted.resolveSubmission();
         assertEquals(7L, tracked.value());
 
-        RtGpuExecutor.GraphicsUse abandoned = new RtGpuExecutor.GraphicsUse(null, 8L);
+        GraphicsUse abandoned = new GraphicsUse(null, 8L);
         tracked.adopt(abandoned);
         abandoned.resolveSubmission();
 
@@ -33,7 +33,7 @@ final class TrackedGraphicsUseTest {
     @Test
     void adoptionIsNotVisibleBeforeSubmission() {
         RtGpuExecutor.TrackedGraphicsUse tracked = new RtGpuExecutor.TrackedGraphicsUse();
-        RtGpuExecutor.GraphicsUse recording = new RtGpuExecutor.GraphicsUse(null, 3L);
+        GraphicsUse recording = new GraphicsUse(null, 3L);
 
         tracked.adopt(recording);
         assertEquals(0L, tracked.value(), "a recording frame has no signalled value yet");
@@ -46,7 +46,7 @@ final class TrackedGraphicsUseTest {
     @Test
     void retirementObservesAMarkRecordedEarlierInTheSameFrame() {
         RtGpuExecutor.TrackedGraphicsUse tracked = new RtGpuExecutor.TrackedGraphicsUse();
-        RtGpuExecutor.GraphicsUse recording = new RtGpuExecutor.GraphicsUse(null, 5L);
+        GraphicsUse recording = new GraphicsUse(null, 5L);
         List<Long> retiredAt = new ArrayList<>();
 
         tracked.adopt(recording);

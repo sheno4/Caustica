@@ -13,8 +13,8 @@ import java.util.Objects;
  * Triangle acceleration-structure input retained by the renderer.
  *
  * <p>Streams refer to source-owned Vulkan buffers. A stream with an independent resource reference remains
- * immutable until that generation retires. A stream using {@link ResourceRef#none()} remains unchanged
- * until the batch which introduced the build retires. The buffers have
+ * immutable until that generation retires. A stream using {@link ResourceRef#none()} provides no tracked
+ * resource lifetime. The buffers have
  * {@code VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR} and
  * {@code VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT} usage.
  *
@@ -87,11 +87,6 @@ public record MeshBuild<N>(Stream positions,
             if ((bytes.address().value() & 3L) != 0L) {
                 throw new IllegalArgumentException("the first stream element must be four-byte aligned");
             }
-        }
-
-        /** Creates a stream whose containing retained batch supplies the lifetime. */
-        public Stream(VulkanDeviceAddressRange bytes, int byteStride) {
-            this(bytes, byteStride, ResourceRef.none());
         }
 
         public long byteSize() { return bytes.byteSize(); }

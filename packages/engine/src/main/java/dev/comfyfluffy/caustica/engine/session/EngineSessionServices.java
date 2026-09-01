@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
-import dev.comfyfluffy.caustica.api.resource.ResourceChannel;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.engine.pass.PassContributionChannel;
 import dev.comfyfluffy.caustica.engine.pass.PassFailureHandler;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
@@ -14,7 +14,6 @@ import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramContributionChannel;
 import dev.comfyfluffy.caustica.engine.program.ProgramEngineFailureHandler;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
-import dev.comfyfluffy.caustica.engine.resource.ResourceContributionChannel;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.scene.GeometryContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.LightContributionChannel;
@@ -94,22 +93,24 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
     }
 
     private final class Scope implements ContributionScope {
+        private final ContributionOwner owner;
         private final ProgramContributionChannel program;
         private final PassContributionChannel pass;
         private final GeometryContributionChannel geometry;
         private final LightContributionChannel lights;
-        private final ResourceContributionChannel resources;
+        private final ResourceFactory resources;
         private boolean quiesced;
         private boolean invalidated;
         private boolean drained;
         private boolean closed;
 
         private Scope(ContributionOwner owner) {
+            this.owner = owner;
             program = programs.openChannel(owner);
             pass = passes.openChannel(owner);
             geometry = scenes.openGeometry(owner);
             lights = scenes.openLights(owner);
-            resources = EngineSessionServices.this.resources.openChannel(owner);
+            resources = EngineSessionServices.this.resources.openFactory(owner);
         }
 
         @Override public GpuDevice gpu() { return gpu; }
@@ -117,7 +118,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         @Override public PassChannel passes() { return pass; }
         @Override public GeometryChannel geometry() { return geometry; }
         @Override public LightChannel lights() { return lights; }
-        @Override public ResourceChannel resources() { return resources; }
+        @Override public ResourceFactory resources() { return resources; }
 
         @Override
         public void quiesce() {
@@ -126,7 +127,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             program.quiesce();
             geometry.quiesce();
             lights.quiesce();
-            resources.quiesce();
+            EngineSessionServices.this.resources.quiesce(owner);
             quiesced = true;
         }
 
@@ -138,7 +139,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             geometry.invalidate();
             lights.invalidate();
             program.invalidate();
-            resources.invalidate();
+            EngineSessionServices.this.resources.invalidate(owner);
             invalidated = true;
         }
 
@@ -150,7 +151,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             geometry.drain();
             lights.drain();
             program.drain();
-            resources.drain();
+            EngineSessionServices.this.resources.drain(owner, scenes::settleFrameUses);
             drained = true;
         }
 

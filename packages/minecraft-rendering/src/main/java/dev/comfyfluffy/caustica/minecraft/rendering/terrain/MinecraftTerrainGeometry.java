@@ -41,21 +41,21 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         return submitGroup(List.of(changes));
     }
 
-    /** Publishes extraction transactions together while retaining each transaction independently. */
+    /** Publishes extraction transactions together as one atomic scene revision. */
     public synchronized GeometryPublication submitGroup(List<? extends List<Change>> groups) {
         if (closed) throw new IllegalStateException("terrain geometry is closed");
         if (groups.isEmpty()) return GeometryPublication.alreadyVisible();
         var batches = new ArrayList<RetainedBatch<GeometryChannel.Operation>>();
         var preparedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
+        var displacedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
         var lightOperations = new ArrayList<LightChannel.Operation>();
         var committedSections = new LinkedHashMap<>(sections);
         GeometryPublication publication;
         try {
             for (List<Change> changes : groups) {
-                var batch = prepareBatch(changes, committedSections, preparedUploads);
+                var batch = prepareBatch(changes, committedSections, preparedUploads, displacedUploads);
                 if (batch.operations().isEmpty()) continue;
-                batches.add(new RetainedBatch<>(batch.operations(),
-                        () -> retireAll(batch.uploads())));
+                batches.add(RetainedBatch.of(batch.operations()));
                 lightOperations.addAll(batch.lightOperations());
             }
             if (batches.isEmpty()) return GeometryPublication.alreadyVisible();
@@ -68,6 +68,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         }
         sections.clear();
         sections.putAll(committedSections);
+        publication.whenVisible(() -> retireAll(displacedUploads));
         return publication;
     }
 
@@ -82,15 +83,16 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     }
 
     private PreparedBatch prepareBatch(List<Change> changes, Map<Long, SectionIds> committedSections,
-                                       List<MinecraftTerrainUploader.UploadedSection> preparedUploads) {
+                                       List<MinecraftTerrainUploader.UploadedSection> preparedUploads,
+                                       List<MinecraftTerrainUploader.UploadedSection> displacedUploads) {
         var latest = new LinkedHashMap<Long, Change>();
         for (Change change : changes) latest.put(change.sectionKey(), change);
         var operations = new ArrayList<GeometryChannel.Operation>();
-        var uploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
         var lightOperations = new ArrayList<LightChannel.Operation>();
         for (Change change : latest.values()) {
             if (change instanceof Put put) {
                 var previous = committedSections.get(put.sectionKey());
+                if (previous != null) displacedUploads.add(previous.uploaded());
                 var mesh = previous == null
                         ? channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA) : previous.mesh();
                 var instance = previous == null ? channel.newInstance() : previous.instance();
@@ -113,19 +115,18 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                         GeometryTransform.translation(put.originX(), put.originY(), put.originZ()),
                         0xff, uploaded.instanceData(), new PrimitiveLightMap(lightRanges)));
                 committedSections.put(put.sectionKey(),
-                        new SectionIds(mesh, instance, List.copyOf(lightIds)));
-                uploads.add(uploaded);
+                        new SectionIds(mesh, instance, List.copyOf(lightIds), uploaded));
             } else if (change instanceof Drop drop) {
                 var ids = committedSections.remove(drop.sectionKey());
                 if (ids != null) {
+                    displacedUploads.add(ids.uploaded());
                     operations.add(new GeometryChannel.DropInstance(ids.instance()));
                     operations.add(new GeometryChannel.DropMesh<>(ids.mesh()));
                     ids.lights().forEach(light -> lightOperations.add(new LightChannel.DropLight(light)));
                 }
             }
         }
-        return new PreparedBatch(List.copyOf(operations), List.copyOf(uploads),
-                List.copyOf(lightOperations));
+        return new PreparedBatch(List.copyOf(operations), List.copyOf(lightOperations));
     }
 
     @Override public synchronized void close() {
@@ -142,9 +143,13 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
             operations.add(new GeometryChannel.DropMesh<>(ids.mesh()));
             ids.lights().forEach(light -> lightOperations.add(new LightChannel.DropLight(light)));
         }
-        if (lightOperations.isEmpty()) channel.submit(RetainedBatch.of(operations));
-        else channel.submitWithLights(List.of(RetainedBatch.of(operations)), lights,
+        List<MinecraftTerrainUploader.UploadedSection> uploads = sections.values().stream()
+                .map(SectionIds::uploaded).toList();
+        GeometryPublication publication;
+        if (lightOperations.isEmpty()) publication = channel.submit(RetainedBatch.of(operations));
+        else publication = channel.submitWithLights(List.of(RetainedBatch.of(operations)), lights,
                 RetainedBatch.of(lightOperations));
+        publication.whenVisible(() -> retireAll(uploads));
         sections.clear();
         closed = true;
         uploader.close();
@@ -155,7 +160,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
             try {
                 resource.close();
             } catch (Throwable ignored) {
-                // Retirement callbacks must finish every release and must not escape into the engine.
+                // Visibility cleanup must attempt every resource release.
             }
         }
     }
@@ -192,9 +197,9 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     public record Drop(long sectionKey) implements Change { }
 
     private record PreparedBatch(List<GeometryChannel.Operation> operations,
-                                 List<MinecraftTerrainUploader.UploadedSection> uploads,
                                  List<LightChannel.Operation> lightOperations) { }
 
     private record SectionIds(MeshId<MinecraftProgramTypes.InstanceData> mesh, InstanceId instance,
-                              List<LightId> lights) { }
+                              List<LightId> lights,
+                              MinecraftTerrainUploader.UploadedSection uploaded) { }
 }

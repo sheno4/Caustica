@@ -36,7 +36,7 @@ final class RtFrameResourceFallbackTest {
     @Test
     void droppedDataChangesOnlyCapturesTakenAfterTheDrop() {
         ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        var channel = directory.openChannel(new ContributionOwner(1));
+        var channel = directory.openFactory(new ContributionOwner(1));
         var positions = sealed(channel.create());
         var indices = sealed(channel.create());
         var surface = sealed(channel.create());

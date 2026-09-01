@@ -162,7 +162,7 @@ final class MinecraftApiBootstrapTest {
         @Override public PassChannel passes() { return null; }
         @Override public GeometryChannel geometry() { return null; }
         @Override public LightChannel lights() { return null; }
-        @Override public dev.comfyfluffy.caustica.api.resource.ResourceChannel resources() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.resource.ResourceFactory resources() { return null; }
         @Override public void quiesce() { }
         @Override public void invalidate() { }
         @Override public void drain() { }

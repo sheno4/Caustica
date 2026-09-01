@@ -49,6 +49,12 @@ public interface GpuDevice {
      */
     long vmaAllocator();
 
+    /**
+     * Queue-family indices used by buffers accessed from both graphics and renderer async compute.
+     * The returned array contains each family exactly once.
+     */
+    int[] asyncBufferSharingQueueFamilies();
+
     /** The renderer-owned resource and sampler heaps shared by every pipeline and pass. */
     GpuDescriptorHeap descriptorHeap();
 

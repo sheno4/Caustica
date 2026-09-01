@@ -18,6 +18,7 @@ import org.lwjgl.vulkan.VkDevice;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 
 import java.util.List;
 
@@ -505,6 +506,9 @@ public final class RtAccel {
 
     private static void recordGeometryRangeBlasBuild(VulkanDeviceContext ctx, VkCommandBuffer cmd,
                                                      MemoryStack stack, PreparedBlas b) {
+        if (b.operation.mode() == BlasOperationMode.UPDATE) {
+            VulkanBarriers.accelerationStructureBuildToUpdate(cmd, stack);
+        }
         try (VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
                 b.vertexAddr, b.vertexStride, b.indexAddr, b.maxVertex + 1, b.geometryRanges);
              VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =

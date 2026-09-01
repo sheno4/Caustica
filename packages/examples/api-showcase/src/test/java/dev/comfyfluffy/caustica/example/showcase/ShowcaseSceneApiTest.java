@@ -12,6 +12,9 @@ import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import org.junit.jupiter.api.Test;
 
@@ -25,27 +28,29 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ShowcaseSceneApiTest {
     @Test
     void meshPublicationAcceptsTypedAddressRanges() throws Exception {
         assertNotNull(ShowcaseScene.class.getDeclaredMethod("publishMesh",
-                VulkanDeviceAddressRange.class, VulkanDeviceAddressRange.class, Runnable.class));
+                VulkanDeviceAddressRange.class, VulkanDeviceAddressRange.class, ResourceGeneration.class));
     }
 
     @Test
     void meshAndPlacementPublishAsOneGroupWithIndependentRetirement() {
         var exports = exports();
         RecordingGeometry geometry = new RecordingGeometry();
+        TestResources resources = new TestResources();
         ShowcaseScene scene = new ShowcaseScene(exports, lights(), new SceneId() { }, geometry);
         AtomicBoolean retired = new AtomicBoolean();
 
         var publication = scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
-                () -> retired.set(true));
+                resources.create(() -> retired.set(true)));
 
         assertSame(geometry.publication, publication);
         org.junit.jupiter.api.Assertions.assertFalse(publication.isVisible());
-        geometry.visible.set(true);
+        geometry.publication.makeVisible();
         assertTrue(publication.isVisible());
         assertEquals(1, geometry.groups.size());
         var group = geometry.groups.getFirst();
@@ -56,7 +61,12 @@ final class ShowcaseSceneApiTest {
                 GeometryChannel.SetMesh.class, group.get(0).operations().getFirst());
         org.junit.jupiter.api.Assertions.assertInstanceOf(
                 GeometryChannel.SetInstance.class, group.get(1).operations().getFirst());
-        group.getFirst().retired().run();
+        var setMesh = (GeometryChannel.SetMesh<?>) group.getFirst().operations().getFirst();
+        assertSame(resources.generations.getFirst().reference(), setMesh.build().positions().resource());
+        assertSame(resources.generations.getFirst().reference(), setMesh.build().indices().resource());
+        scene.stop();
+        assertFalse(retired.get());
+        geometry.publication.makeVisible();
         assertTrue(retired.get());
     }
 
@@ -80,8 +90,8 @@ final class ShowcaseSceneApiTest {
         ShowcaseScene first = new ShowcaseScene(exports, sharedLights, primary, primaryGeometry);
         ShowcaseScene second = new ShowcaseScene(exports, sharedLights, alternate, alternateGeometry);
 
-        first.publishMesh(range(0x1000, 48), range(0x3000, 48), () -> { });
-        second.publishMesh(range(0x4000, 48), range(0x6000, 48), () -> { });
+        first.publishMesh(range(0x1000, 48), range(0x3000, 48), new TestGeneration(() -> { }));
+        second.publishMesh(range(0x4000, 48), range(0x6000, 48), new TestGeneration(() -> { }));
         var firstPlacement = (GeometryChannel.SetInstance<?>) primaryGeometry.operations.getFirst().get(1);
         var secondPlacement = (GeometryChannel.SetInstance<?>) alternateGeometry.operations.getFirst().get(1);
         assertSame(sharedLights.getFirst(), firstPlacement.primitiveLights().ranges().getFirst().light());
@@ -106,9 +116,9 @@ final class ShowcaseSceneApiTest {
         AtomicBoolean replacementRetired = new AtomicBoolean();
 
         scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
-                () -> originalRetired.set(true));
+                new TestGeneration(() -> originalRetired.set(true)));
         scene.replaceMesh(range(0x4000, 48), range(0x6000, 48), 2L,
-                () -> replacementRetired.set(true));
+                new TestGeneration(() -> replacementRetired.set(true)));
         scene.moveInstance(portalDestination, GeometryTransform.translation(4.0, 70.0, -3.0));
 
         var replacement = assertInstanceOf(GeometryChannel.SetMesh.class,
@@ -120,10 +130,33 @@ final class ShowcaseSceneApiTest {
         assertFalse(originalRetired.get());
         assertFalse(replacementRetired.get());
 
-        geometry.groups.getFirst().getFirst().retired().run();
-        geometry.batches.getFirst().retired().run();
+        geometry.publications.get(1).makeVisible();
         assertTrue(originalRetired.get());
+        assertFalse(replacementRetired.get());
+        scene.stop();
+        geometry.publication.makeVisible();
         assertTrue(replacementRetired.get());
+    }
+
+    @Test
+    void rejectedReplacementDropsOnlyItsNewGeneration() {
+        RecordingGeometry geometry = new RecordingGeometry();
+        ShowcaseScene scene = new ShowcaseScene(exports(), lights(), new SceneId() { }, geometry);
+        AtomicBoolean currentRetired = new AtomicBoolean();
+        AtomicBoolean rejectedRetired = new AtomicBoolean();
+        scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
+                new TestGeneration(() -> currentRetired.set(true)));
+
+        geometry.rejectNext = true;
+        assertThrows(IllegalStateException.class, () -> scene.replaceMesh(
+                range(0x4000, 48), range(0x6000, 48), 2L,
+                new TestGeneration(() -> rejectedRetired.set(true))));
+
+        assertTrue(rejectedRetired.get());
+        assertFalse(currentRetired.get());
+        scene.stop();
+        geometry.publication.makeVisible();
+        assertTrue(currentRetired.get());
     }
 
     private static ShowcasePrograms.Exports exports() {
@@ -149,8 +182,9 @@ final class ShowcaseSceneApiTest {
         private final List<List<Operation>> operations = new ArrayList<>();
         private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
         private final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
-        private final AtomicBoolean visible = new AtomicBoolean();
-        private final dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication = visible::get;
+        private final List<TestPublication> publications = new ArrayList<>();
+        private TestPublication publication;
+        private boolean rejectNext;
 
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) {
             return new MeshId<>() { };
@@ -162,15 +196,27 @@ final class ShowcaseSceneApiTest {
 
         @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
                 RetainedBatch<Operation> batch) {
+            if (rejectNext) {
+                rejectNext = false;
+                throw new IllegalStateException("rejected");
+            }
             batches.add(batch);
             operations.add(batch.operations());
+            publication = new TestPublication();
+            publications.add(publication);
             return publication;
         }
 
         @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
                 List<RetainedBatch<Operation>> batches) {
+            if (rejectNext) {
+                rejectNext = false;
+                throw new IllegalStateException("rejected");
+            }
             groups.add(List.copyOf(batches));
             operations.add(batches.stream().flatMap(batch -> batch.operations().stream()).toList());
+            publication = new TestPublication();
+            publications.add(publication);
             return publication;
         }
         @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(
@@ -178,6 +224,47 @@ final class ShowcaseSceneApiTest {
                 dev.comfyfluffy.caustica.api.light.LightChannel lights,
                 RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class TestPublication
+            implements dev.comfyfluffy.caustica.api.geometry.GeometryPublication {
+        private final List<Runnable> callbacks = new ArrayList<>();
+        private boolean visible;
+        @Override public boolean isVisible() { return visible; }
+        @Override public void whenVisible(Runnable callback) {
+            if (visible) callback.run();
+            else callbacks.add(callback);
+        }
+        void makeVisible() {
+            visible = true;
+            callbacks.forEach(Runnable::run);
+            callbacks.clear();
+        }
+    }
+
+    private static final class TestResources implements ResourceFactory {
+        private final List<TestGeneration> generations = new ArrayList<>();
+
+        @Override public ResourceGeneration create(Runnable retired) {
+            TestGeneration generation = new TestGeneration(retired);
+            generations.add(generation);
+            return generation;
+        }
+    }
+
+    private static final class TestGeneration implements ResourceGeneration {
+        private final ResourceRef reference = new ResourceRef() { };
+        private final Runnable retired;
+        private boolean dropped;
+
+        private TestGeneration(Runnable retired) { this.retired = retired; }
+        @Override public ResourceRef reference() { return reference; }
+        @Override public void seal() { }
+        @Override public void drop() {
+            if (dropped) return;
+            dropped = true;
+            retired.run();
         }
     }
 }

@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtStateData;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;

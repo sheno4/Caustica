@@ -17,7 +17,7 @@ final class ResourceLeaseSetTest {
     @Test
     void capturedGenerationSurvivesDropWhileNextCaptureSeesItUnavailable() {
         ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        var channel = directory.openChannel(new ContributionOwner(1));
+        var channel = directory.openFactory(new ContributionOwner(1));
         AtomicInteger retired = new AtomicInteger();
         var generation = channel.create(retired::incrementAndGet);
         generation.seal();
@@ -44,7 +44,7 @@ final class ResourceLeaseSetTest {
     @Test
     void requiredAcquisitionReleasesEarlierLeaseWhenAnotherInputWasDropped() {
         ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        var channel = directory.openChannel(new ContributionOwner(1));
+        var channel = directory.openFactory(new ContributionOwner(1));
         AtomicInteger firstRetired = new AtomicInteger();
         var first = channel.create(firstRetired::incrementAndGet);
         var dropped = channel.create();

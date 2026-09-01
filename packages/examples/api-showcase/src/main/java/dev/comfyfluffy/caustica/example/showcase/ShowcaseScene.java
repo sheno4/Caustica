@@ -10,6 +10,8 @@ import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
 import java.util.List;
@@ -25,6 +27,7 @@ final class ShowcaseScene {
     private final MeshId<ShowcasePrograms.InstanceData> mesh;
     private final InstanceId instance;
     private final List<LightId> lightIds;
+    private ResourceGeneration meshResource;
 
     ShowcaseScene(ShowcasePrograms.Exports programs, List<LightId> lightIds,
                   SceneId scene, GeometryChannel geometry) {
@@ -36,24 +39,22 @@ final class ShowcaseScene {
         instance = geometry.newInstance();
     }
 
-    /**
-     * Publishes GPU data uploaded by a world-resource pass. The caller owns all streams until retired runs.
-     */
+    /** Publishes one immutable generation containing the combined position and index upload buffer. */
     GeometryPublication publishMesh(VulkanDeviceAddressRange currentPositions,
-                                     VulkanDeviceAddressRange indices, Runnable retired) {
-        MeshBuild<ShowcasePrograms.InstanceData> build = meshBuild(
-                currentPositions, indices, 1L);
-        return geometry.submitGroup(List.of(
-                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, build)), retired),
-                RetainedBatch.of(List.of(placement(scene, GeometryTransform.translation(0.0, 64.0, 0.0))))));
+                                     VulkanDeviceAddressRange indices, ResourceGeneration resource) {
+        return publish(resource, reference -> geometry.submitGroup(List.of(
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
+                        meshBuild(currentPositions, indices, 1L, reference)))),
+                RetainedBatch.of(List.of(placement(scene, GeometryTransform.translation(0.0, 64.0, 0.0)))))));
     }
 
     /** Replaces the retained mesh streams while every existing placement remains resident. */
     GeometryPublication replaceMesh(VulkanDeviceAddressRange currentPositions,
                                      VulkanDeviceAddressRange indices, long indexRevision,
-                                     Runnable retired) {
-        return geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
-                meshBuild(currentPositions, indices, indexRevision))), retired));
+                                     ResourceGeneration resource) {
+        return publish(resource, reference -> geometry.submit(
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
+                        meshBuild(currentPositions, indices, indexRevision, reference))))));
     }
 
     /** Moves the existing placement, including between simultaneously resident scenes. */
@@ -63,7 +64,7 @@ final class ShowcaseScene {
 
     private MeshBuild<ShowcasePrograms.InstanceData> meshBuild(VulkanDeviceAddressRange currentPositions,
                                                                 VulkanDeviceAddressRange indices,
-                                                               long indexRevision) {
+                                                               long indexRevision, ResourceRef resource) {
         var opaque = new MeshBuild.SurfaceSlot<>(programs.opaque(),
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
         var cutout = new MeshBuild.SurfaceSlot<>(programs.cutout(),
@@ -72,8 +73,8 @@ final class ShowcaseScene {
         var volume = new MeshBuild.VolumeSlot<>(programs.volume(),
                 ShowcasePrograms.VOLUME_BINDING.data(0L));
         return new MeshBuild<>(
-                new MeshBuild.Stream(currentPositions, 12),
-                new MeshBuild.Stream(indices, 4),
+                new MeshBuild.Stream(currentPositions, 12, resource),
+                new MeshBuild.Stream(indices, 4, resource),
                 4, new MeshBuild.IndexRevision(indexRevision),
                 List.of(
                         new MeshBuild.Geometry<>(opaque, null, 0, 3),
@@ -95,8 +96,28 @@ final class ShowcaseScene {
     }
 
     void stop() {
-        geometry.submit(RetainedBatch.of(List.of(
+        ResourceGeneration previous = meshResource;
+        GeometryPublication publication = geometry.submit(RetainedBatch.of(List.of(
                 new GeometryChannel.DropInstance(instance),
                 new GeometryChannel.DropMesh<>(mesh))));
+        meshResource = null;
+        if (previous != null) publication.whenVisible(previous::drop);
+    }
+
+    private GeometryPublication publish(ResourceGeneration next,
+                                        java.util.function.Function<ResourceRef, GeometryPublication> submit) {
+        boolean accepted = false;
+        try {
+            next.seal();
+            GeometryPublication publication = submit.apply(next.reference());
+            accepted = true;
+            ResourceGeneration previous = meshResource;
+            meshResource = next;
+            if (previous != null) publication.whenVisible(previous::drop);
+            return publication;
+        } catch (RuntimeException | Error failure) {
+            if (!accepted) next.drop();
+            throw failure;
+        }
     }
 }

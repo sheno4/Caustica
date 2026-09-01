@@ -116,7 +116,7 @@ final class ProgramSessionTest {
         ProgramRegistration.Failed failed = assertInstanceOf(
                 ProgramRegistration.Failed.class, brokenCompletion.getFirst());
         assertEquals("broken shader", failed.failure().summary());
-        assertEquals(List.of("broken"), retired);
+        assertTrue(retired.isEmpty());
         assertEquals(0, session.resolve(broken.exports()));
         assertEquals(1, session.resolve(first.exports()));
         assertEquals(2, backend.pendingRegistrationCount(),
@@ -193,7 +193,7 @@ final class ProgramSessionTest {
         session.progress();
         assertInstanceOf(ProgramRegistration.Cancelled.class, cancelledCompletion.getFirst());
         assertEquals(1, backend.closedCandidates);
-        assertEquals(List.of("cancelled"), retired);
+        assertTrue(retired.isEmpty());
         assertTrue(session.isDrained(channel));
         assertEquals(0, session.resolve(cancelled.exports()));
 
@@ -212,10 +212,10 @@ final class ProgramSessionTest {
         backend.succeed();
         session.progress();
         assertEquals(0, session.resolve(ready.exports()));
-        assertEquals(List.of("cancelled"), retired, "active roots wait for displaced GPU use");
+        assertTrue(retired.isEmpty());
         backend.retireLatestPrevious();
         session.progress();
-        assertEquals(List.of("cancelled", "ready"), retired);
+        assertTrue(retired.isEmpty());
     }
 
     @Test
@@ -234,7 +234,7 @@ final class ProgramSessionTest {
         backend.succeed();
         channel.drain();
 
-        assertEquals(1, retired.get());
+        assertEquals(0, retired.get());
         assertTrue(backend.publishedUseDrains > 0);
         assertTrue(session.isDrained(channel));
     }
@@ -271,7 +271,7 @@ final class ProgramSessionTest {
         AtomicInteger notOwned = new AtomicInteger();
         assertThrows(IllegalStateException.class, () -> first.register(builder -> builder.surface(
                 new SurfaceDefinition<>(shader("different_module", "sample.One"), null,
-                        IMPLEMENTATION.data(0), BINDING, INSTANCE, notOwned::incrementAndGet))));
+                        IMPLEMENTATION.data(0), BINDING, INSTANCE))));
         session.progress();
         assertEquals(0, notOwned.get());
     }
@@ -294,7 +294,7 @@ final class ProgramSessionTest {
         assertThrows(IllegalStateException.class, () -> channel.register(builder -> "late"));
         session.progress();
         assertInstanceOf(ProgramRegistration.Cancelled.class, completion.getFirst());
-        assertEquals(1, retired.get());
+        assertEquals(0, retired.get());
         assertTrue(session.isDrained(channel));
     }
 
@@ -320,8 +320,8 @@ final class ProgramSessionTest {
         backend.fail("compile");
         session.progress();
 
-        assertEquals(List.of("registration", "retirement"), callbacks);
-        assertEquals(List.of("readiness", "retirement"),
+        assertEquals(List.of("registration"), callbacks);
+        assertEquals(List.of("readiness"),
                 failures.stream().map(Throwable::getMessage).toList());
         assertTrue(session.isDrained(channel));
     }
@@ -333,7 +333,7 @@ final class ProgramSessionTest {
         ProgramSession session = new ProgramSession(
                 resources, new ManualBackend(), failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel channel = session.openChannel(owner);
-        var resourceChannel = resources.openChannel(owner);
+        var resourceChannel = resources.openFactory(owner);
         AtomicInteger firstRetired = new AtomicInteger();
         var first = resourceChannel.create(firstRetired::incrementAndGet);
         first.seal();
@@ -341,28 +341,28 @@ final class ProgramSessionTest {
 
         assertThrows(IllegalStateException.class, () -> channel.register(builder -> {
             builder.surface(new SurfaceDefinition<>(shader("first", "sample.ResourceFirst"), null,
-                    IMPLEMENTATION.data(1, first.reference()), BINDING, INSTANCE, () -> { }));
+                    IMPLEMENTATION.data(1, first.reference()), BINDING, INSTANCE));
             return builder.volume(new VolumeDefinition<>(shader("second", "sample.ResourceSecond"),
-                    IMPLEMENTATION.data(2, unsealed.reference()), BINDING, INSTANCE, () -> { }));
+                    IMPLEMENTATION.data(2, unsealed.reference()), BINDING, INSTANCE));
         }));
         first.drop();
         resources.progress();
         assertEquals(1, firstRetired.get(), "a rejected declaration must release earlier acquisitions");
 
-        var sameSessionForeignOwner = resources.openChannel(new ContributionOwner(2)).create();
+        var sameSessionForeignOwner = resources.openFactory(new ContributionOwner(2)).create();
         sameSessionForeignOwner.seal();
         assertThrows(IllegalArgumentException.class, () -> channel.register(builder -> builder.surface(
                 new SurfaceDefinition<>(shader("foreign_owner", "sample.ForeignOwner"), null,
                         IMPLEMENTATION.data(3, sameSessionForeignOwner.reference()),
-                        BINDING, INSTANCE, () -> { }))));
+                        BINDING, INSTANCE))));
 
         ResourceDirectory foreignDirectory = resources();
-        var foreignSession = foreignDirectory.openChannel(owner).create();
+        var foreignSession = foreignDirectory.openFactory(owner).create();
         foreignSession.seal();
         assertThrows(IllegalArgumentException.class, () -> channel.register(builder -> builder.surface(
                 new SurfaceDefinition<>(shader("foreign_session", "sample.ForeignSession"), null,
                         IMPLEMENTATION.data(4, foreignSession.reference()),
-                        BINDING, INSTANCE, () -> { }))));
+                        BINDING, INSTANCE))));
     }
 
     @Test
@@ -374,16 +374,14 @@ final class ProgramSessionTest {
                 resources, backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel channel = session.openChannel(owner);
         List<String> events = new ArrayList<>();
-        var generation = resources.openChannel(owner).create(() -> events.add("resource"));
+        var generation = resources.openFactory(owner).create(() -> events.add("resource"));
         generation.seal();
 
         ProgramRegistration<?> registration = channel.register(builder -> {
             builder.surface(new SurfaceDefinition<>(shader("surface_root", "sample.ResourceSurface"), null,
-                    IMPLEMENTATION.data(1, generation.reference()), BINDING, INSTANCE,
-                    () -> events.add("surface")));
+                    IMPLEMENTATION.data(1, generation.reference()), BINDING, INSTANCE));
             return builder.volume(new VolumeDefinition<>(shader("volume_root", "sample.ResourceVolume"),
-                    IMPLEMENTATION.data(2, generation.reference()), BINDING, INSTANCE,
-                    () -> events.add("volume")));
+                    IMPLEMENTATION.data(2, generation.reference()), BINDING, INSTANCE));
         });
         generation.drop();
         resources.progress();
@@ -401,9 +399,9 @@ final class ProgramSessionTest {
 
         backend.retireLatestPrevious();
         session.progress();
-        assertEquals(List.of("surface", "volume"), events);
+        assertTrue(events.isEmpty());
         resources.progress();
-        assertEquals(List.of("surface", "volume", "resource"), events);
+        assertEquals(List.of("resource"), events);
     }
 
     @Test
@@ -416,12 +414,11 @@ final class ProgramSessionTest {
         ProgramContributionChannel channel = session.openChannel(owner);
         List<String> retired = new ArrayList<>();
 
-        var failedRoot = resources.openChannel(owner).create(() -> retired.add("failed-resource"));
+        var failedRoot = resources.openFactory(owner).create(() -> retired.add("failed-resource"));
         failedRoot.seal();
         channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                 shader("failed_root", "sample.FailedResource"), null,
-                IMPLEMENTATION.data(1, failedRoot.reference()), BINDING, INSTANCE,
-                () -> retired.add("failed-definition"))));
+                IMPLEMENTATION.data(1, failedRoot.reference()), BINDING, INSTANCE)));
         failedRoot.drop();
         session.progress();
         backend.fail("failed");
@@ -429,35 +426,33 @@ final class ProgramSessionTest {
         assertTrue(retired.isEmpty());
         session.progress();
         resources.progress();
-        assertEquals(List.of("failed-definition", "failed-resource"), retired);
+        assertEquals(List.of("failed-resource"), retired);
 
-        var cancelledRoot = resources.openChannel(owner).create(() -> retired.add("cancelled-resource"));
+        var cancelledRoot = resources.openFactory(owner).create(() -> retired.add("cancelled-resource"));
         cancelledRoot.seal();
         ProgramRegistration<?> cancelled = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                 shader("cancelled_root", "sample.CancelledResource"), null,
-                IMPLEMENTATION.data(2, cancelledRoot.reference()), BINDING, INSTANCE,
-                () -> retired.add("cancelled-definition"))));
+                IMPLEMENTATION.data(2, cancelledRoot.reference()), BINDING, INSTANCE)));
         cancelledRoot.drop();
         session.progress();
         cancelled.close();
         resources.progress();
-        assertEquals(List.of("failed-definition", "failed-resource"), retired,
+        assertEquals(List.of("failed-resource"), retired,
                 "cancellation must retain resources while its compile is in flight");
         backend.succeed();
         session.progress();
         resources.progress();
-        assertEquals(List.of("failed-definition", "failed-resource",
-                "cancelled-definition", "cancelled-resource"), retired);
+        assertEquals(List.of("failed-resource", "cancelled-resource"), retired);
     }
 
     private static SurfaceDefinition<Binding, Instance> surface(
             String type, Runnable retired) {
         return new SurfaceDefinition<>(shader(type.substring(type.lastIndexOf('.') + 1).toLowerCase(), type),
-                null, IMPLEMENTATION.data(1), BINDING, INSTANCE, retired);
+                null, IMPLEMENTATION.data(1), BINDING, INSTANCE);
     }
 
     private static VolumeDefinition<Binding, Instance> volume(String type, Runnable retired) {
-        return new VolumeDefinition<>(shader("volume", type), IMPLEMENTATION.data(2), BINDING, INSTANCE, retired);
+        return new VolumeDefinition<>(shader("volume", type), IMPLEMENTATION.data(2), BINDING, INSTANCE);
     }
 
     private static ShaderDefinition shader(String module, String type) {

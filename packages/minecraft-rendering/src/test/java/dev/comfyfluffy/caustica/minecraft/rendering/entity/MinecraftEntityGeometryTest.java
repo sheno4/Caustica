@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -40,7 +41,7 @@ final class MinecraftEntityGeometryTest {
 
         assertSame(channel.publication, publication);
         assertFalse(publication.isVisible());
-        channel.visible = true;
+        channel.publication.makeVisible();
         assertTrue(publication.isVisible());
     }
 
@@ -56,9 +57,10 @@ final class MinecraftEntityGeometryTest {
         geometry.put(key, revision(1), mesh(), GeometryTransform.translation(10, 20, 30), 0xff);
         geometry.put(key, revision(2), mesh(), GeometryTransform.translation(10, 20, 30), 0xff);
 
-        assertEquals(2, channel.batches.size());
+        assertEquals(1, channel.batches.size());
+        assertEquals(1, channel.groups.size());
         var initial = channel.batches.get(0).operations();
-        var replacement = channel.batches.get(1).operations();
+        var replacement = channel.groups.getFirst().getFirst().operations();
         assertEquals(2, initial.size());
         assertEquals(2, replacement.size());
         var initialMesh = assertInstanceOf(GeometryChannel.SetMesh.class, initial.get(0));
@@ -83,7 +85,7 @@ final class MinecraftEntityGeometryTest {
                 GeometryTransform.translation(10, 20, 30), 0xff);
 
         var initial = channel.batches.get(0).operations();
-        var replacement = channel.batches.get(1).operations();
+        var replacement = channel.groups.getFirst().getFirst().operations();
         assertSame(assertInstanceOf(GeometryChannel.SetMesh.class, initial.get(0)).mesh(),
                 assertInstanceOf(GeometryChannel.SetMesh.class, replacement.get(0)).mesh());
         assertEquals(2, replacement.size());
@@ -169,7 +171,7 @@ final class MinecraftEntityGeometryTest {
     }
 
     @Test
-    void frameUpdatesKeepIndependentRetirementsInOnePublicationGroup() {
+    void frameUpdatesKeepCurrentUploadsOwnedAfterPublication() {
         RecordingChannel channel = new RecordingChannel();
         Uploaded firstUpload = new Uploaded(0x4b00L);
         Uploaded secondUpload = new Uploaded(0x4c00L);
@@ -187,11 +189,9 @@ final class MinecraftEntityGeometryTest {
 
         assertEquals(1, channel.groups.size());
         assertEquals(2, channel.groups.getFirst().size());
-        channel.groups.getFirst().getFirst().retired().run();
-        assertTrue(firstUpload.closed);
+        channel.publication.makeVisible();
+        assertFalse(firstUpload.closed);
         assertFalse(secondUpload.closed);
-        channel.groups.getFirst().get(1).retired().run();
-        assertTrue(secondUpload.closed);
     }
 
     @Test
@@ -206,11 +206,9 @@ final class MinecraftEntityGeometryTest {
         geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
         geometry.put(key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
 
-        channel.batches.get(0).retired().run();
+        channel.publication.makeVisible();
         assertTrue(first.closed);
         assertFalse(second.closed);
-        channel.batches.get(1).retired().run();
-        assertTrue(second.closed);
     }
 
     @Test
@@ -259,6 +257,49 @@ final class MinecraftEntityGeometryTest {
     }
 
     @Test
+    void rejectedReplacementAndLatestPlacementDoNotCloseAcceptedState() {
+        RecordingChannel channel = new RecordingChannel();
+        Uploaded initial = new Uploaded(0x4e30L);
+        Uploaded rejected = new Uploaded(0x4e40L);
+        var uploads = new ArrayList<>(List.of(initial, rejected));
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+        var key = new MinecraftEntityGeometry.Key(2, 801);
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
+        channel.rejectNextGroup = true;
+
+        assertThrows(IllegalStateException.class, () -> geometry.put(
+                key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 0xff));
+
+        assertFalse(initial.closed);
+        assertTrue(rejected.closed);
+        assertEquals(1, channel.batches.size());
+        assertEquals(0, channel.groups.size());
+    }
+
+    @Test
+    void rejectedGroupWithRepeatedReplacementClosesIntroducedUploadsAndKeepsPrior() {
+        RecordingChannel channel = new RecordingChannel();
+        Uploaded prior = new Uploaded(0x4e40L);
+        Uploaded first = new Uploaded(0x4e50L);
+        Uploaded second = new Uploaded(0x4e60L);
+        var uploads = new ArrayList<>(List.of(prior, first, second));
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+        var key = new MinecraftEntityGeometry.Key(2, 81);
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 0xff);
+        channel.rejectNextGroup = true;
+
+        MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup();
+        geometry.put(key, revision(2), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
+        geometry.put(key, revision(3), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
+        assertThrows(IllegalStateException.class, updates::submit);
+
+        assertEquals(0, prior.closeCount);
+        assertEquals(1, first.closeCount);
+        assertEquals(1, second.closeCount);
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(3, 0, 0), 0xff);
+    }
+
+    @Test
     void stagingFailureBeforeGroupAcceptanceClosesTheUntransferredUpload() {
         RecordingChannel channel = new RecordingChannel();
         Uploaded uploaded = new Uploaded(0x4f00L) {
@@ -290,8 +331,8 @@ final class MinecraftEntityGeometryTest {
         GeometryChannel.LatestInstance operation = channel.latestGroups.getFirst().getFirst();
         assertEquals(GeometryTransform.translation(1, 2, 3), operation.transform());
         assertEquals(0x01, operation.mask());
-        channel.batches.getFirst().retired().run();
-        assertTrue(uploaded.closed);
+        channel.publication.makeVisible();
+        assertFalse(uploaded.closed);
     }
 
     @Test
@@ -405,14 +446,17 @@ final class MinecraftEntityGeometryTest {
     private static class Uploaded implements MinecraftEntityUploader.UploadedEntity {
         final long address;
         boolean closed;
+        int closeCount;
 
         Uploaded(long address) { this.address = address; }
 
         @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(
-                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12);
+                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12,
+                    ResourceRef.none());
             var indices = new MeshBuild.Stream(
-                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4);
+                    new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4,
+                    ResourceRef.none());
             var surface = new MeshBuild.SurfaceSlot<>(new SurfaceId<
                     MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
                     MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),
@@ -426,7 +470,7 @@ final class MinecraftEntityGeometryTest {
             return MinecraftProgramTypes.INSTANCE_DATA.data(address + 0x300);
         }
 
-        @Override public void close() { closed = true; }
+        @Override public void close() { closed = true; closeCount++; }
     }
 
     private static final class RecordingChannel implements GeometryChannel {
@@ -435,8 +479,7 @@ final class MinecraftEntityGeometryTest {
         final List<List<GeometryChannel.LatestInstance>> latestGroups = new ArrayList<>();
         boolean rejectNext;
         boolean rejectNextGroup;
-        boolean visible;
-        final dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication = () -> visible;
+        final TestPublication publication = new TestPublication();
 
         @Override public <N> MeshId<N> newMesh(dev.comfyfluffy.caustica.api.program.ShaderDataType<N> type) {
             return new MeshId<>() { };
@@ -478,6 +521,22 @@ final class MinecraftEntityGeometryTest {
                 dev.comfyfluffy.caustica.api.light.LightChannel lights,
                 RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class TestPublication
+            implements dev.comfyfluffy.caustica.api.geometry.GeometryPublication {
+        private final List<Runnable> callbacks = new ArrayList<>();
+        private boolean visible;
+        @Override public boolean isVisible() { return visible; }
+        @Override public void whenVisible(Runnable callback) {
+            if (visible) callback.run();
+            else callbacks.add(callback);
+        }
+        void makeVisible() {
+            visible = true;
+            callbacks.forEach(Runnable::run);
+            callbacks.clear();
         }
     }
 }

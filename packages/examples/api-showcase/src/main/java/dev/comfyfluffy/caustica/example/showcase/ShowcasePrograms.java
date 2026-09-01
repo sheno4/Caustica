@@ -93,9 +93,9 @@ final class ShowcasePrograms {
     }
 
     EnvironmentBinding<EnvironmentBindingData> environmentBinding(
-            EnvironmentId<EnvironmentBindingData> implementation, long bindingWord, Runnable retired) {
+            EnvironmentId<EnvironmentBindingData> implementation, long bindingWord) {
         return new EnvironmentBinding<>(implementation,
-                ENVIRONMENT_BINDING.data(bindingWord), retired);
+                ENVIRONMENT_BINDING.data(bindingWord));
     }
 
     void close() {

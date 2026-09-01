@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import org.junit.jupiter.api.Test;
@@ -51,6 +52,6 @@ final class RtResolvedGeometryPlanTest {
 
     private static MeshBuild.Stream stream(long address, long bytes, int stride) {
         return new MeshBuild.Stream(new VulkanDeviceAddressRange(
-                new VulkanDeviceAddress(address), bytes), stride);
+                new VulkanDeviceAddress(address), bytes), stride, ResourceRef.none());
     }
 }

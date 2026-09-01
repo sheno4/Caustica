@@ -53,9 +53,8 @@ final class EngineSessionServicesTest {
             return new RenderSessionContribution() {
                 @Override public void stop() {
                     events.add("first:stop");
-                    context.geometry().submit(new RetainedBatch<>(
-                            List.of(new GeometryChannel.DropMesh<>(mesh)),
-                            () -> events.add("first:retired")));
+                    context.geometry().submit(RetainedBatch.of(
+                            List.of(new GeometryChannel.DropMesh<>(mesh))));
                 }
                 @Override public void close() { events.add("first:close"); }
             };
@@ -83,7 +82,7 @@ final class EngineSessionServicesTest {
 
         assertEquals(List.of(
                 "first:record", "second:record",
-                "first:stop", "first:pass-close", "first:retired", "first:close",
+                "first:stop", "first:pass-close", "first:close",
                 "second:record",
                 "second:stop", "second:pass-close", "second:close"), events);
     }
@@ -138,15 +137,11 @@ final class EngineSessionServicesTest {
             @Override public void drainPublishedUses() { }
         };
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published,
-                                          Runnable previousRetired) {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
                 published.run();
-                previousRetired.run();
             }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
-                                                 Runnable previousRetired) {
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
                 published.run();
-                previousRetired.run();
             }
         };
         return new EngineSessionServices(GPU, programs, scenes, passes,
@@ -189,6 +184,7 @@ final class EngineSessionServicesTest {
     private static final GpuDevice GPU = new GpuDevice() {
         @Override public VkDevice vk() { return null; }
         @Override public long vmaAllocator() { return 0; }
+        @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
         @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
     };

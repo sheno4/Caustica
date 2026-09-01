@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
-import dev.comfyfluffy.caustica.api.resource.ResourceChannel;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 
 /**
  * Owner-scoped services and lifecycle controls supplied by the renderer implementation.
@@ -25,7 +25,7 @@ public interface ContributionScope extends AutoCloseable {
 
     LightChannel lights();
 
-    ResourceChannel resources();
+    ResourceFactory resources();
 
     /** Reject new scoped registrations, stop future pass callbacks, and wait for callbacks already running. */
     void quiesce();
