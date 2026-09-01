@@ -115,6 +115,38 @@ final class RtRetainedSceneLifetimeTest {
     }
 
     @Test
+    void displacedMotionHistoryLivesUntilItsOverlappingFrameCompletes() {
+        AtomicInteger releases = new AtomicInteger();
+        SharedResourceLease<String> mappedHistory = SharedResourceLease.owned(
+                "submitted frame 1", ignored -> releases.incrementAndGet());
+        SharedResourceLease<String> overlappingFrame = mappedHistory.retain();
+
+        mappedHistory.close();
+
+        assertEquals(0, releases.get());
+        assertEquals("submitted frame 1", overlappingFrame.get());
+        overlappingFrame.close();
+        assertEquals(1, releases.get());
+    }
+
+    @Test
+    void displacedMotionHistoryWaitsForEveryOverlappingConsumer() {
+        AtomicInteger releases = new AtomicInteger();
+        SharedResourceLease<String> mappedHistory = SharedResourceLease.owned(
+                "submitted frame 1", ignored -> releases.incrementAndGet());
+        SharedResourceLease<String> firstFrame = mappedHistory.retain();
+        SharedResourceLease<String> secondFrame = mappedHistory.retain();
+
+        mappedHistory.close();
+        firstFrame.close();
+
+        assertEquals(0, releases.get());
+        assertEquals("submitted frame 1", secondFrame.get());
+        secondFrame.close();
+        assertEquals(1, releases.get());
+    }
+
+    @Test
     void terminalFrameRootReleaseDoesNotRetireCurrentPublication() {
         AtomicInteger retirements = new AtomicInteger();
         SharedResourceLease<String> current = SharedResourceLease.owned(

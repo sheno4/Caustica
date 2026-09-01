@@ -53,7 +53,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final RetainedSceneProgressQueue<CompletedBuild> completed = new RetainedSceneProgressQueue<>();
     private final RtLatestInstanceTransforms latestTransforms = new RtLatestInstanceTransforms();
     private final Map<GraphicsUse, FrameSnapshot> inFlightFrames = new IdentityHashMap<>();
-    private final Map<SceneId, SceneMotionHistory> motionHistoryByScene = new IdentityHashMap<>();
+    private final Map<SceneId, SharedResourceLease<SceneMotionHistory>> motionHistoryByScene =
+            new IdentityHashMap<>();
     private PublishedSceneRevision published;
     private Throwable fatalFailure;
     private boolean closed;
@@ -823,7 +824,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     private void retainRenderedScenes(java.util.Set<SceneId> retained) {
-        List<SceneMotionHistory> removed = new ArrayList<>();
+        List<SharedResourceLease<SceneMotionHistory>> removed = new ArrayList<>();
         motionHistoryByScene.entrySet().removeIf(entry -> {
             if (retained.contains(entry.getKey())) return false;
             removed.add(entry.getValue());
@@ -1054,79 +1055,82 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         FrameSceneSnapshot scene(SceneId scene) {
             FrameSceneSnapshot existing = scenes.get(scene);
             if (existing != null) return existing;
-            SceneRevisionRoot current = root();
-            SceneMotionHistory history = motionHistoryByScene.get(scene);
-            SharedResourceLease<SceneRevisionRoot> previousRoot = history == null
-                    ? null : history.root.retain();
+            SharedResourceLease<SceneMotionHistory> historyLease = motionHistoryByScene.get(scene);
+            SharedResourceLease<SceneMotionHistory> retainedHistory = historyLease == null
+                    ? null : historyLease.retain();
             try {
-                Map<Long, NativeInstance> previousInstances = new LinkedHashMap<>();
-                if (previousRoot != null) {
-                    List<NativeInstance> values = previousRoot.get().geometry().instances.get(scene);
-                    if (values != null) {
-                        for (NativeInstance instance : values) {
-                            previousInstances.put(instance.logical.identity(), instance);
-                        }
-                    }
-                }
+                SceneMotionHistory history = retainedHistory == null ? null : retainedHistory.get();
                 List<FrameInstanceSnapshot> instances = new ArrayList<>();
-                Map<Long, GeometryTransform> currentTransforms = new LinkedHashMap<>();
                 for (LatchedInstance frameCurrent : currentInstances.get(scene)) {
                     NativeInstance instance = frameCurrent.nativeInstance;
                     RetainedSceneSnapshot.Instance effective = frameCurrent.current;
                     GeometryTransform previousTransform = effective.transform();
                     MeshBuild.Stream previousPositions = instance.mesh.logical.build().positions();
-                    NativeInstance prior = previousInstances.get(instance.logical.identity());
+                    MotionInstanceHistory prior = history == null
+                            ? null : history.instances.get(instance.logical.identity());
                     if (prior != null
-                            && prior.logical.meshIdentity() == instance.logical.meshIdentity()
+                            && prior.meshIdentity == instance.logical.meshIdentity()
                             && prior.placementOrdinal == instance.placementOrdinal) {
-                        previousTransform = history.transforms.getOrDefault(
-                                instance.logical.identity(), prior.logical.transform());
-                        if (RetainedSceneSnapshot.vertexTopologyCompatible(
-                                prior.mesh.logical.build(), instance.mesh.logical.build())
+                        previousTransform = prior.transform;
+                        if (prior.topology.compatibleWith(instance.mesh.logical.build())
                                 && history.positionResources.available(
-                                prior.mesh.logical.build().positions().resource())) {
-                            previousPositions = prior.mesh.logical.build().positions();
+                                prior.positions.resource())) {
+                            previousPositions = prior.positions;
                         }
                     }
-                    currentTransforms.put(instance.logical.identity(), effective.transform());
                     instances.add(new FrameInstanceSnapshot(
                             instance, effective, frameCurrent.resolvedMesh,
                             frameCurrent.resolvedPlacement, previousTransform, previousPositions,
                             frameCurrent.geometryBase, frameCurrent.sbtRecordOffset));
                 }
-                FrameSceneSnapshot created = new FrameSceneSnapshot(currentContent.get(scene), List.copyOf(instances),
-                        Map.copyOf(currentTransforms), previousRoot);
+                FrameSceneSnapshot created = new FrameSceneSnapshot(
+                        currentContent.get(scene), List.copyOf(instances), retainedHistory);
+                retainedHistory = null;
                 scenes.put(scene, created);
                 return created;
             } catch (Throwable failure) {
-                if (previousRoot != null) suppressCleanupFailure(failure, previousRoot::close);
+                if (retainedHistory != null) suppressCleanupFailure(failure, retainedHistory::close);
                 throw failure;
             }
         }
 
         void accept() {
-            List<SceneMotionHistory> displaced = new ArrayList<>();
+            List<SharedResourceLease<SceneMotionHistory>> displaced = new ArrayList<>();
             synchronized (RtRetainedSceneBackend.this) {
                 if (root == null) return;
                 for (Map.Entry<SceneId, FrameSceneSnapshot> entry : scenes.entrySet()) {
                     if (!entry.getValue().traced()) continue;
-                    List<ResourceRef> positions = entry.getValue().instances.stream()
-                            .map(instance -> instance.nativeInstance.mesh.logical.build()
-                                    .positions().resource()).toList();
+                    List<ResourceRef> positions = entry.getValue().instances.stream().map(instance ->
+                            instance.nativeInstance.mesh.logical.build().positions().resource()).toList();
                     ResourceLeaseSet positionResources = resources.retainOnly(positions);
-                    SharedResourceLease<SceneRevisionRoot> historyRoot = null;
-                    SceneMotionHistory replacement;
+                    SharedResourceLease<SceneRevisionRoot> legacyRoot = null;
+                    SharedResourceLease<SceneMotionHistory> replacement = null;
                     try {
-                        historyRoot = root.retain();
-                        replacement = new SceneMotionHistory(historyRoot,
-                                entry.getValue().currentTransforms, positionResources);
-                        historyRoot = null;
+                        if (positions.stream().anyMatch(resource -> resource == ResourceRef.none())) {
+                            // Legacy streams have no independent lease, so their publication retirement
+                            // callback must remain deferred until this history generation is unused.
+                            legacyRoot = root.retain();
+                        }
+                        Map<Long, MotionInstanceHistory> historyInstances = new LinkedHashMap<>();
+                        for (FrameInstanceSnapshot instance : entry.getValue().instances) {
+                            NativeInstance nativeInstance = instance.nativeInstance;
+                            MeshBuild<?> build = nativeInstance.mesh.logical.build();
+                            historyInstances.put(nativeInstance.logical.identity(), new MotionInstanceHistory(
+                                    nativeInstance.logical.meshIdentity(), nativeInstance.placementOrdinal,
+                                    instance.current.transform(),
+                                    MotionTopology.capture(build), build.positions()));
+                        }
+                        SceneMotionHistory history = new SceneMotionHistory(Map.copyOf(historyInstances),
+                                positionResources, legacyRoot);
+                        replacement = SharedResourceLease.owned(history, SceneMotionHistory::close);
                         positionResources = null;
+                        legacyRoot = null;
                     } finally {
-                        if (historyRoot != null) historyRoot.close();
+                        if (legacyRoot != null) legacyRoot.close();
                         if (positionResources != null) positionResources.close();
                     }
-                    SceneMotionHistory previous = motionHistoryByScene.put(entry.getKey(), replacement);
+                    SharedResourceLease<SceneMotionHistory> previous =
+                            motionHistoryByScene.put(entry.getKey(), replacement);
                     if (previous != null) displaced.add(previous);
                 }
             }
@@ -1168,17 +1172,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private static final class FrameSceneSnapshot implements AutoCloseable {
         final SceneContent content;
         final List<FrameInstanceSnapshot> instances;
-        final Map<Long, GeometryTransform> currentTransforms;
-        final SharedResourceLease<SceneRevisionRoot> previousRoot;
+        final SharedResourceLease<SceneMotionHistory> previousHistory;
         private boolean traced;
 
         FrameSceneSnapshot(SceneContent content, List<FrameInstanceSnapshot> instances,
-                   Map<Long, GeometryTransform> currentTransforms,
-                   SharedResourceLease<SceneRevisionRoot> previousRoot) {
+                           SharedResourceLease<SceneMotionHistory> previousHistory) {
             this.content = content;
             this.instances = instances;
-            this.currentTransforms = currentTransforms;
-            this.previousRoot = previousRoot;
+            this.previousHistory = previousHistory;
         }
 
         void markTraced() { traced = true; }
@@ -1186,7 +1187,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         boolean traced() { return traced; }
 
         @Override public void close() {
-            if (previousRoot != null) previousRoot.close();
+            if (previousHistory != null) previousHistory.close();
         }
     }
 
@@ -1216,27 +1217,54 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     record ResolvedFrameInput(RtRetainedGeometryPlan.ResolvedMesh mesh,
                               RtRetainedGeometryPlan.ResolvedPlacement placement) { }
 
-    private static final class SceneMotionHistory implements AutoCloseable {
-        final SharedResourceLease<SceneRevisionRoot> root;
-        final Map<Long, GeometryTransform> transforms;
-        final ResourceLeaseSet positionResources;
+    private record MotionInstanceHistory(long meshIdentity, long placementOrdinal,
+                                         GeometryTransform transform, MotionTopology topology,
+                                         MeshBuild.Stream positions) { }
 
-        SceneMotionHistory(SharedResourceLease<SceneRevisionRoot> root,
-                           Map<Long, GeometryTransform> transforms,
-                           ResourceLeaseSet positionResources) {
-            this.root = root;
-            this.transforms = transforms;
+    private record MotionTopology(int vertexCount, MeshBuild.IndexRevision indexRevision,
+                                  List<IndexRange> geometries) {
+        static MotionTopology capture(MeshBuild<?> build) {
+            return new MotionTopology(build.vertexCount(), build.indexRevision(), build.geometries().stream()
+                    .map(geometry -> new IndexRange(geometry.firstIndex(), geometry.indexCount())).toList());
+        }
+
+        boolean compatibleWith(MeshBuild<?> build) {
+            if (vertexCount != build.vertexCount() || indexRevision == null
+                    || !indexRevision.equals(build.indexRevision())
+                    || geometries.size() != build.geometries().size()) return false;
+            for (int index = 0; index < geometries.size(); index++) {
+                IndexRange previous = geometries.get(index);
+                MeshBuild.Geometry<?> current = build.geometries().get(index);
+                if (previous.firstIndex != current.firstIndex()
+                        || previous.indexCount != current.indexCount()) return false;
+            }
+            return true;
+        }
+    }
+
+    private record IndexRange(int firstIndex, int indexCount) { }
+
+    private static final class SceneMotionHistory implements AutoCloseable {
+        final Map<Long, MotionInstanceHistory> instances;
+        final ResourceLeaseSet positionResources;
+        final SharedResourceLease<SceneRevisionRoot> legacyRoot;
+
+        SceneMotionHistory(Map<Long, MotionInstanceHistory> instances,
+                           ResourceLeaseSet positionResources,
+                           SharedResourceLease<SceneRevisionRoot> legacyRoot) {
+            this.instances = instances;
             this.positionResources = positionResources;
+            this.legacyRoot = legacyRoot;
         }
 
         @Override public void close() {
             Throwable failure = null;
             try {
-                root.close();
+                positionResources.close();
             } catch (Throwable releaseFailure) {
                 failure = releaseFailure;
             }
-            closeAll(List.of(positionResources), failure);
+            if (legacyRoot != null) closeAll(List.of(legacyRoot), failure);
             throwFailure(failure, "motion history release failed");
         }
     }
