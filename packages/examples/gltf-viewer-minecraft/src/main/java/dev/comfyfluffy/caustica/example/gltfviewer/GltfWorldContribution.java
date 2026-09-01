@@ -95,7 +95,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                         new MeshBuild.SurfaceSlot<>(programs.material(),
                                 GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value()), coverage);
                 MeshBuild<GltfProgramExports.InstanceData> build = new MeshBuild<>(
-                        upload.positionsStream(), null, upload.indexStream(), upload.vertexCount(),
+                        upload.positionsStream(), upload.indexStream(), upload.vertexCount(),
                         new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
                         List.of(new MeshBuild.Geometry<>(slot, null, 0, upload.indexCount())));
                 operations.add(new GeometryChannel.SetMesh<>(mesh, build));
@@ -120,7 +120,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                     GltfProgramExports.PRIMITIVE.data(portalUpload.primitiveDataAddress().value()),
                     new MeshBuild.CoveragePolicy.Opaque());
             operations.add(new GeometryChannel.SetMesh<>(portalMesh, new MeshBuild<>(
-                    portalUpload.positionsStream(), null, portalUpload.indexStream(), portalUpload.vertexCount(),
+                    portalUpload.positionsStream(), portalUpload.indexStream(), portalUpload.vertexCount(),
                     new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
                     List.of(new MeshBuild.Geometry<>(portalSlot, null, 0, portalUpload.indexCount())))));
             for (BlockPos anchor : Set.copyOf(portalAnchors.get())) {

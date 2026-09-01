@@ -83,6 +83,28 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void sessionCloseSettlesQueuedMeshPositionHistory() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        AtomicInteger retired = new AtomicInteger();
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x1000, 7))), retired::incrementAndGet));
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x3000, 7))), retired::incrementAndGet));
+        geometry.invalidate();
+
+        directory.prepareForSessionClose();
+        geometry.drain();
+
+        assertEquals(2, retired.get());
+    }
+
+    @Test
     void ownerDrainWakesAndProgressesAcceptedBackendPublications() throws InterruptedException {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
@@ -675,6 +697,211 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void compatibleMeshReplacementUsesImmediatePredecessorPositions() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> firstSurface = programs.surface(new ContributionOwner(1));
+        SurfaceId<Binding, Instance> secondSurface = programs.surface(new ContributionOwner(2));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(3));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        MeshBuild<Instance> first = mesh(firstSurface, 0x1000, 7);
+        MeshBuild<Instance> second = mesh(secondSurface, 0x3000, 7);
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, first))));
+        assertSame(first.positions(), directory.snapshot().meshes().getFirst().previousPositions());
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, second))));
+
+        RetainedSceneSnapshot.Mesh published = directory.snapshot().meshes().getFirst();
+        assertSame(second, published.build());
+        assertSame(first.positions(), published.previousPositions());
+    }
+
+    @Test
+    void invalidLatestPlacementRollsBackPreparedPositionHistoryRetain() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var absentInstance = geometry.newInstance();
+        AtomicInteger firstRetired = new AtomicInteger();
+
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x1000, 7))), firstRetired::incrementAndGet));
+
+        assertThrows(IllegalArgumentException.class, () -> geometry.submitGroupWithLatest(
+                List.of(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
+                        mesh(surface, 0x3000, 7))))),
+                List.of(new GeometryChannel.LatestInstance(absentInstance,
+                        GeometryTransform.translation(1, 0, 0), 0xff))));
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(1, firstRetired.get());
+    }
+
+    @Test
+    void incompatibleMeshReplacementResetsPreviousPositionsToCurrent() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneDirectory directory = directory(programs, new SceneBackend());
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        MeshBuild<Instance> first = mesh(surface, 0x1000, 7);
+        MeshBuild<Instance> second = mesh(surface, 0x3000, 8);
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, first))));
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, second))));
+
+        assertSame(second.positions(), directory.snapshot().meshes().getFirst().previousPositions());
+    }
+
+    @Test
+    void groupedMeshReplacementUsesThePriorPublishedGeneration() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        MeshBuild<Instance> first = mesh(surface, 0x1000, 7);
+        MeshBuild<Instance> second = mesh(surface, 0x3000, 7);
+        MeshBuild<Instance> third = mesh(surface, 0x5000, 7);
+        AtomicInteger firstRetired = new AtomicInteger();
+        AtomicInteger secondRetired = new AtomicInteger();
+
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, first)),
+                firstRetired::incrementAndGet));
+        geometry.submitGroup(List.of(
+                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, second)),
+                        secondRetired::incrementAndGet),
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, third)))));
+
+        RetainedSceneSnapshot.Mesh published = directory.snapshot().meshes().getFirst();
+        assertSame(third, published.build());
+        assertSame(first.positions(), published.previousPositions());
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(0, firstRetired.get());
+        assertEquals(1, secondRetired.get());
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(1, firstRetired.get());
+        assertEquals(1, secondRetired.get());
+    }
+
+    @Test
+    void dropThenSetStartsANewPositionHistory() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneDirectory directory = directory(programs, new SceneBackend());
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        MeshBuild<Instance> first = mesh(surface, 0x1000, 7);
+        MeshBuild<Instance> second = mesh(surface, 0x3000, 7);
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, first))));
+        geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.DropMesh<>(mesh),
+                new GeometryChannel.SetMesh<>(mesh, second))));
+
+        RetainedSceneSnapshot.Mesh published = directory.snapshot().meshes().getFirst();
+        assertSame(second, published.build());
+        assertSame(second.positions(), published.previousPositions());
+    }
+
+    @Test
+    void predecessorBatchStaysAliveUntilCompatibleSuccessorRetires() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        AtomicInteger firstRetired = new AtomicInteger();
+        AtomicInteger secondRetired = new AtomicInteger();
+
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x1000, 7))), firstRetired::incrementAndGet));
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x3000, 7))), secondRetired::incrementAndGet));
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(0, firstRetired.get());
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(1, firstRetired.get());
+        assertEquals(1, secondRetired.get());
+    }
+
+    @Test
+    void incompatibleSuccessorReleasesPredecessorHistoryAtItsPublicationBoundary() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        AtomicInteger firstRetired = new AtomicInteger();
+        AtomicInteger secondRetired = new AtomicInteger();
+
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x1000, 7))), firstRetired::incrementAndGet));
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x3000, 7))), secondRetired::incrementAndGet));
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(0, firstRetired.get());
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x5000, 8)))));
+        backend.retireLatest();
+        directory.progress();
+
+        assertEquals(1, firstRetired.get());
+        assertEquals(1, secondRetired.get());
+    }
+
+    @Test
+    void rejectedCompatibleReplacementDoesNotRetainPredecessorBatch() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        AtomicInteger firstRetired = new AtomicInteger();
+        AtomicInteger rejectedRetired = new AtomicInteger();
+        geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, 0x1000, 7))), firstRetired::incrementAndGet));
+        backend.rejectNext = true;
+
+        assertThrows(IllegalStateException.class, () -> geometry.submit(new RetainedBatch<>(List.of(
+                new GeometryChannel.SetMesh<>(mesh, mesh(surface, 0x3000, 7))),
+                rejectedRetired::incrementAndGet)));
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+        backend.retireLatest();
+        directory.progress();
+
+        assertEquals(1, firstRetired.get());
+        assertEquals(0, rejectedRetired.get());
+    }
+
+    @Test
     void rejectedContentPublicationKeepsLightStateAndRetirementRetryable() {
         ProgramFixture programs = new ProgramFixture();
         SceneBackend backend = new SceneBackend();
@@ -733,12 +960,17 @@ final class SceneDirectoryTest {
     }
 
     private static MeshBuild<Instance> mesh(SurfaceId<Binding, Instance> surface) {
+        return mesh(surface, 0x1000, 1);
+    }
+
+    private static MeshBuild<Instance> mesh(SurfaceId<Binding, Instance> surface,
+                                            long positionAddress, long indexRevision) {
         MeshBuild.Stream positions = new MeshBuild.Stream(
-                new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x1000), 36), 12);
+                new VulkanDeviceAddressRange(new VulkanDeviceAddress(positionAddress), 36), 12);
         MeshBuild.Stream indices = new MeshBuild.Stream(
                 new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x2000), 12), 4);
         var slot = new MeshBuild.SurfaceSlot<>(surface, BINDING.data(0), new MeshBuild.CoveragePolicy.Opaque());
-        return new MeshBuild<>(positions, null, indices, 3, new MeshBuild.IndexRevision(1),
+        return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(indexRevision),
                 List.of(new MeshBuild.Geometry<>(slot, null, 0, 3)));
     }
 

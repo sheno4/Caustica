@@ -20,8 +20,30 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
     }
 
     public record Scene(SceneId id, EnvironmentBinding<?> environment) { }
-    public record Mesh(long identity, MeshBuild<?> build, List<GeometryPrograms> geometryPrograms) {
+
+    /** Whether vertex indices preserve the same ordered vertex correspondence across two builds. */
+    public static boolean vertexTopologyCompatible(MeshBuild<?> previous, MeshBuild<?> current) {
+        if (previous == null || previous.vertexCount() != current.vertexCount()
+                || previous.indexRevision() == null
+                || !previous.indexRevision().equals(current.indexRevision())
+                || previous.geometries().size() != current.geometries().size()) {
+            return false;
+        }
+        for (int index = 0; index < previous.geometries().size(); index++) {
+            MeshBuild.Geometry<?> first = previous.geometries().get(index);
+            MeshBuild.Geometry<?> second = current.geometries().get(index);
+            if (first.firstIndex() != second.firstIndex() || first.indexCount() != second.indexCount()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public record Mesh(long identity, MeshBuild<?> build, MeshBuild.Stream previousPositions,
+                       List<GeometryPrograms> geometryPrograms) {
         public Mesh {
+            java.util.Objects.requireNonNull(build, "build");
+            java.util.Objects.requireNonNull(previousPositions, "previousPositions");
             geometryPrograms = List.copyOf(geometryPrograms);
             if (geometryPrograms.size() != build.geometries().size()) {
                 throw new IllegalArgumentException("each geometry needs one resolved program entry");

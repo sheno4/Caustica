@@ -100,7 +100,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             geometries.add(new MeshBuild.Geometry<>(surface, null, first * 3, (end - first) * 3));
         }
         MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
-                new MeshBuild.Stream(positions.deviceRange(), 12), null,
+                new MeshBuild.Stream(positions.deviceRange(), 12),
                 new MeshBuild.Stream(indices.deviceRange(), 4), source.vertexCount(),
                 new MeshBuild.IndexRevision(source.indexRevision()), geometries);
         return new Uploaded(build, MinecraftProgramTypes.INSTANCE_DATA.data(

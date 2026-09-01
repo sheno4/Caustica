@@ -36,7 +36,7 @@ final class MeshBuildTest {
     @Test
     void rejectsPositionStrideThatIsNotAFloatMultiple() {
         assertThrows(IllegalArgumentException.class, () -> new MeshBuild<Instance>(
-                new MeshBuild.Stream(range(0x1000L, 38L), 13), null,
+                new MeshBuild.Stream(range(0x1000L, 38L), 13),
                 new MeshBuild.Stream(range(0x2000L, 12L), 4), 3, null,
                 List.of(geometry(new SurfaceId<Binding, Instance>() { }, 0, 3))));
     }
@@ -56,7 +56,7 @@ final class MeshBuildTest {
     void rejectsOverlappingGeometrySlices() {
         SurfaceId<Binding, Instance> surface = new SurfaceId<>() { };
         assertThrows(IllegalArgumentException.class, () -> new MeshBuild<Instance>(
-                new MeshBuild.Stream(range(0x1000L, 36L), 12), null,
+                new MeshBuild.Stream(range(0x1000L, 36L), 12),
                 new MeshBuild.Stream(range(0x2000L, 24L), 4), 3,
                 null,
                 List.of(geometry(surface, 0, 6), geometry(surface, 3, 3))));
@@ -102,7 +102,7 @@ final class MeshBuildTest {
     private static MeshBuild<Instance> build(MeshBuild.IndexRevision revision) {
         SurfaceId<Binding, Instance> surface = new SurfaceId<>() { };
         return new MeshBuild<>(
-                new MeshBuild.Stream(range(0x1000L, 36L), 12), null,
+                new MeshBuild.Stream(range(0x1000L, 36L), 12),
                 new MeshBuild.Stream(range(0x2000L, 12L), 4), 3, revision,
                 List.of(geometry(surface, 0, 3)));
     }

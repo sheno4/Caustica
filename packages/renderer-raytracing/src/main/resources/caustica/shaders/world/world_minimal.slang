@@ -112,12 +112,28 @@ public bool worldHitEntering() {
     return dot(outward, WorldRayDirection()) < 0.0;
 }
 
+public uint3 worldTriangleIndices(RetainedGeometryRecord record) {
+    ConstPtr<uint> indices = (ConstPtr<uint>)record.indexAddress;
+    uint first = record.firstIndex + PrimitiveIndex() * 3u;
+    return uint3(indices[first], indices[first + 1u], indices[first + 2u]);
+}
+
+public float3 worldPreviousVertex(RetainedGeometryRecord record, uint vertexIndex) {
+    uint64_t address = record.previousPositionAddress
+            + uint64_t(vertexIndex) * uint64_t(record.previousPositionStride);
+    ConstPtr<float> position = (ConstPtr<float>)address;
+    return float3(position[0], position[1], position[2]);
+}
+
 public float3 worldPreviousHitPosition(BuiltInTriangleIntersectionAttributes attributes,
                                        RetainedGeometryRecord record) {
+    uint3 indices = worldTriangleIndices(record);
+    float3 p0 = worldPreviousVertex(record, indices.x);
+    float3 p1 = worldPreviousVertex(record, indices.y);
+    float3 p2 = worldPreviousVertex(record, indices.z);
     float2 barycentrics = attributes.barycentrics;
-    float3 objectPosition = HitTriangleVertexPosition(0u) * (1.0 - barycentrics.x - barycentrics.y)
-            + HitTriangleVertexPosition(1u) * barycentrics.x
-            + HitTriangleVertexPosition(2u) * barycentrics.y;
+    float3 objectPosition = p0 * (1.0 - barycentrics.x - barycentrics.y)
+            + p1 * barycentrics.x + p2 * barycentrics.y;
     return transformPosition(worldPreviousTransform(record), objectPosition);
 }
 
@@ -165,10 +181,16 @@ public SurfaceInput worldSurfaceInput(BuiltInTriangleIntersectionAttributes attr
     ConstPtr<WorldPush> frame = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
     float3 objectEdgeU = HitTriangleVertexPosition(1u) - HitTriangleVertexPosition(0u);
     float3 objectEdgeV = HitTriangleVertexPosition(2u) - HitTriangleVertexPosition(0u);
+    uint3 triangleIndices = worldTriangleIndices(record);
+    float3 previousObjectPosition0 = worldPreviousVertex(record, triangleIndices.x);
+    float3 previousObjectEdgeU = worldPreviousVertex(record, triangleIndices.y)
+            - previousObjectPosition0;
+    float3 previousObjectEdgeV = worldPreviousVertex(record, triangleIndices.z)
+            - previousObjectPosition0;
     float3 currentEdgeU = transformDirection(input.objectToScene, objectEdgeU);
     float3 currentEdgeV = transformDirection(input.objectToScene, objectEdgeV);
-    float3 previousEdgeU = transformDirection(input.previousObjectToScene, objectEdgeU);
-    float3 previousEdgeV = transformDirection(input.previousObjectToScene, objectEdgeV);
+    float3 previousEdgeU = transformDirection(input.previousObjectToScene, previousObjectEdgeU);
+    float3 previousEdgeV = transformDirection(input.previousObjectToScene, previousObjectEdgeV);
     float3 currentNormal = normalize(cross(currentEdgeU, currentEdgeV));
     float3 previousNormal = normalize(cross(previousEdgeU, previousEdgeV));
     float orientation = dot(currentNormal, WorldRayDirection()) <= 0.0 ? 1.0 : -1.0;

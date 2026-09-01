@@ -16,7 +16,8 @@ public typealias ConstPtr<T> = Ptr<T, Access.Read, AddressSpace.Device, Std430Da
 public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
 
 // GeometryIndex-addressed retained hit state. The TLAS instance custom index is the placement's base.
-// The explicit float4 transform rows and emitter sidecar tail keep the std430 record stride stable.
+// The explicit float4 transform rows keep the std430 record aligned. Motion addresses refer to the
+// source-owned streams retained by the scene snapshot for this publication.
 public struct RetainedGeometryRecord {
     public uint surfaceImplementation;
     public uint coverageImplementation;
@@ -35,7 +36,11 @@ public struct RetainedGeometryRecord {
     public float4 previousRow2;
     public uint64_t emitterIndexAddress;
     public uint emitterPrimitiveBase;
-    public uint reservedEmitter;
+    public uint previousPositionStride;
+    public uint64_t previousPositionAddress;
+    public uint64_t indexAddress;
+    public uint firstIndex;
+    public uint reservedMotion;
 };
 
 public static const uint RETAINED_GEOMETRY_HAS_VOLUME = 2u;

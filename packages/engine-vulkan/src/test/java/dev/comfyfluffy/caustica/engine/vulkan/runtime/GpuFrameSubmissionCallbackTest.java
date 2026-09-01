@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -54,5 +55,81 @@ final class GpuFrameSubmissionCallbackTest {
         assertThrows(IllegalStateException.class,
                 () -> use.resolveSubmission(() -> events.add("duplicate signal")));
         assertEquals(List.of("callback", "signal"), events);
+    }
+
+    @Test
+    void acceptedCommandsTransferKeepAliveToTimelineCompletion() {
+        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        AtomicInteger releases = new AtomicInteger();
+        List<Runnable> completions = new ArrayList<>();
+        use.keepAlive(releases::incrementAndGet);
+        use.commandsAccepted();
+
+        use.resolveSubmission(() -> { }, completions::add);
+
+        assertEquals(0, releases.get());
+        assertEquals(1, completions.size());
+        completions.getFirst().run();
+        assertEquals(1, releases.get());
+    }
+
+    @Test
+    void abandonedCommandsReleaseKeepAliveImmediately() {
+        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        AtomicInteger releases = new AtomicInteger();
+        List<Runnable> completions = new ArrayList<>();
+        use.keepAlive(releases::incrementAndGet);
+
+        use.resolveSubmission(() -> { }, completions::add);
+
+        assertEquals(1, releases.get());
+        assertEquals(List.of(), completions);
+    }
+
+    @Test
+    void keepAliveReleaseFailureDoesNotSkipOtherReleases() {
+        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        AtomicInteger releases = new AtomicInteger();
+        List<Runnable> completions = new ArrayList<>();
+        use.keepAlive(() -> { throw new Exception("first"); });
+        use.keepAlive(releases::incrementAndGet);
+        use.commandsAccepted();
+        use.resolveSubmission(() -> { }, completions::add);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, completions.getFirst()::run);
+
+        assertEquals("graphics keep-alive release failed", failure.getMessage());
+        assertEquals(1, releases.get());
+    }
+
+    @Test
+    void acceptedCompletionCallbacksRunAfterTimelineInRegistrationOrder() {
+        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        List<String> events = new ArrayList<>();
+        List<Runnable> completions = new ArrayList<>();
+        use.whenComplete(() -> events.add("first"));
+        use.whenComplete(() -> events.add("second"));
+        use.commandsAccepted();
+
+        use.resolveSubmission(() -> events.add("signal"), completions::add);
+
+        assertEquals(List.of("signal"), events);
+        assertEquals(1, completions.size());
+        completions.getFirst().run();
+        assertEquals(List.of("signal", "first", "second"), events);
+    }
+
+    @Test
+    void abandonedCompletionCallbacksRunDuringResolutionInRegistrationOrder() {
+        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        List<String> events = new ArrayList<>();
+        List<Runnable> completions = new ArrayList<>();
+        use.whenComplete(() -> events.add("first"));
+        use.whenComplete(() -> events.add("second"));
+
+        use.resolveSubmission(() -> events.add("unexpected signal"), completions::add);
+
+        assertEquals(List.of("first", "second"), events);
+        assertEquals(List.of(), completions);
     }
 }

@@ -45,7 +45,7 @@ final class MinecraftEntityGeometryTest {
     }
 
     @Test
-    void replacementAndPlacementAreOneAtomicBatch() {
+    void compatibleReplacementKeepsMeshIdentityAndPlacementInOneAtomicBatch() {
         RecordingChannel channel = new RecordingChannel();
         Uploaded first = new Uploaded(0x1000L);
         Uploaded second = new Uploaded(0x2000L);
@@ -60,15 +60,33 @@ final class MinecraftEntityGeometryTest {
         var initial = channel.batches.get(0).operations();
         var replacement = channel.batches.get(1).operations();
         assertEquals(2, initial.size());
-        assertEquals(3, replacement.size());
+        assertEquals(2, replacement.size());
         var initialMesh = assertInstanceOf(GeometryChannel.SetMesh.class, initial.get(0));
         var initialPlacement = assertInstanceOf(GeometryChannel.SetInstance.class, initial.get(1));
         var replacementMesh = assertInstanceOf(GeometryChannel.SetMesh.class, replacement.get(0));
         var replacementPlacement = assertInstanceOf(GeometryChannel.SetInstance.class, replacement.get(1));
-        assertNotSame(initialMesh.mesh(), replacementMesh.mesh());
+        assertSame(initialMesh.mesh(), replacementMesh.mesh());
         assertSame(initialPlacement.instance(), replacementPlacement.instance());
         assertEquals(GeometryTransform.translation(10, 20, 30), replacementPlacement.transform());
-        assertInstanceOf(GeometryChannel.DropMesh.class, replacement.get(2));
+    }
+
+    @Test
+    void topologyChangeKeepsTheResidentsLogicalMeshIdentity() {
+        RecordingChannel channel = new RecordingChannel();
+        var uploads = new ArrayList<>(List.of(new Uploaded(0x2100L), new Uploaded(0x2200L)));
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+        var key = new MinecraftEntityGeometry.Key(2, 8);
+
+        geometry.put(key, new MinecraftEntityGeometry.MeshRevision(0, 1, 17), mesh(),
+                GeometryTransform.translation(10, 20, 30), 0xff);
+        geometry.put(key, new MinecraftEntityGeometry.MeshRevision(0, 2, 18), mesh(),
+                GeometryTransform.translation(10, 20, 30), 0xff);
+
+        var initial = channel.batches.get(0).operations();
+        var replacement = channel.batches.get(1).operations();
+        assertSame(assertInstanceOf(GeometryChannel.SetMesh.class, initial.get(0)).mesh(),
+                assertInstanceOf(GeometryChannel.SetMesh.class, replacement.get(0)).mesh());
+        assertEquals(2, replacement.size());
     }
 
     @Test
@@ -177,6 +195,25 @@ final class MinecraftEntityGeometryTest {
     }
 
     @Test
+    void overlappingCompatibleReplacementsRetireTheirUploadsIndependently() {
+        RecordingChannel channel = new RecordingChannel();
+        Uploaded first = new Uploaded(0x4c10L);
+        Uploaded second = new Uploaded(0x4c20L);
+        var uploads = new ArrayList<>(List.of(first, second));
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+        var key = new MinecraftEntityGeometry.Key(2, 70);
+
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
+        geometry.put(key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
+
+        channel.batches.get(0).retired().run();
+        assertTrue(first.closed);
+        assertFalse(second.closed);
+        channel.batches.get(1).retired().run();
+        assertTrue(second.closed);
+    }
+
+    @Test
     void rejectedFrameGroupRestoresResidentsAndClosesUnacceptedUploads() {
         RecordingChannel channel = new RecordingChannel();
         Uploaded rejected = new Uploaded(0x4d00L);
@@ -193,6 +230,31 @@ final class MinecraftEntityGeometryTest {
 
         geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
         assertEquals(1, channel.batches.size());
+        assertFalse(retry.closed);
+    }
+
+    @Test
+    void rejectedCompatibleReplacementKeepsTheStableMeshRetryable() {
+        RecordingChannel channel = new RecordingChannel();
+        Uploaded initial = new Uploaded(0x4e10L);
+        Uploaded rejected = new Uploaded(0x4e20L);
+        Uploaded retry = new Uploaded(0x4e30L);
+        var uploads = new ArrayList<>(List.of(initial, rejected, retry));
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+        var key = new MinecraftEntityGeometry.Key(2, 80);
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
+        Object stableMesh = assertInstanceOf(GeometryChannel.SetMesh.class,
+                channel.batches.getFirst().operations().getFirst()).mesh();
+        channel.rejectNextGroup = true;
+
+        MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup();
+        geometry.put(key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
+        assertThrows(IllegalStateException.class, updates::submit);
+        assertTrue(rejected.closed);
+
+        geometry.put(key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
+        assertSame(stableMesh, assertInstanceOf(GeometryChannel.SetMesh.class,
+                channel.batches.getLast().operations().getFirst()).mesh());
         assertFalse(retry.closed);
     }
 
@@ -355,7 +417,7 @@ final class MinecraftEntityGeometryTest {
                     MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
                     MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),
                     new MeshBuild.CoveragePolicy.Opaque());
-            return new MeshBuild<>(positions, null, indices, 3, new MeshBuild.IndexRevision(17),
+            return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(17),
                     List.of(new MeshBuild.Geometry<>(surface, null, 0, 3)));
         }
 

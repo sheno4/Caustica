@@ -117,8 +117,9 @@ public interface GeometryChannel {
 
     /**
      * Retain or replace a mesh. The source keeps every buffer and its contents unchanged until this batch
-     * reports retirement after the build is later replaced, dropped, fails, or the session closes. Closing
-     * a scene removes placements in that scene, never this scene-independent mesh.
+     * reports retirement. A topology-compatible replacement retains the preceding position stream as its
+     * deformation history, so retirement may follow the replacement generation rather than this build's
+     * publication boundary. Closing a scene removes placements in that scene, never this scene-independent mesh.
      * A rejected submission changes nothing and does not take ownership of the callback.
      */
     record SetMesh<N>(MeshId<N> mesh, MeshBuild<N> build) implements Operation {

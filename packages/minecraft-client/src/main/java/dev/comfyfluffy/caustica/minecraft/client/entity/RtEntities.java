@@ -144,11 +144,15 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private final PoseStack entityPoseStack = new PoseStack();
     private final PoseStack blockEntityPoseStack = new PoseStack();
     private CameraRenderState cameraState;
-    // Particle capture funnels MC billboard quads into the shared entity mesh. Rebuilt particle topology
-    // has no stable vertex correspondence, so each upload carries no cross-frame vertex history.
+    // Particle capture funnels MC billboard quads into the shared entity mesh. Exact particle identity and
+    // order determine whether the rebuilt vertex slots still correspond to the preceding frame.
     private final RtParticleCapture particleCapture = new RtParticleCapture(capture);
     private final QuadParticleRenderState particleScratch = new QuadParticleRenderState();
     private final float[] particleCenterScratch = new float[3];
+    private final List<ParticleMember> particleMembers = new ArrayList<>();
+    private List<ParticleMember> previousParticleMembers = List.of();
+    private long previousParticleBaseTopology = Long.MIN_VALUE;
+    private long particleTopologyRevision;
 
 
     // This frame's glowing entities (see GlowEntity) + the camera-relative offset (camera pos - rebase
@@ -650,6 +654,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private void captureParticles(FrameBuild build, Minecraft mc, float partial,
                                   int rbx, int rby, int rbz, Matrix4f projection, Matrix4f viewRotation) {
         capture.reset();
+        particleMembers.clear();
         int particleLimit = maxParticles();
         if (!particlesEnabled() || particleLimit == 0 || build.full()) {
             submitParticles(build);
@@ -721,6 +726,8 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                         capture.surfaces.subList(surfaceCount, capture.surfaces.size()).clear();
                         continue;
                     }
+                    particleMembers.add(new ParticleMember(p, vertAfter - vertBefore,
+                            capture.idx.size() - ib, capture.surfaces.size() - surfaceCount));
                     build.logicalCount++;
                     particlesCaptured++;
                 }
@@ -741,12 +748,45 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private void submitParticles(FrameBuild build) {
         MinecraftEntityGeometry.Key particleKey = key(PARTICLE_GEOMETRY, PARTICLE_KEY);
         if (capture.isEmpty()) {
+            clearParticleHistory();
             build.drop(particleKey, null);
         } else {
-            MeshFingerprint fingerprint = meshFingerprint(capture);
+            MeshFingerprint captured = meshFingerprint(capture);
+            if (captured.topologyRevision() != previousParticleBaseTopology
+                    || !sameParticleLayout(particleMembers, previousParticleMembers)) {
+                particleTopologyRevision++;
+            }
+            MeshFingerprint fingerprint = new MeshFingerprint(
+                    captured.contentHash(), particleTopologyRevision);
+            previousParticleBaseTopology = captured.topologyRevision();
+            previousParticleMembers = List.copyOf(particleMembers);
             build.put(particleKey, capture.entityMesh(fingerprint.topologyRevision()),
                     transform(IDENTITY, build.origin), revision(fingerprint), PARTICLE_MASK, null);
         }
+    }
+
+    static boolean sameParticleLayout(List<ParticleMember> first, List<ParticleMember> second) {
+        if (first.size() != second.size()) return false;
+        for (int index = 0; index < first.size(); index++) {
+            ParticleMember a = first.get(index);
+            ParticleMember b = second.get(index);
+            if (a.identity() != b.identity()
+                    || a.vertexCount() != b.vertexCount()
+                    || a.indexCount() != b.indexCount()
+                    || a.surfaceCount() != b.surfaceCount()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static record ParticleMember(Object identity, int vertexCount, int indexCount, int surfaceCount) { }
+
+    private void clearParticleHistory() {
+        particleMembers.clear();
+        previousParticleMembers = List.of();
+        previousParticleBaseTopology = Long.MIN_VALUE;
+        particleTopologyRevision++;
     }
 
     /** Average (rebase-space) position of a captured particle's verts — approximates the particle center. */
@@ -1089,6 +1129,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     /** Drop CPU templates that retain resource-pack-owned model trees. */
     public void onResourceReload() {
         meshRevisionEpoch++;
+        clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         for (int id : entityStates.keySet()) pendingDrops.add(key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id)));
         for (long value : beCache.keySet()) pendingDrops.add(key(BLOCK_ENTITY_GEOMETRY, value));
@@ -1100,12 +1141,14 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
 
     /** Prevent deferred profiling callbacks from outliving this contribution's retained-scene ownership. */
     public void onSourceStopped() {
+        clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
     }
 
     /** Clears CPU capture state before entity IDs can be reused by a new world. */
     public void resetWorldState() {
         meshRevisionEpoch++;
+        clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();
         beCache.clear();
@@ -1115,6 +1158,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
 
     /** Clear capture state; the bound geometry contribution tears down all GPU residents. */
     public void shutdown() {
+        clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();
         beCache.clear();

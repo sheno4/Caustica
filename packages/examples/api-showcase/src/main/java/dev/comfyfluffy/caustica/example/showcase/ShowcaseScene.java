@@ -40,10 +40,9 @@ final class ShowcaseScene {
      * Publishes GPU data uploaded by a world-resource pass. The caller owns all streams until retired runs.
      */
     GeometryPublication publishMesh(VulkanDeviceAddressRange currentPositions,
-                                    VulkanDeviceAddressRange previousPositions,
-                                    VulkanDeviceAddressRange indices, Runnable retired) {
+                                     VulkanDeviceAddressRange indices, Runnable retired) {
         MeshBuild<ShowcasePrograms.InstanceData> build = meshBuild(
-                currentPositions, previousPositions, indices, 1L);
+                currentPositions, indices, 1L);
         return geometry.submitGroup(List.of(
                 new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, build)), retired),
                 RetainedBatch.of(List.of(placement(scene, GeometryTransform.translation(0.0, 64.0, 0.0))))));
@@ -51,11 +50,10 @@ final class ShowcaseScene {
 
     /** Replaces the retained mesh streams while every existing placement remains resident. */
     GeometryPublication replaceMesh(VulkanDeviceAddressRange currentPositions,
-                                    VulkanDeviceAddressRange previousPositions,
-                                    VulkanDeviceAddressRange indices, long indexRevision,
-                                    Runnable retired) {
+                                     VulkanDeviceAddressRange indices, long indexRevision,
+                                     Runnable retired) {
         return geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
-                meshBuild(currentPositions, previousPositions, indices, indexRevision))), retired));
+                meshBuild(currentPositions, indices, indexRevision))), retired));
     }
 
     /** Moves the existing placement, including between simultaneously resident scenes. */
@@ -64,8 +62,7 @@ final class ShowcaseScene {
     }
 
     private MeshBuild<ShowcasePrograms.InstanceData> meshBuild(VulkanDeviceAddressRange currentPositions,
-                                                               VulkanDeviceAddressRange previousPositions,
-                                                               VulkanDeviceAddressRange indices,
+                                                                VulkanDeviceAddressRange indices,
                                                                long indexRevision) {
         var opaque = new MeshBuild.SurfaceSlot<>(programs.opaque(),
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
@@ -76,7 +73,6 @@ final class ShowcaseScene {
                 ShowcasePrograms.VOLUME_BINDING.data(0L));
         return new MeshBuild<>(
                 new MeshBuild.Stream(currentPositions, 12),
-                new MeshBuild.Stream(previousPositions, 12),
                 new MeshBuild.Stream(indices, 4),
                 4, new MeshBuild.IndexRevision(indexRevision),
                 List.of(

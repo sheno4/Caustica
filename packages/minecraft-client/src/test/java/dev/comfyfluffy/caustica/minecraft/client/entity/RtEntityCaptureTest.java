@@ -5,10 +5,14 @@ import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtEntityCaptureTest {
     private static final float[] X = {0f, 1f, 1f, 0f};
@@ -130,6 +134,28 @@ final class RtEntityCaptureTest {
         RtEntities.MeshFingerprint reordered = RtEntities.meshFingerprint(capture);
         assertNotEquals(alphaChanged.topologyRevision(), reordered.topologyRevision());
         assertEquals(reordered.topologyRevision(), capture.entityMesh(reordered.topologyRevision()).indexRevision());
+    }
+
+    @Test
+    void particleCorrespondenceRequiresIdentityOrderAndPerParticleSpans() {
+        Object first = new Object();
+        Object second = new Object();
+        var firstSpan = new RtEntities.ParticleMember(first, 4, 6, 1);
+        var secondSpan = new RtEntities.ParticleMember(second, 8, 12, 2);
+
+        assertTrue(RtEntities.sameParticleLayout(
+                List.of(firstSpan, secondSpan), List.of(firstSpan, secondSpan)));
+        assertFalse(RtEntities.sameParticleLayout(
+                List.of(firstSpan, secondSpan), List.of(secondSpan, firstSpan)));
+        assertFalse(RtEntities.sameParticleLayout(
+                List.of(firstSpan), List.of(new RtEntities.ParticleMember(new Object(), 4, 6, 1))));
+        assertFalse(RtEntities.sameParticleLayout(
+                List.of(firstSpan), List.of(new RtEntities.ParticleMember(first, 8, 6, 1))));
+        assertFalse(RtEntities.sameParticleLayout(
+                List.of(firstSpan), List.of(new RtEntities.ParticleMember(first, 4, 12, 1))));
+        assertFalse(RtEntities.sameParticleLayout(
+                List.of(firstSpan), List.of(new RtEntities.ParticleMember(first, 4, 6, 2))));
+        assertFalse(RtEntities.sameParticleLayout(List.of(firstSpan), List.of(firstSpan, secondSpan)));
     }
 
     @Test

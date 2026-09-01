@@ -23,10 +23,14 @@ import java.util.Objects;
  * than {@code vertexCount}; this is a source assertion because the renderer cannot inspect source-owned
  * buffers while validating the build description.
  *
+ * <p>Sources provide only the current position stream. When the same mesh ID is replaced with compatible
+ * topology, the engine retains the preceding generation's current positions as deformation history.
+ * A first generation or an incompatible replacement uses its current positions as history and therefore
+ * reports zero vertex deformation.
+ *
  * @param <N> data schema accepted by every surface and volume slot for each mesh placement
  */
 public record MeshBuild<N>(Stream positions,
-                           Stream previousPositions,
                            Stream indices,
                            int vertexCount,
                            IndexRevision indexRevision,
@@ -43,16 +47,6 @@ public record MeshBuild<N>(Stream positions,
         }
         if (positions.byteSize() < requiredBytes(vertexCount, positions.byteStride(), 3 * Float.BYTES)) {
             throw new IllegalArgumentException("position stream is too small for vertexCount");
-        }
-        if (previousPositions != null) {
-            if (previousPositions.byteStride() < 3 * Float.BYTES
-                    || previousPositions.byteStride() % Float.BYTES != 0) {
-                throw new IllegalArgumentException("previous-position stride must contain a float3 position");
-            }
-            if (previousPositions.byteSize()
-                    < requiredBytes(vertexCount, previousPositions.byteStride(), 3 * Float.BYTES)) {
-                throw new IllegalArgumentException("previous-position stream is too small for vertexCount");
-            }
         }
         if (indices.byteStride() != Integer.BYTES) {
             throw new IllegalArgumentException("indices must be tightly packed unsigned 32-bit integers");

@@ -31,6 +31,10 @@ public final class RtRetainedGeometryPlan {
     public static final int PREVIOUS_TRANSFORM_OFFSET = 96;
     public static final int EMITTER_INDEX_ADDRESS_OFFSET = 144;
     public static final int EMITTER_PRIMITIVE_BASE_OFFSET = 152;
+    public static final int PREVIOUS_POSITION_STRIDE_OFFSET = 156;
+    public static final int PREVIOUS_POSITION_ADDRESS_OFFSET = 160;
+    public static final int INDEX_ADDRESS_OFFSET = 168;
+    public static final int FIRST_INDEX_OFFSET = 176;
 
     public static final int HAS_SURFACE = 1;
     public static final int HAS_VOLUME = 2;
@@ -57,6 +61,13 @@ public final class RtRetainedGeometryPlan {
     public static List<GeometryRecord> records(RetainedSceneSnapshot.Mesh mesh,
                                                RetainedSceneSnapshot.Instance placement,
                                                GeometryTransform previousTransform) {
+        return records(mesh, placement, previousTransform, mesh.previousPositions());
+    }
+
+    public static List<GeometryRecord> records(RetainedSceneSnapshot.Mesh mesh,
+                                               RetainedSceneSnapshot.Instance placement,
+                                               GeometryTransform previousTransform,
+                                               MeshBuild.Stream previousPositions) {
         List<GeometryRecord> records = new ArrayList<>(mesh.build().geometries().size());
         for (int i = 0; i < mesh.build().geometries().size(); i++) {
             MeshBuild.Geometry<?> geometry = mesh.build().geometries().get(i);
@@ -81,6 +92,8 @@ public final class RtRetainedGeometryPlan {
                     geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
                     geometry.volume() == null ? 0L : geometry.volume().bindingData().bits(),
                     placement.instanceData().bits(), alphaCutoff, placement.transform(), previousTransform,
+                    previousPositions.bytes().address(), previousPositions.byteStride(),
+                    mesh.build().indices().bytes().address(), geometry.firstIndex(),
                     null, 0));
         }
         return List.copyOf(records);
@@ -99,7 +112,9 @@ public final class RtRetainedGeometryPlan {
                     row(current, 0), row(current, 4), row(current, 8),
                     row(previous, 0), row(previous, 4), row(previous, 8),
                     record.emitterIndexAddress() == null ? 0L : record.emitterIndexAddress().value(),
-                    record.emitterPrimitiveBase(), 0)
+                    record.emitterPrimitiveBase(), record.previousPositionStride(),
+                    record.previousPositionAddress().value(), record.indexAddress().value(),
+                    record.firstIndex(), 0)
                     .write(packed.slice(base, RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN));
             packed.position(base + RECORD_BYTES);
         }
@@ -132,20 +147,14 @@ public final class RtRetainedGeometryPlan {
                                  int volumeImplementation, int flags, long surfaceBinding,
                                  long volumeBinding, long instanceData, float alphaCutoff,
                                  GeometryTransform currentTransform, GeometryTransform previousTransform,
+                                 VulkanDeviceAddress previousPositionAddress, int previousPositionStride,
+                                 VulkanDeviceAddress indexAddress, int firstIndex,
                                  VulkanDeviceAddress emitterIndexAddress, int emitterPrimitiveBase) {
-        public GeometryRecord(int surfaceImplementation, int coverageImplementation,
-                              int volumeImplementation, int flags, long surfaceBinding,
-                              long volumeBinding, long instanceData, float alphaCutoff,
-                              GeometryTransform currentTransform, GeometryTransform previousTransform) {
-            this(surfaceImplementation, coverageImplementation, volumeImplementation, flags,
-                    surfaceBinding, volumeBinding, instanceData, alphaCutoff, currentTransform,
-                    previousTransform, null, 0);
-        }
-
         GeometryRecord withEmitterIndex(VulkanDeviceAddress address, int primitiveBase) {
             return new GeometryRecord(surfaceImplementation, coverageImplementation, volumeImplementation,
                     flags, surfaceBinding, volumeBinding, instanceData, alphaCutoff, currentTransform,
-                    previousTransform, java.util.Objects.requireNonNull(address, "address"), primitiveBase);
+                    previousTransform, previousPositionAddress, previousPositionStride, indexAddress,
+                    firstIndex, java.util.Objects.requireNonNull(address, "address"), primitiveBase);
         }
     }
 

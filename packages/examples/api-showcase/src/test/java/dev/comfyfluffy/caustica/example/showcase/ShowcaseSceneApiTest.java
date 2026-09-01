@@ -30,8 +30,7 @@ final class ShowcaseSceneApiTest {
     @Test
     void meshPublicationAcceptsTypedAddressRanges() throws Exception {
         assertNotNull(ShowcaseScene.class.getDeclaredMethod("publishMesh",
-                VulkanDeviceAddressRange.class, VulkanDeviceAddressRange.class,
-                VulkanDeviceAddressRange.class, Runnable.class));
+                VulkanDeviceAddressRange.class, VulkanDeviceAddressRange.class, Runnable.class));
     }
 
     @Test
@@ -41,7 +40,7 @@ final class ShowcaseSceneApiTest {
         ShowcaseScene scene = new ShowcaseScene(exports, lights(), new SceneId() { }, geometry);
         AtomicBoolean retired = new AtomicBoolean();
 
-        var publication = scene.publishMesh(range(0x1000, 48), range(0x2000, 48), range(0x3000, 48),
+        var publication = scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
                 () -> retired.set(true));
 
         assertSame(geometry.publication, publication);
@@ -81,8 +80,8 @@ final class ShowcaseSceneApiTest {
         ShowcaseScene first = new ShowcaseScene(exports, sharedLights, primary, primaryGeometry);
         ShowcaseScene second = new ShowcaseScene(exports, sharedLights, alternate, alternateGeometry);
 
-        first.publishMesh(range(0x1000, 48), range(0x2000, 48), range(0x3000, 48), () -> { });
-        second.publishMesh(range(0x4000, 48), range(0x5000, 48), range(0x6000, 48), () -> { });
+        first.publishMesh(range(0x1000, 48), range(0x3000, 48), () -> { });
+        second.publishMesh(range(0x4000, 48), range(0x6000, 48), () -> { });
         var firstPlacement = (GeometryChannel.SetInstance<?>) primaryGeometry.operations.getFirst().get(1);
         var secondPlacement = (GeometryChannel.SetInstance<?>) alternateGeometry.operations.getFirst().get(1);
         assertSame(sharedLights.getFirst(), firstPlacement.primitiveLights().ranges().getFirst().light());
@@ -106,9 +105,9 @@ final class ShowcaseSceneApiTest {
         AtomicBoolean originalRetired = new AtomicBoolean();
         AtomicBoolean replacementRetired = new AtomicBoolean();
 
-        scene.publishMesh(range(0x1000, 48), range(0x2000, 48), range(0x3000, 48),
+        scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
                 () -> originalRetired.set(true));
-        scene.replaceMesh(range(0x4000, 48), range(0x5000, 48), range(0x6000, 48), 2L,
+        scene.replaceMesh(range(0x4000, 48), range(0x6000, 48), 2L,
                 () -> replacementRetired.set(true));
         scene.moveInstance(portalDestination, GeometryTransform.translation(4.0, 70.0, -3.0));
 

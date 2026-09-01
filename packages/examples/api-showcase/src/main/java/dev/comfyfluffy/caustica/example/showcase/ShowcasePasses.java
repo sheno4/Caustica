@@ -88,8 +88,7 @@ final class ShowcasePasses {
     private static final class VulkanWorldMeshHandoff implements WorldMeshHandoff {
         private static final int POSITION_BYTES = 4 * 3 * Float.BYTES;
         private static final int INDEX_BYTES = 12 * Integer.BYTES;
-        private static final int PREVIOUS_OFFSET = POSITION_BYTES;
-        private static final int INDEX_OFFSET = POSITION_BYTES * 2;
+        private static final int INDEX_OFFSET = POSITION_BYTES;
         private static final int TOTAL_BYTES = INDEX_OFFSET + INDEX_BYTES;
 
         private final GpuDevice gpu;
@@ -115,7 +114,6 @@ final class ShowcasePasses {
                 if (!uploadComplete) return;
                 VmaMappedBuffer accepted = upload;
                 publication = scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
-                        accepted.deviceRange().slice(PREVIOUS_OFFSET, POSITION_BYTES),
                         accepted.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), accepted::close);
                 upload = null;
                 return;
@@ -127,7 +125,6 @@ final class ShowcasePasses {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 ByteBuffer data = stack.calloc(TOTAL_BYTES);
                 putTrianglePositions(data, 0);
-                putTrianglePositions(data, PREVIOUS_OFFSET);
                 for (int triangle = 0; triangle < 4; triangle++) {
                     int base = INDEX_OFFSET + triangle * 3 * Integer.BYTES;
                     data.putInt(base, 0).putInt(base + Integer.BYTES, 1)

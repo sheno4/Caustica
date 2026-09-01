@@ -16,37 +16,33 @@ final class RtLatestInstanceTransformsTest {
     private static final ShaderDataType<Object> INSTANCE_DATA = ShaderDataType.create("latest instance");
 
     @Test
-    void multipleUpdatesCoalesceToLatestWithPenultimateMotion() {
+    void multipleUpdatesCoalesceToTheLatestPlacement() {
         RtLatestInstanceTransforms transforms = new RtLatestInstanceTransforms();
         RetainedSceneSnapshot.Instance published = instance(1, 7, 0, 0xff);
         transforms.acceptSnapshot(List.of(published));
 
         transforms.acceptLatest(List.of(update(1, 1, 0xff)));
         transforms.acceptLatest(List.of(update(1, 2, 0x01)));
-        RtLatestInstanceTransforms.Resolved resolved = transforms.latch(
-                published, published.transform());
+        RetainedSceneSnapshot.Instance resolved = transforms.resolve(published);
 
-        assertEquals(GeometryTransform.translation(2, 0, 0), resolved.instance().transform());
-        assertEquals(GeometryTransform.translation(1, 0, 0), resolved.previous());
-        assertEquals(0x01, resolved.instance().mask());
-        assertEquals(7, resolved.instance().meshIdentity());
-        assertEquals(SCENE, resolved.instance().scene());
+        assertEquals(GeometryTransform.translation(2, 0, 0), resolved.transform());
+        assertEquals(0x01, resolved.mask());
+        assertEquals(7, resolved.meshIdentity());
+        assertEquals(SCENE, resolved.scene());
     }
 
     @Test
-    void aConsumedStationaryPlacementDoesNotReplayMotion() {
+    void resolvingLatestPlacementDoesNotConsumeOrChangeIt() {
         RtLatestInstanceTransforms transforms = new RtLatestInstanceTransforms();
         RetainedSceneSnapshot.Instance published = instance(1, 7, 0, 0xff);
         transforms.acceptSnapshot(List.of(published));
         transforms.acceptLatest(List.of(update(1, 2, 0xff)));
-        assertEquals(GeometryTransform.translation(0, 0, 0),
-                transforms.latch(published, published.transform()).previous());
 
-        RtLatestInstanceTransforms.Resolved stationary = transforms.latch(
-                published, published.transform());
+        RetainedSceneSnapshot.Instance first = transforms.resolve(published);
+        RetainedSceneSnapshot.Instance second = transforms.resolve(published);
 
-        assertEquals(GeometryTransform.translation(2, 0, 0), stationary.instance().transform());
-        assertEquals(stationary.instance().transform(), stationary.previous());
+        assertEquals(GeometryTransform.translation(2, 0, 0), first.transform());
+        assertEquals(first, second);
     }
 
     private static RetainedInstanceTransform update(long identity, double x, int mask) {

@@ -185,6 +185,12 @@ public final class RtGpuExecutor {
         }
     }
 
+    private void keepAliveAfterGraphicsValue(long lastUseValue, Runnable release) {
+        synchronized (destroyJobs) {
+            destroyJobs.add(new DestroyJob(lastUseValue, release));
+        }
+    }
+
     public boolean hasPendingDestroys() {
         synchronized (destroyJobs) {
             return !destroyJobs.isEmpty();
@@ -535,6 +541,7 @@ public final class RtGpuExecutor {
         private final RtGpuExecutor owner;
         private final long value;
         private final ArrayList<Runnable> submittedCallbacks = new ArrayList<>();
+        private final ArrayList<AutoCloseable> keepAlives = new ArrayList<>();
         private boolean commandsAccepted;
         private boolean submittedResolved;
 
@@ -549,6 +556,16 @@ public final class RtGpuExecutor {
             submittedCallbacks.add(java.util.Objects.requireNonNull(callback, "callback"));
         }
 
+        /**
+         * Holds a lease while this frame is recording. Accepted commands transfer it to the graphics
+         * timeline; an abandoned frame releases it during submission resolution because the GPU never
+         * received commands that could read the leased resource.
+         */
+        public void keepAlive(AutoCloseable lease) {
+            if (submittedResolved) throw new IllegalStateException("graphics submission callbacks are resolved");
+            keepAlives.add(java.util.Objects.requireNonNull(lease, "lease"));
+        }
+
         public void commandsAccepted() {
             if (commandsAccepted || submittedResolved) {
                 throw new IllegalStateException("graphics commands are already resolved");
@@ -561,7 +578,15 @@ public final class RtGpuExecutor {
         }
 
         void resolveSubmission(Runnable signalAcceptedCommands) {
+            Consumer<Runnable> retire = owner == null
+                    ? Runnable::run
+                    : release -> owner.keepAliveAfterGraphicsValue(value, release);
+            resolveSubmission(signalAcceptedCommands, retire);
+        }
+
+        void resolveSubmission(Runnable signalAcceptedCommands, Consumer<Runnable> retireAcceptedKeepAlive) {
             java.util.Objects.requireNonNull(signalAcceptedCommands, "signalAcceptedCommands");
+            java.util.Objects.requireNonNull(retireAcceptedKeepAlive, "retireAcceptedKeepAlive");
             if (submittedResolved) {
                 throw new IllegalStateException("graphics submission callbacks are resolved");
             }
@@ -572,6 +597,16 @@ public final class RtGpuExecutor {
                 else discardSubmittedCallbacks();
             } catch (Throwable callbackFailure) {
                 failure = callbackFailure;
+            }
+            Runnable releaseKeepAlives = takeKeepAliveRelease();
+            if (releaseKeepAlives != null) {
+                try {
+                    if (signal) retireAcceptedKeepAlive.accept(releaseKeepAlives);
+                    else releaseKeepAlives.run();
+                } catch (Throwable releaseFailure) {
+                    if (failure == null) failure = releaseFailure;
+                    else failure.addSuppressed(releaseFailure);
+                }
             }
             if (signal) {
                 try {
@@ -584,6 +619,26 @@ public final class RtGpuExecutor {
             if (failure instanceof RuntimeException runtime) throw runtime;
             if (failure instanceof Error error) throw error;
             if (failure != null) throw new IllegalStateException("graphics-use resolution failed", failure);
+        }
+
+        private Runnable takeKeepAliveRelease() {
+            if (keepAlives.isEmpty()) return null;
+            List<AutoCloseable> releases = List.copyOf(keepAlives);
+            keepAlives.clear();
+            return () -> {
+                Throwable failure = null;
+                for (AutoCloseable release : releases) {
+                    try {
+                        release.close();
+                    } catch (Throwable releaseFailure) {
+                        if (failure == null) failure = releaseFailure;
+                        else failure.addSuppressed(releaseFailure);
+                    }
+                }
+                if (failure instanceof RuntimeException runtime) throw runtime;
+                if (failure instanceof Error error) throw error;
+                if (failure != null) throw new IllegalStateException("graphics keep-alive release failed", failure);
+            };
         }
 
         private void fireSubmittedCallbacks() {
@@ -620,7 +675,8 @@ public final class RtGpuExecutor {
 
         @Override
         public void whenComplete(Runnable callback) {
-            owner.retireAfterGraphics(this, callback);
+            java.util.Objects.requireNonNull(callback, "callback");
+            keepAlive(() -> callback.run());
         }
     }
 

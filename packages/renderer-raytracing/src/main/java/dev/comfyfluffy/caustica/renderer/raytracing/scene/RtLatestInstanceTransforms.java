@@ -28,7 +28,7 @@ final class RtLatestInstanceTransforms {
                 if (dropped.remove(set.instance().identity())) {
                     RetainedSceneSnapshot.Instance instance = set.instance();
                     states.put(instance.identity(), new State(
-                            instance.transform(), instance.transform(), instance.mask(), false, false));
+                            instance.transform(), instance.mask(), false));
                 } else {
                     acceptOrdered(set.instance());
                 }
@@ -41,41 +41,21 @@ final class RtLatestInstanceTransforms {
             State state = states.get(transform.identity());
             if (state == null) {
                 states.put(transform.identity(), new State(
-                        transform.transform(), transform.transform(), transform.mask(), true, false));
+                        transform.transform(), transform.mask(), true));
                 continue;
             }
-            if (!state.current.equals(transform.transform())) {
-                state.previous = state.current;
-                state.current = transform.transform();
-            } else if (state.active && state.consumed) {
-                state.previous = state.current;
-            }
+            state.current = transform.transform();
             state.mask = transform.mask();
             state.active = true;
-            state.consumed = false;
         }
     }
 
-    Resolved latch(RetainedSceneSnapshot.Instance instance, GeometryTransform publicationPrevious) {
+    RetainedSceneSnapshot.Instance resolve(RetainedSceneSnapshot.Instance instance) {
         State state = states.get(instance.identity());
-        if (state == null || !state.active) return new Resolved(instance, publicationPrevious);
-        if (state.consumed) state.previous = state.current;
-        state.consumed = true;
-        return resolved(instance, state);
-    }
-
-    Resolved peek(RetainedSceneSnapshot.Instance instance, GeometryTransform publicationPrevious) {
-        State state = states.get(instance.identity());
-        return state == null || !state.active
-                ? new Resolved(instance, publicationPrevious)
-                : resolved(instance, state);
-    }
-
-    private static Resolved resolved(RetainedSceneSnapshot.Instance instance, State state) {
-        RetainedSceneSnapshot.Instance effective = new RetainedSceneSnapshot.Instance(
+        if (state == null || !state.active) return instance;
+        return new RetainedSceneSnapshot.Instance(
                 instance.identity(), instance.scene(), instance.meshIdentity(), state.current, state.mask,
                 instance.instanceData(), instance.primitiveEmitters());
-        return new Resolved(effective, state.previous);
     }
 
     void retainOnly(Set<Long> identities) {
@@ -86,34 +66,25 @@ final class RtLatestInstanceTransforms {
         State prior = states.get(instance.identity());
         if (prior == null) {
             states.put(instance.identity(), new State(
-                    instance.transform(), instance.transform(), instance.mask(), false, false));
+                    instance.transform(), instance.mask(), false));
             return;
         }
         if (!prior.current.equals(instance.transform()) || prior.mask != instance.mask()) {
-            prior.previous = prior.current;
             prior.current = instance.transform();
             prior.mask = instance.mask();
             prior.active = false;
-            prior.consumed = false;
         }
     }
 
-    record Resolved(RetainedSceneSnapshot.Instance instance, GeometryTransform previous) { }
-
     private static final class State {
         GeometryTransform current;
-        GeometryTransform previous;
         int mask;
         boolean active;
-        boolean consumed;
 
-        State(GeometryTransform current, GeometryTransform previous, int mask,
-              boolean active, boolean consumed) {
+        State(GeometryTransform current, int mask, boolean active) {
             this.current = current;
-            this.previous = previous;
             this.mask = mask;
             this.active = active;
-            this.consumed = consumed;
         }
     }
 }

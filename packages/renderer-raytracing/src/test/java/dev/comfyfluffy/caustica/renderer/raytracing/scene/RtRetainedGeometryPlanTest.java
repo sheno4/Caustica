@@ -49,8 +49,10 @@ final class RtRetainedGeometryPlanTest {
                         new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22),
                         new MeshBuild.CoveragePolicy.Stochastic(0.35f)));
+        MeshBuild.Stream acceptedPredecessor = stream(0x9000, 256, 20);
+        MeshBuild.Stream renderedPredecessor = stream(0xa000, 256, 24);
         var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
-                1, build, List.of(
+                1, build, acceptedPredecessor, List.of(
                 new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
                 new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)));
         var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
@@ -58,11 +60,15 @@ final class RtRetainedGeometryPlanTest {
                 GeometryTransform.translation(0, 0, 0), 0xff, BINDING.data(0), List.of());
 
         var record = RtRetainedGeometryPlan.records(mesh, instance,
-                GeometryTransform.translation(0, 0, 0)).get(1);
+                GeometryTransform.translation(0, 0, 0), renderedPredecessor).get(1);
 
         assertFalse(RtRetainedGeometryPlan.blasRanges(build).get(1).opaque());
         assertTrue((record.flags() & RtRetainedGeometryPlan.STOCHASTIC) != 0);
         assertEquals(0.35f, record.alphaCutoff());
+        assertEquals(renderedPredecessor.bytes().address(), record.previousPositionAddress());
+        assertEquals(24, record.previousPositionStride());
+        assertEquals(build.indices().bytes().address(), record.indexAddress());
+        assertEquals(12, record.firstIndex());
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_CUTOUT,
                         RtRetainedGeometryPlan.HitGroup.SHADOW_CUTOUT),
                 RtRetainedGeometryPlan.hitGroups(List.of(record)));
@@ -101,10 +107,12 @@ final class RtRetainedGeometryPlanTest {
                 RtRetainedGeometryPlan.HAS_SURFACE | RtRetainedGeometryPlan.HAS_VOLUME
                         | RtRetainedGeometryPlan.CUTOUT,
                 0x1111, 0x2222, 0x3333, 0.45f, current, previous,
+                new VulkanDeviceAddress(0x5550), 20, new VulkanDeviceAddress(0x6660), 3,
                 new VulkanDeviceAddress(0x4444), 6);
         var second = new RtRetainedGeometryPlan.GeometryRecord(7, 0, 0,
                 RtRetainedGeometryPlan.HAS_SURFACE, 0x4444, 0, 0x5555, 0,
-                current, current);
+                current, current, new VulkanDeviceAddress(0x7770), 12,
+                new VulkanDeviceAddress(0x8880), 12, null, 0);
 
         ByteBuffer packed = RtRetainedGeometryPlan.pack(List.of(first, second),
                 new SceneOrigin(100, 200, 300));
@@ -120,6 +128,10 @@ final class RtRetainedGeometryPlanTest {
         assertEquals(9.0f, packed.getFloat(RtRetainedGeometryPlan.PREVIOUS_TRANSFORM_OFFSET + 3 * 4));
         assertEquals(0x4444, packed.getLong(RtRetainedGeometryPlan.EMITTER_INDEX_ADDRESS_OFFSET));
         assertEquals(6, packed.getInt(RtRetainedGeometryPlan.EMITTER_PRIMITIVE_BASE_OFFSET));
+        assertEquals(20, packed.getInt(RtRetainedGeometryPlan.PREVIOUS_POSITION_STRIDE_OFFSET));
+        assertEquals(0x5550, packed.getLong(RtRetainedGeometryPlan.PREVIOUS_POSITION_ADDRESS_OFFSET));
+        assertEquals(0x6660, packed.getLong(RtRetainedGeometryPlan.INDEX_ADDRESS_OFFSET));
+        assertEquals(3, packed.getInt(RtRetainedGeometryPlan.FIRST_INDEX_OFFSET));
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
                         RtRetainedGeometryPlan.HitGroup.SHADOW_TRANSMISSIVE,
                         RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
@@ -131,7 +143,7 @@ final class RtRetainedGeometryPlanTest {
     void volumeBoundaryUsesOpaqueRadianceAndTransmissiveShadowRouting() {
         MeshBuild.Stream positions = stream(0x1000, 256, 12);
         MeshBuild.Stream indices = stream(0x2000, 64, 4);
-        MeshBuild<Instance> build = new MeshBuild<>(positions, null, indices, 8,
+        MeshBuild<Instance> build = new MeshBuild<>(positions, indices, 8,
                 new MeshBuild.IndexRevision(1), List.of(new MeshBuild.Geometry<>(
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1),
                         new MeshBuild.CoveragePolicy.Cutout(0.5f)),
@@ -141,7 +153,8 @@ final class RtRetainedGeometryPlanTest {
                 RtRetainedGeometryPlan.HAS_SURFACE | RtRetainedGeometryPlan.HAS_VOLUME
                         | RtRetainedGeometryPlan.CUTOUT,
                 1, 2, 3, 0.5f, GeometryTransform.translation(0, 0, 0),
-                GeometryTransform.translation(0, 0, 0));
+                GeometryTransform.translation(0, 0, 0), positions.bytes().address(),
+                positions.byteStride(), indices.bytes().address(), 0, null, 0);
 
         assertTrue(range.opaque());
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
@@ -171,7 +184,7 @@ final class RtRetainedGeometryPlanTest {
     private static MeshBuild<Instance> build(MeshBuild.IndexRevision revision, long positionAddress,
                                              MeshBuild.SurfaceSlot<Binding, Instance> first,
                                              MeshBuild.SurfaceSlot<Binding, Instance> second) {
-        return new MeshBuild<>(stream(positionAddress, 256, 12), null,
+        return new MeshBuild<>(stream(positionAddress, 256, 12),
                 stream(0x2000, 128, 4), 8, revision, List.of(
                 new MeshBuild.Geometry<>(first, null, 3, 6),
                 new MeshBuild.Geometry<>(second, null, 12, 9)));

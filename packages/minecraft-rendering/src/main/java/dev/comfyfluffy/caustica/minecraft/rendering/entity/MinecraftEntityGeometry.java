@@ -17,13 +17,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Retained Minecraft placements and per-resident revision-keyed meshes for one borrowed world scene. */
+/** Retained Minecraft placements and per-resident meshes for one borrowed world scene. */
 public final class MinecraftEntityGeometry implements MinecraftWorldSessionContribution {
     private final GeometryChannel channel;
     private final SceneId scene;
     private final MinecraftEntityUploader uploader;
     private final Map<Key, Resident> residents = new LinkedHashMap<>();
-    private final Map<PoolKey, SharedMesh> meshes = new LinkedHashMap<>();
     private PendingGroup pendingGroup;
     private boolean stopped;
 
@@ -50,54 +49,31 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         Objects.requireNonNull(mesh, "mesh");
         Objects.requireNonNull(transform, "transform");
         Resident prior = residents.get(key);
-        if (prior != null && prior.mesh.poolKey.revision.equals(revision)) {
+        if (prior != null && prior.revision.equals(revision)) {
             submitLatest(prior, transform, mask);
             prior.transform = transform;
             prior.mask = mask;
             return;
         }
-        Resident target = prior != null ? prior : new Resident(channel.newInstance());
-        PoolKey poolKey = new PoolKey(key, revision);
-        SharedMesh targetMesh = meshes.get(poolKey);
-        boolean newMesh = targetMesh == null;
-        if (newMesh) {
-            MeshId<MinecraftProgramTypes.InstanceData> meshId = channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA);
-            MinecraftEntityUploader.UploadedEntity uploaded = uploader.upload(mesh);
-            targetMesh = new SharedMesh(poolKey, meshId, new Lease(uploaded));
-        }
-        Runnable retirement = targetMesh.lease.retain();
-        SharedMesh submittedMesh = targetMesh;
-        SharedMesh priorMesh = prior != null ? prior.mesh : null;
+        Resident target = prior != null ? prior : new Resident(channel.newInstance(),
+                channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA));
+        MinecraftEntityUploader.UploadedEntity uploaded = uploader.upload(mesh);
+        Lease lease = new Lease(uploaded);
+        Runnable retirement = lease.retain();
         boolean staged = false;
         try {
-            var operations = new ArrayList<GeometryChannel.Operation>(3);
-            if (newMesh) {
-                operations.add(new GeometryChannel.SetMesh<>(targetMesh.mesh, targetMesh.lease.uploaded.build()));
-            }
-            operations.add(new GeometryChannel.SetInstance<>(target.instance, scene, targetMesh.mesh, transform, mask,
-                    targetMesh.lease.uploaded.instanceData()));
-            if (priorMesh != null && priorMesh != targetMesh && priorMesh.residents == 1) {
-                operations.add(new GeometryChannel.DropMesh<>(priorMesh.mesh));
-            }
-            submit(new RetainedBatch<>(operations, retirement), failure -> {
-                if (newMesh) submittedMesh.lease.reject(failure);
-                else submittedMesh.lease.cancelRetain(failure);
-            });
+            var operations = new ArrayList<GeometryChannel.Operation>(2);
+            operations.add(new GeometryChannel.SetMesh<>(target.mesh, uploaded.build()));
+            operations.add(new GeometryChannel.SetInstance<>(target.instance, scene, target.mesh, transform, mask,
+                    uploaded.instanceData()));
+            submit(new RetainedBatch<>(operations, retirement), lease::reject);
             staged = true;
             if (prior != null) submitLatest(target, transform, mask);
         } catch (RuntimeException | Error failure) {
-            if (!staged) {
-                if (newMesh) targetMesh.lease.reject(failure);
-                else targetMesh.lease.cancelRetain(failure);
-            }
+            if (!staged) lease.reject(failure);
             throw failure;
         }
-        if (priorMesh != targetMesh) {
-            targetMesh.residents++;
-            if (priorMesh != null && --priorMesh.residents == 0) meshes.remove(priorMesh.poolKey);
-        }
-        if (newMesh) meshes.put(poolKey, targetMesh);
-        target.mesh = targetMesh;
+        target.revision = revision;
         target.transform = transform;
         target.mask = mask;
         residents.put(key, target);
@@ -129,25 +105,23 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         if (resident == null) return;
         var operations = new ArrayList<GeometryChannel.Operation>(2);
         operations.add(new GeometryChannel.DropInstance(resident.instance));
-        if (resident.mesh.residents == 1) operations.add(new GeometryChannel.DropMesh<>(resident.mesh.mesh));
+        operations.add(new GeometryChannel.DropMesh<>(resident.mesh));
         submit(RetainedBatch.of(operations), failure -> { });
         residents.remove(key);
-        if (--resident.mesh.residents == 0) meshes.remove(resident.mesh.poolKey);
     }
 
     @Override public synchronized void stop() {
         if (stopped) return;
         if (pendingGroup != null) throw new IllegalStateException("cannot stop during an entity update group");
         if (!residents.isEmpty()) {
-            var operations = new ArrayList<GeometryChannel.Operation>(residents.size() + meshes.size());
+            var operations = new ArrayList<GeometryChannel.Operation>(residents.size() * 2);
             for (Resident resident : residents.values()) {
                 operations.add(new GeometryChannel.DropInstance(resident.instance));
+                operations.add(new GeometryChannel.DropMesh<>(resident.mesh));
             }
-            for (SharedMesh mesh : meshes.values()) operations.add(new GeometryChannel.DropMesh<>(mesh.mesh));
             channel.submit(RetainedBatch.of(operations));
         }
         residents.clear();
-        meshes.clear();
         stopped = true;
     }
 
@@ -176,8 +150,6 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
 
     private final class PendingGroup implements UpdateGroup {
         final Map<Key, ResidentSnapshot> residentSnapshot = new LinkedHashMap<>();
-        final Map<PoolKey, SharedMesh> meshSnapshot = new LinkedHashMap<>(meshes);
-        final Map<SharedMesh, Integer> meshResidentCounts = new IdentityHashMap<>();
         final List<RetainedBatch<GeometryChannel.Operation>> batches = new ArrayList<>();
         final List<java.util.function.Consumer<Throwable>> rejections = new ArrayList<>();
         final Map<InstanceId, GeometryChannel.LatestInstance> latestInstances = new IdentityHashMap<>();
@@ -185,8 +157,8 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
 
         PendingGroup() {
             residents.forEach((key, resident) -> residentSnapshot.put(key,
-                    new ResidentSnapshot(resident.instance, resident.mesh, resident.transform, resident.mask)));
-            meshes.values().forEach(mesh -> meshResidentCounts.put(mesh, mesh.residents));
+                    new ResidentSnapshot(resident.instance, resident.mesh, resident.revision,
+                            resident.transform, resident.mask)));
         }
 
         @Override public GeometryPublication submit() {
@@ -218,9 +190,6 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             for (int index = rejections.size() - 1; index >= 0; index--) {
                 rejections.get(index).accept(failure);
             }
-            meshResidentCounts.forEach((mesh, count) -> mesh.residents = count);
-            meshes.clear();
-            meshes.putAll(meshSnapshot);
             residents.clear();
             residentSnapshot.forEach((key, snapshot) -> residents.put(key, snapshot.restore()));
             finished = true;
@@ -232,11 +201,11 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         }
     }
 
-    private record ResidentSnapshot(InstanceId instance, SharedMesh mesh,
-                                    GeometryTransform transform, int mask) {
+    private record ResidentSnapshot(InstanceId instance, MeshId<MinecraftProgramTypes.InstanceData> mesh,
+                                    MeshRevision revision, GeometryTransform transform, int mask) {
         Resident restore() {
-            Resident resident = new Resident(instance);
-            resident.mesh = mesh;
+            Resident resident = new Resident(instance, mesh);
+            resident.revision = revision;
             resident.transform = transform;
             resident.mask = mask;
             return resident;
@@ -248,29 +217,16 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     /** Stable captured content identity used to reuse one resident's unchanged retained BLAS. */
     public record MeshRevision(long epoch, long content, long topology) { }
 
-    private record PoolKey(Key resident, MeshRevision revision) { }
-
     private static final class Resident {
         final InstanceId instance;
-        SharedMesh mesh;
+        final MeshId<MinecraftProgramTypes.InstanceData> mesh;
+        MeshRevision revision;
         GeometryTransform transform;
         int mask;
 
-        Resident(InstanceId instance) {
+        Resident(InstanceId instance, MeshId<MinecraftProgramTypes.InstanceData> mesh) {
             this.instance = instance;
-        }
-    }
-
-    private static final class SharedMesh {
-        final PoolKey poolKey;
-        final MeshId<MinecraftProgramTypes.InstanceData> mesh;
-        final Lease lease;
-        int residents;
-
-        SharedMesh(PoolKey poolKey, MeshId<MinecraftProgramTypes.InstanceData> mesh, Lease lease) {
-            this.poolKey = poolKey;
             this.mesh = mesh;
-            this.lease = lease;
         }
     }
 
@@ -286,11 +242,6 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         synchronized Runnable retain() {
             references++;
             return this::release;
-        }
-
-        synchronized void cancelRetain(Throwable failure) {
-            references--;
-            if (references == 0) close(failure);
         }
 
         synchronized void reject(Throwable failure) {
