@@ -10,8 +10,9 @@ import org.lwjgl.vulkan.VkDevice;
  * release resources with {@link #retireAfterUse}, except when a lifecycle callback guarantees all uses
  * have drained.
  *
- * <p>Extensions record GPU work through passes and may prepare it on their own CPU executors. This API does
- * not expose device discovery, queues, submission, or renderer lifecycle.
+ * <p>Extensions submit asynchronous initialization through their contribution's
+ * {@link GpuComputeQueue}, record frame-dependent work through passes, and may prepare either on their own
+ * CPU executors. This API does not expose device discovery, queues, submission, or renderer lifecycle.
  *
  * <p>The logical device is Vulkan 1.4. The renderer enables the features required for buffer device
  * addresses, 16-bit integer and floating-point shader arithmetic, dynamic rendering, synchronization2,

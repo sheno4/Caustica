@@ -132,6 +132,8 @@ final class EngineRenderSessionTest {
         private final String name;
         private final List<String> events;
         private final GpuDevice gpu = stub(GpuDevice.class);
+        private final dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue compute =
+                stub(dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue.class);
         private final ProgramChannel program = stub(ProgramChannel.class);
         private final PassChannel passes = stub(PassChannel.class);
         private final GeometryChannel geometry = stub(GeometryChannel.class);
@@ -145,6 +147,7 @@ final class EngineRenderSessionTest {
         }
 
         @Override public GpuDevice gpu() { return gpu; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue compute() { return compute; }
         @Override public ProgramChannel program() { return program; }
         @Override public PassChannel passes() { return passes; }
         @Override public GeometryChannel geometry() { return geometry; }

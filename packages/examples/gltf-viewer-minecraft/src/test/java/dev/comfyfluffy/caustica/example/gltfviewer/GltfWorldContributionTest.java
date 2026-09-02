@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
@@ -193,6 +194,7 @@ final class GltfWorldContributionTest {
         @Override public RenderSessionContext renderSession() {
             return new RenderSessionContext() {
                 @Override public GpuDevice gpu() { return null; }
+                @Override public GpuComputeQueue compute() { return null; }
                 @Override public ProgramChannel program() { return null; }
                 @Override public PassChannel passes() { return null; }
                 @Override public GeometryChannel geometry() { return geometry; }

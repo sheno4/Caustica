@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.client.program;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.api.pass.*;
 import dev.comfyfluffy.caustica.api.program.*;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelectionInstaller;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureInstaller;
@@ -97,7 +99,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         java.util.Objects.requireNonNull(options, "options");
         java.util.Objects.requireNonNull(instrumentation, "instrumentation");
         MinecraftProgramResources resources = new MinecraftProgramResources(
-                context.renderSession().gpu(), context.renderSession().resources());
+                context.renderSession().gpu(), context.renderSession().compute(),
+                context.renderSession().resources());
         MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
         MinecraftFrameCaptureInstaller.Lease frameCapture = null;
         MinecraftLightProvider lights = null;
@@ -144,19 +147,12 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             return;
         }
         Pending request = new Pending(resourcePack.generation(), lookup);
-        MinecraftProgramResources.PreparedUpload[] prepared = new MinecraftProgramResources.PreparedUpload[1];
         try {
-            request.upload = context.renderSession().passes().addWorldResourcePass(
-                    setup -> {
-                        prepared[0] = resources.prepareUpload(lookup,
-                                () -> uploadSubmitted(request), () -> uploadCompleted(request));
-                        return prepared[0].pass();
-                    });
-            request.prepared = java.util.Objects.requireNonNull(prepared[0], "upload factory result").epoch();
+            MinecraftProgramResources.PreparedUpload prepared = resources.prepareUpload(
+                    lookup, completion -> uploadCompleted(request, completion));
+            request.upload = prepared.job();
+            request.prepared = prepared.epoch();
         } catch (RuntimeException | Error failure) {
-            if (request.prepared == null && prepared[0] != null) {
-                request.prepared = prepared[0].epoch();
-            }
             request.close();
             CausticaMod.LOGGER.error("Minecraft material epoch {} could not be prepared",
                     resourcePack.generation(), failure);
@@ -167,29 +163,23 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         if (displaced != null) displaced.close();
     }
 
-    private synchronized void uploadSubmitted(Pending request) {
+    private synchronized void uploadCompleted(Pending request, GpuComputeCompletion completion) {
+        request.upload = null;
         if (pending != request || stopped) return;
-        try {
-            resources.populateMaterialRecords(request.prepared.gpu(), request.lookup);
-        } catch (RuntimeException | Error failure) {
+        if (!(completion instanceof GpuComputeCompletion.Succeeded)) {
             pending = null;
             request.close();
-            CausticaMod.LOGGER.error("Minecraft material epoch {} could not populate its resources",
-                    request.generation, failure);
+            if (completion instanceof GpuComputeCompletion.Failed failed) {
+                CausticaMod.LOGGER.error("Minecraft material epoch {} GPU upload failed",
+                        request.generation, failed.failure());
+            }
+            return;
         }
-    }
-
-    private synchronized void uploadCompleted(Pending request) {
-        if (request.upload != null) {
-            request.upload.close();
-            request.upload = null;
-        }
-        if (pending != request || stopped) return;
         try {
             resources.seal(request.prepared.gpu());
             request.registration = registerPrograms(
                     context.renderSession().program(), roots(request.prepared.gpu()));
-            request.registration.whenComplete(completion -> completed(request, completion));
+            request.registration.whenComplete(result -> completed(request, result));
         } catch (RuntimeException | Error failure) {
             pending = null;
             request.close();
@@ -359,7 +349,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private static final class Pending {
         final long generation;
         final MinecraftMaterialLookup lookup;
-        PassRegistration upload;
+        GpuComputeJob upload;
         ProgramRegistration<MinecraftPrograms> registration;
         MinecraftProgramResources.PreparedEpoch prepared;
         Pending(long generation, MinecraftMaterialLookup lookup) {

@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.session;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
@@ -29,13 +30,14 @@ public final class EngineWorldSession implements AutoCloseable {
     public EngineWorldSession(
             RenderSessionHost renderHost,
             GpuDevice gpu,
+            GpuComputeQueue compute,
             ProgramBackend programs,
             RetainedSceneBackend scenes,
             PassSchedulerBackend passes,
             Consumer<? super Throwable> failures) {
         Objects.requireNonNull(renderHost, "renderHost");
         Objects.requireNonNull(failures, "failures");
-        services = new EngineSessionServices(gpu, programs, scenes, passes,
+        services = new EngineSessionServices(gpu, compute, programs, scenes, passes,
                 failures::accept, failures::accept, (pass, failure) -> failures.accept(failure));
         rootScene = services.scenes().createScene();
         EngineRenderSession openedRender = null;

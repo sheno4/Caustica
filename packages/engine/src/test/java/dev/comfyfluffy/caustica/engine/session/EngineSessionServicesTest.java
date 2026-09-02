@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.engine.session;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
@@ -98,6 +100,7 @@ final class EngineSessionServicesTest {
         assertNotSame(first.geometry(), second.geometry());
         assertNotSame(first.lights(), second.lights());
         assertNotSame(first.passes(), second.passes());
+        assertNotSame(first.compute(), second.compute());
         assertNotSame(first.resources(), second.resources());
         assertThrows(IllegalStateException.class, services::close);
 
@@ -144,7 +147,7 @@ final class EngineSessionServicesTest {
                 published.run();
             }
         };
-        return new EngineSessionServices(GPU, programs, scenes, passes,
+        return new EngineSessionServices(GPU, COMPUTE, programs, scenes, passes,
                 failure -> { throw new AssertionError(failure); },
                 failure -> { throw new AssertionError(failure); },
                 (pass, failure) -> { throw new AssertionError(failure); });
@@ -187,6 +190,15 @@ final class EngineSessionServicesTest {
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
         @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
+    };
+
+    private static final GpuComputeQueue COMPUTE = new GpuComputeQueue() {
+        @Override public GpuComputeJob submit(
+                java.util.function.Consumer<? super VkCommandBuffer> recorder,
+                java.util.function.Consumer<? super dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion> completion) {
+            throw new AssertionError("no compute jobs expected");
+        }
+        @Override public int[] sharedQueueFamilyIndices() { return new int[] { 0 }; }
     };
 
     private static final PassFrame FRAME = new PassFrame() {

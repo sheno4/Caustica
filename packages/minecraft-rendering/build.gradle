@@ -220,7 +220,7 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialRecord",
                 "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialEpochCompiler",
                 "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialLookup",
-                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialUploadPass",
+                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialUpload",
                 "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftProgramResources",
                 "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftLightingCalibration",
                 "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameSelector",

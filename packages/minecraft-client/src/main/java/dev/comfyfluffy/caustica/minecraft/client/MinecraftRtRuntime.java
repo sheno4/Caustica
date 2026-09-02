@@ -683,7 +683,7 @@ public final class MinecraftRtRuntime {
                     requireNgxRuntime(), superResolutionSettings(denoising));
             try {
                 world = new MinecraftEngineWorldSession(apiHost(),
-                        minecraftSessionHost, context,
+                        minecraftSessionHost, context, context.gpuExecutor(),
                         programs, scenes, passes, dimension, resourcePackEpoch,
                         failure -> LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(context, programs, scenes, passes,

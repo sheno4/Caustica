@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
@@ -26,13 +29,12 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
-import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 /**
@@ -40,12 +42,10 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
  * The host never fetches or submits to this reserved queue, so the executor exclusively satisfies Vulkan's
  * queue-synchronization rule while sharing the logical device with graphics work.
  */
-public final class RtGpuExecutor {
+public final class RtGpuExecutor implements GpuComputeQueue {
     private static final int MAX_BUILD_BATCH = 128;
     private static final Job STOP = new Job(null, null, null, null, null);
-    private static final long BUILD_READ_STAGES =
-            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
-                    | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+    private static final long BUILD_READ_STAGES = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
     private final VulkanDeviceContext ctx;
     private final VulkanQueueRef computeQueue;
@@ -74,6 +74,33 @@ public final class RtGpuExecutor {
         this.thread = new Thread(this::run, "Caustica GPU executor");
         this.thread.setDaemon(true);
         this.thread.start();
+    }
+
+    @Override
+    public GpuComputeJob submit(Consumer<? super VkCommandBuffer> recorder,
+                                Consumer<? super GpuComputeCompletion> completion) {
+        java.util.Objects.requireNonNull(recorder, "recorder");
+        java.util.Objects.requireNonNull(completion, "completion");
+        AtomicBoolean cancelled = new AtomicBoolean();
+        submit(cancelled::get, recorder::accept, () -> { }, (build, failure) -> {
+            if (failure == null) {
+                // The first later graphics submission waits on this signal even though host completion
+                // was observed, establishing the cross-queue Vulkan memory dependency for published output.
+                pendingPublishWaitValue.accumulateAndGet(build.value, Math::max);
+            }
+            GpuComputeCompletion result = failure == null
+                    ? new GpuComputeCompletion.Succeeded()
+                    : failure instanceof CancellationException
+                    ? new GpuComputeCompletion.Cancelled()
+                    : new GpuComputeCompletion.Failed(failure);
+            completion.accept(result);
+        });
+        return () -> cancelled.set(true);
+    }
+
+    @Override
+    public int[] sharedQueueFamilyIndices() {
+        return ctx.asyncBufferSharingQueueFamilies();
     }
 
     /**

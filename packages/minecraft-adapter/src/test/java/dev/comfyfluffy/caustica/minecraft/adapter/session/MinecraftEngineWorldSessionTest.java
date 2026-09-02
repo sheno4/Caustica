@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.adapter.session;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
@@ -58,7 +60,7 @@ final class MinecraftEngineWorldSessionTest {
                 published.run();
             }
         };
-        MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU,
+        MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE,
                 PROGRAMS, sceneBackend, PASSES,
                 MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(2),
                 failure -> { throw new AssertionError(failure); });
@@ -97,7 +99,7 @@ final class MinecraftEngineWorldSessionTest {
         };
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, PROGRAMS, scenes, PASSES,
+                () -> new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE, PROGRAMS, scenes, PASSES,
                         MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
                         reported -> { throw (RuntimeException) reported; }));
 
@@ -130,6 +132,15 @@ final class MinecraftEngineWorldSessionTest {
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
         @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
+    };
+
+    private static final GpuComputeQueue COMPUTE = new GpuComputeQueue() {
+        @Override public GpuComputeJob submit(
+                java.util.function.Consumer<? super org.lwjgl.vulkan.VkCommandBuffer> recorder,
+                java.util.function.Consumer<? super dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion> completion) {
+            throw new AssertionError("no compute jobs expected");
+        }
+        @Override public int[] sharedQueueFamilyIndices() { return new int[] { 0 }; }
     };
 
     private static final ProgramBackend PROGRAMS = new ProgramBackend() {

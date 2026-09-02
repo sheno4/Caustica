@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-final class MinecraftMaterialUploadPassTest {
+final class MinecraftMaterialUploadTest {
     @Test
     void preparedTableCoversEveryRealMaterialOrdinalWithFallbackData() {
         var records = MinecraftProgramResources.fallbackRecords(37);
@@ -25,8 +25,8 @@ final class MinecraftMaterialUploadPassTest {
                 new MinecraftMaterialTexture.Mip(2, 2, rgba(2, 2)),
                 new MinecraftMaterialTexture.Mip(1, 1, rgba(1, 1))));
 
-        assertArrayEquals(new long[]{0L, 64L, 80L}, MinecraftMaterialUploadPass.mipOffsets(texture));
-        assertEquals(84L, MinecraftMaterialUploadPass.byteSize(texture));
+        assertArrayEquals(new long[]{0L, 64L, 80L}, MinecraftMaterialUpload.mipOffsets(texture));
+        assertEquals(84L, MinecraftMaterialUpload.byteSize(texture));
     }
 
     private static byte[] rgba(int width, int height) {

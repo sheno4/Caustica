@@ -33,8 +33,8 @@ Session shutdown has one defined order:
 3. Unschedule passes and logically invalidate objects still owned by the session scope. Stale surface and
    environment references resolve to visible error implementations, stale volumes resolve to vacuum, and
    none of those references pin the owner.
-4. Cancel pending program registrations, drain submitted GPU uses, return readiness and retirement callbacks, then
-   close pass instances.
+4. Cancel pending compute jobs and program registrations, drain submitted GPU uses, return terminal,
+   readiness, and retirement callbacks, then close pass instances.
 5. Invoke `RenderSessionContribution.close()` before destroying the device.
 
 `RenderSessionRegistration.close()` requests factory removal and applies this ordering asynchronously to its
@@ -87,10 +87,12 @@ infrequent retained change directly. The renderer consumes accepted changes in o
 boundaries; there is no public camera-timed scene callback. Dynamic geometry reuses issued mesh and instance
 IDs and replaces or drops their retained values, so it needs no separate transient lifetime.
 
-GPU-visible memory is different: a worker prepares replacement data, while a world-resource pass records
-and publishes it before the trace so it cannot race an in-flight reader. The pass is for commands on the
-engine-owned queue, not for submitting retained geometry or lights. Minecraft render interpolation and
-other host-owned per-frame extraction remain integration work rather than a core extension contract.
+GPU-visible memory is different: a worker prepares a private replacement and submits its transfer or compute
+initialization through `GpuComputeQueue`. Its terminal callback seals and publishes the immutable generation;
+failed or cancelled work drops it. World-resource passes remain appropriate for recurring work ordered inside
+a frame, not for one-shot producer initialization or for submitting retained geometry and lights. Minecraft
+render interpolation and other host-owned per-frame extraction remain integration work rather than a core
+extension contract.
 
 ## Program composition and the shader ABI
 
@@ -192,12 +194,19 @@ session context.
 
 ## GPU work and synchronization
 
-The renderer owns graphics/compute queues and submission. The public GPU API intentionally exposes no
-queue, immediate-submit method, fence wait, or asynchronous command queue. Extensions may run arbitrary
-CPU preparation on their own executors, then record GPU work into engine-provided command buffers at the
-stage where the result is consumed.
+The renderer owns Vulkan queues, command buffers, submission, and timeline waits. `GpuComputeQueue` exposes a
+contribution-scoped asynchronous recording lane without exposing a raw queue, fence wait, or immediate-submit
+operation. Extensions may run arbitrary CPU preparation on their own executors, allocate a private output,
+and submit transfer or compute commands which initialize it. The renderer serializes terminal callbacks
+through render-session progress and cancels queued jobs during contribution teardown.
 
-The stages are:
+A successful job participates in the next graphics submission's timeline dependency. The recorder must still
+finish with the access and image-layout barriers required by its eventual consumer. A buffer or image shared
+between distinct compute and graphics queue families must use every family returned by
+`GpuComputeQueue.sharedQueueFamilyIndices()` or perform an explicit ownership transfer. Publication happens
+only from `GpuComputeCompletion.Succeeded`; failed and cancelled jobs publish nothing.
+
+Passes are the frame-ordered recording API. The stages are:
 
 - `addWorldResourcePass`: before tracing, for dirty texture, environment, lookup-table, or buffer updates.
 - `addPostEffectPass`: after reconstruction, in the ordered scene-colour chain.

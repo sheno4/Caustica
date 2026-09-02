@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.minecraft.api.*;
 import org.junit.jupiter.api.Test;
@@ -40,6 +41,7 @@ final class ShowcaseSessionLifecycleTest {
         SceneId scene = new SceneId() { };
         RenderSessionContext selectionOwner = new RenderSessionContext() {
             @Override public GpuDevice gpu() { return GPU; }
+            @Override public GpuComputeQueue compute() { return null; }
             @Override public ProgramChannel program() { return programs; }
             @Override public PassChannel passes() { throw new AssertionError("selection owner has no passes"); }
             @Override public GeometryChannel geometry() {
@@ -50,6 +52,7 @@ final class ShowcaseSessionLifecycleTest {
         };
         RenderSessionContext geometryOwner = new RenderSessionContext() {
             @Override public GpuDevice gpu() { return GPU; }
+            @Override public GpuComputeQueue compute() { return null; }
             @Override public ProgramChannel program() {
                 throw new AssertionError("geometry owner consumes handed-off program ids");
             }

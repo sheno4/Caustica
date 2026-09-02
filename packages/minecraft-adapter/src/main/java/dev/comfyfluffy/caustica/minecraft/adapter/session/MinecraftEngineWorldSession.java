@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.adapter.session;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -26,6 +27,7 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
             RenderSessionHost renderHost,
             MinecraftWorldSessionHost minecraftHost,
             GpuDevice gpu,
+            GpuComputeQueue compute,
             ProgramBackend programs,
             RetainedSceneBackend scenes,
             PassSchedulerBackend passes,
@@ -34,7 +36,8 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
             Consumer<? super Throwable> failures) {
         Objects.requireNonNull(minecraftHost, "minecraftHost");
         Objects.requireNonNull(failures, "failures");
-        EngineWorldSession openedEngine = new EngineWorldSession(renderHost, gpu, programs, scenes, passes, failures);
+        EngineWorldSession openedEngine = new EngineWorldSession(
+                renderHost, gpu, compute, programs, scenes, passes, failures);
         MinecraftWorldSession openedMinecraft = null;
         try {
             openedMinecraft = minecraftHost.openSession(openedEngine.services(),

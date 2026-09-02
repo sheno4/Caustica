@@ -4,12 +4,13 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
-import dev.comfyfluffy.caustica.api.pass.Pass;
-import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftImplementationData;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftInstanceData;
@@ -28,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.VK10.*;
 
@@ -35,13 +37,16 @@ import static org.lwjgl.vulkan.VK10.*;
 public final class MinecraftProgramResources implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(MinecraftProgramResources.class);
     private final GpuDevice gpu;
+    private final GpuComputeQueue compute;
     private final ResourceFactory resourceFactory;
     private final GpuDescriptorRange<GpuDescriptorIndex.Sampler> sampler;
     private int liveEpochs;
     private boolean closed;
 
-    public MinecraftProgramResources(GpuDevice gpu, ResourceFactory resourceFactory) {
+    public MinecraftProgramResources(GpuDevice gpu, GpuComputeQueue compute,
+                                     ResourceFactory resourceFactory) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
+        this.compute = java.util.Objects.requireNonNull(compute, "compute");
         this.resourceFactory = java.util.Objects.requireNonNull(resourceFactory, "resourceFactory");
         sampler = gpu.descriptorHeap().allocateSamplers(1);
         try {
@@ -61,13 +66,13 @@ public final class MinecraftProgramResources implements AutoCloseable {
         }
     }
 
-    /** Prepares an immutable fallback-safe epoch and its one-shot texture transfer pass. */
+    /** Prepares an immutable fallback-safe epoch and starts its asynchronous texture upload. */
     public synchronized PreparedUpload prepareUpload(MinecraftMaterialLookup lookup,
-                                                      Runnable submitted, Runnable completed) {
+            Consumer<? super GpuComputeCompletion> completion) {
         requireOpen();
-        MinecraftMaterialUploadPass pass = new MinecraftMaterialUploadPass(
-                gpu, this, lookup, submitted, completed);
-        return new PreparedUpload(new PreparedEpoch(lookup, pass.epoch()), pass);
+        MinecraftMaterialUpload upload = new MinecraftMaterialUpload(
+                gpu, compute, this, lookup, completion);
+        return new PreparedUpload(new PreparedEpoch(lookup, upload.epoch()), upload.job());
     }
 
     /**
@@ -144,7 +149,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
             }
             int firstDescriptor = descriptors == null ? 0 : descriptors.firstIndex().value();
             long tableSize = Math.multiplyExact((long) records.size(), MinecraftMaterialData.BYTE_SIZE);
-            materialTable = create(tableSize,
+            materialTable = createAsync(tableSize,
                     bytes -> writeMaterialRecords(bytes, records, firstDescriptor));
             VmaMappedBuffer table = materialTable;
             implementation = create(MinecraftImplementationData.BYTE_SIZE,
@@ -258,6 +263,19 @@ public final class MinecraftProgramResources implements AutoCloseable {
         }
     }
 
+    private VmaMappedBuffer createAsync(long size, Writer writer) {
+        VmaMappedBuffer buffer = VmaMappedBuffer.createAsync(
+                gpu, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft async program buffer");
+        try {
+            writer.write(buffer.mapped().order(ByteOrder.LITTLE_ENDIAN));
+            buffer.flush(0, size);
+            return buffer;
+        } catch (RuntimeException | Error failure) {
+            buffer.close();
+            throw failure;
+        }
+    }
+
     private void requireOpen() {
         if (closed) throw new IllegalStateException("Minecraft program resources are closed");
     }
@@ -287,11 +305,11 @@ public final class MinecraftProgramResources implements AutoCloseable {
         }
     }
 
-    /** Prepared epoch plus the pass that initializes its texture images. */
-    public record PreparedUpload(PreparedEpoch epoch, Pass<PassFrame> pass) {
+    /** Prepared epoch plus its cancellable asynchronous initialization. */
+    public record PreparedUpload(PreparedEpoch epoch, GpuComputeJob job) {
         public PreparedUpload {
             java.util.Objects.requireNonNull(epoch, "epoch");
-            java.util.Objects.requireNonNull(pass, "pass");
+            java.util.Objects.requireNonNull(job, "job");
         }
     }
 

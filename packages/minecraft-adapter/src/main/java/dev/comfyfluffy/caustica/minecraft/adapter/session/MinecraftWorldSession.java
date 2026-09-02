@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.adapter.session;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
@@ -218,6 +219,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
 
     private record CoreContext(ContributionScope scope) implements RenderSessionContext {
         @Override public GpuDevice gpu() { return scope.gpu(); }
+        @Override public GpuComputeQueue compute() { return scope.compute(); }
         @Override public ProgramChannel program() { return scope.program(); }
         @Override public PassChannel passes() { return scope.passes(); }
         @Override public GeometryChannel geometry() { return scope.geometry(); }

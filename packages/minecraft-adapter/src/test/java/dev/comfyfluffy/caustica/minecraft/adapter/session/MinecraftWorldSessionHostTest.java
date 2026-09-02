@@ -164,6 +164,8 @@ final class MinecraftWorldSessionHostTest {
         private final String id;
         private final List<String> events;
         private final ProgramChannel program = service(ProgramChannel.class);
+        private final dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue compute =
+                service(dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue.class);
         private final PassChannel passes = service(PassChannel.class);
         private final GeometryChannel geometry = service(GeometryChannel.class);
         private final LightChannel lights = service(LightChannel.class);
@@ -172,6 +174,7 @@ final class MinecraftWorldSessionHostTest {
 
         private TestScope(String id, List<String> events) { this.id = id; this.events = events; }
         @Override public GpuDevice gpu() { return service(GpuDevice.class); }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue compute() { return compute; }
         @Override public ProgramChannel program() { return program; }
         @Override public PassChannel passes() { return passes; }
         @Override public GeometryChannel geometry() { return geometry; }

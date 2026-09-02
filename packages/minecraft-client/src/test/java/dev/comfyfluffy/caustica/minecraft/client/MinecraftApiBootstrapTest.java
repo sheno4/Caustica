@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
@@ -164,6 +165,7 @@ final class MinecraftApiBootstrapTest {
 
     private static final class EmptyScope implements ContributionScope {
         @Override public GpuDevice gpu() { return null; }
+        @Override public GpuComputeQueue compute() { return null; }
         @Override public ProgramChannel program() { return null; }
         @Override public PassChannel passes() { return null; }
         @Override public GeometryChannel geometry() { return null; }

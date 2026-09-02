@@ -18,13 +18,13 @@ final class MinecraftMaterialUploadOwnershipTest {
         assertEquals(VmaImageAllocation.class, image.getDeclaredField("allocation").getType());
         assertEquals(VmaMappedHostBuffer.class, imageUpload.getRecordComponents()[2].getType());
         assertEquals(MinecraftProgramResources.Epoch.class,
-                MinecraftMaterialUploadPass.class.getDeclaredField("epoch").getType());
-        assertFalse(Arrays.stream(MinecraftMaterialUploadPass.class.getDeclaredClasses())
+                MinecraftMaterialUpload.class.getDeclaredField("epoch").getType());
+        assertFalse(Arrays.stream(MinecraftMaterialUpload.class.getDeclaredClasses())
                 .anyMatch(type -> type.getSimpleName().equals("StagingBuffer")));
     }
 
     private static Class<?> nested(String simpleName) {
-        return Arrays.stream(MinecraftMaterialUploadPass.class.getDeclaredClasses())
+        return Arrays.stream(MinecraftMaterialUpload.class.getDeclaredClasses())
                 .filter(type -> type.getSimpleName().equals(simpleName))
                 .findFirst().orElseThrow();
     }

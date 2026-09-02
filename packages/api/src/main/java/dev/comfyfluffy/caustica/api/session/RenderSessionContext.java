@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.api.session;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
@@ -23,8 +24,8 @@ import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
  * a renderer publication boundary. Mesh removal cascades to its placements; stale surface and environment
  * references resolve to visible error implementations, and stale volumes resolve to vacuum. Logical
  * references never pin an owner or make teardown wait for another contribution;</li>
- * <li>cancel pending program registrations, drain accepted submissions and frame uses, run all readiness
- * callbacks, run all retirement callbacks, and close the now-drained pass instances;</li>
+ * <li>cancel pending compute jobs and program registrations, drain accepted submissions and frame uses,
+ * run all terminal, readiness, and retirement callbacks, and close the now-drained pass instances;</li>
  * <li>call {@link RenderSessionContribution#close()} before destroying the device.</li>
  * </ol>
  *
@@ -45,6 +46,8 @@ import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
  */
 public interface RenderSessionContext {
     GpuDevice gpu();
+
+    GpuComputeQueue compute();
 
     ProgramChannel program();
 

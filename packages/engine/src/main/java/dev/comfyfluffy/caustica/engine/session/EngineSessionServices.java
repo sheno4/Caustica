@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.engine.session;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
@@ -15,6 +16,8 @@ import dev.comfyfluffy.caustica.engine.program.ProgramContributionChannel;
 import dev.comfyfluffy.caustica.engine.program.ProgramEngineFailureHandler;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.engine.compute.ComputeQueueSession;
+import dev.comfyfluffy.caustica.engine.compute.ComputeQueueSession.ComputeContributionQueue;
 import dev.comfyfluffy.caustica.engine.scene.GeometryContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.LightContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
@@ -28,6 +31,7 @@ import java.util.Set;
 /** Shared renderer services and owner-scope factory for one concrete render session. */
 public final class EngineSessionServices implements ContributionScopeFactory, AutoCloseable {
     private final GpuDevice gpu;
+    private final ComputeQueueSession compute;
     private final ProgramSession programs;
     private final SceneDirectory scenes;
     private final PassSession passes;
@@ -37,6 +41,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
 
     public EngineSessionServices(
             GpuDevice gpu,
+            GpuComputeQueue computeBackend,
             ProgramBackend programBackend,
             RetainedSceneBackend sceneBackend,
             PassSchedulerBackend passBackend,
@@ -44,6 +49,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             SceneRetirementFailureHandler sceneFailures,
             PassFailureHandler passFailures) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
+        compute = new ComputeQueueSession(computeBackend, sceneFailures::report);
         resources = new ResourceDirectory(sceneFailures::report);
         programs = new ProgramSession(resources, programBackend, programFailures);
         scenes = new SceneDirectory(programs, resources, sceneBackend, sceneFailures);
@@ -71,8 +77,9 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
     /** Host resource validation and renderer lease acquisition. */
     public ResourceDirectory resources() { return resources; }
 
-    /** Advances compiler publication, retained retirements, and eligible pass closes. */
+    /** Advances compute terminals, compiler publication, retained retirements, and eligible pass closes. */
     public void progress() {
+        compute.progress();
         programs.progress();
         scenes.progress();
         passes.progress();
@@ -90,11 +97,13 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         passes.close();
         progress();
         resources.close();
+        compute.close();
     }
 
     private final class Scope implements ContributionScope {
         private final ContributionOwner owner;
         private final ProgramContributionChannel program;
+        private final ComputeContributionQueue compute;
         private final PassContributionChannel pass;
         private final GeometryContributionChannel geometry;
         private final LightContributionChannel lights;
@@ -106,6 +115,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
 
         private Scope(ContributionOwner owner) {
             this.owner = owner;
+            compute = EngineSessionServices.this.compute.openChannel();
             program = programs.openChannel(owner);
             pass = passes.openChannel(owner);
             geometry = scenes.openGeometry(owner);
@@ -114,6 +124,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         }
 
         @Override public GpuDevice gpu() { return gpu; }
+        @Override public GpuComputeQueue compute() { return compute; }
         @Override public ProgramChannel program() { return program; }
         @Override public PassChannel passes() { return pass; }
         @Override public GeometryChannel geometry() { return geometry; }
@@ -123,6 +134,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         @Override
         public void quiesce() {
             if (quiesced) return;
+            compute.quiesce();
             pass.quiesce();
             program.quiesce();
             geometry.quiesce();
@@ -135,6 +147,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         public void invalidate() {
             if (invalidated) return;
             quiesce();
+            compute.invalidate();
             pass.invalidate();
             geometry.invalidate();
             lights.invalidate();
@@ -147,6 +160,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         public void drain() {
             if (drained) return;
             invalidate();
+            compute.drain();
             pass.drain();
             geometry.drain();
             lights.drain();
@@ -159,6 +173,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         public void close() {
             if (closed) return;
             if (!drained) throw new IllegalStateException("scope must drain before close");
+            compute.closeChannel();
             synchronized (EngineSessionServices.this) {
                 scopes.remove(this);
             }

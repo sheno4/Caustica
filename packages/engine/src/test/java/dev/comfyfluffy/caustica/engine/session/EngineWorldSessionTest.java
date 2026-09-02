@@ -2,6 +2,8 @@ package dev.comfyfluffy.caustica.engine.session;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
@@ -42,7 +44,7 @@ final class EngineWorldSessionTest {
                 published.run();
             }
         };
-        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, COMPUTE, PROGRAMS, scenes, PASSES,
                 failure -> { throw new AssertionError(failure); });
 
         assertEquals(1, session.services().scenes().snapshot().scenes().size());
@@ -58,7 +60,7 @@ final class EngineWorldSessionTest {
     void closeSettlesAcceptedSceneWorkWithoutAnotherFrame() {
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         AsyncSceneBackend scenes = new AsyncSceneBackend();
-        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, COMPUTE, PROGRAMS, scenes, PASSES,
                 failure -> { throw new AssertionError(failure); });
 
         session.close();
@@ -80,7 +82,7 @@ final class EngineWorldSessionTest {
             }
             @Override public void prepareForSessionClose() { throw new IllegalStateException("settle"); }
         };
-        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, COMPUTE, PROGRAMS, scenes, PASSES,
                 failure -> { throw new AssertionError(failure); });
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
@@ -101,7 +103,7 @@ final class EngineWorldSessionTest {
         AsyncSceneBackend scenes = new AsyncSceneBackend();
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+                () -> new EngineWorldSession(renderHost, GPU, COMPUTE, PROGRAMS, scenes, PASSES,
                         reported -> { throw (RuntimeException) reported; }));
 
         assertEquals("open", failure.getMessage());
@@ -123,7 +125,7 @@ final class EngineWorldSessionTest {
         };
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+                () -> new EngineWorldSession(renderHost, GPU, COMPUTE, PROGRAMS, scenes, PASSES,
                         reported -> { throw (RuntimeException) reported; }));
 
         assertEquals("open", failure.getMessage());
@@ -170,6 +172,15 @@ final class EngineWorldSessionTest {
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
         @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
+    };
+
+    private static final GpuComputeQueue COMPUTE = new GpuComputeQueue() {
+        @Override public GpuComputeJob submit(
+                java.util.function.Consumer<? super org.lwjgl.vulkan.VkCommandBuffer> recorder,
+                java.util.function.Consumer<? super dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion> completion) {
+            throw new AssertionError("no compute jobs expected");
+        }
+        @Override public int[] sharedQueueFamilyIndices() { return new int[] { 0 }; }
     };
 
     private static final ProgramBackend PROGRAMS = new ProgramBackend() {

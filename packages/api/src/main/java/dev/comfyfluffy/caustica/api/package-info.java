@@ -28,10 +28,12 @@
  * tables behind those roots. Retained changes use their thread-safe session channels and become visible at
  * renderer publication boundaries.
  *
- * <p>The renderer owns GPU queues and submission. Extensions prepare CPU data on their own executors
- * and record GPU work through a typed {@link dev.comfyfluffy.caustica.api.pass.Pass} registered at the
- * pre-trace, post-effect, or UI stage. Completion and retirement are callback-based; no public API blocks
- * waiting for GPU or program progress.
+ * <p>The renderer owns GPU queues and submission. Extensions prepare CPU data on their own executors,
+ * submit asynchronous immutable-resource initialization through
+ * {@link dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue}, and record frame-dependent work through a
+ * typed {@link dev.comfyfluffy.caustica.api.pass.Pass} registered at the pre-trace, post-effect, or UI
+ * stage. Completion and retirement are callback-based; no public API blocks waiting for GPU or program
+ * progress.
  *
  * <h2>Boundary</h2>
  *

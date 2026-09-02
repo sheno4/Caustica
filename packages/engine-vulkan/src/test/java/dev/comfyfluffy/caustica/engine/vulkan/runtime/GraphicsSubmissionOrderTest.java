@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
-
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -10,8 +8,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 final class GraphicsSubmissionOrderTest {
@@ -24,20 +20,18 @@ final class GraphicsSubmissionOrderTest {
         RtGpuExecutor.enqueueGraphicsSignal(submission, 22L, 4L);
 
         assertEquals(List.of(
-                "wait:21:3:" + (VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
-                        | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR),
+                "wait:21:3:" + VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                 "execute",
                 "signal:22:4:" + VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT), submission.calls);
     }
 
     @Test
-    void publishedBuildWaitCoversTlasBuildAndRayTraversal() {
+    void publishedComputeWaitCoversEveryGraphicsConsumerStage() {
         RecordingSubmission submission = new RecordingSubmission();
 
         RtGpuExecutor.enqueueBuildWait(submission, 31L, 7L);
 
-        assertEquals(List.of("wait:31:7:" + (VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
-                | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)), submission.calls);
+        assertEquals(List.of("wait:31:7:" + VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT), submission.calls);
     }
 
     private static final class RecordingSubmission implements GraphicsSubmission {
