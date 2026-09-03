@@ -27,12 +27,9 @@ import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BiConsumer;
-import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -41,25 +38,34 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
  * Single-owner asynchronous GPU submission lane on a queue reserved by Caustica at device creation.
  * The host never fetches or submits to this reserved queue, so the executor exclusively satisfies Vulkan's
  * queue-synchronization rule while sharing the logical device with graphics work.
+ *
+ * <p>Compute output reaches graphics through host completion rather than a cross-queue semaphore. The
+ * executor thread waits {@link #jobTimeline} before reporting a job finished, so a completion callback
+ * observes work the device has already retired. The signal that satisfied that wait made every write of
+ * the batch available to the device domain, and the render thread's later {@code vkQueueSubmit2} performs
+ * the matching device-domain visibility operation. Completion therefore carries a full memory dependency
+ * to any graphics submission that happens-after it on the host, which is why graphics never waits on this
+ * executor's timeline and never learns that a compute queue exists.
+ *
+ * <p>That guarantee holds only for results published after completion and never mutated again. Writing to
+ * memory a live graphics frame still reads is the opposite hazard and needs {@link #graphicsTimeline}
+ * retirement, which is this executor's only remaining cross-queue ordering.
  */
 public final class RtGpuExecutor implements GpuComputeQueue {
-    private static final int MAX_BUILD_BATCH = 128;
-    private static final Job STOP = new Job(null, null, null, null, null);
-    private static final long BUILD_READ_STAGES = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    private static final int MAX_JOB_BATCH = 128;
+    private static final Job STOP = new Job(null, null, null, 0L);
 
     private final VulkanDeviceContext ctx;
     private final VulkanQueueRef computeQueue;
-    private final long buildTimeline;
+    private final long jobTimeline;
     private final long graphicsTimeline;
     private final LinkedBlockingQueue<Job> jobs = new LinkedBlockingQueue<>();
-    private final AtomicLong nextBuildValue = new AtomicLong();
-    private final AtomicLong pendingPublishWaitValue = new AtomicLong();
+    private final AtomicLong nextJobValue = new AtomicLong();
     private final AtomicLong nextGraphicsValue = new AtomicLong();
     private final AtomicLong latestSubmittedGraphicsValue = new AtomicLong();
     private final ArrayList<DestroyJob> destroyJobs = new ArrayList<>();
-    private final Object submissionLock = new Object();
-    private long submittedBuildValue;
-    private long completedBuildValue;
+    private final Object completionLock = new Object();
+    private long completedJobValue;
     private final Thread thread;
     private long commandPool;
     private volatile boolean closed;
@@ -68,7 +74,7 @@ public final class RtGpuExecutor implements GpuComputeQueue {
     RtGpuExecutor(VulkanDeviceContext ctx) {
         this.ctx = ctx;
         this.computeQueue = ctx.computeQueue();
-        this.buildTimeline = createTimeline("RT build timeline");
+        this.jobTimeline = createTimeline("GPU job timeline");
         this.graphicsTimeline = createTimeline("RT graphics-use timeline");
         createCommandPool();
         this.thread = new Thread(this::run, "Caustica GPU executor");
@@ -76,25 +82,27 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         this.thread.start();
     }
 
+    /**
+     * Enqueue one job. This is the only way work reaches the reserved queue: acceleration-structure
+     * builds, transfers, and extension compute all take this path and receive the same completion
+     * contract, so nothing internal can acquire ordering an extension cannot express.
+     *
+     * <p>Cancellation is sampled immediately before a queued job enters a command-buffer batch;
+     * already-recording or submitted work still completes normally. The completion callback runs once on
+     * the executor thread and is the job's only terminal notification, so a producer that needs cleanup
+     * ordered against GPU completion does it there.
+     */
     @Override
-    public GpuComputeJob submit(Consumer<? super VkCommandBuffer> recorder,
-                                Consumer<? super GpuComputeCompletion> completion) {
+    public synchronized GpuComputeJob submit(Consumer<? super VkCommandBuffer> recorder,
+                                             Consumer<? super GpuComputeCompletion> completion) {
         java.util.Objects.requireNonNull(recorder, "recorder");
         java.util.Objects.requireNonNull(completion, "completion");
+        checkExecutorFailure();
+        if (closed) {
+            throw new IllegalStateException("RT GPU executor is closed");
+        }
         AtomicBoolean cancelled = new AtomicBoolean();
-        submit(cancelled::get, recorder::accept, () -> { }, (build, failure) -> {
-            if (failure == null) {
-                // The first later graphics submission waits on this signal even though host completion
-                // was observed, establishing the cross-queue Vulkan memory dependency for published output.
-                pendingPublishWaitValue.accumulateAndGet(build.value, Math::max);
-            }
-            GpuComputeCompletion result = failure == null
-                    ? new GpuComputeCompletion.Succeeded()
-                    : failure instanceof CancellationException
-                    ? new GpuComputeCompletion.Cancelled()
-                    : new GpuComputeCompletion.Failed(failure);
-            completion.accept(result);
-        });
+        jobs.add(new Job(cancelled, recorder, completion, nextJobValue.incrementAndGet()));
         return () -> cancelled.set(true);
     }
 
@@ -103,52 +111,13 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         return ctx.asyncBufferSharingQueueFamilies();
     }
 
-    /**
-     * Enqueue GPU recording. On success, {@code afterSuccess} runs after timeline completion; then
-     * {@code finished} receives exactly one terminal success/failure notification on this thread.
-     */
-    public Build submit(Consumer<VkCommandBuffer> record, Runnable afterSuccess,
-                        BiConsumer<Build, Throwable> finished) {
-        return submit(() -> false, record, afterSuccess, finished);
-    }
-
-    /**
-     * Enqueue cancellable GPU recording. Cancellation is sampled immediately before a queued job enters
-     * a command-buffer batch; already-recording or submitted work still completes normally.
-     */
-    public synchronized Build submit(BooleanSupplier cancelled, Consumer<VkCommandBuffer> record,
-                                     Runnable afterSuccess, BiConsumer<Build, Throwable> finished) {
-        checkExecutorFailure();
-        if (closed) {
-            throw new IllegalStateException("RT GPU executor is closed");
-        }
-        long value = nextBuildValue.incrementAndGet();
-        Build build = new Build(value);
-        jobs.add(new Job(cancelled, record, afterSuccess, finished, build));
-        return build;
-    }
-
-    /** Mark a build visible to publication; the next graphics frame use waits on it. */
-    public void markPublished(Build build) {
-        assertRenderThread();
-        pendingPublishWaitValue.accumulateAndGet(build.value, Math::max);
-    }
-
-    /** Attach published-build waits and reserve the completion token shared by this frame's RT resources. */
-    public GraphicsUse beginGraphicsUse(GraphicsSubmission submission) {
+    /** Reserve the completion token shared by this frame's RT resources. */
+    public GraphicsUse beginGraphicsUse() {
         assertRenderThread();
         checkExecutorFailure();
         // Host operations on graphicsTimeline are render-thread-affine so its query is ordered with the
         // host graphics submission that signals it.
         processDestroyJobs();
-        long waitValue = pendingPublishWaitValue.get();
-        if (waitValue != 0L) {
-            // vkQueuePresentKHR requires every transitive signal dependency of its binary wait to have
-            // already been submitted. A Build is assigned its timeline value when queued on this Java
-            // executor, so do not expose that future value to the graphics/present chain prematurely.
-            awaitBuildSubmission(waitValue);
-            enqueueBuildWait(submission, buildTimeline, waitValue);
-        }
         return new GraphicsUse(this, nextGraphicsValue.incrementAndGet());
     }
 
@@ -168,10 +137,6 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         });
     }
 
-    static void enqueueBuildWait(GraphicsSubmission submission, long semaphore, long value) {
-        submission.waitSemaphore(semaphore, value, BUILD_READ_STAGES);
-    }
-
     static void enqueueGraphicsSignal(GraphicsSubmission submission, long semaphore, long value) {
         submission.signalSemaphore(semaphore, value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     }
@@ -186,11 +151,6 @@ public final class RtGpuExecutor implements GpuComputeQueue {
     /** Rethrow a latched executor failure on the calling thread. */
     public void throwIfFailed() {
         checkExecutorFailure();
-    }
-
-    /** Destroy an owner once the specified submitted frame has completed. */
-    public void retireAfterGraphics(GraphicsUse lastUse, Runnable destroy) {
-        enqueueDestroyAfterGraphicsValue(lastUse.value(), destroy);
     }
 
     /** Destroy a tracked owner once its exact last frame use has completed. */
@@ -217,14 +177,14 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         }
     }
 
-    public boolean hasPendingDestroys() {
+    private boolean hasPendingDestroys() {
         synchronized (destroyJobs) {
             return !destroyJobs.isEmpty();
         }
     }
 
-    /** Caller has made the device idle; all queued destruction is now unconditionally safe. */
-    public void flushDestroysAfterDeviceIdle() {
+    /** The device is idle, so all queued destruction is now unconditionally safe. */
+    private void flushDestroysAfterDeviceIdle() {
         Throwable failure = executorFailure;
         synchronized (destroyJobs) {
             for (DestroyJob job : destroyJobs) {
@@ -251,11 +211,11 @@ public final class RtGpuExecutor implements GpuComputeQueue {
      * boundary before session-owned resources are destroyed.
      */
     public void drainAndWaitIdle() {
-        long target = nextBuildValue.get();
-        synchronized (submissionLock) {
-            while (completedBuildValue < target && executorFailure == null) {
+        long target = nextJobValue.get();
+        synchronized (completionLock) {
+            while (completedJobValue < target && executorFailure == null) {
                 try {
-                    submissionLock.wait();
+                    completionLock.wait();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("Interrupted while draining RT GPU executor", e);
@@ -292,7 +252,7 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         VK10.vkDestroyCommandPool(ctx.vk(), commandPool, null);
         commandPool = 0L;
         VK10.vkDestroySemaphore(ctx.vk(), graphicsTimeline, null);
-        VK10.vkDestroySemaphore(ctx.vk(), buildTimeline, null);
+        VK10.vkDestroySemaphore(ctx.vk(), jobTimeline, null);
         if (failure != null) {
             throw new IllegalStateException("RT GPU executor shutdown failed", failure);
         }
@@ -311,10 +271,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             if (first == STOP) {
                 return;
             }
-            ArrayList<Job> batch = new ArrayList<>(MAX_BUILD_BATCH);
+            ArrayList<Job> batch = new ArrayList<>(MAX_JOB_BATCH);
             batch.add(first);
             boolean stopAfterBatch = false;
-            while (batch.size() < MAX_BUILD_BATCH) {
+            while (batch.size() < MAX_JOB_BATCH) {
                 Job next = jobs.poll();
                 if (next == null) {
                     break;
@@ -328,8 +288,8 @@ public final class RtGpuExecutor implements GpuComputeQueue {
 
             ArrayList<Job> executable = new ArrayList<>(batch.size());
             for (Job job : batch) {
-                if (job.cancelled.getAsBoolean()) {
-                    finishJob(job, new CancellationException("RT GPU job epoch is stale"));
+                if (job.cancelled.get()) {
+                    finishJob(job, new GpuComputeCompletion.Cancelled());
                 } else {
                     executable.add(job);
                 }
@@ -338,12 +298,12 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                 try {
                     execute(executable);
                     for (Job job : executable) {
-                        finishJob(job, null);
+                        finishJob(job, new GpuComputeCompletion.Succeeded());
                     }
                 } catch (Throwable t) {
                     latchFailure(t);
                     for (Job job : executable) {
-                        finishJob(job, t);
+                        finishJob(job, new GpuComputeCompletion.Failed(t));
                     }
                 }
             }
@@ -357,37 +317,30 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         }
     }
 
-    private void finishJob(Job job, Throwable failure) {
-        if (failure == null) {
-            try {
-                job.afterSuccess.run();
-            } catch (Throwable t) {
-                failure = t;
-            }
-        }
+    private void finishJob(Job job, GpuComputeCompletion result) {
         try {
-            job.finished.accept(job.build, failure);
+            job.completion.accept(result);
         } catch (Throwable t) {
-            if (failure != null) {
-                failure.addSuppressed(t);
+            if (result instanceof GpuComputeCompletion.Failed failed && failed.failure() != t) {
+                failed.failure().addSuppressed(t);
             }
             latchFailure(t);
         } finally {
-            synchronized (submissionLock) {
-                completedBuildValue = Math.max(completedBuildValue, job.build.value);
-                submissionLock.notifyAll();
+            synchronized (completionLock) {
+                completedJobValue = Math.max(completedJobValue, job.value);
+                completionLock.notifyAll();
             }
         }
     }
 
-    /** Fail every accepted build before the executor thread exits so task ownership always unwinds. */
+    /** Fail every accepted job before the executor thread exits so task ownership always unwinds. */
     private synchronized void failQueuedJobs(Throwable failure) {
         Throwable terminal = failure != null ? failure : new IllegalStateException("RT GPU executor stopped");
         latchFailure(terminal);
         Job job;
         while ((job = jobs.poll()) != null) {
             if (job != STOP) {
-                finishJob(job, terminal);
+                finishJob(job, new GpuComputeCompletion.Failed(terminal));
             }
         }
     }
@@ -398,8 +351,8 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         } else if (executorFailure != failure) {
             executorFailure.addSuppressed(failure);
         }
-        synchronized (submissionLock) {
-            submissionLock.notifyAll();
+        synchronized (completionLock) {
+            completionLock.notifyAll();
         }
     }
 
@@ -436,10 +389,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         VkCommandBuffer cmd = null;
         boolean submitted = false;
         boolean completed = false;
-        long signalValue = batch.get(batch.size() - 1).build.value;
-        long firstValue = batch.get(0).build.value;
+        long signalValue = batch.get(batch.size() - 1).value;
+        long firstValue = batch.get(0).value;
         VulkanDiagnostics.setInFlight("async-compute",
-                "recording builds=" + firstValue + ".." + signalValue + " batch=" + batch.size()
+                "recording jobs=" + firstValue + ".." + signalValue + " batch=" + batch.size()
                         + " queued=" + jobs.size());
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBufferAllocateInfo ai = VkCommandBufferAllocateInfo.calloc(stack).sType$Default()
@@ -457,10 +410,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             VkCommandBufferSubmitInfo.Buffer command = VkCommandBufferSubmitInfo.calloc(1, stack)
                     .sType$Default().commandBuffer(cmd);
             VkSemaphoreSubmitInfo.Buffer signal = VkSemaphoreSubmitInfo.calloc(1, stack)
-                    .sType$Default().semaphore(buildTimeline).value(signalValue)
+                    .sType$Default().semaphore(jobTimeline).value(signalValue)
                     // Jobs also contain pure transfer uploads (for example the device-local light
                     // proposal tables). Signal only after every command in the batch, not merely the
-                    // AS-build stage, so a graphics wait cannot overtake such a copy.
+                    // AS-build stage, so completion cannot be reported while a copy is still running.
                     .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             VkSubmitInfo2.Buffer submit = VkSubmitInfo2.calloc(1, stack).sType$Default()
                     .pCommandBufferInfos(command).pSignalSemaphoreInfos(signal);
@@ -470,13 +423,12 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                         computeQueue.queue(), submit, 0L), "vkQueueSubmit2(RT GPU executor)");
             }
             submitted = true;
-            synchronized (submissionLock) {
-                submittedBuildValue = Math.max(submittedBuildValue, signalValue);
-                submissionLock.notifyAll();
-            }
             VulkanDiagnostics.setInFlight("async-compute",
-                    "submitted builds=" + firstValue + ".." + signalValue + " batch=" + batch.size());
-            waitTimeline(buildTimeline, signalValue);
+                    "submitted jobs=" + firstValue + ".." + signalValue + " batch=" + batch.size());
+            // This wait is the publication boundary, not merely command-buffer recycling. Returning from
+            // it proves the batch retired and, with the signal's availability operation, lets any graphics
+            // submission that happens-after the resulting completion callback read the batch's writes.
+            waitTimeline(jobTimeline, signalValue);
             completed = true;
         } finally {
             // Never retry a failed host wait while unwinding: propagate its original error. A command
@@ -533,32 +485,6 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                     .pSemaphores(stack.longs(semaphore))
                     .pValues(stack.longs(value));
             ctx.checkDeviceResult(VK12.vkWaitSemaphores(ctx.vk(), wi, Long.MAX_VALUE), "vkWaitSemaphores(RT GPU executor)");
-        }
-    }
-
-    private void awaitBuildSubmission(long value) {
-        synchronized (submissionLock) {
-            while (submittedBuildValue < value && executorFailure == null) {
-                try {
-                    submissionLock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("Interrupted waiting for RT GPU build submission " + value, e);
-                }
-            }
-        }
-        checkExecutorFailure();
-    }
-
-    public static final class Build {
-        private final long value;
-
-        private Build(long value) {
-            this.value = value;
-        }
-
-        public long value() {
-            return value;
         }
     }
 
@@ -649,17 +575,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             return true;
         }
 
-        private boolean awaitValue(long requiredValue) {
-            if (requiredValue <= completedValue) return false;
-            checkExecutorFailure();
-            waitTimeline(graphicsTimeline, requiredValue);
-            completedValue = requiredValue;
-            return true;
-        }
     }
 
-    private record Job(BooleanSupplier cancelled, Consumer<VkCommandBuffer> record, Runnable afterSuccess,
-                       BiConsumer<Build, Throwable> finished, Build build) {
+    private record Job(AtomicBoolean cancelled, Consumer<? super VkCommandBuffer> record,
+                       Consumer<? super GpuComputeCompletion> completion, long value) {
     }
 
     private record DestroyJob(long lastUseValue, Runnable destroy) {

@@ -751,7 +751,7 @@ public final class RtFrameRenderer {
         long dstImage = nativeColorImage;
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
-        GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse(submission);
+        GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse();
         RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
         presentationResources().exposure().beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;

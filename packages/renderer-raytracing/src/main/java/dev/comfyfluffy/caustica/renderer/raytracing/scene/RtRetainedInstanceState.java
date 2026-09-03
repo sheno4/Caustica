@@ -41,6 +41,36 @@ final class RtRetainedInstanceState {
         }
     }
 
+    /** Replace the whole table, keeping ordinals and motion history for surviving identities. */
+    void replaceAll(List<RetainedSceneSnapshot.Instance> next, LongSupplier nextOrdinal) {
+        Map<Long, RetainedSceneSnapshot.Instance> replacement = new LinkedHashMap<>();
+        for (RetainedSceneSnapshot.Instance instance : next) {
+            long identity = instance.identity();
+            if (!ordinals.containsKey(identity)) {
+                ordinals.put(identity, nextOrdinal.getAsLong());
+                previousTransforms.put(identity, instance.transform());
+            }
+            replacement.put(identity, instance);
+        }
+        ordinals.keySet().retainAll(replacement.keySet());
+        previousTransforms.keySet().retainAll(replacement.keySet());
+        instances.clear();
+        instances.putAll(replacement);
+    }
+
+    /**
+     * Adopt every current transform as the motion-vector predecessor. Called once per materialized layout,
+     * so "previous" always names the placement the last rendered layout used rather than the last accepted
+     * mutation, which may not have reached a frame.
+     */
+    void latchPreviousTransforms() {
+        instances.forEach((identity, instance) -> previousTransforms.put(identity, instance.transform()));
+    }
+
+    java.util.Set<Long> identities() {
+        return java.util.Set.copyOf(instances.keySet());
+    }
+
     List<RetainedSceneSnapshot.Instance> orderedInstances() {
         List<RetainedSceneSnapshot.Instance> ordered = new ArrayList<>(instances.values());
         ordered.sort(Comparator.comparingLong(instance -> ordinal(instance.identity())));

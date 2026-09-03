@@ -16,8 +16,8 @@ heaps, and retirement are intentional extension contracts; Minecraft lifecycle a
 
 ## Implemented decisions
 
-- `packages/api` exposes process registration, owner-scoped render sessions, atomic program registration,
-  retained geometry/lights, views, staged passes, and typed Vulkan resource contracts.
+- `packages/api` exposes process registration, owner-scoped render sessions, asynchronous compute recording,
+  atomic program registration, retained geometry/lights, views, staged passes, and typed Vulkan resources.
 - `packages/engine` owns renderer-generic session, program, retained-scene, environment-selection, and pass
   state. `packages/engine-vulkan` owns Vulkan profile validation, mapped heaps, VMA resources, submission
   retirement, diagnostics, and the renderer-backend SPI.
@@ -58,15 +58,16 @@ Device interception, loader entrypoints, mixins, and composition are application
 
 ### Sessions and programs
 
-Each factory receives a fresh session context. GPU, program, geometry, light, and pass capabilities are
-session-owned and must not be cached in process-lived extension objects. Runtime state is reached by explicit
-construction and ownership; `packages/renderer-runtime` has no runtime singleton, current-composition lookup,
-or renderer-composition locator.
+Each factory receives a fresh session context. GPU, compute, program, geometry, light, resource, and pass
+capabilities are session-owned and must not be cached in process-lived extension objects. Runtime state is
+reached by explicit construction and ownership; `packages/renderer-runtime` has no runtime singleton,
+current-composition lookup, or renderer-composition locator.
 
 Shutdown stops producers and pass callbacks, invalidates contribution-owned state, then crosses one explicit
 retained-scene settlement boundary before owner drains. That boundary lets the backend accept or complete
 native retained publications after the ordinary frame loop has stopped; drainage no longer depends on another
-render frame arriving. Pass uses, program callbacks, retained retirements, and final contribution close follow.
+render frame arriving. Compute terminals, pass uses, program callbacks, retained retirements, and final
+contribution close follow.
 
 One `ProgramRegistration` atomically declares an owner's coherent surface, coverage, volume, and environment
 set. Its readiness result covers the complete registration and is pending, ready, failed, or cancelled.

@@ -7,7 +7,6 @@ import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,7 +16,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtRetainedSceneLifetimeTest {
     @Test
@@ -272,29 +273,17 @@ final class RtRetainedSceneLifetimeTest {
     }
 
     @Test
-    void publicationIsTrackedBeforeAcceptanceCanComplete() {
-        ArrayDeque<Object> queue = new ArrayDeque<>();
-        Object publication = new Object();
-
-        RtRetainedSceneBackend.queueBeforeAcceptance(queue, publication,
-                () -> assertSame(publication, queue.getLast()));
-
-        assertSame(publication, queue.getLast());
+    void afinishedBuildInstallsOnlyWhileItIsStillTheNewestUpdateForItsMesh() {
+        assertTrue(RtRetainedSceneBackend.claimsMeshEntry(true, 7L, 7L));
     }
 
     @Test
-    void rejectedAcceptanceRollsBackItsQueueSlot() {
-        ArrayDeque<Object> queue = new ArrayDeque<>();
-        Object predecessor = new Object();
-        Object publication = new Object();
-        RuntimeException rejection = new RuntimeException("rejected");
-        queue.add(predecessor);
+    void aSupersededBuildDoesNotInstallOverTheUpdateThatReplacedIt() {
+        assertFalse(RtRetainedSceneBackend.claimsMeshEntry(true, 9L, 7L));
+    }
 
-        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
-                RtRetainedSceneBackend.queueBeforeAcceptance(
-                        queue, publication, () -> { throw rejection; }));
-
-        assertSame(rejection, thrown);
-        assertEquals(List.of(predecessor), List.copyOf(queue));
+    @Test
+    void aBuildForADroppedMeshDoesNotResurrectIt() {
+        assertFalse(RtRetainedSceneBackend.claimsMeshEntry(false, 0L, 7L));
     }
 }

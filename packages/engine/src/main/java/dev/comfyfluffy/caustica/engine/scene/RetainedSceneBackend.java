@@ -9,11 +9,16 @@ public interface RetainedSceneBackend {
     default void updateLatestInstanceTransforms(List<RetainedInstanceTransform> transforms) { }
 
     /**
-     * Accepts one complete logical snapshot and reports when it becomes native-visible.
+     * Accepts one complete logical snapshot and reports when its native work has settled.
      * Native allocation, command construction, and submit acceptance happen before this method returns so
-     * throwing rejects the logical mutation. Failures discovered after accepted GPU submission are session-fatal.
-     * {@code published} runs exactly once after the native commit. Either callback may run synchronously, so
-     * callers must not depend on post-call bookkeeping.
+     * throwing rejects the logical mutation. {@code published} runs exactly once afterwards, and backends
+     * may report it out of revision order: a publication needing no GPU work can settle ahead of an earlier
+     * one that is still building. Either callback may run synchronously, so callers must not depend on
+     * post-call bookkeeping.
+     *
+     * <p>A backend may make accepted mutations logically visible before their acceleration structures exist,
+     * rendering the affected geometry from its previous native generation until the build lands. Reaching
+     * {@code published} therefore means the batch settled, not that every mutation in it is on screen.
      */
     void publish(RetainedSceneSnapshot snapshot, Runnable published);
 

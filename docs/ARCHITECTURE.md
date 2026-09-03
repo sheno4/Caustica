@@ -45,7 +45,8 @@ or renderer-implementation dependency. `minecraft-client` supplies their live Mi
 ## Ownership and lifecycle
 
 Process discovery registers settings first, loads option values, and then registers render-session and
-Minecraft-world-session factories. A render session owns its GPU, program, geometry, light, and pass channels.
+Minecraft-world-session factories. A render session owns its GPU, asynchronous compute, program, geometry,
+light, resource, and pass channels.
 Minecraft world sessions borrow the host-owned scene for their world epoch.
 
 Program contributions publish one atomic owner-scoped `ProgramRegistration`. Readiness is
@@ -65,9 +66,9 @@ gone. `invalidate()` stops future selections and `drain()` waits for that owner'
 A scene with no surviving selection uses the renderer's built-in environment fallback.
 
 Teardown stops callbacks and producers before invalidating scoped channels. The retained-scene backend then
-crosses one settlement boundary so accepted native work can finish without another render frame. Program
-readiness, pass uses, and GPU retirement callbacks drain before implementations close. Recording callbacks
-must not block on device idle or await their own frame.
+crosses one settlement boundary so accepted native work can finish without another render frame. Compute
+completions, program readiness, pass uses, and GPU retirement callbacks drain before implementations close.
+Recording callbacks must not block on device idle or await their own work.
 
 ## Frame and scene flow
 
@@ -85,7 +86,8 @@ For a frame:
 
 1. `minecraft-client` captures host state through the package-owned frame/capture seams;
 2. the adapter selects the scene and camera medium and advances world-session contributions;
-3. retained geometry, lights, environment, and program state are snapshotted atomically;
+3. completed asynchronous resource generations are published, then retained geometry, lights, environment,
+   and program state are snapshotted atomically;
 4. reusable BLAS candidates and the scene TLAS are prepared, then the persistent per-scene NEE-AT distribution
    is updated;
 5. world-resource passes record and the ray pipeline traces; the selected raw, NRD, or Ray Reconstruction route

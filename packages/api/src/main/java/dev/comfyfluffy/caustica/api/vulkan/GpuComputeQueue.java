@@ -12,16 +12,31 @@ import java.util.function.Consumer;
  * which initialize them. The recorder runs once on the renderer's compute executor thread and must not
  * retain the borrowed command buffer.
  *
+ * <p>This is the renderer's own submission path, not a parallel one offered to extensions: acceleration
+ * structure builds and internal transfers are ordinary jobs here and take exactly the guarantees written
+ * below. Recorded jobs batch together into shared command buffers and submissions, so a producer must not
+ * assume its commands are alone in a batch.
+ *
  * <p>A resource consumed later by graphics must be created for every family returned by
  * {@link #sharedQueueFamilyIndices()} when more than one family is present. The recorder must finish with
- * the Vulkan access and layout transitions required by its eventual consumer. The renderer orders a
- * successful job before later graphics submissions; that does not replace queue-family sharing or the
- * producer's Vulkan memory and layout barriers.
+ * the image layout transitions its eventual consumer requires; queue-family sharing and layout are state
+ * the renderer cannot supply on the producer's behalf.
  *
- * <p>Completion-before-publication is the intended immutable-resource pattern: keep the result and its
- * unsealed resource generation private while the job is pending, then seal the generation and publish its
- * retained value only after {@link GpuComputeCompletion.Succeeded}. Failed or cancelled jobs publish
- * nothing and drop the unsealed generation.
+ * <p>Completion-before-publication is the required immutable-resource pattern, and it is the whole of the
+ * cross-queue contract: keep the result and its unsealed resource generation private while the job is
+ * pending, then seal the generation and publish its retained value only after
+ * {@link GpuComputeCompletion.Succeeded}. Failed or cancelled jobs publish nothing and drop the unsealed
+ * generation. A successful completion is reported only once the device has retired the job, so graphics
+ * work submitted after a callback observes the published value reads it with a complete Vulkan memory
+ * dependency and needs no barrier of its own. Graphics never waits on this queue.
+ *
+ * <p>Republishing means allocating, never overwriting. Rewriting memory a live graphics frame still reads
+ * is the opposite hazard, which completion cannot order; a resource must stay unreachable to graphics
+ * until its last frame use has retired.
+ *
+ * <p>Work whose result must appear in the frame that requested it does not belong here. Publication is
+ * always at least one {@code progress} boundary behind submission, by design: the trade is a bounded
+ * frame of latency instead of a variable graphics stall.
  *
  * <p>All methods are thread-safe. Completion callbacks from one render session are serialized through
  * render-session progress, are never invoked inline by {@link #submit}, and return before their

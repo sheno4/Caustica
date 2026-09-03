@@ -42,8 +42,9 @@ frame/session read without exposing host storage or mutation.
 
 ## Render-session ownership
 
-Each `RenderSessionFactory` receives a fresh `RenderSessionContext` with `gpu()`, `program()`, `geometry()`,
-`lights()`, and `passes()`. Never cache these in the process-lived extension object.
+Each `RenderSessionFactory` receives a fresh `RenderSessionContext` with `gpu()`, `compute()`, `program()`,
+`geometry()`, `lights()`, `passes()`, and `resources()`. Never cache these in the process-lived extension
+object.
 
 The host teardown order is:
 
@@ -52,10 +53,57 @@ The host teardown order is:
 3. invalidate remaining scoped objects at a publication boundary;
 4. cross the retained-scene settlement boundary once, allowing the backend to accept or finish native work
    after the ordinary frame loop has stopped;
-5. drain accepted work, program readiness, pass uses, and retirement callbacks;
+5. drain accepted compute jobs, program readiness, pass uses, and retirement callbacks;
 6. close drained pass instances and call `RenderSessionContribution.close()`.
 
 Do not block on device idle or wait for the current frame from a recording callback.
+
+## Asynchronous GPU initialization
+
+`GpuComputeQueue` is the contribution-scoped lane for transfer or compute work that produces a future
+immutable resource. Allocate and populate private inputs on a worker, submit only Vulkan recording, and
+publish the output from the terminal callback:
+
+```java
+ResourceGeneration generation = context.resources().create(deviceBuffer::close);
+GpuComputeJob upload = context.compute().submit(commandBuffer -> {
+    try (MemoryStack stack = MemoryStack.stackPush()) {
+        VkBufferCopy2.Buffer region = VkBufferCopy2.calloc(1, stack)
+                .sType$Default().srcOffset(0).dstOffset(0).size(byteSize);
+        VK13.vkCmdCopyBuffer2(commandBuffer,
+                VkCopyBufferInfo2.calloc(stack).sType$Default()
+                        .srcBuffer(staging.buffer()).dstBuffer(deviceBuffer.handle())
+                        .pRegions(region));
+        recordTransferToConsumerBarrier(commandBuffer, deviceBuffer.handle(), byteSize);
+    }
+}, result -> {
+    staging.close();
+    if (result instanceof GpuComputeCompletion.Succeeded) {
+        generation.seal();
+        publishReplacement(generation.reference(), deviceBuffer.deviceAddress());
+    } else {
+        generation.drop();
+    }
+});
+```
+
+`recordTransferToConsumerBarrier` and `publishReplacement` above are producer-specific; the queue owns the
+command buffer and submission. If graphics and compute use distinct queue families, create every shared
+buffer or image for the indices returned by `compute().sharedQueueFamilyIndices()` or record an explicit
+ownership transfer, and record the image layout transitions the consumer expects.
+
+Graphics never waits on the compute queue. A `Succeeded` callback runs only after the device has retired
+the job, and the render thread's later submission supplies the matching visibility operation, so a value
+published from the callback is readable by graphics with no barrier of its own. This holds only for
+results that are published once and never rewritten: overwriting memory a live frame still reads is the
+opposite hazard, ordered by frame retirement rather than by completion. Work that must appear in the frame
+that requested it does not belong on this queue — publication is always at least one progress boundary
+behind submission.
+
+Closing `upload` requests cancellation only while it is still queued. Every accepted job receives exactly
+one `Succeeded`, `Failed`, or `Cancelled` callback through render-session progress. Contribution teardown
+cancels pending jobs and delivers those callbacks before `RenderSessionContribution.close()`, so the callback
+is the single place to release staging and either publish or drop the private generation.
 
 ## Programs and cross-contribution selection
 
