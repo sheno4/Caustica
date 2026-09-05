@@ -177,25 +177,29 @@ public TraceDirect traceDirect(PackedPathSegment path, WorldPayload hit, TraceLo
         uint2 pixel, bool coherent, inout uint seed) {
     TraceDirect result = {};
     if (lobes.continuousProbability == 0.0) return result;
-    uint count = clamp(neeAtState(worldBindings.neeAtStateAddress)[0].candidateCount, 1u, 8u);
+    uint count;
     DirectLightSample selected = invalidDirectLight();
     float sum = 0.0, selectedTarget = 0.0;
     BsdfQuery query;
     query.surface = hit.surface;
     query.outgoingDirection = -path.direction;
-    for (uint i = 0u; i < count; i++) {
-        DirectLightSample candidate = sampleRetainedLight(worldBindings, hit.position,
-                pixel, i, count, coherent, seed);
-        if (!candidate.valid) continue;
-        query.incomingDirection = candidate.direction;
-        float target = max(max(candidate.radianceOverShapePdf.x,
-                candidate.radianceOverShapePdf.y), candidate.radianceOverShapePdf.z)
-                * evaluateBsdfPdf(query);
-        float weight = target / candidate.proposalPdf;
-        sum += weight;
-        if (weight > 0.0 && retainedLightRandom(seed) * sum < weight) {
-            selected = candidate;
-            selectedTarget = target;
+    {
+        NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
+        count = clamp(state.candidateCount, 1u, 8u);
+        RetainedLightSamplingContext context = retainedLightSamplingContext(state, pixel, count, coherent);
+        for (uint i = 0u; i < count; i++) {
+            DirectLightSample candidate = sampleRetainedLight(context, hit.position, i, seed);
+            if (!candidate.valid) continue;
+            query.incomingDirection = candidate.direction;
+            float target = max(max(candidate.radianceOverShapePdf.x,
+                    candidate.radianceOverShapePdf.y), candidate.radianceOverShapePdf.z)
+                    * evaluateBsdfPdf(query);
+            float weight = target / candidate.proposalPdf;
+            sum += weight;
+            if (weight > 0.0 && retainedLightRandom(seed) * sum < weight) {
+                selected = candidate;
+                selectedTarget = target;
+            }
         }
     }
     if (!selected.valid || selectedTarget <= 0.0) return result;
