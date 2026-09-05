@@ -3,11 +3,11 @@ package dev.comfyfluffy.caustica.minecraft.adapter.session;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.engine.scene.MeshPreparationBackend;
 import dev.comfyfluffy.caustica.engine.session.EngineWorldSession;
 import dev.comfyfluffy.caustica.engine.session.EnvironmentSelectionScope;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
@@ -30,6 +30,7 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
             GpuComputeQueue compute,
             ProgramBackend programs,
             RetainedSceneBackend scenes,
+            MeshPreparationBackend meshes,
             PassSchedulerBackend passes,
             MinecraftDimensionKey dimension,
             ResourcePackEpoch resourcePackEpoch,
@@ -37,7 +38,7 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
         Objects.requireNonNull(minecraftHost, "minecraftHost");
         Objects.requireNonNull(failures, "failures");
         EngineWorldSession openedEngine = new EngineWorldSession(
-                renderHost, gpu, compute, programs, scenes, passes, failures);
+                renderHost, gpu, compute, programs, scenes, meshes, passes, failures);
         MinecraftWorldSession openedMinecraft = null;
         try {
             openedMinecraft = minecraftHost.openSession(openedEngine.services(),
@@ -100,8 +101,8 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
 
     private static MinecraftEnvironmentScope adapt(EnvironmentSelectionScope scope) {
         return new MinecraftEnvironmentScope() {
-            @Override public RetainedPublication select(EnvironmentBinding<?> binding) {
-                return scope.select(binding);
+            @Override public void select(EnvironmentBinding<?> binding) {
+                scope.select(binding);
             }
             @Override public void invalidate() { scope.invalidate(); }
             @Override public void drain() { scope.drain(); }

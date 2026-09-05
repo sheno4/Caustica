@@ -1,9 +1,10 @@
 package dev.comfyfluffy.caustica.minecraft.client.program;
 
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.light.LightId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
+import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
@@ -136,7 +137,7 @@ final class MinecraftProgramSessionTest {
     @Test
     void lightUpdateTimingBracketsTheCapturedFrameUpdate() {
         List<String> events = new ArrayList<>();
-        MinecraftLightProvider lights = new MinecraftLightProvider(new NoopLightChannel(), new SceneId() { },
+        MinecraftLightProvider lights = new MinecraftLightProvider(new NoopSceneChannel(), new SceneId() { },
                 () -> new MinecraftLightProvider.CelestialSettings(30, 0.6, 1.5),
                 () -> { events.add("update"); return null; });
         var pass = new MinecraftProgramSession.LightUpdatePass(lights,
@@ -180,9 +181,10 @@ final class MinecraftProgramSessionTest {
         }
     }
 
-    private static final class NoopLightChannel implements LightChannel {
+    private static final class NoopSceneChannel implements SceneChannel {
         @Override public LightId newLight() { return new LightId() { }; }
-        @Override public void submit(RetainedBatch<Operation> batch) { }
+        @Override public void edit(List<? extends SceneEdit> edits) { }
+        @Override public InstanceId newInstance() { return new InstanceId() { }; }
     }
 
     private record RecordingInstrumentation(List<String> events)

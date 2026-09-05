@@ -395,9 +395,10 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                  MinecraftEntityGeometry.MeshRevision revision, int mask, Runnable acknowledgment) {
             pendingDrops.remove(key);
             Object extraction = telemetry.extraction(sourceKind(key), 1);
-            geometry.put(key, revision, mesh, transform, mask);
-            telemetry.published(extraction);
-            if (acknowledgment != null) acknowledgment.run();
+            geometry.put(key, revision, mesh, transform, mask, () -> {
+                telemetry.published(extraction);
+                if (acknowledgment != null) acknowledgment.run();
+            });
         }
 
         void transform(MinecraftEntityGeometry.Key key, GeometryTransform transform, int mask) {

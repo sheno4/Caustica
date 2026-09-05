@@ -23,10 +23,10 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
         this.selections = java.util.Objects.requireNonNull(selections, "selections");
         RenderSessionContext renderSession = context.renderSession();
         scene = new ShowcaseScene(selections.programs(), selections.lights(),
-                context.scene(), renderSession.geometry());
+                context.scene(), renderSession.scene(), renderSession.meshes());
         passes = List.of(
                 renderSession.passes().addWorldResourcePass(
-                        setup -> ShowcasePasses.worldResource(setup.gpu(), renderSession.resources(),
+                        setup -> ShowcasePasses.worldResource(setup.gpu(), renderSession.resources(), renderSession.compute(),
                                 selections::ready, scene)),
                 renderSession.passes().addPostEffectPass(
                         ShowcasePasses.POST_EFFECT, ShowcasePasses.POST_EFFECT_PLACEMENT,

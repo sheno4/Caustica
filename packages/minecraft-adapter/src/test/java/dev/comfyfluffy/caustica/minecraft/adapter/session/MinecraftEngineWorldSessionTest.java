@@ -16,7 +16,6 @@ import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
-import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
@@ -52,16 +51,12 @@ final class MinecraftEngineWorldSessionTest {
         });
 
         RetainedSceneBackend sceneBackend = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
+            @Override public void apply(RetainedSceneSnapshot snapshot) {
                 snapshots.add(snapshot);
-                published.run();
-            }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
-                published.run();
             }
         };
         MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE,
-                PROGRAMS, sceneBackend, PASSES,
+                PROGRAMS, sceneBackend, (mesh, source) -> java.util.concurrent.CompletableFuture.completedFuture(dev.comfyfluffy.caustica.api.resource.ResourceRef.none().retain()), PASSES,
                 MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(2),
                 failure -> { throw new AssertionError(failure); });
 
@@ -86,11 +81,7 @@ final class MinecraftEngineWorldSessionTest {
         minecraftHost.api().sessions().add(context -> minecraftContribution("minecraft", events));
         minecraftHost.api().sessions().add(context -> { throw new IllegalStateException("minecraft-open"); });
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
-                published.run();
-            }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
-                published.run();
+            @Override public void apply(RetainedSceneSnapshot snapshot) {
             }
             @Override public void prepareForSessionClose() {
                 events.add("scene:settle");
@@ -99,7 +90,7 @@ final class MinecraftEngineWorldSessionTest {
         };
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE, PROGRAMS, scenes, PASSES,
+                () -> new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE, PROGRAMS, scenes, (mesh, source) -> java.util.concurrent.CompletableFuture.completedFuture(dev.comfyfluffy.caustica.api.resource.ResourceRef.none().retain()), PASSES,
                         MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
                         reported -> { throw (RuntimeException) reported; }));
 

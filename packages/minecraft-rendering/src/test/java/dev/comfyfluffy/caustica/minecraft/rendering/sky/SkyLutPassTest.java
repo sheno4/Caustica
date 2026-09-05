@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.minecraft.rendering.TestResource;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.MinecraftEnvironmentBindingData;
@@ -94,12 +93,10 @@ final class SkyLutPassTest {
             SkyLutPass.publishBinding(first, environment, binding -> {
                 readers.add(binding.bindingData().resource().retain());
                 selected.add(binding);
-                return RetainedPublication.alreadyVisible();
             }, 0x1000L);
             SkyLutPass.publishBinding(second, environment, binding -> {
                 readers.add(binding.bindingData().resource().retain());
                 selected.add(binding);
-                return RetainedPublication.alreadyVisible();
             }, 0x1000L);
 
             assertNotSame(ResourceRef.none(), first.reference());
@@ -137,12 +134,6 @@ final class SkyLutPassTest {
 
         SkyLutPass.publishBinding(producer, environment, binding -> {
             scene.add(binding.bindingData().resource().retain());
-            return new RetainedPublication() {
-                @Override public boolean isVisible() { return false; }
-                @Override public void whenVisible(Runnable callback) {
-                    throw new AssertionError("ownership must not depend on visibility callbacks");
-                }
-            };
         }, 0x1000L);
         producer.close();
         assertEquals(0, releases.get());

@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContext;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
 
@@ -24,15 +24,15 @@ final class ShowcaseSelectionContribution implements MinecraftWorldSessionContri
         this.context = java.util.Objects.requireNonNull(context, "context");
         this.handoff = java.util.Objects.requireNonNull(handoff, "handoff");
         programs = new ShowcasePrograms(context.renderSession().program(), System.err::println);
-        LightChannel channel = context.renderSession().lights();
+        SceneChannel channel = context.renderSession().scene();
         lights = List.of(channel.newLight(), channel.newLight(), channel.newLight());
-        channel.submit(RetainedBatch.of(List.of(
-                new LightChannel.SetLight(lights.get(0), context.scene(), new LightDescriptor.Parallelogram(
+        channel.edit(List.of(
+                new SceneEdit.SetLight(lights.get(0), context.scene(), new LightDescriptor.Parallelogram(
                         0, 66, 0, 0.5, 0, 0, 0, 0, 0.5, 20, 18, 15)),
-                new LightChannel.SetLight(lights.get(1), context.scene(), new LightDescriptor.Spot(
+                new SceneEdit.SetLight(lights.get(1), context.scene(), new LightDescriptor.Spot(
                         0, 66, 0, 0, -1, 0, 24, 0.35, 500, 450, 400)),
-                new LightChannel.SetLight(lights.get(2), context.scene(), new LightDescriptor.Distant(
-                        0, 1, 0, 100_000, 95_000, 90_000, 0.00465, false)))));
+                new SceneEdit.SetLight(lights.get(2), context.scene(), new LightDescriptor.Distant(
+                        0, 1, 0, 100_000, 95_000, 90_000, 0.00465, false))));
         selections = new ShowcaseHandoff.Selections(programs.exports(), lights, programs::ready);
         handoff.publish(context.scene(), selections);
         programs.whenReady(this::publishEnvironment);
@@ -51,10 +51,10 @@ final class ShowcaseSelectionContribution implements MinecraftWorldSessionContri
         if (stopped) return;
         stopped = true;
         handoff.remove(context.scene(), selections);
-        context.renderSession().lights().submit(RetainedBatch.of(lights.stream()
-                .map(LightChannel.DropLight::new)
-                .map(LightChannel.Operation.class::cast)
-                .toList()));
+        context.renderSession().scene().edit(lights.stream()
+                .map(SceneEdit.DropLight::new)
+                .map(SceneEdit.class::cast)
+                .toList());
         programs.close();
     }
 

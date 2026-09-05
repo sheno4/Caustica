@@ -63,29 +63,6 @@ final class RtRetainedSceneLifetimeTest {
     }
 
     @Test
-    void blasBuildUseReleasesScratchAndSourceGenerationTogetherAfterCompute() {
-        List<String> events = new ArrayList<>();
-
-        RtRetainedSceneBackend.releaseBuildUseResources(
-                () -> events.add("scratch"), List.of(() -> events.add("source generation")));
-
-        assertEquals(List.of("scratch", "source generation"), events);
-    }
-
-    @Test
-    void blasBuildUseStillReleasesSourceWhenScratchReleaseFails() {
-        AtomicInteger sourceReleases = new AtomicInteger();
-        RuntimeException scratchFailure = new RuntimeException("scratch");
-
-        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
-                RtRetainedSceneBackend.releaseBuildUseResources(
-                        () -> { throw scratchFailure; }, List.of(sourceReleases::incrementAndGet)));
-
-        assertSame(scratchFailure, thrown);
-        assertEquals(1, sourceReleases.get());
-    }
-
-    @Test
     void terminalFrameRootsRetireDisplacedSnapshotBeforeContributionDrain() {
         AtomicInteger retirements = new AtomicInteger();
         SharedResource<String> published = SharedResource.owned(

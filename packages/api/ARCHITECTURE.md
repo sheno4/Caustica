@@ -50,10 +50,10 @@ acceleration structure, and an optional selected environment binding. With no se
 built-in environment fallback. Multiple scenes may be resident at the same time.
 
 `SceneId` is an opaque, same-session, non-owning reference. Geometry and light operations may name an id
-explicitly handed to their contribution, but possession grants no creation, environment-selection, or
+explicitly handed to their contribution, but possession grants no scene creation or
 removal authority and does not extend the scene lifetime. The Minecraft integration owns those operations
-for the rendered dimensions. An environment package exports `EnvironmentBinding` values to that integration;
-it does not mutate scenes directly.
+for the rendered dimensions. Environment bindings may be selected atomically through `SceneEdit.SetEnvironment`; the Minecraft host
+also provides a scoped selector for its dimension environment.
 
 The camera is not scene state. A rendered view is:
 
@@ -72,27 +72,33 @@ lifetime; each trace root still selects exactly one TLAS. Simultaneous portal tr
 and concrete behavior for visibility, recursion, transforms, lighting, and lifetime before it can earn a
 public type.
 
-## Retained scene updates
+## Mesh preparation and atomic scene edits
 
-`GeometryChannel` and `LightChannel` hold asynchronous retained state. `MeshId`, `InstanceId`, and `LightId`
-are mutation capabilities local to their issuing contribution. A same-session `LightId` may additionally cross
-an owner boundary as a non-owning `PrimitiveLightMap` selection; it grants no mutation authority, never pins its
-issuer, and becomes non-sampleable when absent. `SceneId`, `SurfaceId`, `VolumeId`, and `EnvironmentId` are
-non-owning selection references which may cross contribution boundaries through an explicit typed Java handoff.
-A stale program reference selects its documented error/vacuum fallback.
+`MeshPreparer.prepare` asynchronously builds an immutable `ReadyMesh<N>`. Its future completes only when
+native preparation finishes. Preparation captures the input resource references before returning; callers
+may then release their own claims. An optional ready mesh supplies compatible refit input without modifying
+that mesh. GPU-generated inputs must finish their `GpuComputeQueue` job before preparation begins.
 
-Each accepted `RetainedBatch` publishes as a unit and keeps its source-owned data borrowed until the batch's
-values are replaced, dropped, cascaded, or removed with the contribution. A content worker may submit an
-infrequent retained change directly. The renderer consumes accepted changes in order at its publication
-boundaries; there is no public camera-timed scene callback. Dynamic geometry reuses issued mesh and instance
-IDs and replaces or drops their retained values, so it needs no separate transient lifetime.
+A ready mesh is a shared owning reference. `retain()` creates another independent claim, and closing a
+claim releases it. Placements and captured frames retain their own claims, so a producer can close its
+claim after publication. The final release retires native geometry and its input dependencies. A ready mesh
+may be shared by multiple placements, scenes, and contributions in the same render session.
 
-GPU-visible memory is different: a worker prepares a private replacement and submits its transfer or compute
-initialization through `GpuComputeQueue`. Its terminal callback seals and publishes the immutable generation;
-failed or cancelled work drops it. World-resource passes remain appropriate for recurring work ordered inside
-a frame, not for one-shot producer initialization or for submitting retained geometry and lights. Minecraft
-render interpolation and other host-owned per-frame extraction remain integration work rather than a core
-extension contract.
+`SceneChannel.edit(List<? extends SceneEdit>)` validates and applies one atomic edit containing ready mesh
+placements, transforms, removals, lights, and environment selections. It performs no native mesh preparation
+or GPU submission. A frame captures the resulting coherent scene state. There is no pending publication or
+visibility receipt. Producers keep their current placements until replacements are ready; neighboring
+Minecraft sections can therefore switch together in one edit while unrelated transforms continue changing.
+
+`InstanceId` and `LightId` grant mutation authority only to their issuing contribution. A same-session
+`LightId` may cross contributions as a non-owning `PrimitiveLightMap` selection; absent lights become
+non-sampleable. Scene and program IDs are non-owning selections. Unavailable programs use their documented
+fallback and begin resolving to the ready implementation without requiring another mesh preparation.
+
+A producer decides whether a completed replacement is still wanted and closes obsolete results. Closing
+a contribution removes its placements and selections and drains accepted preparation before device teardown.
+Recurring work required by a frame belongs in a world-resource pass. Private transfer or compute
+initialization belongs in `GpuComputeQueue`, followed by mesh preparation and a direct scene edit.
 
 ## Program composition and the shader ABI
 
@@ -126,10 +132,12 @@ acceptance order: one bad set cannot fail another publishable set, and unaffecte
 against the last successful composition. Registration close and readiness publication are linearized, so a
 pending close which wins cannot be followed by publication.
 
-Surface and volume definitions attach retirement callbacks to their typed `implementationData` roots when
-declared. Closing the registration needs no new callback: every accepted root retires after the set is
-removed or abandoned and its active and in-flight program uses drain. Environment implementations have no
-implementation root because each `EnvironmentBinding` owns and retires its own `bindingData`.
+Surface and volume definitions carry shared `ResourceRef` dependencies in their typed
+`implementationData`. Geometry slots, placement data, and environment bindings carry the same form of
+opaque-data dependency. Providers create owning claims with `ResourceFactory` and supply final-release
+callbacks. The engine retains claims while programs, scenes, or frames reference the data; callbacks run
+after the final claim ends. Closing a program registration removes its implementations without invalidating
+resources still retained by an in-flight frame.
 
 The opaque 64-bit vocabulary follows ownership depth consistently:
 
@@ -138,7 +146,7 @@ The opaque 64-bit vocabulary follows ownership depth consistently:
 | `compositionData` | Engine-generated `ShaderRootData` | Root table for the active composed program |
 | `implementationData` | `ShaderData<?>` in `SurfaceDefinition<B, N>` / `VolumeDefinition<B, N>` | State shared by every binding of one registered implementation |
 | `bindingData` | `ShaderData<B>` in a typed surface/volume slot or environment binding | State for one geometry slot or scene environment binding |
-| `instanceData` | `ShaderData<N>` in `GeometryChannel.SetInstance<N>` | State for one mesh placement; `newMesh(ShaderDataType<N>)` fixes the ID's runtime schema and `MeshId<N>` ensures all slots accept it |
+| `instanceData` | `ShaderData<N>` in `SceneEdit.SetInstance<N>` | State for one mesh placement; `MeshPreparer.prepare(ShaderDataType<N>, ...)` fixes the schema shared by its slots and placements |
 
 Each registration describes one complete accepted program set. It becomes `READY` only when an active world
 program contains the whole set, `FAILED` when none of the set can publish, or `CANCELLED` when the owner
@@ -299,9 +307,8 @@ general scene mutation.
 The main artifact is Vulkan-native while remaining independent of Minecraft and loader lifecycle:
 
 - `api.session`: render-session ownership and teardown.
-- `api.retained`: opaque retained identities and atomic retained batches.
-- `api.scene`: non-owning scene identity and environment-binding values.
-- `api.geometry`, `api.light`: session-retained world contributions.
+- `api.scene`: scene identity, environment bindings, and atomic scene edits.
+- `api.geometry`, `api.light`: immutable ready meshes, preparation, placements, and light descriptors.
 - `api.view`: immutable camera state associated with one entry scene and containing medium.
 - `api.program`: composed-world Slang inputs and non-blocking compilation observation.
 - `api.pass`: GPU frame-recording stages, including post effects and UI.

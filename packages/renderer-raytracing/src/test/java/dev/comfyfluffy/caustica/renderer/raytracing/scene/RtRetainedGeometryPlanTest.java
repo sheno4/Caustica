@@ -54,7 +54,7 @@ final class RtRetainedGeometryPlanTest {
         var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
                 1, build, List.of(
                 new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
-                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)));
+                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)), null);
         var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
                 1, new dev.comfyfluffy.caustica.api.scene.SceneId() { }, 1,
                 GeometryTransform.translation(0, 0, 0), 0xff, BINDING.data(0), List.of());
@@ -84,7 +84,7 @@ final class RtRetainedGeometryPlanTest {
         var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
                 1, build, List.of(
                 new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
-                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)));
+                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)), null);
         var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
                 1, new dev.comfyfluffy.caustica.api.scene.SceneId() { }, 1,
                 GeometryTransform.translation(0, 0, 0), 0xff, BINDING.data(0), List.of());

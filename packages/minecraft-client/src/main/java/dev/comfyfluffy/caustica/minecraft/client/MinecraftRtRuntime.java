@@ -684,7 +684,8 @@ public final class MinecraftRtRuntime {
             try {
                 world = new MinecraftEngineWorldSession(apiHost(),
                         minecraftSessionHost, context, context.gpuExecutor(),
-                        programs, scenes, passes, dimension, resourcePackEpoch,
+                        programs, scenes, new dev.comfyfluffy.caustica.renderer.raytracing.scene.RtMeshPreparer(context),
+                        passes, dimension, resourcePackEpoch,
                         failure -> LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(context, programs, scenes, passes,
                         world.services(), presenter, rayReconstruction,

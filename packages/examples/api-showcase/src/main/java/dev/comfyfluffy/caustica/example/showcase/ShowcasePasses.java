@@ -1,6 +1,9 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
@@ -24,10 +27,7 @@ import org.lwjgl.vulkan.VkOffset2D;
 import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
-import org.lwjgl.vulkan.VkDependencyInfo;
-import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
 
 import java.io.IOException;
@@ -37,8 +37,6 @@ import java.util.List;
 import java.util.function.BooleanSupplier;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-import static org.lwjgl.vulkan.KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 
 final class ShowcasePasses {
     private static final int COLOR_WRITE_RGBA = VK10.VK_COLOR_COMPONENT_R_BIT | VK10.VK_COLOR_COMPONENT_G_BIT
@@ -61,9 +59,9 @@ final class ShowcasePasses {
 
     private ShowcasePasses() { }
 
-    static Pass<PassFrame> worldResource(GpuDevice gpu, ResourceFactory resources,
+    static Pass<PassFrame> worldResource(GpuDevice gpu, ResourceFactory resources, GpuComputeQueue compute,
                                          BooleanSupplier programReady, ShowcaseScene scene) {
-        return worldResource(programReady, new VulkanWorldMeshHandoff(gpu, resources, scene));
+        return worldResource(programReady, new VulkanWorldMeshHandoff(gpu, resources, compute, scene));
     }
 
     static Pass<PassFrame> worldResource(BooleanSupplier programReady, WorldMeshHandoff handoff) {
@@ -81,9 +79,9 @@ final class ShowcasePasses {
     }
 
     interface WorldMeshHandoff extends AutoCloseable {
-        /** True only after the accepted geometry publication is visible in the native scene. */
+        /** True after the prepared geometry has been placed in the scene. */
         boolean published();
-        /** Advances upload, submission, or receipt polling without submitting the retained mesh twice. */
+        /** Starts asynchronous upload and mesh preparation once. */
         void recordAndPublish(PassFrame frame);
         @Override void close();
     }
@@ -97,69 +95,77 @@ final class ShowcasePasses {
         private final GpuDevice gpu;
         private final ResourceFactory resources;
         private final ShowcaseScene scene;
-        private VmaMappedBuffer upload;
-        private boolean uploadRecorded;
-        private boolean uploadSubmitted;
-        private boolean uploadComplete;
-        private boolean closed;
-        private RetainedPublication publication;
+        private final GpuComputeQueue compute;
+        private CompletableFuture<Void> publication;
 
-        private VulkanWorldMeshHandoff(GpuDevice gpu, ResourceFactory resources, ShowcaseScene scene) {
-            this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
-            this.resources = java.util.Objects.requireNonNull(resources, "resources");
-            this.scene = java.util.Objects.requireNonNull(scene, "scene");
+        private VulkanWorldMeshHandoff(GpuDevice gpu, ResourceFactory resources,
+                                       GpuComputeQueue compute, ShowcaseScene scene) {
+            this.gpu = gpu;
+            this.resources = resources;
+            this.compute = compute;
+            this.scene = scene;
         }
 
         @Override public boolean published() {
-            return publication != null && publication.isVisible();
+            if (publication == null || !publication.isDone()) return false;
+            publication.join();
+            return true;
         }
 
         @Override
         public void recordAndPublish(PassFrame frame) {
             if (publication != null) return;
-            if (uploadRecorded) {
-                if (!uploadComplete) return;
-                VmaMappedBuffer accepted = upload;
-                ResourceOwner generation = resources.create(accepted::close);
-                upload = null;
-                publication = scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
-                        accepted.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), generation);
+            CompletableFuture<Void> result = new CompletableFuture<>();
+            publication = result;
+            VmaMappedBuffer upload = VmaMappedBuffer.createAsync(gpu, TOTAL_BYTES,
+                    VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                            | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                    "API showcase retained mesh");
+            ResourceOwner producer;
+            try { producer = resources.create(upload::close); }
+            catch (Throwable failure) {
+                upload.close();
+                result.completeExceptionally(failure);
                 return;
             }
-            if (upload == null) {
-                upload = VmaMappedBuffer.create(gpu, TOTAL_BYTES,
-                        VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                                | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                        "API showcase retained mesh");
-            }
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                ByteBuffer data = stack.calloc(TOTAL_BYTES);
-                putTrianglePositions(data, 0);
-                for (int triangle = 0; triangle < 4; triangle++) {
-                    int base = INDEX_OFFSET + triangle * 3 * Integer.BYTES;
-                    data.putInt(base, 0).putInt(base + Integer.BYTES, 1)
-                            .putInt(base + Integer.BYTES * 2, 2);
+            try (producer) {
+                ResourceOwner pending = producer.retain();
+                try {
+                    compute.submit(commandBuffer -> {
+                        try (MemoryStack stack = MemoryStack.stackPush()) {
+                            ByteBuffer data = stack.calloc(TOTAL_BYTES);
+                            putTrianglePositions(data, 0);
+                            for (int triangle = 0; triangle < 4; triangle++) {
+                                int base = INDEX_OFFSET + triangle * 3 * Integer.BYTES;
+                                data.putInt(base, 0).putInt(base + Integer.BYTES, 1)
+                                        .putInt(base + Integer.BYTES * 2, 2);
+                            }
+                            VK10.vkCmdUpdateBuffer(commandBuffer, upload.buffer(), 0L, data);
+                        }
+                    }, List.of(pending), completion -> {
+                        if (result.isCancelled()) return;
+                        if (completion instanceof GpuComputeCompletion.Failed failed) {
+                            result.completeExceptionally(failed.failure());
+                        } else if (completion instanceof GpuComputeCompletion.Cancelled) {
+                            result.completeExceptionally(new CancellationException("Mesh upload cancelled"));
+                        } else {
+                            try {
+                                scene.publishMesh(upload.deviceRange().slice(0, POSITION_BYTES),
+                                        upload.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), pending.retain())
+                                        .whenComplete((ignored, failure) -> {
+                                            if (failure == null) result.complete(null);
+                                            else result.completeExceptionally(failure);
+                                        });
+                            } catch (Throwable failure) {
+                                result.completeExceptionally(failure);
+                            }
+                        }
+                    });
+                } catch (Throwable failure) {
+                    pending.close();
+                    result.completeExceptionally(failure);
                 }
-                VK10.vkCmdUpdateBuffer(frame.commandBuffer(), upload.buffer(), 0L, data);
-                VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
-                        .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
-                        .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                        .dstStageMask(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR)
-                        .dstAccessMask(VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-                VK14.vkCmdPipelineBarrier2(frame.commandBuffer(),
-                        VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
             }
-            uploadRecorded = true;
-            uploadSubmitted = false;
-            frame.gpuUse().whenSubmitted(() -> uploadSubmitted = true);
-            frame.gpuUse().whenComplete(() -> {
-                if (uploadSubmitted) uploadComplete = true;
-                else uploadRecorded = false;
-                if (closed && upload != null) {
-                    upload.close();
-                    upload = null;
-                }
-            });
         }
 
         private static void putTrianglePositions(ByteBuffer target, int offset) {
@@ -172,11 +178,7 @@ final class ShowcasePasses {
 
         @Override
         public void close() {
-            closed = true;
-            if ((!uploadRecorded || uploadComplete) && upload != null) {
-                upload.close();
-                upload = null;
-            }
+            if (publication != null) publication.cancel(false);
         }
     }
 

@@ -134,6 +134,35 @@ final class RtTerrainPublicationBackpressureTest {
         assertTrue(terrain.sections.get(1L).ready);
     }
 
+    @Test
+    void supersededAndClearedGroupsReleasePreparedResourcesExactlyOnce() {
+        var discarded = new java.util.ArrayList<String>();
+        var terrain = new TerrainUpdates<String>(discarded::add);
+        terrain.want(1L);
+        terrain.want(2L);
+        terrain.rebuild(List.of(1L, 2L));
+        terrain.complete(terrain.sections.get(1L).request, "prepared A");
+        terrain.complete(terrain.sections.get(2L).request, "prepared B");
+        terrain.rebuild(List.of(1L, 2L));
+        assertEquals(java.util.Set.of("prepared A", "prepared B"), java.util.Set.copyOf(discarded));
+        assertEquals(2, discarded.size());
+        terrain.complete(terrain.sections.get(1L).request, "prepared C");
+        terrain.clear();
+        assertEquals(3, discarded.size());
+        assertEquals("prepared C", discarded.getLast());
+    }
+
+    @Test
+    void acceptedEditTransfersPreparedOwnershipWithoutDiscardingIt() {
+        var discarded = new java.util.ArrayList<String>();
+        var terrain = new TerrainUpdates<String>(discarded::add);
+        terrain.want(1L);
+        terrain.complete(terrain.sections.get(1L).request, "prepared A");
+        terrain.published(terrain.ready(8, section -> section.key));
+        terrain.clear();
+        assertTrue(discarded.isEmpty());
+    }
+
     private static TerrainUpdates<String> published(long... keys) {
         var terrain = new TerrainUpdates<String>();
         for (long key : keys) {

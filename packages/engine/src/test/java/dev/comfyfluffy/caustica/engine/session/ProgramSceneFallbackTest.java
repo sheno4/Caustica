@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.session;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
+import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -10,7 +11,6 @@ import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
@@ -19,7 +19,6 @@ import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
-import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
 import org.junit.jupiter.api.Test;
@@ -61,12 +60,11 @@ final class ProgramSceneFallbackTest {
         CapturingSceneBackend scenesBackend = new CapturingSceneBackend();
         SceneDirectory scenes = new SceneDirectory(
                 programs, resources,
-                scenesBackend, failure -> { throw new AssertionError(failure); });
-        scenes.createScene();
-        var geometry = scenes.openGeometry(new ContributionOwner(2));
-        var mesh = geometry.newMesh(INSTANCE);
-        geometry.submit(RetainedBatch.of(List.of(
-                new GeometryChannel.SetMesh<>(mesh, mesh(registration.exports())))));
+                scenesBackend, (input, source) -> java.util.concurrent.CompletableFuture.completedFuture(ResourceRef.none().retain()));
+        var scene = scenes.createScene();
+        var geometry = scenes.openChannel(new ContributionOwner(2));
+        var mesh = geometry.prepare(INSTANCE,mesh(registration.exports())).join();
+        geometry.edit(List.of(new SceneEdit.SetInstance<>(geometry.newInstance(),scene,mesh,GeometryTransform.translation(0,0,0),255,INSTANCE.data(0))));
 
         assertEquals(2, scenesBackend.snapshots.size());
         RetainedSceneSnapshot published = scenesBackend.snapshots.getLast();
@@ -86,6 +84,28 @@ final class ProgramSceneFallbackTest {
         assertEquals(retainedMesh.identity(), scenes.snapshot().meshes().getFirst().identity());
         assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1, 1),
                 scenesBackend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
+    }
+
+    @Test
+    void preparedMeshStartsUsingProgramAfterCompilationWithoutAnotherSceneEdit() {
+        var resources=new ResourceDirectory(failure->{throw new AssertionError(failure);});
+        var programs=new ProgramSession(resources,new ImmediateProgramBackend(),failure->{throw new AssertionError(failure);});
+        var registration=programs.openChannel(new ContributionOwner(1)).register(builder->new Exports(
+            builder.surface(new SurfaceDefinition<>(shader("surface","test.Surface"),shader("coverage","test.Coverage"),
+                IMPLEMENTATION.data(0),BINDING,INSTANCE)),
+            builder.volume(new VolumeDefinition<>(shader("volume","test.Volume"),IMPLEMENTATION.data(0),BINDING,INSTANCE))));
+        var backend=new CapturingSceneBackend();
+        var scenes=new SceneDirectory(programs,resources,backend,
+            (input,source)->java.util.concurrent.CompletableFuture.completedFuture(ResourceRef.none().retain()));
+        var scene=scenes.createScene();var channel=scenes.openChannel(new ContributionOwner(2));
+        var ready=channel.prepare(INSTANCE,mesh(registration.exports())).join();
+        channel.edit(List.of(new SceneEdit.SetInstance<>(channel.newInstance(),scene,ready,
+            GeometryTransform.translation(0,0,0),255,INSTANCE.data(0))));
+        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
+        progress(programs);scenes.progress();
+        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1,1),backend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
+        registration.close();progress(programs);scenes.progress();
+        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
     }
 
     private static void progress(ProgramSession programs) {
@@ -139,14 +159,9 @@ final class ProgramSceneFallbackTest {
         private final List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
 
         @Override
-        public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
+        public void apply(RetainedSceneSnapshot snapshot) {
             snapshots.add(snapshot);
-            published.run();
         }
 
-        @Override
-        public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
-            published.run();
-        }
     }
 }

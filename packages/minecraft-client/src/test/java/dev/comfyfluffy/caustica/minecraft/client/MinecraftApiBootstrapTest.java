@@ -2,10 +2,10 @@ package dev.comfyfluffy.caustica.minecraft.client;
 
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
@@ -62,9 +62,8 @@ final class MinecraftApiBootstrapTest {
 
         MinecraftWorldSession session = minecraftHost.openSession(
                 owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
-                    @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication select(
+                    @Override public void select(
                             dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
-                        return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
                     }
                     @Override public void invalidate() { }
                     @Override public void drain() { }
@@ -112,9 +111,8 @@ final class MinecraftApiBootstrapTest {
         session.processPendingChanges();
         MinecraftWorldSession minecraftSession = minecraftHost.openSession(
                 owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
-                    @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication select(
+                    @Override public void select(
                             dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
-                        return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
                     }
                     @Override public void invalidate() { }
                     @Override public void drain() { }
@@ -168,8 +166,8 @@ final class MinecraftApiBootstrapTest {
         @Override public GpuComputeQueue compute() { return null; }
         @Override public ProgramChannel program() { return null; }
         @Override public PassChannel passes() { return null; }
-        @Override public GeometryChannel geometry() { return null; }
-        @Override public LightChannel lights() { return null; }
+        @Override public MeshPreparer meshes() { return null; }
+        @Override public SceneChannel scene() { return null; }
         @Override public dev.comfyfluffy.caustica.api.resource.ResourceFactory resources() { return null; }
         @Override public void quiesce() { }
         @Override public void invalidate() { }

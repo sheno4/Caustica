@@ -5,9 +5,8 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
@@ -21,7 +20,6 @@ import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
-import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -51,12 +49,11 @@ final class EngineSessionServicesTest {
             programChannels.add(context.program());
             context.passes().addWorldResourcePass(setup -> pass(
                     () -> events.add("first:record"), () -> events.add("first:pass-close")));
-            var mesh = context.geometry().newMesh(ShaderDataType.create("stop-time mesh"));
+            var instance = context.scene().newInstance();
             return new RenderSessionContribution() {
                 @Override public void stop() {
                     events.add("first:stop");
-                    context.geometry().submit(RetainedBatch.of(
-                            List.of(new GeometryChannel.DropMesh<>(mesh))));
+                    context.scene().edit(List.of(new SceneEdit.DropInstance(instance)));
                 }
                 @Override public void close() { events.add("first:close"); }
             };
@@ -97,8 +94,8 @@ final class EngineSessionServicesTest {
 
         assertSame(GPU, first.gpu());
         assertSame(GPU, second.gpu());
-        assertNotSame(first.geometry(), second.geometry());
-        assertNotSame(first.lights(), second.lights());
+        assertNotSame(first.meshes(), second.meshes());
+        assertNotSame(first.scene(), second.scene());
         assertNotSame(first.passes(), second.passes());
         assertNotSame(first.compute(), second.compute());
         assertNotSame(first.resources(), second.resources());
@@ -140,14 +137,10 @@ final class EngineSessionServicesTest {
             @Override public void drainPublishedUses() { }
         };
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published) {
-                published.run();
-            }
-            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published) {
-                published.run();
+            @Override public void apply(RetainedSceneSnapshot snapshot) {
             }
         };
-        return new EngineSessionServices(GPU, COMPUTE, programs, scenes, passes,
+        return new EngineSessionServices(GPU, COMPUTE, programs, scenes, (mesh, source) -> { throw new AssertionError(); }, passes,
                 failure -> { throw new AssertionError(failure); },
                 failure -> { throw new AssertionError(failure); },
                 (pass, failure) -> { throw new AssertionError(failure); });

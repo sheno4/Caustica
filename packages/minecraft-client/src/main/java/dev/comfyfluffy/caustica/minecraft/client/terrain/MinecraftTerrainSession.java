@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -42,14 +42,14 @@ public final class MinecraftTerrainSession {
     }
 
     /** Installs the atomic program exports and begins targeting the borrowed world scene. */
-    public void bind(MinecraftPrograms programs, GeometryChannel channel, LightChannel lights, SceneId scene) {
+    public void bind(MinecraftPrograms programs, MeshPreparer meshes, SceneChannel channel, SceneId scene) {
         if (geometry != null) throw new IllegalStateException("terrain session is already bound");
         var atlas = textures.contributeAtlas(TextureAtlas.LOCATION_BLOCKS);
         var borrowed = java.util.Objects.requireNonNull(textures.resolve(atlas),
                 "Minecraft block atlas must be available to terrain");
         var uploader = new MinecraftVulkanTerrainUploader(gpu, programs, borrowed, resources);
         try {
-            var next = new MinecraftTerrainGeometry(channel, lights, scene, uploader);
+            var next = new MinecraftTerrainGeometry(meshes, channel, scene, uploader);
             terrain.bindGeometry(next);
             geometry = next;
         } catch (RuntimeException | Error failure) {

@@ -16,6 +16,10 @@ final class TerrainUpdates<T> {
     final Long2ObjectOpenHashMap<Section<T>> sections = new Long2ObjectOpenHashMap<>();
     private final LinkedHashSet<Group<T>> groups = new LinkedHashSet<>();
 
+    private final java.util.function.Consumer<T> discard;
+    TerrainUpdates() { this(value -> { }); }
+    TerrainUpdates(java.util.function.Consumer<T> discard) { this.discard = discard; }
+
     void want(long key) {
         Section<T> section = sections.get(key);
         if (section != null && section.wanted) return;
@@ -55,7 +59,11 @@ final class TerrainUpdates<T> {
             members.add(key);
             if (section.request != null) {
                 Group<T> old = section.request.group;
-                groups.remove(old);
+                if (groups.remove(old)) {
+                    for (Request<T> request : old.requests) {
+                        if (request.result != null) discard.accept(request.result);
+                    }
+                }
                 for (Request<T> request : old.requests) members.add(request.section.key);
             }
         }
@@ -126,6 +134,11 @@ final class TerrainUpdates<T> {
     }
 
     void clear() {
+        for (Group<T> group : groups) {
+            for (Request<T> request : group.requests) {
+                if (request.result != null) discard.accept(request.result);
+            }
+        }
         for (Section<T> section : sections.values()) section.request = null;
         sections.clear();
         groups.clear();

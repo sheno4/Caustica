@@ -39,6 +39,9 @@ public final class ResourceOwners implements AutoCloseable {
         }
     }
 
+    /** Borrow a captured claim while this collection remains retained. */
+    public synchronized ResourceOwner borrowed(ResourceRef reference) { return owners.get(reference); }
+
     @Override public synchronized void close() {
         owners.values().forEach(ResourceOwner::close);
         owners.clear();

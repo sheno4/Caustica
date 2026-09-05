@@ -1,24 +1,21 @@
 package dev.comfyfluffy.caustica.example.gltfviewer;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfPrimitiveUploader;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfProgramExports;
@@ -49,7 +46,8 @@ final class GltfWorldContributionTest {
                 List.of(new GltfScene.Placement(0, identity())));
         GltfViewerAssetRepository assets = new GltfViewerAssetRepository(() -> scene);
         List<String> stopOrder = new ArrayList<>();
-        CaptureGeometry geometry = new CaptureGeometry(stopOrder);
+        TestScene geometry = new TestScene();
+        geometry.onEdit = () -> stopOrder.add("geometry");
         TestResources resources = new TestResources();
         AtomicInteger destroyed = new AtomicInteger();
         FakeUploader uploader = new FakeUploader(destroyed);
@@ -63,40 +61,89 @@ final class GltfWorldContributionTest {
         contribution.resourcePackChanged(new ResourcePackEpoch(2));
 
         assertEquals(1, geometry.batches.size());
-        assertEquals(2, count(geometry.last(), GeometryChannel.SetMesh.class));
-        assertEquals(2, count(geometry.last(), GeometryChannel.SetInstance.class));
-        GeometryChannel.SetInstance<?> authored = geometry.last().operations().stream()
-                .filter(GeometryChannel.SetInstance.class::isInstance)
-                .map(GeometryChannel.SetInstance.class::cast).findFirst().orElseThrow();
+        assertEquals(2, geometry.builds.size());
+        assertEquals(2, count(geometry.last(), SceneEdit.SetInstance.class));
+        SceneEdit.SetInstance<?> authored = geometry.last().stream()
+                .filter(SceneEdit.SetInstance.class::isInstance)
+                .map(SceneEdit.SetInstance.class::cast).findFirst().orElseThrow();
         assertEquals(10.0, authored.transform().translationX());
         assertEquals(20.0, authored.transform().translationY());
         assertEquals(30.0, authored.transform().translationZ());
-        var authoredMesh = (GeometryChannel.SetMesh<?>) geometry.last().operations().stream()
-                .filter(GeometryChannel.SetMesh.class::isInstance).findFirst().orElseThrow();
-        assertSame(resources.generations.get(0).reference(), authoredMesh.build().positions().resource());
-        assertSame(resources.generations.get(1).reference(), authoredMesh.build().indices().resource());
+        var authoredMesh = geometry.builds.getFirst();
+        assertSame(resources.generations.get(0).reference(), authoredMesh.positions().resource());
+        assertSame(resources.generations.get(1).reference(), authoredMesh.indices().resource());
         assertSame(resources.generations.get(2).reference(),
-                authoredMesh.build().geometries().getFirst().surface().bindingData().resource());
+                authoredMesh.geometries().getFirst().surface().bindingData().resource());
 
-        var oldFrame = resources.generations.stream().map(ResourceOwner::retain).toList();
+        var oldFrame = resources.generations.stream().map(owner -> owner.reference().retain()).toList();
         contribution.resourcePackChanged(new ResourcePackEpoch(3));
-        assertEquals(2, count(geometry.last(), GeometryChannel.DropMesh.class));
-        assertEquals(2, count(geometry.last(), GeometryChannel.DropInstance.class));
-        assertEquals(2, count(geometry.last(), GeometryChannel.SetMesh.class));
+        assertEquals(2, count(geometry.last(), SceneEdit.DropInstance.class));
+        assertEquals(4, geometry.builds.size());
         assertEquals(0, destroyed.get());
-        assertFalse(geometry.publications.get(1).isVisible());
         oldFrame.forEach(ResourceOwner::close);
         assertEquals(6, destroyed.get());
 
         stopOrder.clear();
         contribution.stop();
-        assertEquals(2, count(geometry.last(), GeometryChannel.DropMesh.class));
-        assertEquals(2, count(geometry.last(), GeometryChannel.DropInstance.class));
+        assertEquals(2, count(geometry.last(), SceneEdit.DropInstance.class));
         assertEquals(1, registrationCloses.get());
         assertEquals(List.of("geometry", "program"), stopOrder);
-        assertFalse(geometry.publications.get(2).isVisible());
         assertEquals(12, destroyed.get());
         contribution.close();
+    }
+
+    @Test
+    void supersededPreparationWaitsForEveryMeshAndReleasesItsClaims() {
+        var geometry = new TestScene();
+        geometry.delayed = true;
+        var resources = new TestResources();
+        var destroyed = new AtomicInteger();
+        var contribution = contribution(geometry, resources, destroyed);
+        contribution.resourcePackChanged(new ResourcePackEpoch(2));
+        contribution.resourcePackChanged(new ResourcePackEpoch(3));
+        assertEquals(4, geometry.completions.size());
+        geometry.completions.get(0).run();
+        assertEquals(0, geometry.batches.size());
+        geometry.completions.get(1).run();
+        assertEquals(6, destroyed.get());
+        assertEquals(0, geometry.batches.size());
+        geometry.completions.get(2).run();
+        assertEquals(0, geometry.batches.size());
+        geometry.completions.get(3).run();
+        assertEquals(1, geometry.batches.size());
+        assertEquals(2, count(geometry.last(), SceneEdit.SetInstance.class));
+        contribution.stop();
+        contribution.close();
+        assertEquals(12, destroyed.get());
+    }
+
+    @Test
+    void preparationCompletingAfterStopDoesNotRestoreSceneInstances() {
+        var geometry = new TestScene();
+        geometry.delayed = true;
+        var resources = new TestResources();
+        var destroyed = new AtomicInteger();
+        var contribution = contribution(geometry, resources, destroyed);
+        contribution.resourcePackChanged(new ResourcePackEpoch(2));
+        contribution.stop();
+        assertEquals(0, destroyed.get());
+        geometry.complete();
+        assertEquals(1, geometry.batches.size());
+        assertEquals(0, count(geometry.last(), SceneEdit.SetInstance.class));
+        assertEquals(6, destroyed.get());
+        contribution.close();
+    }
+
+    private static GltfWorldContribution contribution(
+            TestScene geometry, TestResources resources, AtomicInteger destroyed) {
+        var authored = new GltfScene(List.of(new GltfScene.Primitive(
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                1, .5f, .25f, 1, .4f, 0, false, .5f)),
+                List.of(new GltfScene.Placement(0, identity())));
+        return new GltfWorldContribution(new WorldContext(geometry, resources),
+                registration(new AtomicInteger(), new ArrayList<>()),
+                new GltfViewerAssetRepository(() -> authored), new FakeUploader(destroyed),
+                () -> Set.of(new BlockPos(10, 20, 30)), () -> Set.of(new BlockPos(-2, 4, 8)));
     }
 
     private static ProgramRegistration<GltfProgramExports> registration(
@@ -110,44 +157,12 @@ final class GltfWorldContributionTest {
         };
     }
 
-    private static long count(RetainedBatch<GeometryChannel.Operation> batch, Class<?> type) {
-        return batch.operations().stream().filter(type::isInstance).count();
+    private static long count(List<SceneEdit> batch, Class<?> type) {
+        return batch.stream().filter(type::isInstance).count();
     }
 
     private static float[] identity() {
         return new float[]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    }
-
-    private static final class CaptureGeometry implements GeometryChannel {
-        private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
-        private final List<TestPublication> publications = new ArrayList<>();
-        private final List<String> order;
-        private CaptureGeometry(List<String> order) { this.order = order; }
-        @Override public <N> MeshId<N> newMesh(ShaderDataType<N> type) { return new MeshId<>() { }; }
-        @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
-                RetainedBatch<Operation> batch) {
-            batches.add(batch);
-            order.add("geometry");
-            TestPublication publication = new TestPublication();
-            publications.add(publication);
-            return publication;
-        }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
-                List<RetainedBatch<Operation>> accepted) {
-            batches.addAll(accepted);
-            order.add("geometry");
-            TestPublication publication = new TestPublication();
-            publications.add(publication);
-            return publication;
-        }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
-                List<RetainedBatch<Operation>> geometryBatches,
-                dev.comfyfluffy.caustica.api.light.LightChannel lights,
-                RetainedBatch<dev.comfyfluffy.caustica.api.light.LightChannel.Operation> lightBatch) {
-            throw new UnsupportedOperationException();
-        }
-        RetainedBatch<Operation> last() { return batches.getLast(); }
     }
 
     private static final class FakeUploader implements GltfPrimitiveUploader {
@@ -189,7 +204,7 @@ final class GltfWorldContributionTest {
         }
     }
 
-    private record WorldContext(CaptureGeometry geometry, ResourceFactory resources)
+    private record WorldContext(TestScene geometry, ResourceFactory resources)
             implements MinecraftWorldSessionContext {
         @Override public RenderSessionContext renderSession() {
             return new RenderSessionContext() {
@@ -197,8 +212,8 @@ final class GltfWorldContributionTest {
                 @Override public GpuComputeQueue compute() { return null; }
                 @Override public ProgramChannel program() { return null; }
                 @Override public PassChannel passes() { return null; }
-                @Override public GeometryChannel geometry() { return geometry; }
-                @Override public LightChannel lights() { return null; }
+                @Override public MeshPreparer meshes() { return geometry; }
+                @Override public SceneChannel scene() { return geometry; }
                 @Override public ResourceFactory resources() { return resources; }
             };
         }
@@ -208,23 +223,7 @@ final class GltfWorldContributionTest {
         }
         @Override public ResourcePackEpoch resourcePackEpoch() { return new ResourcePackEpoch(1); }
         @Override public MinecraftEnvironmentSelector environment() {
-            return binding -> dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
-        }
-    }
-
-    private static final class TestPublication
-            implements dev.comfyfluffy.caustica.api.retained.RetainedPublication {
-        private final List<Runnable> callbacks = new ArrayList<>();
-        private boolean visible;
-        @Override public boolean isVisible() { return visible; }
-        @Override public void whenVisible(Runnable callback) {
-            if (visible) callback.run();
-            else callbacks.add(callback);
-        }
-        void makeVisible() {
-            visible = true;
-            List.copyOf(callbacks).forEach(Runnable::run);
-            callbacks.clear();
+            return binding -> { };
         }
     }
 

@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
@@ -35,7 +34,7 @@ public final class RtTerrain {
     private final RtWorkerPool workers;
     private final MinecraftTelemetry.Instrumentation instrumentation;
     private final RtSectionSnapshots snapshots;
-    private final TerrainUpdates<Build> updates = new TerrainUpdates<>();
+    private final TerrainUpdates<Build> updates = new TerrainUpdates<>(Build::close);
     private final LongOpenHashSet columns = new LongOpenHashSet();
     private final ConcurrentLinkedQueue<List<Long>> dirty = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<Build> completed = new ConcurrentLinkedQueue<>();
@@ -45,7 +44,8 @@ public final class RtTerrain {
     private volatile boolean clearRequested;
     private volatile long epoch;
     private ClientLevel world;
-    private Submitted submitted;
+    private final ConcurrentLinkedQueue<Build> prepared = new ConcurrentLinkedQueue<>();
+    private final Object preparationLock = new Object();
     private int lowY;
     private int highY;
     private long lastFrame;
@@ -73,7 +73,10 @@ public final class RtTerrain {
     public void bindGeometry(MinecraftTerrainGeometry geometry) { this.geometry = geometry; }
 
     public void unbindGeometry(MinecraftTerrainGeometry geometry) {
-        if (this.geometry == geometry) this.geometry = null;
+        if (this.geometry == geometry) {
+            this.geometry = null;
+            reset();
+        }
     }
 
     public void publishMaterialLookup(MinecraftMaterialLookup lookup) {
@@ -99,14 +102,12 @@ public final class RtTerrain {
     }
 
     public void update() {
-        if (!settlePublication()) return;
         Minecraft mc = Minecraft.getInstance();
         ClientLevel nextWorld = mc.player == null ? null : mc.level;
         if (clearRequested || world != nextWorld) {
             clearRequested = false;
             reset();
             world = nextWorld;
-            if (!settlePublication()) return;
         }
         if (world == null || materials == null) return;
         synchronizeWindow(mc);
@@ -115,7 +116,6 @@ public final class RtTerrain {
     }
 
     public void frame() {
-        if (!settlePublication()) return;
         Minecraft mc = Minecraft.getInstance();
         if (clearRequested || world == null || mc.level != world || mc.player == null || materials == null) return;
         lastFrame = System.nanoTime();
@@ -174,6 +174,7 @@ public final class RtTerrain {
     }
 
     private void stream(Minecraft mc) {
+        if (geometry == null) return;
         MinecraftMaterialLookup lookup = materials;
         int limit = CausticaConfig.Rt.Terrain.COMPLETION_RESULTS_PER_PASS.value();
         for (int i = 0; i < limit; i++) {
@@ -183,6 +184,34 @@ public final class RtTerrain {
             if (build.epoch != epoch || !build.materialEpoch.equals(lookup.epoch())) continue;
             if (build.request.section.request != build.request) continue;
             if (build.failure != null) throw new IllegalStateException("Terrain extraction failed", build.failure);
+            if (build.cpu.mesh() == null) {
+                updates.complete(build.request, build);
+            } else if (geometry != null) {
+                long key = build.request.section.key;
+                int x = sectionX(key) << 4, y = sectionY(key) << 4, z = sectionZ(key) << 4;
+                var put = new MinecraftTerrainGeometry.Put(key, x, y, z, build.cpu.mesh(),
+                        MinecraftTerrainLightAdapter.describe(key, build.revision, x, y, z, build.cpu.lights()));
+                var preparation = geometry.prepare(put);
+                outstandingBuilds.incrementAndGet();
+                preparation.whenComplete((mesh, failure) -> {
+                    outstandingBuilds.decrementAndGet();
+                    var result = new Build(build.request, build.epoch, build.materialEpoch, build.revision,
+                            build.cpu, failure, build.extraction, build.ready, mesh);
+                    synchronized (preparationLock) {
+                        if (result.epoch != epoch) result.close();
+                        else prepared.add(result);
+                    }
+                });
+            }
+        }
+        for (int i = 0; i < limit; i++) {
+            Build build = prepared.poll();
+            if (build == null) break;
+            if (build.epoch != epoch || build.request.section.request != build.request) {
+                build.close();
+                continue;
+            }
+            if (build.failure != null) throw new IllegalStateException("Terrain mesh preparation failed", build.failure);
             updates.complete(build.request, build);
         }
         publishReady(mc);
@@ -263,34 +292,21 @@ public final class RtTerrain {
     }
 
     private void publishReady(Minecraft mc) {
-        if (submitted != null || geometry == null) return;
+        if (geometry == null) return;
         int cx = mc.player.getBlockX() >> 4, cy = mc.player.getBlockY() >> 4, cz = mc.player.getBlockZ() >> 4;
         var groups = updates.ready(PUBLICATION_BUDGET, section ->
                 (section.ready ? 0L : 1L << 60) + distance(section.key, cx, cy, cz));
         if (groups.isEmpty()) return;
-        var changes = new ArrayList<MinecraftTerrainGeometry.Change>();
+        var changes = new ArrayList<MinecraftTerrainGeometry.ReadyChange>();
         for (var group : groups) {
             for (var request : group.requests) {
-                long key = request.section.key;
                 Build build = request.result;
-                if (build == null || build.cpu.mesh() == null) {
-                    changes.add(new MinecraftTerrainGeometry.Drop(key));
-                } else {
-                    int x = sectionX(key) << 4, y = sectionY(key) << 4, z = sectionZ(key) << 4;
-                    changes.add(new MinecraftTerrainGeometry.Put(key, x, y, z, build.cpu.mesh(),
-                            MinecraftTerrainLightAdapter.describe(key, build.revision, x, y, z, build.cpu.lights())));
-                }
+                changes.add(build == null || build.prepared == null
+                        ? new MinecraftTerrainGeometry.Drop(request.section.key) : build.prepared);
             }
         }
-        submitted = new Submitted(groups, geometry.submit(changes));
-        settlePublication();
-    }
-
-    /** Accepted publication is serialized with later world edits until the scene has applied it. */
-    private boolean settlePublication() {
-        if (submitted == null) return true;
-        if (!submitted.receipt.isVisible()) return false;
-        for (var group : submitted.groups) {
+        geometry.edit(changes);
+        for (var group : groups) {
             for (var request : group.requests) {
                 if (request.result != null) {
                     instrumentation.published(request.result.extraction);
@@ -298,13 +314,15 @@ public final class RtTerrain {
                 }
             }
         }
-        updates.published(submitted.groups);
-        submitted = null;
-        return true;
+        updates.published(groups);
     }
 
     private void reset() {
-        epoch++;
+        synchronized (preparationLock) {
+            epoch++;
+            Build result;
+            while ((result = prepared.poll()) != null) result.close();
+        }
         updates.clear();
         snapshots.clear();
         columns.clear();
@@ -312,20 +330,23 @@ public final class RtTerrain {
         drainDiscardedBuilds();
         if (geometry != null) {
             var drops = geometry.sectionKeys().stream()
-                    .map(key -> (MinecraftTerrainGeometry.Change) new MinecraftTerrainGeometry.Drop(key)).toList();
-            if (!drops.isEmpty()) submitted = new Submitted(List.of(), geometry.submit(drops));
+                    .map(key -> (MinecraftTerrainGeometry.ReadyChange) new MinecraftTerrainGeometry.Drop(key)).toList();
+            if (!drops.isEmpty()) geometry.edit(drops);
         }
     }
 
     public void shutdown() {
-        epoch++;
+        synchronized (preparationLock) {
+            epoch++;
+            Build result;
+            while ((result = prepared.poll()) != null) result.close();
+        }
         workers.shutdown();
         updates.clear();
         drainDiscardedBuilds();
         dirty.clear();
         snapshots.clear();
         columns.clear();
-        submitted = null;
         world = null;
     }
 
@@ -359,7 +380,11 @@ public final class RtTerrain {
 
     private record Build(TerrainUpdates.Request<Build> request, long epoch, ResourcePackEpoch materialEpoch,
                          long revision, RtTerrainMesher.CpuSection cpu, Throwable failure,
-                         Object extraction, Object ready) { }
-
-    private record Submitted(List<TerrainUpdates.Group<Build>> groups, RetainedPublication receipt) { }
+                         Object extraction, Object ready, MinecraftTerrainGeometry.Prepared prepared) {
+        Build(TerrainUpdates.Request<Build> request, long epoch, ResourcePackEpoch materialEpoch,
+              long revision, RtTerrainMesher.CpuSection cpu, Throwable failure, Object extraction, Object ready) {
+            this(request, epoch, materialEpoch, revision, cpu, failure, extraction, ready, null);
+        }
+        void close() { if (prepared != null) prepared.close(); }
+    }
 }

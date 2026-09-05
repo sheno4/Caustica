@@ -33,11 +33,12 @@ public final class EngineWorldSession implements AutoCloseable {
             GpuComputeQueue compute,
             ProgramBackend programs,
             RetainedSceneBackend scenes,
+            dev.comfyfluffy.caustica.engine.scene.MeshPreparationBackend meshes,
             PassSchedulerBackend passes,
             Consumer<? super Throwable> failures) {
         Objects.requireNonNull(renderHost, "renderHost");
         Objects.requireNonNull(failures, "failures");
-        services = new EngineSessionServices(gpu, compute, programs, scenes, passes,
+        services = new EngineSessionServices(gpu, compute, programs, scenes, meshes, passes,
                 failures::accept, failures::accept, (pass, failure) -> failures.accept(failure));
         rootScene = services.scenes().createScene();
         EngineRenderSession openedRender = null;

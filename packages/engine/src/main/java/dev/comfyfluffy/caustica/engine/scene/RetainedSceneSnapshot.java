@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 
 import java.util.List;
 
-/** Immutable logical world publication consumed by later BLAS, TLAS, and light-upload backends. */
+/** Immutable scene values referencing prepared meshes. Frame capture retains independent resource claims. */
 public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh> meshes,
                                     List<Instance> instances, List<Light> lights) {
     public RetainedSceneSnapshot {
@@ -39,7 +39,8 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
         return true;
     }
 
-    public record Mesh(long identity, MeshBuild<?> build, List<GeometryPrograms> geometryPrograms) {
+    public record Mesh(long identity, MeshBuild<?> build, List<GeometryPrograms> geometryPrograms,
+                       dev.comfyfluffy.caustica.api.geometry.ReadyMesh<?> ready) {
         public Mesh {
             java.util.Objects.requireNonNull(build, "build");
             geometryPrograms = List.copyOf(geometryPrograms);

@@ -10,7 +10,7 @@ public interface MinecraftEntityUploader extends AutoCloseable {
 
     @Override default void close() { }
 
-    /** Resources owned by one retained entity mesh generation. */
+    /** Producer claim on upload buffers and instance data, kept until replacement or removal. */
     interface UploadedEntity extends AutoCloseable {
         MeshBuild<MinecraftProgramTypes.InstanceData> build();
         ShaderData<MinecraftProgramTypes.InstanceData> instanceData();

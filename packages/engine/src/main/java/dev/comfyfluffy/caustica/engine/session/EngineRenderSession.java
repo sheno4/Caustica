@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.engine.session;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
@@ -172,8 +172,8 @@ public final class EngineRenderSession implements AutoCloseable {
         @Override public GpuComputeQueue compute() { return scope.compute(); }
         @Override public ProgramChannel program() { return scope.program(); }
         @Override public PassChannel passes() { return scope.passes(); }
-        @Override public GeometryChannel geometry() { return scope.geometry(); }
-        @Override public LightChannel lights() { return scope.lights(); }
+        @Override public MeshPreparer meshes() { return scope.meshes(); }
+        @Override public SceneChannel scene() { return scope.scene(); }
         @Override public ResourceFactory resources() { return scope.resources(); }
     }
 }

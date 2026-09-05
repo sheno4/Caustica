@@ -1,9 +1,10 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.provider;
 
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
+import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.light.LightId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightFrame;
@@ -61,7 +62,7 @@ final class MinecraftLightProviderTest {
         provider.publish(celestial, helmet);
 
         assertEquals(1, channel.submissions.size());
-        assertEquals(3, channel.submissions.getFirst().operations().size());
+        assertEquals(3, channel.submissions.getFirst().size());
     }
 
     @Test
@@ -74,12 +75,12 @@ final class MinecraftLightProviderTest {
         provider.publish(emptyCelestial(), Optional.of(first));
 
         provider.publish(emptyCelestial(), Optional.of(replacement));
-        assertEquals(1, channel.submissions.getLast().operations().size());
-        assertTrue(channel.submissions.getLast().operations().getFirst() instanceof LightChannel.SetLight);
+        assertEquals(1, channel.submissions.getLast().size());
+        assertTrue(channel.submissions.getLast().getFirst() instanceof SceneEdit.SetLight);
 
         provider.publish(emptyCelestial(), Optional.empty());
-        assertEquals(1, channel.submissions.getLast().operations().size());
-        assertTrue(channel.submissions.getLast().operations().getFirst() instanceof LightChannel.DropLight);
+        assertEquals(1, channel.submissions.getLast().size());
+        assertTrue(channel.submissions.getLast().getFirst() instanceof SceneEdit.DropLight);
     }
 
     @Test
@@ -90,13 +91,13 @@ final class MinecraftLightProviderTest {
                 0.0, Math.PI, 128_000, 5, 0)), Optional.empty());
 
         provider.publish(emptyCelestial(), Optional.empty());
-        assertEquals(1, channel.submissions.getLast().operations().size());
-        assertTrue(channel.submissions.getLast().operations().getFirst() instanceof LightChannel.DropLight);
+        assertEquals(1, channel.submissions.getLast().size());
+        assertTrue(channel.submissions.getLast().getFirst() instanceof SceneEdit.DropLight);
 
         provider.publish(MinecraftLightProvider.celestialLights(frame(
                 Math.PI, 0.0, 128_000, 5, 0)), Optional.empty());
-        assertEquals(1, channel.submissions.getLast().operations().size());
-        assertTrue(channel.submissions.getLast().operations().getFirst() instanceof LightChannel.SetLight);
+        assertEquals(1, channel.submissions.getLast().size());
+        assertTrue(channel.submissions.getLast().getFirst() instanceof SceneEdit.SetLight);
     }
 
     @Test
@@ -105,9 +106,9 @@ final class MinecraftLightProviderTest {
         MinecraftLightProvider provider = provider(channel);
         provider.close();
 
-        var clear = channel.submissions.getLast().operations();
+        var clear = channel.submissions.getLast();
         assertEquals(3, clear.size());
-        assertTrue(clear.stream().allMatch(LightChannel.DropLight.class::isInstance));
+        assertTrue(clear.stream().allMatch(SceneEdit.DropLight.class::isInstance));
     }
 
     @Test
@@ -124,8 +125,8 @@ final class MinecraftLightProviderTest {
         provider.update();
 
         assertEquals(1, reads.get());
-        assertEquals(3, channel.submissions.getLast().operations().size());
-        assertTrue(channel.submissions.getLast().operations().getFirst() instanceof LightChannel.SetLight);
+        assertEquals(3, channel.submissions.getLast().size());
+        assertTrue(channel.submissions.getLast().getFirst() instanceof SceneEdit.SetLight);
     }
 
     private static MinecraftLightProvider.CelestialLights emptyCelestial() {
@@ -147,9 +148,10 @@ final class MinecraftLightProviderTest {
                 sunLux, moonLux, moonPhase, 0.1, Math.toRadians(0.6), Math.toRadians(1.5));
     }
 
-    private static final class RecordingLights implements LightChannel {
+    private static final class RecordingLights implements SceneChannel {
         private int issued;
-        private final ArrayList<RetainedBatch<Operation>> submissions = new ArrayList<>();
+        @Override public InstanceId newInstance() { return new InstanceId() { }; }
+        private final ArrayList<List<? extends SceneEdit>> submissions = new ArrayList<>();
 
         @Override
         public LightId newLight() {
@@ -158,7 +160,7 @@ final class MinecraftLightProviderTest {
         }
 
         @Override
-        public void submit(RetainedBatch<Operation> batch) {
+        public void edit(List<? extends SceneEdit> batch) {
             submissions.add(batch);
         }
     }

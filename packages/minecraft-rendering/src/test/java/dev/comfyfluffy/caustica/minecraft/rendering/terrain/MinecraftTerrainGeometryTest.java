@@ -1,16 +1,12 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.terrain;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.geometry.MeshId;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
@@ -20,6 +16,8 @@ import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightB
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
+import dev.comfyfluffy.caustica.minecraft.rendering.PreparedScene;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,183 +28,60 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftTerrainGeometryTest {
-    @Test
-    void placementAndNeeLightShareFreshIdentityUntilThePlacementRetires() {
-        var geometry = new RecordingChannel();
-        var lights = new RecordingLights();
-        var terrain = new MinecraftTerrainGeometry(
-                geometry, lights, new SceneId() { }, ignored -> new Uploaded(0x9000L));
-
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(
-                7L, 0, 0, 0, mesh(), emitterBatch(7L, 1L))));
-
-        var firstPlacement = assertInstanceOf(GeometryChannel.SetInstance.class,
-                geometry.batches.getFirst().operations().get(1));
-        LightId firstMapped = firstPlacement.primitiveLights().ranges().getFirst().light();
-        var firstLight = assertInstanceOf(LightChannel.SetLight.class,
-                geometry.lightBatches.getFirst().operations().getFirst());
-        assertSame(firstMapped, firstLight.light());
-        assertTrue(lights.batches.isEmpty());
-        assertEquals(0, firstPlacement.primitiveLights().ranges().getFirst().firstPrimitive());
-        assertEquals(1, firstPlacement.primitiveLights().ranges().getFirst().primitiveCount());
-
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(
-                7L, 0, 0, 0, mesh(), emitterBatch(7L, 2L))));
-        var secondPlacement = assertInstanceOf(GeometryChannel.SetInstance.class,
-                geometry.batches.get(1).operations().get(1));
-        LightId secondMapped = secondPlacement.primitiveLights().ranges().getFirst().light();
-        assertNotSame(firstMapped, secondMapped);
-        var replacementLights = geometry.lightBatches.get(1).operations();
-        var retiredLight = assertInstanceOf(LightChannel.DropLight.class, replacementLights.getFirst());
-        assertSame(firstMapped, retiredLight.light());
-        assertSame(secondMapped, assertInstanceOf(LightChannel.SetLight.class,
-                replacementLights.get(1)).light());
+    @Test void waitsForBothNeighborsAndPublishesLightsInTheSameEdit() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        var first = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 16, 0, 0, mesh(), emitterBatch(7, 1)));
+        var second = terrain.prepare(new MinecraftTerrainGeometry.Put(8, 32, 0, 0, mesh()));
+        scene.jobs.get(1).complete();
+        assertFalse(first.isDone());
+        assertTrue(scene.edits.isEmpty());
+        scene.jobs.get(0).complete();
+        terrain.edit(List.of(first.join(), second.join()));
+        assertEquals(1, scene.edits.size());
+        var placement = (SceneEdit.SetInstance<?>) scene.edits.getFirst().stream()
+                .filter(SceneEdit.SetInstance.class::isInstance).findFirst().orElseThrow();
+        var light = (SceneEdit.SetLight) scene.edits.getFirst().getFirst();
+        assertSame(light.light(), placement.primitiveLights().ranges().getFirst().light());
+        assertTrue(terrain.hasSection(7));
+        terrain.close();
+        assertEquals(1, scene.jobs.get(0).releases);
+        assertEquals(1, scene.jobs.get(1).releases);
     }
 
-    @Test
-    void replacementIsOneAtomicMeshAndPlacementBatchAndKeepsTheCurrentUpload() {
-        var channel = new RecordingChannel();
-        var upload = new Uploaded(0x1000L);
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> upload);
-
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(7L, 16, -32, 48, mesh())));
-
-        assertEquals(1, channel.batches.size());
-        var batch = channel.batches.getFirst();
-        assertInstanceOf(GeometryChannel.SetMesh.class, batch.operations().get(0));
-        var placement = assertInstanceOf(GeometryChannel.SetInstance.class, batch.operations().get(1));
-        assertEquals(16.0, placement.transform().translationX());
-        assertEquals(-32.0, placement.transform().translationY());
-        assertEquals(48.0, placement.transform().translationZ());
-        assertFalse(upload.closed);
-        channel.publication.makeVisible();
-        assertFalse(upload.closed);
-    }
-
-    @Test
-    void acceptedReplacementReleasesDisplacedUploadBeforeVisibility() {
-        var channel = new RecordingChannel();
-        var first = new Uploaded(0x1010L);
-        var second = new Uploaded(0x1020L);
+    @Test void rejectionKeepsOldSectionAndPreparedReplacementOwnedByCaller() {
+        var scene = new PreparedScene();
+        var first = new Uploaded(0x1000);
+        var second = new Uploaded(0x2000);
         var uploads = new java.util.ArrayDeque<>(List.of(first, second));
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { },
-                ignored -> uploads.removeFirst());
-
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(7L, 0, 0, 0, mesh())));
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(7L, 0, 0, 0, mesh())));
-
-        assertFalse(channel.publication.isVisible());
-        assertTrue(first.closed);
-        assertFalse(second.closed);
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Drop(7L)));
-        assertTrue(second.closed);
-    }
-
-    @Test
-    void transactionCoalescesASectionAndDropsMeshAndPlacementTogether() {
-        var channel = new RecordingChannel();
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> new Uploaded(0x2000L));
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh())));
-
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh()),
-                new MinecraftTerrainGeometry.Drop(2L)));
-
-        var operations = channel.batches.getLast().operations();
-        assertEquals(2, operations.size());
-        assertInstanceOf(GeometryChannel.DropInstance.class, operations.get(0));
-        assertInstanceOf(GeometryChannel.DropMesh.class, operations.get(1));
-    }
-
-    @Test
-    void groupsTransactionsIntoOnePublicationWithCurrentUploadOwnership() {
-        var channel = new RecordingChannel();
-        var first = new Uploaded(0x2100L);
-        var second = new Uploaded(0x2200L);
-        var uploads = new java.util.ArrayDeque<>(List.of(first, second));
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> uploads.removeFirst());
-
-        terrain.submitGroup(List.of(
-                List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh())),
-                List.of(new MinecraftTerrainGeometry.Put(3L, 16, 0, 0, mesh()))));
-
-        assertEquals(1, channel.groups.size());
-        assertEquals(2, channel.groups.getFirst().size());
-        channel.publication.makeVisible();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> uploads.remove());
+        var initial = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 0, 0, 0, mesh()));
+        scene.jobs.get(0).complete();
+        terrain.edit(List.of(initial.join()));
+        var replacement = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 0, 0, 0, mesh()));
+        assertFalse(first.closed);
+        scene.jobs.get(1).complete();
+        scene.reject = true;
+        assertThrows(IllegalStateException.class, () -> terrain.edit(List.of(replacement.join())));
         assertFalse(first.closed);
         assertFalse(second.closed);
-    }
-
-    @Test
-    void returnsTheGroupedNativePublicationReceipt() {
-        var channel = new RecordingChannel();
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> new Uploaded(0x2250L));
-
-        var publication = terrain.submitGroup(List.of(
-                List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh()))));
-
-        assertSame(channel.publication, publication);
-        assertFalse(publication.isVisible());
-        channel.publication.makeVisible();
-        assertTrue(publication.isVisible());
-    }
-
-    @Test
-    void acceptedSectionStateTracksSubmissionBeforeNativeVisibility() {
-        var channel = new RecordingChannel();
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> new Uploaded(0x2260L));
-
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(7L, 0, 0, 0, mesh())));
-        assertTrue(terrain.hasSection(7L));
-        assertEquals(List.of(7L), terrain.sectionKeys());
-
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Drop(7L)));
-        assertFalse(terrain.hasSection(7L));
-        assertTrue(terrain.sectionKeys().isEmpty());
-    }
-
-    @Test
-    void rejectedPublicationGroupReleasesEveryUploadAndKeepsSectionStateRetryable() {
-        var channel = new RecordingChannel();
-        var first = new Uploaded(0x2300L);
-        var second = new Uploaded(0x2400L);
-        var uploads = new java.util.ArrayDeque<>(List.of(first, second));
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> uploads.removeFirst());
-        channel.rejectNext = true;
-
-        assertThrows(IllegalArgumentException.class, () -> terrain.submitGroup(List.of(
-                List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh())),
-                List.of(new MinecraftTerrainGeometry.Put(3L, 16, 0, 0, mesh())))));
-
+        terrain.edit(List.of(replacement.join()));
         assertTrue(first.closed);
+        assertEquals(1, scene.jobs.get(0).releases);
+        terrain.close();
         assertTrue(second.closed);
-        terrain.close();
-        assertTrue(channel.batches.isEmpty());
     }
 
-    @Test
-    void malformedCpuGeometryIsRejectedBeforeUpload() {
-        assertThrows(IllegalArgumentException.class, () -> new MinecraftTerrainMesh(
-                new float[]{0, 0, 0}, new int[]{0, 0, 0}, new float[0],
-                new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS],
-                List.of(new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f)), 1L));
-    }
-
-    @Test
-    void rejectedCloseKeepsSectionStateSoCloseCanBeRetried() {
-        var channel = new RecordingChannel();
-        var uploader = new RecordingUploader();
-        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, uploader);
-        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(9L, 0, 0, 0, mesh())));
-        channel.rejectNext = true;
-
-        assertThrows(IllegalArgumentException.class, terrain::close);
-        assertEquals(0, uploader.closeCount);
+    @Test void failedPreparationReleasesUploadWithoutEditingScene() {
+        var scene = new PreparedScene();
+        var upload = new Uploaded(0x1000);
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> upload);
+        var future = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 0, 0, 0, mesh()));
+        scene.jobs.getFirst().future.completeExceptionally(new IllegalStateException("failed build"));
+        assertTrue(future.isCompletedExceptionally());
+        assertTrue(upload.closed);
+        assertTrue(scene.edits.isEmpty());
         terrain.close();
-
-        assertEquals(2, channel.batches.size());
-        assertEquals(2, channel.batches.getLast().operations().size());
-        assertEquals(1, uploader.closeCount);
     }
 
     @Test
@@ -380,81 +255,4 @@ final class MinecraftTerrainGeometryTest {
         @Override public void close() { closed = true; }
     }
 
-    private static final class RecordingUploader implements MinecraftTerrainUploader {
-        private int closeCount;
-
-        @Override public UploadedSection upload(MinecraftTerrainMesh source) {
-            return new Uploaded(0x3000L);
-        }
-
-        @Override public void close() {
-            closeCount++;
-        }
-    }
-
-    private static final class RecordingChannel implements GeometryChannel {
-        private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
-        private final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
-        private final List<RetainedBatch<LightChannel.Operation>> lightBatches = new ArrayList<>();
-        private boolean rejectNext;
-        private final TestPublication publication = new TestPublication();
-
-        @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) { return new MeshId<>() { }; }
-        @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
-                RetainedBatch<Operation> batch) {
-            if (rejectNext) {
-                rejectNext = false;
-                throw new IllegalArgumentException("rejected");
-            }
-            batches.add(batch);
-            return publication;
-        }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
-                List<RetainedBatch<Operation>> group) {
-            if (rejectNext) {
-                rejectNext = false;
-                throw new IllegalArgumentException("rejected");
-            }
-            groups.add(List.copyOf(group));
-            batches.addAll(group);
-            return publication;
-        }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
-                List<RetainedBatch<Operation>> group, LightChannel lights,
-                RetainedBatch<LightChannel.Operation> lightBatch) {
-            if (rejectNext) {
-                rejectNext = false;
-                throw new IllegalArgumentException("rejected");
-            }
-            groups.add(List.copyOf(group));
-            batches.addAll(group);
-            lightBatches.add(lightBatch);
-            return publication;
-        }
-    }
-
-    private static final class TestPublication
-            implements dev.comfyfluffy.caustica.api.retained.RetainedPublication {
-        private final List<Runnable> callbacks = new ArrayList<>();
-        private boolean visible;
-        @Override public boolean isVisible() { return visible; }
-        @Override public void whenVisible(Runnable callback) {
-            if (visible) callback.run();
-            else callbacks.add(callback);
-        }
-        void makeVisible() {
-            visible = true;
-            callbacks.forEach(Runnable::run);
-            callbacks.clear();
-        }
-    }
-
-    private static final class RecordingLights implements LightChannel {
-        private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
-
-        @Override public LightId newLight() { return new LightId() { }; }
-
-        @Override public void submit(RetainedBatch<Operation> batch) { batches.add(batch); }
-    }
 }

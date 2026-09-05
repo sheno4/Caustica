@@ -1,179 +1,108 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.terrain;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
-import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
-import dev.comfyfluffy.caustica.api.geometry.InstanceId;
-import dev.comfyfluffy.caustica.api.geometry.MeshId;
-import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.geometry.*;
 import dev.comfyfluffy.caustica.api.light.LightId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
-import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.scene.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-
-/** Retained geometry and matching finite-light owner for the sections of one borrowed Minecraft scene. */
+/** Prepares section resources before atomically replacing neighboring instances and their lights. */
 public final class MinecraftTerrainGeometry implements AutoCloseable {
-    private final GeometryChannel channel;
-    private final LightChannel lights;
+    private final MeshPreparer meshes;
+    private final SceneChannel channel;
     private final SceneId scene;
     private final MinecraftTerrainUploader uploader;
-    private final Map<Long, SectionIds> sections = new LinkedHashMap<>();
-    private boolean closed;
+    private final Map<Long, Section> sections = new LinkedHashMap<>();
 
-    public MinecraftTerrainGeometry(GeometryChannel channel, LightChannel lights,
+    public MinecraftTerrainGeometry(MeshPreparer meshes, SceneChannel channel,
                                     SceneId scene, MinecraftTerrainUploader uploader) {
-        this.channel = Objects.requireNonNull(channel, "channel");
-        this.lights = Objects.requireNonNull(lights, "lights");
-        this.scene = Objects.requireNonNull(scene, "scene");
-        this.uploader = Objects.requireNonNull(uploader, "uploader");
+        this.meshes = meshes;
+        this.channel = channel;
+        this.scene = scene;
+        this.uploader = uploader;
     }
 
-    /** Atomically replaces and removes all sections named by one Minecraft extraction transaction. */
-    public synchronized RetainedPublication submit(List<Change> changes) {
-        return submitGroup(List.of(changes));
-    }
-
-    /** Publishes extraction transactions together as one atomic scene revision. */
-    public synchronized RetainedPublication submitGroup(List<? extends List<Change>> groups) {
-        if (closed) throw new IllegalStateException("terrain geometry is closed");
-        if (groups.isEmpty()) return RetainedPublication.alreadyVisible();
-        var batches = new ArrayList<RetainedBatch<GeometryChannel.Operation>>();
-        var preparedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
-        var displacedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
-        var lightOperations = new ArrayList<LightChannel.Operation>();
-        var committedSections = new LinkedHashMap<>(sections);
-        RetainedPublication publication;
+    public CompletableFuture<Prepared> prepare(Put put) {
+        var uploaded = uploader.upload(put.mesh());
         try {
-            for (List<Change> changes : groups) {
-                var batch = prepareBatch(changes, committedSections, preparedUploads, displacedUploads);
-                if (batch.operations().isEmpty()) continue;
-                batches.add(RetainedBatch.of(batch.operations()));
-                lightOperations.addAll(batch.lightOperations());
-            }
-            if (batches.isEmpty()) return RetainedPublication.alreadyVisible();
-            publication = lightOperations.isEmpty()
-                    ? channel.submitGroup(batches)
-                    : channel.submitWithLights(batches, lights, RetainedBatch.of(lightOperations));
+            return meshes.prepare(MinecraftProgramTypes.INSTANCE_DATA, uploaded.build())
+                    .handle((mesh, failure) -> {
+                        if (failure != null) {
+                            uploaded.close();
+                            throw new java.util.concurrent.CompletionException(failure);
+                        }
+                        return new Prepared(put, uploaded, mesh);
+                    });
         } catch (RuntimeException | Error failure) {
-            releaseRejected(preparedUploads, failure);
+            uploaded.close();
             throw failure;
         }
-        sections.clear();
-        sections.putAll(committedSections);
-        retireAll(displacedUploads);
-        return publication;
     }
 
-    /** Whether an accepted retained-scene transaction currently owns geometry for this section. */
-    public synchronized boolean hasSection(long sectionKey) {
-        return sections.containsKey(sectionKey);
-    }
-
-    /** Snapshot of section keys owned by accepted retained-scene transactions. */
-    public synchronized List<Long> sectionKeys() {
-        return List.copyOf(sections.keySet());
-    }
-
-    private PreparedBatch prepareBatch(List<Change> changes, Map<Long, SectionIds> committedSections,
-                                       List<MinecraftTerrainUploader.UploadedSection> preparedUploads,
-                                       List<MinecraftTerrainUploader.UploadedSection> displacedUploads) {
-        var latest = new LinkedHashMap<Long, Change>();
-        for (Change change : changes) latest.put(change.sectionKey(), change);
-        var operations = new ArrayList<GeometryChannel.Operation>();
-        var lightOperations = new ArrayList<LightChannel.Operation>();
-        for (Change change : latest.values()) {
-            if (change instanceof Put put) {
-                var previous = committedSections.get(put.sectionKey());
-                if (previous != null) displacedUploads.add(previous.uploaded());
-                var mesh = previous == null
-                        ? channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA) : previous.mesh();
-                var instance = previous == null ? channel.newInstance() : previous.instance();
-                var uploaded = uploader.upload(put.mesh());
-                preparedUploads.add(uploaded);
-                operations.add(new GeometryChannel.SetMesh<>(mesh, uploaded.build()));
-                var lightIds = new ArrayList<LightId>(put.lights().emitters().size());
-                var lightRanges = new ArrayList<PrimitiveLightMap.Range>(put.lights().emitters().size());
-                if (previous != null) {
-                    previous.lights().forEach(light -> lightOperations.add(new LightChannel.DropLight(light)));
-                }
+    /** Consumes prepared resources only after the entire direct scene edit succeeds. */
+    public void edit(List<? extends ReadyChange> changes) {
+        var next = new LinkedHashMap<>(sections);
+        var edits = new ArrayList<SceneEdit>();
+        var displaced = new ArrayList<Prepared>();
+        for (var change : changes) {
+            var previous = next.remove(change.sectionKey());
+            if (previous != null) {
+                previous.lights.forEach(light -> edits.add(new SceneEdit.DropLight(light)));
+                displaced.add(previous.prepared);
+            }
+            if (change instanceof Prepared prepared) {
+                Put put = prepared.put;
+                InstanceId instance = previous == null ? channel.newInstance() : previous.instance;
+                var lightIds = new ArrayList<LightId>();
+                var ranges = new ArrayList<PrimitiveLightMap.Range>();
                 for (var emitter : put.lights().emitters()) {
-                    LightId light = lights.newLight();
+                    var light = channel.newLight();
                     lightIds.add(light);
-                    lightOperations.add(new LightChannel.SetLight(light, scene, emitter.descriptor()));
-                    lightRanges.add(new PrimitiveLightMap.Range(
-                            emitter.firstPrimitive(), emitter.primitiveCount(), light));
+                    edits.add(new SceneEdit.SetLight(light, scene, emitter.descriptor()));
+                    ranges.add(new PrimitiveLightMap.Range(emitter.firstPrimitive(), emitter.primitiveCount(), light));
                 }
-                operations.add(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                edits.add(new SceneEdit.SetInstance<>(instance, scene, prepared.mesh,
                         GeometryTransform.translation(put.originX(), put.originY(), put.originZ()),
-                        0xff, uploaded.instanceData(), new PrimitiveLightMap(lightRanges)));
-                committedSections.put(put.sectionKey(),
-                        new SectionIds(mesh, instance, List.copyOf(lightIds), uploaded));
-            } else if (change instanceof Drop drop) {
-                var ids = committedSections.remove(drop.sectionKey());
-                if (ids != null) {
-                    displacedUploads.add(ids.uploaded());
-                    operations.add(new GeometryChannel.DropInstance(ids.instance()));
-                    operations.add(new GeometryChannel.DropMesh<>(ids.mesh()));
-                    ids.lights().forEach(light -> lightOperations.add(new LightChannel.DropLight(light)));
-                }
+                        0xff, prepared.uploaded.instanceData(), new PrimitiveLightMap(ranges)));
+                next.put(put.sectionKey(), new Section(instance, List.copyOf(lightIds), prepared));
+            } else if (previous != null) {
+                edits.add(new SceneEdit.DropInstance(previous.instance));
             }
         }
-        return new PreparedBatch(List.copyOf(operations), List.copyOf(lightOperations));
+        if (!edits.isEmpty()) channel.edit(edits);
+        sections.clear();
+        sections.putAll(next);
+        displaced.forEach(Prepared::close);
     }
 
-    @Override public synchronized void close() {
-        if (closed) return;
-        if (sections.isEmpty()) {
-            closed = true;
-            uploader.close();
-            return;
-        }
-        var operations = new ArrayList<GeometryChannel.Operation>(sections.size() * 2);
-        var lightOperations = new ArrayList<LightChannel.Operation>();
-        for (SectionIds ids : sections.values()) {
-            operations.add(new GeometryChannel.DropInstance(ids.instance()));
-            operations.add(new GeometryChannel.DropMesh<>(ids.mesh()));
-            ids.lights().forEach(light -> lightOperations.add(new LightChannel.DropLight(light)));
-        }
-        List<MinecraftTerrainUploader.UploadedSection> uploads = sections.values().stream()
-                .map(SectionIds::uploaded).toList();
-        RetainedPublication publication;
-        if (lightOperations.isEmpty()) publication = channel.submit(RetainedBatch.of(operations));
-        else publication = channel.submitWithLights(List.of(RetainedBatch.of(operations)), lights,
-                RetainedBatch.of(lightOperations));
-        retireAll(uploads);
-        sections.clear();
-        closed = true;
+    public boolean hasSection(long key) { return sections.containsKey(key); }
+    public List<Long> sectionKeys() { return List.copyOf(sections.keySet()); }
+
+    @Override public void close() {
+        edit(sectionKeys().stream().map(Drop::new).toList());
         uploader.close();
     }
 
-    private static void retireAll(List<? extends MinecraftTerrainUploader.UploadedSection> resources) {
-        resources.forEach(MinecraftTerrainUploader.UploadedSection::close);
-    }
+    public sealed interface ReadyChange permits Prepared, Drop { long sectionKey(); }
 
-    private static void releaseRejected(List<? extends MinecraftTerrainUploader.UploadedSection> resources,
-                                        Throwable rejection) {
-        for (AutoCloseable resource : resources) {
-            try {
-                resource.close();
-            } catch (Throwable releaseFailure) {
-                rejection.addSuppressed(releaseFailure);
-            }
+    public static final class Prepared implements ReadyChange, AutoCloseable {
+        private final Put put;
+        private final MinecraftTerrainUploader.UploadedSection uploaded;
+        private final ReadyMesh<MinecraftProgramTypes.InstanceData> mesh;
+        private Prepared(Put put, MinecraftTerrainUploader.UploadedSection uploaded,
+                         ReadyMesh<MinecraftProgramTypes.InstanceData> mesh) {
+            this.put = put;
+            this.uploaded = uploaded;
+            this.mesh = mesh;
         }
+        @Override public long sectionKey() { return put.sectionKey(); }
+        @Override public void close() { mesh.close(); uploaded.close(); }
     }
-
-    public sealed interface Change permits Put, Drop { long sectionKey(); }
 
     public record Put(long sectionKey, int originX, int originY, int originZ,
-                      MinecraftTerrainMesh mesh, MinecraftTerrainLightBatch lights) implements Change {
+                      MinecraftTerrainMesh mesh, MinecraftTerrainLightBatch lights) {
         public Put(long sectionKey, int originX, int originY, int originZ, MinecraftTerrainMesh mesh) {
             this(sectionKey, originX, originY, originZ, mesh,
                     new MinecraftTerrainLightBatch(sectionKey, 0L, List.of()));
@@ -188,12 +117,8 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         }
     }
 
-    public record Drop(long sectionKey) implements Change { }
+    public record Drop(long sectionKey) implements ReadyChange { }
 
-    private record PreparedBatch(List<GeometryChannel.Operation> operations,
-                                 List<LightChannel.Operation> lightOperations) { }
 
-    private record SectionIds(MeshId<MinecraftProgramTypes.InstanceData> mesh, InstanceId instance,
-                              List<LightId> lights,
-                              MinecraftTerrainUploader.UploadedSection uploaded) { }
+    private record Section(InstanceId instance, List<LightId> lights, Prepared prepared) { }
 }

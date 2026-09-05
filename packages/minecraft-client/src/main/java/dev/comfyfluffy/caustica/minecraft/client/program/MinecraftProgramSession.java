@@ -109,7 +109,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         try {
             frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames, calibration),
                     "frame capture lease");
-            lights = new MinecraftLightProvider(context.renderSession().lights(), context.scene(),
+            lights = new MinecraftLightProvider(context.renderSession().scene(), context.scene(),
                     () -> celestialSettings(options.snapshot().options(MinecraftProvidersExtension.ID)),
                     frames::lightFrame);
             MinecraftLightProvider installedLights = lights;
@@ -223,15 +223,15 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease = null;
         MinecraftFrameSelector frameSelector = null;
         try {
-            terrainSession.bind(programs, context.renderSession().geometry(),
-                    context.renderSession().lights(), context.scene());
+            terrainSession.bind(programs, context.renderSession().meshes(),
+                    context.renderSession().scene(), context.scene());
             terrainSession.publishMaterialLookup(request.lookup);
             frameSelector = new MinecraftFrameSelector(context.scene(), programs.waterVolume(),
                     request.prepared.gpu().fallbackBindingData(),
                     request.prepared.gpu().fallbackInstanceData());
             frameSelection = java.util.Objects.requireNonNull(frameSelections.install(frameSelector),
                     "frame selection lease");
-            entityGeometry = new MinecraftEntityGeometry(context.renderSession().geometry(), context.scene(),
+            entityGeometry = new MinecraftEntityGeometry(context.renderSession().meshes(), context.renderSession().scene(), context.scene(),
                     new MinecraftVulkanEntityUploader(context.renderSession().gpu(), request.lookup,
                             programs, entityTextures, context.renderSession().resources()));
             entityLease = java.util.Objects.requireNonNull(entityCapture.install(entityGeometry),

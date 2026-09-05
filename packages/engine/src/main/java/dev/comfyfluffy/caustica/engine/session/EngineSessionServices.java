@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.engine.session;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
@@ -18,8 +18,8 @@ import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.compute.ComputeQueueSession;
 import dev.comfyfluffy.caustica.engine.compute.ComputeQueueSession.ComputeContributionQueue;
-import dev.comfyfluffy.caustica.engine.scene.GeometryContributionChannel;
-import dev.comfyfluffy.caustica.engine.scene.LightContributionChannel;
+import dev.comfyfluffy.caustica.engine.scene.SceneContributionChannel;
+import dev.comfyfluffy.caustica.engine.scene.MeshPreparationBackend;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
 import dev.comfyfluffy.caustica.engine.scene.SceneRetirementFailureHandler;
@@ -44,6 +44,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             GpuComputeQueue computeBackend,
             ProgramBackend programBackend,
             RetainedSceneBackend sceneBackend,
+            MeshPreparationBackend meshBackend,
             PassSchedulerBackend passBackend,
             ProgramEngineFailureHandler programFailures,
             SceneRetirementFailureHandler sceneFailures,
@@ -52,7 +53,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         compute = new ComputeQueueSession(computeBackend, sceneFailures::report);
         resources = new ResourceDirectory(sceneFailures::report);
         programs = new ProgramSession(resources, programBackend, programFailures);
-        scenes = new SceneDirectory(programs, resources, sceneBackend, sceneFailures);
+        scenes = new SceneDirectory(programs, resources, sceneBackend, meshBackend);
         passes = new PassSession(passBackend, passFailures);
     }
 
@@ -104,8 +105,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         private final ProgramContributionChannel program;
         private final ComputeContributionQueue compute;
         private final PassContributionChannel pass;
-        private final GeometryContributionChannel geometry;
-        private final LightContributionChannel lights;
+        private final SceneContributionChannel scene;
         private final ResourceFactory resources;
         private boolean quiesced;
         private boolean invalidated;
@@ -117,8 +117,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             compute = EngineSessionServices.this.compute.openChannel();
             program = programs.openChannel(owner);
             pass = passes.openChannel(owner);
-            geometry = scenes.openGeometry(owner);
-            lights = scenes.openLights(owner);
+            scene = scenes.openChannel(owner);
             resources = EngineSessionServices.this.resources.openFactory(owner);
         }
 
@@ -126,8 +125,8 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         @Override public GpuComputeQueue compute() { return compute; }
         @Override public ProgramChannel program() { return program; }
         @Override public PassChannel passes() { return pass; }
-        @Override public GeometryChannel geometry() { return geometry; }
-        @Override public LightChannel lights() { return lights; }
+        @Override public MeshPreparer meshes() { return scene; }
+        @Override public SceneChannel scene() { return scene; }
         @Override public ResourceFactory resources() { return resources; }
 
         @Override
@@ -136,8 +135,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             compute.quiesce();
             pass.quiesce();
             program.quiesce();
-            geometry.quiesce();
-            lights.quiesce();
+            scene.quiesce();
             EngineSessionServices.this.resources.quiesce(owner);
             quiesced = true;
         }
@@ -148,8 +146,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             quiesce();
             compute.invalidate();
             pass.invalidate();
-            geometry.invalidate();
-            lights.invalidate();
+            scene.invalidate();
             program.invalidate();
             EngineSessionServices.this.resources.invalidate(owner);
             invalidated = true;
@@ -161,8 +158,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             invalidate();
             compute.drain();
             pass.drain();
-            geometry.drain();
-            lights.drain();
+            scene.drain();
             program.drain();
             EngineSessionServices.this.resources.drain(owner, scenes::settleFrameUses);
             drained = true;

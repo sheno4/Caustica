@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.provider;
 
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightFrame;
@@ -18,7 +18,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
     private static final double TO_RADIANS = Math.PI / 180.0;
     private static final double SURFACE_TO_TOP_ILLUMINANCE = 100_000.0 / 128_000.0;
 
-    private final LightChannel lights;
+    private final SceneChannel lights;
     private final SceneId scene;
     private final Supplier<CelestialSettings> celestialSettings;
     private final Supplier<MinecraftLightFrame> frames;
@@ -29,7 +29,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
     private Optional<LightDescriptor.Distant> publishedMoon;
     private Optional<LightDescriptor.Spot> publishedHelmet;
 
-    public MinecraftLightProvider(LightChannel lights, SceneId scene,
+    public MinecraftLightProvider(SceneChannel lights, SceneId scene,
                                   Supplier<CelestialSettings> celestialSettings,
                                   Supplier<MinecraftLightFrame> frames) {
         this.lights = lights;
@@ -52,7 +52,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
     }
 
     void publish(CelestialLights celestial, Optional<LightDescriptor.Spot> helmet) {
-        ArrayList<LightChannel.Operation> operations = new ArrayList<>();
+        ArrayList<SceneEdit> operations = new ArrayList<>();
         boolean sunChanged = !java.util.Objects.equals(publishedSun, celestial.sun());
         boolean moonChanged = !java.util.Objects.equals(publishedMoon, celestial.moon());
         boolean helmetChanged = !java.util.Objects.equals(publishedHelmet, helmet);
@@ -66,26 +66,26 @@ public final class MinecraftLightProvider implements AutoCloseable {
             setOrDrop(operations, helmetLight, helmet);
         }
         if (operations.isEmpty()) return;
-        lights.submit(RetainedBatch.of(operations));
+        lights.edit(operations);
         if (sunChanged) publishedSun = celestial.sun();
         if (moonChanged) publishedMoon = celestial.moon();
         if (helmetChanged) publishedHelmet = helmet;
     }
 
-    private void setOrDrop(List<LightChannel.Operation> operations, LightId light,
+    private void setOrDrop(List<SceneEdit> operations, LightId light,
                            Optional<? extends LightDescriptor> descriptor) {
-        operations.add(descriptor.<LightChannel.Operation>map(value ->
-                new LightChannel.SetLight(light, scene, value)).orElseGet(() ->
-                new LightChannel.DropLight(light)));
+        operations.add(descriptor.<SceneEdit>map(value ->
+                new SceneEdit.SetLight(light, scene, value)).orElseGet(() ->
+                new SceneEdit.DropLight(light)));
     }
 
     @Override
     public void close() {
-        ArrayList<LightChannel.Operation> operations = new ArrayList<>();
-        operations.add(new LightChannel.DropLight(sunLight));
-        operations.add(new LightChannel.DropLight(moonLight));
-        operations.add(new LightChannel.DropLight(helmetLight));
-        lights.submit(RetainedBatch.of(operations));
+        ArrayList<SceneEdit> operations = new ArrayList<>();
+        operations.add(new SceneEdit.DropLight(sunLight));
+        operations.add(new SceneEdit.DropLight(moonLight));
+        operations.add(new SceneEdit.DropLight(helmetLight));
+        lights.edit(operations);
     }
 
     static CelestialLights celestialLights(CelestialFrame frame) {

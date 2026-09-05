@@ -1,65 +1,71 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
-import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
-import dev.comfyfluffy.caustica.api.geometry.InstanceId;
-import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.geometry.MeshId;
-import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
-import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
+import dev.comfyfluffy.caustica.api.geometry.*;
 import dev.comfyfluffy.caustica.api.light.LightId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
-import dev.comfyfluffy.caustica.api.scene.SceneId;
-
+import dev.comfyfluffy.caustica.api.scene.*;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
-/**
- * Geometry contribution consuming program and light selections from another contribution in the same
- * render session. This owner has mutation authority only over its own mesh and instance ids.
- */
+/** Prepares replacement geometry while the current placement remains available to frames. */
 final class ShowcaseScene {
     private final ShowcasePrograms.Exports programs;
-    private final GeometryChannel geometry;
+    private final SceneChannel edits;
+    private final MeshPreparer meshes;
     private final SceneId scene;
-    private final MeshId<ShowcasePrograms.InstanceData> mesh;
     private final InstanceId instance;
     private final List<LightId> lightIds;
-    private ResourceOwner meshResource;
+    private ReadyMesh<ShowcasePrograms.InstanceData> mesh;
+    private SceneId target;
+    private GeometryTransform transform = GeometryTransform.translation(0.0, 64.0, 0.0);
+    private long request;
+    private boolean stopped;
 
     ShowcaseScene(ShowcasePrograms.Exports programs, List<LightId> lightIds,
-                  SceneId scene, GeometryChannel geometry) {
+                  SceneId scene, SceneChannel edits, MeshPreparer meshes) {
         this.programs = programs;
         this.lightIds = List.copyOf(lightIds);
         this.scene = scene;
-        this.geometry = geometry;
-        mesh = geometry.newMesh(ShowcasePrograms.INSTANCE);
-        instance = geometry.newInstance();
+        this.target = scene;
+        this.edits = edits;
+        this.meshes = meshes;
+        instance = edits.newInstance();
     }
 
-    /** Publishes one immutable generation containing the combined position and index upload buffer. */
-    RetainedPublication publishMesh(VulkanDeviceAddressRange currentPositions,
-                                     VulkanDeviceAddressRange indices, ResourceOwner resource) {
-        return publish(resource, reference -> geometry.submitGroup(List.of(
-                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
-                        meshBuild(currentPositions, indices, 1L, reference)))),
-                RetainedBatch.of(List.of(placement(scene, GeometryTransform.translation(0.0, 64.0, 0.0)))))));
+    CompletableFuture<Void> publishMesh(VulkanDeviceAddressRange positions,
+            VulkanDeviceAddressRange indices, ResourceOwner resource) {
+        return replaceMesh(positions, indices, 1L, resource);
     }
 
-    /** Replaces the retained mesh streams while every existing placement remains resident. */
-    RetainedPublication replaceMesh(VulkanDeviceAddressRange currentPositions,
-                                     VulkanDeviceAddressRange indices, long indexRevision,
-                                     ResourceOwner resource) {
-        return publish(resource, reference -> geometry.submit(
-                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
-                        meshBuild(currentPositions, indices, indexRevision, reference))))));
+    synchronized CompletableFuture<Void> replaceMesh(VulkanDeviceAddressRange positions,
+            VulkanDeviceAddressRange indices, long indexRevision, ResourceOwner resource) {
+        long preparing = ++request;
+        CompletableFuture<ReadyMesh<ShowcasePrograms.InstanceData>> prepared;
+        try {
+            prepared = meshes.prepare(ShowcasePrograms.INSTANCE,
+                    meshBuild(positions, indices, indexRevision, resource.reference()));
+        } finally {
+            resource.close();
+        }
+        return prepared.thenAccept(next -> {
+            synchronized (this) {
+                if (stopped || preparing != request) { next.close(); return; }
+                try { edits.edit(List.of(placement(next))); }
+                catch (RuntimeException | Error failure) { next.close(); throw failure; }
+                var previous = mesh;
+                mesh = next;
+                if (previous != null) previous.close();
+            }
+        });
     }
 
-    /** Moves the existing placement, including between simultaneously resident scenes. */
-    RetainedPublication moveInstance(SceneId target, GeometryTransform transform) {
-        return geometry.submit(RetainedBatch.of(List.of(placement(target, transform))));
+    synchronized void moveInstance(SceneId target, GeometryTransform transform) {
+        if (mesh != null) edits.edit(List.of(new SceneEdit.SetInstance<>(instance, target, mesh,
+                transform, 0xff, ShowcasePrograms.INSTANCE.data(7L), primitiveLights())));
+        this.target = target;
+        this.transform = transform;
     }
 
     private MeshBuild<ShowcasePrograms.InstanceData> meshBuild(VulkanDeviceAddressRange currentPositions,
@@ -83,40 +89,26 @@ final class ShowcaseScene {
                         new MeshBuild.Geometry<>(null, volume, 9, 3)));
     }
 
-    private GeometryChannel.SetInstance<ShowcasePrograms.InstanceData> placement(
-            SceneId target, GeometryTransform transform) {
-        return new GeometryChannel.SetInstance<>(instance, target, mesh, transform, 0xff,
-                ShowcasePrograms.INSTANCE.data(7L),
-                new PrimitiveLightMap(List.of(
-                        new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))));
+    private SceneEdit.SetInstance<ShowcasePrograms.InstanceData> placement(
+            ReadyMesh<ShowcasePrograms.InstanceData> ready) {
+        return new SceneEdit.SetInstance<>(instance, target, ready, transform, 0xff,
+                ShowcasePrograms.INSTANCE.data(7L), primitiveLights());
     }
 
-    SceneId identity() {
-        return scene;
+    private PrimitiveLightMap primitiveLights() {
+        return new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(0, 1, lightIds.getFirst())));
     }
 
-    void stop() {
-        ResourceOwner previous = meshResource;
-        geometry.submit(RetainedBatch.of(List.of(
-                new GeometryChannel.DropInstance(instance),
-                new GeometryChannel.DropMesh<>(mesh))));
-        meshResource = null;
-        if (previous != null) previous.close();
-    }
+    SceneId identity() { return scene; }
 
-    private RetainedPublication publish(ResourceOwner next,
-                                        java.util.function.Function<ResourceRef, RetainedPublication> submit) {
-        boolean accepted = false;
-        try {
-            RetainedPublication publication = submit.apply(next.reference());
-            accepted = true;
-            ResourceOwner previous = meshResource;
-            meshResource = next;
-            if (previous != null) previous.close();
-            return publication;
-        } catch (RuntimeException | Error failure) {
-            if (!accepted) next.close();
-            throw failure;
+    synchronized void stop() {
+        if (stopped) return;
+        stopped = true;
+        request++;
+        if (mesh != null) {
+            edits.edit(List.of(new SceneEdit.DropInstance(instance)));
+            mesh.close();
+            mesh = null;
         }
     }
 }

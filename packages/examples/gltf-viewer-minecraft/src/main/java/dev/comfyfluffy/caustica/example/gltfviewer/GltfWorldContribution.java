@@ -1,13 +1,12 @@
 package dev.comfyfluffy.caustica.example.gltfviewer;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.ReadyMesh;
+import dev.comfyfluffy.caustica.api.scene.SceneEdit;
+import java.util.concurrent.CompletableFuture;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
-import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfMeshUploader;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfPrimitiveUploader;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfProgramContent;
@@ -37,6 +36,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
     private final Supplier<Set<BlockPos>> portalAnchors;
     private Live live = Live.EMPTY;
     private boolean stopped;
+    private long request;
 
     static GltfWorldContribution open(MinecraftWorldSessionContext context) {
         ProgramRegistration<GltfProgramExports> registration =
@@ -75,91 +75,93 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
         replace();
     }
 
-    private void replace() {
+    private synchronized void replace() {
         assets.reload();
-        GeometryChannel geometry = context.renderSession().geometry();
-        ResourceFactory resources = context.renderSession().resources();
-        Live previous = live;
-        List<GeometryChannel.Operation> operations = dropOperations(live);
-        List<GltfPrimitiveUploader.Uploaded> uploads = new ArrayList<>();
-        List<MeshId<GltfProgramExports.InstanceData>> meshes = new ArrayList<>();
-        List<InstanceId> instances = new ArrayList<>();
-        boolean accepted = false;
+        long preparing = ++request;
+        GltfScene authored = assets.current();
+        var anchors = Set.copyOf(gltfAnchors.get());
+        var portals = Set.copyOf(portalAnchors.get());
+        var pending = new ArrayList<CompletableFuture<ReadyMesh<GltfProgramExports.InstanceData>>>();
         try {
-            GltfScene scene = assets.current();
-            for (GltfScene.Primitive primitive : scene.primitives()) {
-                GltfPrimitiveUploader.Uploaded upload = uploader.upload(resources, primitive);
-                uploads.add(upload);
-                MeshId<GltfProgramExports.InstanceData> mesh = geometry.newMesh(GltfProgramExports.INSTANCE);
-                meshes.add(mesh);
-                MeshBuild.CoveragePolicy coverage = primitive.cutout()
-                        ? new MeshBuild.CoveragePolicy.Cutout(primitive.alphaCutoff())
-                        : new MeshBuild.CoveragePolicy.Opaque();
-                MeshBuild.SurfaceSlot<GltfProgramExports.PrimitiveData, GltfProgramExports.InstanceData> slot =
-                        new MeshBuild.SurfaceSlot<>(programs.material(),
-                                GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
-                                        upload.primitiveDataResource()), coverage);
-                MeshBuild<GltfProgramExports.InstanceData> build = new MeshBuild<>(
-                        upload.positionsStream(), upload.indexStream(), upload.vertexCount(),
-                        new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
-                        List.of(new MeshBuild.Geometry<>(slot, null, 0, upload.indexCount())));
-                operations.add(new GeometryChannel.SetMesh<>(mesh, build));
-            }
-            for (BlockPos anchor : Set.copyOf(gltfAnchors.get())) {
-                for (GltfScene.Placement placement : scene.placements()) {
-                    InstanceId instance = geometry.newInstance();
-                    instances.add(instance);
-                    operations.add(new GeometryChannel.SetInstance<>(instance, context.scene(),
-                            meshes.get(placement.primitive()),
-                            placement.at(anchor.getX(), anchor.getY(), anchor.getZ()), 0xff,
-                            GltfProgramExports.INSTANCE.data(0L)));
-                }
-            }
-
-            GltfScene.Primitive portal = portalCube();
-            GltfPrimitiveUploader.Uploaded portalUpload = uploader.upload(resources, portal);
-            uploads.add(portalUpload);
-            MeshId<GltfProgramExports.InstanceData> portalMesh = geometry.newMesh(GltfProgramExports.INSTANCE);
-            meshes.add(portalMesh);
-            var portalSlot = new MeshBuild.SurfaceSlot<>(programs.portal(),
-                    GltfProgramExports.PRIMITIVE.data(portalUpload.primitiveDataAddress().value(),
-                            portalUpload.primitiveDataResource()),
-                    new MeshBuild.CoveragePolicy.Opaque());
-            operations.add(new GeometryChannel.SetMesh<>(portalMesh, new MeshBuild<>(
-                    portalUpload.positionsStream(), portalUpload.indexStream(), portalUpload.vertexCount(),
-                    new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
-                    List.of(new MeshBuild.Geometry<>(portalSlot, null, 0, portalUpload.indexCount())))));
-            for (BlockPos anchor : Set.copyOf(portalAnchors.get())) {
-                InstanceId instance = geometry.newInstance();
-                instances.add(instance);
-                operations.add(new GeometryChannel.SetInstance<>(instance, context.scene(), portalMesh,
-                        GeometryTransform.translation(anchor.getX(), anchor.getY(), anchor.getZ()), 0xff,
-                        GltfProgramExports.INSTANCE.data(0L)));
-            }
-
-            Live next = new Live(List.copyOf(meshes), List.copyOf(instances), List.copyOf(uploads));
-            geometry.submit(RetainedBatch.of(operations));
-            accepted = true;
-            live = next;
-            previous.dropResources();
+            for (var primitive : authored.primitives()) pending.add(prepare(primitive, false));
+            pending.add(prepare(portalCube(), true));
         } catch (RuntimeException | Error failure) {
-            if (!accepted) uploads.forEach(GltfPrimitiveUploader.Uploaded::drop);
+            pending.forEach(future -> future.thenAccept(ReadyMesh::close));
             throw failure;
+        }
+        CompletableFuture.allOf(pending.toArray(CompletableFuture[]::new)).whenComplete((ignored, failure) -> {
+            var ready = pending.stream().filter(future -> !future.isCompletedExceptionally())
+                    .map(CompletableFuture::join).toList();
+            synchronized (this) {
+                if (failure != null || stopped || preparing != request) {
+                    ready.forEach(ReadyMesh::close);
+                    if (failure != null && !stopped) reportFailure(failure);
+                    return;
+                }
+                var edits = context.renderSession().scene();
+                var operations = dropOperations(live);
+                var instances = new ArrayList<InstanceId>();
+                for (BlockPos anchor : anchors) {
+                    for (var placement : authored.placements()) {
+                        var instance = edits.newInstance();
+                        instances.add(instance);
+                        operations.add(new SceneEdit.SetInstance<>(instance, context.scene(),
+                                ready.get(placement.primitive()),
+                                placement.at(anchor.getX(), anchor.getY(), anchor.getZ()), 0xff,
+                                GltfProgramExports.INSTANCE.data(0L)));
+                    }
+                }
+                for (BlockPos anchor : portals) {
+                    var instance = edits.newInstance();
+                    instances.add(instance);
+                    operations.add(new SceneEdit.SetInstance<>(instance, context.scene(), ready.getLast(),
+                            GeometryTransform.translation(anchor.getX(), anchor.getY(), anchor.getZ()),
+                            0xff, GltfProgramExports.INSTANCE.data(0L)));
+                }
+                try { edits.edit(operations); }
+                catch (RuntimeException | Error rejected) {
+                    ready.forEach(ReadyMesh::close);
+                    reportFailure(rejected);
+                    return;
+                }
+                Live previous = live;
+                live = new Live(ready, List.copyOf(instances));
+                previous.close();
+            }
+        });
+    }
+
+    private CompletableFuture<ReadyMesh<GltfProgramExports.InstanceData>> prepare(
+            GltfScene.Primitive primitive, boolean portal) {
+        var upload = uploader.upload(context.renderSession().resources(), primitive);
+        try {
+            MeshBuild.CoveragePolicy coverage = primitive.cutout()
+                    ? new MeshBuild.CoveragePolicy.Cutout(primitive.alphaCutoff())
+                    : new MeshBuild.CoveragePolicy.Opaque();
+            var slot = new MeshBuild.SurfaceSlot<>(portal ? programs.portal() : programs.material(),
+                    GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
+                            upload.primitiveDataResource()), coverage);
+            var build = new MeshBuild<>(upload.positionsStream(), upload.indexStream(), upload.vertexCount(),
+                    new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
+                    List.of(new MeshBuild.Geometry<>(slot, null, 0, upload.indexCount())));
+            return context.renderSession().meshes().prepare(GltfProgramExports.INSTANCE, build);
+        } finally {
+            upload.drop();
         }
     }
 
-    @Override
-    public void stop() {
+    private static void reportFailure(Throwable failure) {
+        Minecraft.getInstance().execute(() -> { throw new IllegalStateException("glTF preparation failed", failure); });
+    }
+
+    @Override public synchronized void stop() {
         if (stopped) return;
         stopped = true;
+        request++;
         try {
-            if (live != Live.EMPTY) {
-                Live previous = live;
-                context.renderSession().geometry().submit(
-                        RetainedBatch.of(dropOperations(previous)));
-                live = Live.EMPTY;
-                previous.dropResources();
-            }
+            context.renderSession().scene().edit(dropOperations(live));
+            live.close();
+            live = Live.EMPTY;
         } finally {
             programRegistration.close();
         }
@@ -167,11 +169,9 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
 
     @Override public void close() { assets.clear(); }
 
-    private static List<GeometryChannel.Operation> dropOperations(Live state) {
-        List<GeometryChannel.Operation> operations = new ArrayList<>();
-        state.instances.forEach(instance -> operations.add(new GeometryChannel.DropInstance(instance)));
-        state.meshes.forEach(mesh -> operations.add(new GeometryChannel.DropMesh<>(mesh)));
-        return operations;
+    private static List<SceneEdit> dropOperations(Live state) {
+        return new ArrayList<>(state.instances.stream().map(SceneEdit.DropInstance::new)
+                .map(SceneEdit.class::cast).toList());
     }
 
     private static GltfScene.Primitive portalCube() {
@@ -190,12 +190,8 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                 : GltfViewerAnchorBlockEntity.loadedAnchors(minecraft.level, block);
     }
 
-    private record Live(List<MeshId<GltfProgramExports.InstanceData>> meshes, List<InstanceId> instances,
-                        List<GltfPrimitiveUploader.Uploaded> uploads) {
-        private static final Live EMPTY = new Live(List.of(), List.of(), List.of());
-
-        void dropResources() {
-            uploads.forEach(GltfPrimitiveUploader.Uploaded::drop);
-        }
+    private record Live(List<ReadyMesh<GltfProgramExports.InstanceData>> meshes, List<InstanceId> instances) {
+        private static final Live EMPTY = new Live(List.of(), List.of());
+        void close() { meshes.forEach(ReadyMesh::close); }
     }
 }

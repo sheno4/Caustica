@@ -215,6 +215,9 @@ public final class VulkanDeviceContext implements GpuDevice {
 
     public GraphicsQueue graphics() { return graphics; }
 
+    /** Dispatch final resource destruction after its owning references have ended. */
+    public void deferDestroy(Runnable destroy) { graphics.releaseAbandoned(destroy); }
+
     long completedComputeValue() { return completedComputeValue; }
 
     void publishCompletedCompute(long value) { completedComputeValue = value; }

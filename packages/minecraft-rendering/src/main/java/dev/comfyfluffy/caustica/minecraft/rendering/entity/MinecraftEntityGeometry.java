@@ -1,254 +1,214 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
-import dev.comfyfluffy.caustica.api.geometry.InstanceId;
-import dev.comfyfluffy.caustica.api.geometry.MeshId;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
-import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.geometry.*;
+import dev.comfyfluffy.caustica.api.scene.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
+import java.util.*;
 
-import java.util.ArrayList;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Objects;
-
-/** Retained Minecraft placements and per-resident meshes for one borrowed world scene. */
+/** Keeps each live mesh visible while its replacement prepares, with independent rigid placement edits. */
 public final class MinecraftEntityGeometry implements MinecraftWorldSessionContribution {
-    private final GeometryChannel channel;
+    private final MeshPreparer meshes;
+    private final SceneChannel channel;
     private final SceneId scene;
     private final MinecraftEntityUploader uploader;
     private final Map<Key, Resident> residents = new LinkedHashMap<>();
-    private PendingGroup pendingGroup;
+    private final ArrayDeque<Completion> completed = new ArrayDeque<>();
+    private PendingGroup group;
     private boolean stopped;
 
-    public MinecraftEntityGeometry(GeometryChannel channel, SceneId scene, MinecraftEntityUploader uploader) {
-        this.channel = Objects.requireNonNull(channel, "channel");
-        this.scene = Objects.requireNonNull(scene, "scene");
-        this.uploader = Objects.requireNonNull(uploader, "uploader");
+    public MinecraftEntityGeometry(MeshPreparer meshes, SceneChannel channel, SceneId scene,
+                                   MinecraftEntityUploader uploader) {
+        this.meshes = meshes;
+        this.channel = channel;
+        this.scene = scene;
+        this.uploader = uploader;
     }
 
-    /** Stages updates so one capture frame becomes one atomic scene publication. */
     public synchronized UpdateGroup beginUpdateGroup() {
         requireRunning();
-        if (pendingGroup != null) throw new IllegalStateException("an entity update group is already active");
-        pendingGroup = new PendingGroup();
-        return pendingGroup;
+        if (group != null) throw new IllegalStateException("entity update group already active");
+        publishPrepared();
+        group = new PendingGroup();
+        return group;
     }
 
-    /** Atomically installs revision-keyed mesh content and its current rigid placement. */
     public synchronized void put(Key key, MeshRevision revision, MinecraftEntityMesh mesh,
                                  GeometryTransform transform, int mask) {
+        put(key, revision, mesh, transform, mask, null);
+    }
+
+    public synchronized void put(Key key, MeshRevision revision, MinecraftEntityMesh mesh,
+                                 GeometryTransform transform, int mask, Runnable accepted) {
         requireRunning();
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(revision, "revision");
-        Objects.requireNonNull(mesh, "mesh");
-        Objects.requireNonNull(transform, "transform");
-        Resident prior = residents.get(key);
+        var prior = residents.get(key);
         if (prior != null && prior.revision.equals(revision)) {
-            submitLatest(prior, transform, mask);
-            prior.transform = transform;
-            prior.mask = mask;
+            transform(key, transform, mask);
             return;
         }
-        Resident target = prior != null ? prior : new Resident(channel.newInstance(),
-                channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA));
-        MinecraftEntityUploader.UploadedEntity displacedUpload = prior == null ? null : prior.uploaded;
-        MinecraftEntityUploader.UploadedEntity uploaded = uploader.upload(mesh);
-        boolean accepted = false;
+        var instance = prior == null ? channel.newInstance() : prior.instance;
+        if (prior != null && prior.live != null) emit(new SceneEdit.SetTransform(instance, transform, mask));
+        var capture = new Capture(revision, mesh, accepted);
+        var target = new Resident(instance, revision, transform, mask,
+                prior == null ? null : prior.live, prior == null ? null : prior.request, null);
+        if (target.request != null) {
+            residents.put(key, new Resident(instance, revision, transform, mask, target.live, target.request, capture));
+        } else {
+            startPreparation(key, target, capture);
+        }
+    }
+
+    /** One running build and one newest CPU capture bound work without starving deforming entities. */
+    private void startPreparation(Key key, Resident resident, Capture capture) {
+        var request = new Preparation(capture.accepted);
+        var uploaded = uploader.upload(capture.mesh);
+        java.util.concurrent.CompletableFuture<ReadyMesh<MinecraftProgramTypes.InstanceData>> future;
         try {
-            var operations = new ArrayList<GeometryChannel.Operation>(2);
-            operations.add(new GeometryChannel.SetMesh<>(target.mesh, uploaded.build()));
-            operations.add(new GeometryChannel.SetInstance<>(target.instance, scene, target.mesh, transform, mask,
-                    uploaded.instanceData()));
-            RetainedPublication publication;
-            if (pendingGroup != null) {
-                pendingGroup.batches.add(RetainedBatch.of(operations));
-                pendingGroup.introduced.add(uploaded);
-                if (displacedUpload != null) pendingGroup.displaced.add(displacedUpload);
-                publication = null;
-            } else if (prior != null) {
-                GeometryChannel.LatestInstance latest = new GeometryChannel.LatestInstance(
-                        target.instance, transform, mask);
-                publication = channel.submitGroupWithLatest(
-                        List.of(RetainedBatch.of(operations)), List.of(latest));
-            } else {
-                publication = channel.submit(RetainedBatch.of(operations));
-            }
-            accepted = publication != null;
-            if (prior != null && pendingGroup != null) submitLatest(target, transform, mask);
-            target.uploaded = uploaded;
-            if (publication != null && displacedUpload != null) displacedUpload.close();
+            future = meshes.prepare(MinecraftProgramTypes.INSTANCE_DATA, uploaded.build(),
+                    resident.live == null ? null : resident.live.mesh);
         } catch (RuntimeException | Error failure) {
-            if (!accepted) {
-                try { uploaded.close(); } catch (Throwable closeFailure) { failure.addSuppressed(closeFailure); }
-            }
+            uploaded.close();
             throw failure;
         }
-        target.revision = revision;
-        target.transform = transform;
-        target.mask = mask;
-        residents.put(key, target);
+        residents.put(key, new Resident(resident.instance, capture.revision, resident.transform, resident.mask,
+                resident.live, request, null));
+        future.whenComplete((ready, failure) -> {
+            synchronized (MinecraftEntityGeometry.this) {
+                var result = new Generation(ready, uploaded);
+                if (stopped) result.close();
+                else completed.add(new Completion(key, request, result, failure));
+            }
+        });
     }
 
-    /** Replaces only the placement so the renderer derives rigid previous/current transforms. */
     public synchronized void transform(Key key, GeometryTransform transform, int mask) {
         requireRunning();
-        Resident resident = residents.get(Objects.requireNonNull(key, "key"));
+        var resident = residents.get(key);
         if (resident == null) return;
-        Objects.requireNonNull(transform, "transform");
-        submitLatest(resident, transform, mask);
-        resident.transform = transform;
-        resident.mask = mask;
+        if (resident.live != null) emit(new SceneEdit.SetTransform(resident.instance, transform, mask));
+        residents.put(key, new Resident(resident.instance, resident.revision, transform, mask,
+                resident.live, resident.request, resident.queued));
     }
 
-    private void submitLatest(Resident resident, GeometryTransform transform, int mask) {
-        GeometryChannel.LatestInstance latest = new GeometryChannel.LatestInstance(
-                resident.instance, Objects.requireNonNull(transform, "transform"), mask);
-        if (pendingGroup != null) pendingGroup.latestInstances.put(resident.instance, latest);
-        else channel.submitGroupWithLatest(List.of(), List.of(latest));
-    }
-
-    /** Atomically removes the placement and mesh for one logical Minecraft object. */
     public synchronized void drop(Key key) {
         requireRunning();
-        Objects.requireNonNull(key, "key");
-        Resident resident = residents.get(key);
+        var resident = residents.get(key);
         if (resident == null) return;
-        var operations = new ArrayList<GeometryChannel.Operation>(2);
-        operations.add(new GeometryChannel.DropInstance(resident.instance));
-        operations.add(new GeometryChannel.DropMesh<>(resident.mesh));
-        if (pendingGroup != null) {
-            pendingGroup.batches.add(RetainedBatch.of(operations));
-            pendingGroup.displaced.add(resident.uploaded);
-        } else {
-            channel.submit(RetainedBatch.of(operations));
-            resident.uploaded.close();
+        if (resident.live != null) {
+            emit(new SceneEdit.DropInstance(resident.instance));
+            retire(resident.live);
         }
         residents.remove(key);
     }
 
-    @Override public synchronized void stop() {
-        if (stopped) return;
-        if (pendingGroup != null) throw new IllegalStateException("cannot stop during an entity update group");
-        if (!residents.isEmpty()) {
-            var operations = new ArrayList<GeometryChannel.Operation>(residents.size() * 2);
-            for (Resident resident : residents.values()) {
-                operations.add(new GeometryChannel.DropInstance(resident.instance));
-                operations.add(new GeometryChannel.DropMesh<>(resident.mesh));
+    /** Completion publication uses the most recent transform, never the one captured by preparation. */
+    private void publishPrepared() {
+        Completion completion;
+        while ((completion = completed.poll()) != null) {
+            var resident = residents.get(completion.key);
+            if (resident == null || resident.request != completion.request) {
+                completion.generation.close();
+                continue;
             }
-            List<MinecraftEntityUploader.UploadedEntity> uploads = residents.values().stream()
-                    .map(resident -> resident.uploaded).toList();
-            channel.submit(RetainedBatch.of(operations));
-            uploads.forEach(MinecraftEntityUploader.UploadedEntity::close);
+            if (completion.failure != null) {
+                completion.generation.close();
+                throw new IllegalStateException("Entity mesh preparation failed", completion.failure);
+            }
+            var generation = completion.generation;
+            try {
+                channel.edit(List.of(new SceneEdit.SetInstance<>(resident.instance, scene, generation.mesh,
+                        resident.transform, resident.mask, generation.uploaded.instanceData())));
+            } catch (RuntimeException | Error failure) {
+                generation.close();
+                throw failure;
+            }
+            var published = new Resident(resident.instance, resident.revision,
+                    resident.transform, resident.mask, generation, null, null);
+            residents.put(completion.key, published);
+            if (resident.live != null) resident.live.close();
+            if (completion.request.accepted != null) completion.request.accepted.run();
+            if (resident.queued != null) startPreparation(completion.key, published, resident.queued);
         }
-        residents.clear();
-        stopped = true;
     }
 
-    @Override public void close() {
-        uploader.close();
+    private void emit(SceneEdit edit) {
+        if (group != null) group.edits.add(edit);
+        else channel.edit(List.of(edit));
     }
+
+    private void retire(Generation generation) {
+        if (group != null) group.displaced.add(generation);
+        else generation.close();
+    }
+
+    @Override public synchronized void stop() {
+        if (stopped) return;
+        if (group != null) throw new IllegalStateException("cannot stop during entity update group");
+        var edits = new ArrayList<SceneEdit>();
+        for (var resident : residents.values()) {
+            if (resident.live != null) edits.add(new SceneEdit.DropInstance(resident.instance));
+        }
+        if (!edits.isEmpty()) channel.edit(edits);
+        stopped = true;
+        residents.values().forEach(resident -> { if (resident.live != null) resident.live.close(); });
+        residents.clear();
+        completed.forEach(completion -> completion.generation.close());
+        completed.clear();
+    }
+
+    @Override public synchronized void close() { stop(); uploader.close(); }
 
     private void requireRunning() {
         if (stopped) throw new IllegalStateException("entity geometry is stopped");
     }
 
     public interface UpdateGroup extends AutoCloseable {
-        RetainedPublication submit();
+        void submit();
         @Override void close();
     }
 
     private final class PendingGroup implements UpdateGroup {
-        final Map<Key, ResidentSnapshot> residentSnapshot = new LinkedHashMap<>();
-        final List<RetainedBatch<GeometryChannel.Operation>> batches = new ArrayList<>();
-        final List<MinecraftEntityUploader.UploadedEntity> introduced = new ArrayList<>();
-        final List<MinecraftEntityUploader.UploadedEntity> displaced = new ArrayList<>();
-        final Map<InstanceId, GeometryChannel.LatestInstance> latestInstances = new IdentityHashMap<>();
+        final Map<Key, Resident> snapshot = new LinkedHashMap<>(residents);
+        final List<SceneEdit> edits = new ArrayList<>();
+        final List<Generation> displaced = new ArrayList<>();
         boolean finished;
 
-        PendingGroup() {
-            residents.forEach((key, resident) -> residentSnapshot.put(key,
-                    new ResidentSnapshot(resident.instance, resident.mesh, resident.revision,
-                            resident.transform, resident.mask, resident.uploaded)));
-        }
-
-        @Override public RetainedPublication submit() {
+        @Override public void submit() {
             synchronized (MinecraftEntityGeometry.this) {
-                requireActive();
-                try {
-                    RetainedPublication publication = batches.isEmpty() && latestInstances.isEmpty()
-                            ? RetainedPublication.alreadyVisible()
-                            : channel.submitGroupWithLatest(batches, List.copyOf(latestInstances.values()));
-                    displaced.forEach(MinecraftEntityUploader.UploadedEntity::close);
-                    finished = true;
-                    pendingGroup = null;
-                    return publication;
-                } catch (RuntimeException | Error failure) {
-                    rollback(failure);
-                    throw failure;
-                }
+                if (!edits.isEmpty()) channel.edit(edits);
+                displaced.forEach(Generation::close);
+                finished = true;
+                group = null;
             }
         }
 
         @Override public void close() {
             synchronized (MinecraftEntityGeometry.this) {
                 if (finished) return;
-                requireActive();
-                rollback(new IllegalStateException("entity update group was cancelled"));
+                residents.clear();
+                residents.putAll(snapshot);
+                finished = true;
+                group = null;
+                completed.removeIf(completion -> {
+                    var resident = residents.get(completion.key);
+                    boolean stale = resident == null || resident.request != completion.request;
+                    if (stale) completion.generation.close();
+                    return stale;
+                });
             }
-        }
-
-        private void rollback(Throwable failure) {
-            for (int index = introduced.size() - 1; index >= 0; index--) {
-                try { introduced.get(index).close(); }
-                catch (Throwable closeFailure) { failure.addSuppressed(closeFailure); }
-            }
-            residents.clear();
-            residentSnapshot.forEach((key, snapshot) -> residents.put(key, snapshot.restore()));
-            finished = true;
-            pendingGroup = null;
-        }
-
-        private void requireActive() {
-            if (finished || pendingGroup != this) throw new IllegalStateException("entity update group is not active");
-        }
-    }
-
-    private record ResidentSnapshot(InstanceId instance, MeshId<MinecraftProgramTypes.InstanceData> mesh,
-                                    MeshRevision revision, GeometryTransform transform, int mask,
-                                    MinecraftEntityUploader.UploadedEntity uploaded) {
-        Resident restore() {
-            Resident resident = new Resident(instance, mesh);
-            resident.revision = revision;
-            resident.transform = transform;
-            resident.mask = mask;
-            resident.uploaded = uploaded;
-            return resident;
         }
     }
 
     public record Key(long domain, long value) { }
-
-    /** Stable captured content identity used to reuse one resident's unchanged retained BLAS. */
     public record MeshRevision(long epoch, long content, long topology) { }
 
-    private static final class Resident {
-        final InstanceId instance;
-        final MeshId<MinecraftProgramTypes.InstanceData> mesh;
-        MeshRevision revision;
-        GeometryTransform transform;
-        int mask;
-        MinecraftEntityUploader.UploadedEntity uploaded;
-
-        Resident(InstanceId instance, MeshId<MinecraftProgramTypes.InstanceData> mesh) {
-            this.instance = instance;
-            this.mesh = mesh;
-        }
+    private record Resident(InstanceId instance, MeshRevision revision, GeometryTransform transform,
+                            int mask, Generation live, Preparation request, Capture queued) { }
+    private record Capture(MeshRevision revision, MinecraftEntityMesh mesh, Runnable accepted) { }
+    private record Preparation(Runnable accepted) { }
+    private record Completion(Key key, Preparation request, Generation generation, Throwable failure) { }
+    private record Generation(ReadyMesh<MinecraftProgramTypes.InstanceData> mesh,
+                              MinecraftEntityUploader.UploadedEntity uploaded) implements AutoCloseable {
+        @Override public void close() { if (mesh != null) mesh.close(); uploaded.close(); }
     }
-
 }

@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.api;
 
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
 import org.junit.jupiter.api.Test;
@@ -12,8 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class MinecraftValueContractTest {
     @Test
-    void environmentSelectionReturnsTheRetainedRevisionReceipt() throws ReflectiveOperationException {
-        assertEquals(RetainedPublication.class, MinecraftEnvironmentSelector.class
+    void environmentSelectionPublishesDirectly() throws ReflectiveOperationException {
+        assertEquals(void.class, MinecraftEnvironmentSelector.class
                 .getMethod("select", EnvironmentBinding.class).getReturnType());
     }
 

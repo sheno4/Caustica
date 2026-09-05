@@ -1,16 +1,12 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.geometry.InstanceId;
-import dev.comfyfluffy.caustica.api.geometry.MeshId;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
-import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.pass.*;
 import dev.comfyfluffy.caustica.api.program.*;
-import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
@@ -34,8 +30,8 @@ final class ShowcaseSessionLifecycleTest {
     @Test
     void sameWorldSessionHandsSelectionsFromOneOwnerToAnotherThenDrainsBoth() {
         Programs programs = new Programs();
-        Geometry geometry = new Geometry();
-        Lights lights = new Lights();
+        TestScene geometry = new TestScene();
+        TestScene lights = new TestScene();
         Passes passes = new Passes();
         AtomicReference<EnvironmentBinding<?>> selected = new AtomicReference<>();
         SceneId scene = new SceneId() { };
@@ -44,10 +40,10 @@ final class ShowcaseSessionLifecycleTest {
             @Override public GpuComputeQueue compute() { return null; }
             @Override public ProgramChannel program() { return programs; }
             @Override public PassChannel passes() { throw new AssertionError("selection owner has no passes"); }
-            @Override public GeometryChannel geometry() {
+            @Override public MeshPreparer meshes() {
                 throw new AssertionError("selection owner has no geometry mutation authority");
             }
-            @Override public LightChannel lights() { return lights; }
+            @Override public SceneChannel scene() { return lights; }
             @Override public ResourceFactory resources() { return null; }
         };
         RenderSessionContext geometryOwner = new RenderSessionContext() {
@@ -57,10 +53,8 @@ final class ShowcaseSessionLifecycleTest {
                 throw new AssertionError("geometry owner consumes handed-off program ids");
             }
             @Override public PassChannel passes() { return passes; }
-            @Override public GeometryChannel geometry() { return geometry; }
-            @Override public LightChannel lights() {
-                throw new AssertionError("geometry owner cannot mutate handed-off lights");
-            }
+            @Override public MeshPreparer meshes() { return geometry; }
+            @Override public SceneChannel scene() { return geometry; }
             @Override public ResourceFactory resources() { return null; }
         };
         MinecraftWorldSessionContext selectionWorld = world(selectionOwner, scene, selected);
@@ -75,7 +69,7 @@ final class ShowcaseSessionLifecycleTest {
 
         assertSame(programs.exports.netherSky(), selected.get().implementation());
         assertEquals(11L, selected.get().bindingData().bits());
-        assertEquals(3, lights.batches.getFirst().operations().size());
+        assertEquals(3, lights.batches.getFirst().size());
 
         selectionContribution.stop();
         session.stop();
@@ -84,9 +78,9 @@ final class ShowcaseSessionLifecycleTest {
 
         assertThrows(IllegalStateException.class, () -> handoff.require(scene));
         assertEquals(3, passes.closed.get());
-        assertEquals(1, geometry.batches.size());
+        assertEquals(0, geometry.batches.size());
         assertEquals(2, lights.batches.size());
-        assertEquals(3, lights.batches.getLast().operations().size());
+        assertEquals(3, lights.batches.getLast().size());
         assertEquals(1, programs.closed.get());
     }
 
@@ -100,10 +94,7 @@ final class ShowcaseSessionLifecycleTest {
             }
             @Override public ResourcePackEpoch resourcePackEpoch() { return new ResourcePackEpoch(11L); }
             @Override public MinecraftEnvironmentSelector environment() {
-                return binding -> {
-                    selected.set(binding);
-                    return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
-                };
+                return selected::set;
             }
         };
     }
@@ -133,35 +124,6 @@ final class ShowcaseSessionLifecycleTest {
                 PassFactory<UiSetup, UiFrame> factory) { return registration(); }
         @Override public PassRegistration addUiPass(PassId id, PassPlacement placement,
                 PassFactory<UiSetup, UiFrame> factory) { return registration(); }
-    }
-
-    private static final class Geometry implements GeometryChannel {
-        private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
-        @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) {
-            return new MeshId<>() { };
-        }
-        @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submit(
-                RetainedBatch<Operation> batch) {
-            batches.add(batch);
-            return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
-        }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitGroup(
-                List<RetainedBatch<Operation>> accepted) {
-            batches.addAll(accepted);
-            return dev.comfyfluffy.caustica.api.retained.RetainedPublication.alreadyVisible();
-        }
-        @Override public dev.comfyfluffy.caustica.api.retained.RetainedPublication submitWithLights(
-                List<RetainedBatch<Operation>> geometryBatches, LightChannel lights,
-                RetainedBatch<LightChannel.Operation> lightBatch) {
-            throw new UnsupportedOperationException();
-        }
-    }
-
-    private static final class Lights implements LightChannel {
-        private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
-        @Override public LightId newLight() { return new LightId() { }; }
-        @Override public void submit(RetainedBatch<Operation> batch) { batches.add(batch); }
     }
 
     private static final class Programs implements ProgramChannel, ProgramBuilder {

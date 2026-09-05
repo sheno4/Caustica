@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.engine.session;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
@@ -30,7 +30,7 @@ final class EngineRenderSessionTest {
             return contribution("one", events);
         });
         host.api().sessions().add(context -> {
-            assertSame(created.get(1).geometry, context.geometry());
+            assertSame(created.get(1).geometry, context.meshes());
             return contribution("two", events);
         });
 
@@ -136,8 +136,8 @@ final class EngineRenderSessionTest {
                 stub(dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue.class);
         private final ProgramChannel program = stub(ProgramChannel.class);
         private final PassChannel passes = stub(PassChannel.class);
-        private final GeometryChannel geometry = stub(GeometryChannel.class);
-        private final LightChannel lights = stub(LightChannel.class);
+        private final MeshPreparer geometry = stub(MeshPreparer.class);
+        private final SceneChannel lights = stub(SceneChannel.class);
         private final dev.comfyfluffy.caustica.api.resource.ResourceFactory resources =
                 stub(dev.comfyfluffy.caustica.api.resource.ResourceFactory.class);
 
@@ -150,8 +150,8 @@ final class EngineRenderSessionTest {
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue compute() { return compute; }
         @Override public ProgramChannel program() { return program; }
         @Override public PassChannel passes() { return passes; }
-        @Override public GeometryChannel geometry() { return geometry; }
-        @Override public LightChannel lights() { return lights; }
+        @Override public MeshPreparer meshes() { return geometry; }
+        @Override public SceneChannel scene() { return lights; }
         @Override public dev.comfyfluffy.caustica.api.resource.ResourceFactory resources() { return resources; }
         @Override public void quiesce() { events.add(name + ":quiesce"); }
         @Override public void invalidate() { events.add(name + ":invalidate"); }
