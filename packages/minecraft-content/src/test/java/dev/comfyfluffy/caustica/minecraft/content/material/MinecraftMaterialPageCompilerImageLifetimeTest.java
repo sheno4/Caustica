@@ -55,7 +55,7 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
     }
 
     @Test
-    void decodeKeepsEmissionPageInputsWithoutProducingCpuEmissionAnalysis() throws Exception {
+    void decodeMultipliesEmissionColorByLinearBaseColor() throws Exception {
         MaterialTextureAnalysisSource source = new MaterialTextureAnalysisSource(1, 1, 1,
                 () -> new MaterialTextureImage() {
                     @Override public int width() { return 1; }
@@ -76,9 +76,9 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
         MaterialTextureLevels.Level level = decoded.levels().getFirst();
 
         assertEquals(0.75f, level.surface0()[2], 1.0e-6f);
-        assertEquals(0.5f, level.emissionColor()[0], 1.0e-6f);
-        assertEquals(0.25f, level.emissionColor()[1], 1.0e-6f);
-        assertEquals(1.0f, level.emissionColor()[2], 1.0e-6f);
+        assertEquals(0.10793025f, level.emissionColor()[0], 1.0e-6f);
+        assertEquals(0.012817365f, level.emissionColor()[1], 1.0e-6f);
+        assertEquals(0.014443844f, level.emissionColor()[2], 1.0e-6f);
     }
 
     @Test

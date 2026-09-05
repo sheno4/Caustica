@@ -21,9 +21,9 @@ final class MaterialTextureAnalyzer {
             for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
                 int i = (y * width + x) * 4;
                 int pixel = sample(texture, x, y, width, height);
-                float r = MaterialTextureLevels.srgbToLinear(red(pixel));
-                float g = MaterialTextureLevels.srgbToLinear(green(pixel));
-                float b = MaterialTextureLevels.srgbToLinear(blue(pixel));
+                float r = MaterialTextureLevels.srgbToLinear(red(pixel) / 255.0f);
+                float g = MaterialTextureLevels.srgbToLinear(green(pixel) / 255.0f);
+                float b = MaterialTextureLevels.srgbToLinear(blue(pixel) / 255.0f);
                 texel.reset();
                 texture.readOpenPbr(x, y, texel);
                 emissionColor[i] = texel.emissionColorR * (emissionUsesBase ? r : 1);
