@@ -50,13 +50,13 @@ class RtDenoiserStateTest {
 
     @Test
     void previousViewUsesCurrentMinusPreviousCameraTranslation() {
-        Matrix4f previous = RtFrameRenderer.nrdPreviousWorldToView(false,
+        Matrix4f previous = RtReconstruction.nrdPreviousWorldToView(false,
                 new Matrix4f(), new Matrix4f(), 3.0f, -2.0f, 1.0f);
         assertEquals(3.0f, previous.m30());
         assertEquals(-2.0f, previous.m31());
         assertEquals(1.0f, previous.m32());
 
-        Matrix4f reset = RtFrameRenderer.nrdPreviousWorldToView(true,
+        Matrix4f reset = RtReconstruction.nrdPreviousWorldToView(true,
                 new Matrix4f().translation(7.0f, 8.0f, 9.0f), new Matrix4f(), 3.0f, -2.0f, 1.0f);
         assertEquals(7.0f, reset.m30());
         assertEquals(8.0f, reset.m31());
@@ -65,8 +65,8 @@ class RtDenoiserStateTest {
 
     @Test
     void denoisingRangeIncludesPrimaryHitsButExcludesTheSkySentinel() {
-        assertTrue(RtFrameRenderer.NRD_DENOISING_RANGE > 10_000.0f);
-        assertTrue(RtFrameRenderer.NRD_DENOISING_RANGE < 65_504.0f);
+        assertTrue(RtReconstruction.NRD_DENOISING_RANGE > 10_000.0f);
+        assertTrue(RtReconstruction.NRD_DENOISING_RANGE < 65_504.0f);
     }
 
     @Test
@@ -102,10 +102,10 @@ class RtDenoiserStateTest {
         RtDenoiserState state = new RtDenoiserState(factory, settings(DenoiserRoute.TEMPORAL_DENOISER));
         state.ensureBackend(EXTENT);
         assertEquals(DenoiserReset.CLEAR_AND_RESTART, state.frameReset(true));
-        state.frameRecorded();
+        state.frameSubmitted();
         assertEquals(DenoiserReset.CONTINUE, state.frameReset(true));
         assertEquals(DenoiserReset.CLEAR_AND_RESTART, state.frameReset(false));
-        state.frameRecorded();
+        state.frameSubmitted();
         state.resetHistory();
         assertEquals(DenoiserReset.CLEAR_AND_RESTART, state.frameReset(true));
 

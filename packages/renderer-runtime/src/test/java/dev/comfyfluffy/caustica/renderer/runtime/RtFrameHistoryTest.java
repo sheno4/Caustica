@@ -1,0 +1,163 @@
+package dev.comfyfluffy.caustica.renderer.runtime;
+
+import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.view.Camera;
+import dev.comfyfluffy.caustica.api.view.SceneView;
+import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
+import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.WorldPushData.Float3;
+import dev.comfyfluffy.caustica.renderer.runtime.pipeline.RtJitter;
+import org.joml.Matrix4f;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+final class RtFrameHistoryTest {
+    private static final SceneId SCENE = new SceneId() { };
+    private static final TraceExtent EXTENT = new TraceExtent(1280, 720, 1920, 1080);
+    private static final DenoiserRoute ROUTE = DenoiserRoute.TEMPORAL_DENOISER;
+
+    @Test
+    void captureDoesNotPublishCameraOrAdvanceJitter() {
+        var history = new RtFrameHistory();
+        capture(history, snapshot(7, 1), 0);
+        var retry = capture(history, snapshot(0, 2), 0);
+        assertFalse(retry.historyContinuous());
+        assertFalse(retry.localHistoryContinuous());
+        assertTrue(history.changesScene(retry.snapshot()));
+        assertEquals(RtJitter.sample(0, 1280, 1920).x(), retry.jitterX());
+        assertEquals(new Float3(0, 0, 0), retry.cameraDelta());
+        assertEquals(retry.projectionView(), retry.previousProjectionView());
+        assertEquals(retry.jitterY(), retry.previousJitterY());
+        assertEquals(0, retry.frameTimeMilliseconds());
+    }
+
+    @Test
+    void abandonedCaptureLeavesLastSubmissionAsThePredecessor() {
+        var history = new RtFrameHistory();
+        var first = capture(history, snapshot(1, 1), 10);
+        history.submitted(first);
+        capture(history, snapshot(7, 1.01), 11);
+        var retry = capture(history, snapshot(3, 1.02), 11);
+        assertTrue(retry.historyContinuous());
+        assertEquals(new Float3(2, 0, 0), retry.cameraDelta());
+        assertEquals(first.projectionView(), retry.previousProjectionView());
+        assertEquals(first.jitterX(), retry.previousJitterX());
+        assertEquals(first.jitterY(), retry.previousJitterY());
+        assertEquals(16, retry.frameTimeMilliseconds(), .0001f);
+        assertEquals(RtJitter.sample(1, 1280, 1920).x(), retry.jitterX());
+        history.submitted(retry);
+        var next = capture(history, snapshot(4, 1.03), 12);
+        assertEquals(new Float3(1, 0, 0), next.cameraDelta());
+        assertEquals(retry.jitterY(), next.previousJitterY());
+        assertEquals(RtJitter.sample(2, 1280, 1920).x(), next.jitterX());
+    }
+
+    @Test
+    void frameGapsAndExplicitResetDiscardCameraHistory() {
+        var history = seeded();
+        assertReset(capture(history, snapshot(1, .02), 2));
+        history.reset();
+        var reset = capture(history, snapshot(1, .02), 1);
+        assertReset(reset);
+        assertEquals(RtJitter.sample(1, 1280, 1920).x(), reset.jitterX());
+        assertTrue(history.changesScene(reset.snapshot()));
+    }
+
+    @Test
+    void sceneOriginScaleExtentAndRouteChangesResetHistory() {
+        assertReset(capture(seeded(), snapshot(new SceneId() { }, SceneOrigin.ZERO, 0, .01,
+                1, false, new Matrix4f(), new Matrix4f()), 1));
+        assertReset(capture(seeded(), snapshot(SCENE, new SceneOrigin(1, 0, 0), 0, .01,
+                1, false, new Matrix4f(), new Matrix4f()), 1));
+        assertReset(capture(seeded(), snapshot(SCENE, SceneOrigin.ZERO, 0, .01,
+                2, false, new Matrix4f(), new Matrix4f()), 1));
+        assertReset(seeded().capture(snapshot(0, .01), 1, 16_000_000L,
+                new TraceExtent(960, 540, 1920, 1080), ROUTE, 1, 1, 1));
+        assertReset(seeded().capture(snapshot(0, .01), 1, 16_000_000L,
+                EXTENT, DenoiserRoute.RAY_RECONSTRUCTION, 1, 1, 1));
+        assertFalse(seeded().changesScene(snapshot(0, .01)));
+    }
+
+    @Test
+    void translationRotationAndProjectionCutsResetHistory() {
+        assertReset(capture(seeded(), snapshot(9, .01), 1));
+        assertReset(capture(seeded(), snapshot(SCENE, SceneOrigin.ZERO, 0, .01,
+                1, false, new Matrix4f(), new Matrix4f().rotationY((float) Math.PI / 2)), 1));
+        assertReset(capture(seeded(), snapshot(SCENE, SceneOrigin.ZERO, 0, .01,
+                1, false, new Matrix4f().m00(1.2f), new Matrix4f()), 1));
+    }
+
+    @Test
+    void localAccumulationRequiresStationaryCameraAndInactiveAnimation() {
+        assertTrue(capture(seeded(), snapshot(0, .01), 1).localHistoryContinuous());
+        var moved = capture(seeded(), snapshot(1, .01), 1);
+        assertTrue(moved.historyContinuous());
+        assertFalse(moved.localHistoryContinuous());
+        var animated = capture(seeded(), snapshot(SCENE, SceneOrigin.ZERO, 0, .01,
+                1, true, new Matrix4f(), new Matrix4f()), 1);
+        assertTrue(animated.historyContinuous());
+        assertFalse(animated.localHistoryContinuous());
+    }
+
+    @Test
+    void rawSubmissionDoesNotConsumeTemporalJitterSamples() {
+        var history = new RtFrameHistory();
+        var raw = history.capture(snapshot(0, 0), 0, 0, EXTENT, DenoiserRoute.RAW, 1, -1, -1);
+        assertEquals(0, raw.jitterX(), 0);
+        assertEquals(0, raw.jitterY(), 0);
+        history.submitted(raw);
+        var temporal = history.capture(snapshot(0, .01), 1, 16_000_000L, EXTENT, ROUTE, 2, -1, -1);
+        assertReset(temporal);
+        assertEquals(-RtJitter.sample(0, 1280, 1920).y(), temporal.jitterY());
+        assertEquals(2, temporal.preExposure());
+    }
+
+    @Test
+    void proceduralTimeUsesPredecessorOnlyWithinTheContinuousTimeWindow() {
+        assertEquals(12, proceduralSuccessor(12, 12.1).previousProceduralTime());
+        assertEquals(.1f, proceduralSuccessor(3599.9, 3600.1).previousProceduralTime(), .00001f);
+        assertEquals(12.5f, proceduralSuccessor(12, 12.5).previousProceduralTime());
+        assertEquals(11.9f, proceduralSuccessor(12, 11.9).previousProceduralTime());
+    }
+
+    private static RtFrameInput proceduralSuccessor(double previous, double current) {
+        var history = new RtFrameHistory();
+        history.submitted(capture(history, snapshot(0, previous), 0));
+        var next = capture(history, snapshot(0, current), 1);
+        assertTrue(next.historyContinuous());
+        return next;
+    }
+
+    private static void assertReset(RtFrameInput frame) {
+        assertFalse(frame.historyContinuous());
+        assertFalse(frame.localHistoryContinuous());
+        assertEquals(new Float3(0, 0, 0), frame.cameraDelta());
+        assertEquals(frame.projectionView(), frame.previousProjectionView());
+        assertEquals(frame.jitterX(), frame.previousJitterX());
+        assertEquals(frame.jitterY(), frame.previousJitterY());
+        assertEquals(0, frame.frameTimeMilliseconds());
+    }
+
+    private static RtFrameHistory seeded() {
+        var history = new RtFrameHistory();
+        history.submitted(capture(history, snapshot(0, 0), 0));
+        return history;
+    }
+
+    private static RtFrameInput capture(RtFrameHistory history, FrameSnapshot snapshot, long number) {
+        return history.capture(snapshot, number, number * 16_000_000L, EXTENT, ROUTE, 1, 1, 1);
+    }
+
+    private static FrameSnapshot snapshot(double x, double seconds) {
+        return snapshot(SCENE, SceneOrigin.ZERO, x, seconds, 1, false, new Matrix4f(), new Matrix4f());
+    }
+
+    private static FrameSnapshot snapshot(SceneId scene, SceneOrigin origin, double x, double seconds,
+            double metersPerUnit, boolean animation, Matrix4f projection, Matrix4f rotation) {
+        var camera = new Camera(x, 0, 0, projection.get(new float[16]), rotation.get(new float[16]));
+        return new FrameSnapshot(new SceneView(scene, camera), origin, animation, seconds, metersPerUnit);
+    }
+}

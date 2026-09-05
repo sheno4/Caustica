@@ -67,7 +67,7 @@ final class RtDenoiserState implements AutoCloseable {
                 ? DenoiserReset.CLEAR_AND_RESTART : DenoiserReset.CONTINUE;
     }
 
-    void frameRecorded() {
+    void frameSubmitted() {
         resetPending = false;
     }
 

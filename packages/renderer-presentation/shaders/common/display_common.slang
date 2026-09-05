@@ -137,7 +137,7 @@ public struct NrdPlaneFrame {
     public float3 cameraOffset;
     public float preExposure;
     public float3 cameraDelta;
-    public float radianceClampRange;
+    public float radianceScale;
     public uint width;
     public uint height;
 };

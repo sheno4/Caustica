@@ -65,6 +65,6 @@ struct NrdPlaneFrameLayoutProbe { NrdPlaneFrame values[2]; };
 void probeNrdPlaneFrame(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
         float sink = nrdPlaneFrameLayoutProbe[0].values[0].currentViewProjection[0][0]
-                + nrdPlaneFrameLayoutProbe[0].values[1].radianceClampRange;
+                + nrdPlaneFrameLayoutProbe[0].values[1].radianceScale;
     }
 }

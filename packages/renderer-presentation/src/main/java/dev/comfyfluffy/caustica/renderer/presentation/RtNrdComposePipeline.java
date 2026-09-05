@@ -19,6 +19,8 @@ import java.nio.ByteBuffer;
 public final class RtNrdComposePipeline {
     public static final int SIGNAL_LINEAR_RGB = 0;
     public static final int SIGNAL_YCOCG = 1;
+    /** Fixed scene-linear scale keeps photometric daylight within NRD's FP16 moment range. */
+    public static final float RADIANCE_SCALE = 1.0f / 4096.0f;
     private static final String SHADER = "/caustica/shaders/pipelines/nrd_compose/main.comp.spv";
     private final VulkanDeviceContext context;
     private final ShaderObjectCompute shader;

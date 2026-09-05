@@ -2,58 +2,43 @@ package dev.comfyfluffy.caustica.renderer.runtime.pipeline;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Modifier;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 final class RtJitterTest {
     @Test
-    void rendererOwnsOneNonStaticJitterSequence() throws Exception {
-        var jitterField = Class.forName("dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer", false,
-                        RtJitterTest.class.getClassLoader())
-                .getDeclaredField("jitter");
-
-        assertEquals(RtJitter.class, jitterField.getType());
-        assertFalse(Modifier.isStatic(jitterField.getModifiers()));
-        assertTrue(Modifier.isFinal(jitterField.getModifiers()));
-        assertFalse(java.util.Arrays.stream(RtJitter.class.getDeclaredFields())
-                .anyMatch(field -> Modifier.isStatic(field.getModifiers())
-                        && field.getType() == RtJitter.class));
+    void firstSamplesAreCenteredHaltonCoordinates() {
+        assertEquals(0, RtJitter.sample(0, 1280, 1920).x());
+        assertEquals(-1.0f / 6, RtJitter.sample(0, 1280, 1920).y(), 1.0e-7f);
+        assertEquals(-.25f, RtJitter.sample(1, 1280, 1920).x());
+        assertEquals(1.0f / 6, RtJitter.sample(1, 1280, 1920).y(), 1.0e-7f);
     }
 
     @Test
-    void instancesAdvanceIndependently() {
-        RtJitter first = new RtJitter();
-        RtJitter second = new RtJitter();
-
-        first.prepare(1280, 720, 1920);
-        float firstPhaseX = first.jitterPixelsX();
-        float firstPhaseY = first.jitterPixelsY();
-        first.prepare(1280, 720, 1920);
-
-        second.prepare(1280, 720, 1920);
-
-        assertNotEquals(first.jitterPixelsX(), second.jitterPixelsX());
-        assertNotEquals(first.jitterPixelsY(), second.jitterPixelsY());
-        assertEquals(firstPhaseX, second.jitterPixelsX());
-        assertEquals(firstPhaseY, second.jitterPixelsY());
+    void samplingDoesNotAdvanceAnySequence() {
+        var first = RtJitter.sample(0, 1280, 1920);
+        assertNotEquals(first, RtJitter.sample(1, 1280, 1920));
+        assertEquals(first, RtJitter.sample(0, 1280, 1920));
     }
 
     @Test
-    void newRendererJitterBeginsAtPhaseZero() {
-        RtJitter advanced = new RtJitter();
-        advanced.prepare(1280, 720, 1920);
-        advanced.prepare(1280, 720, 1920);
+    void nativeAndQualityRenderingUseThirtyTwoPhases() {
+        for (int renderWidth : new int[]{1920, 1280, 960}) {
+            assertEquals(RtJitter.sample(0, renderWidth, 1920), RtJitter.sample(32, renderWidth, 1920));
+            assertNotEquals(RtJitter.sample(0, renderWidth, 1920), RtJitter.sample(31, renderWidth, 1920));
+        }
+    }
 
-        RtJitter fresh = new RtJitter();
-        fresh.prepare(1280, 720, 1920);
+    @Test
+    void phaseCountGrowsWithUpscaleRatio() {
+        assertEquals(RtJitter.sample(0, 640, 1920), RtJitter.sample(72, 640, 1920));
+        assertNotEquals(RtJitter.sample(0, 640, 1920), RtJitter.sample(32, 640, 1920));
+    }
 
-        assertEquals(0.0f, fresh.jitterPixelsX());
-        assertEquals(-1.0f / 6.0f, fresh.jitterPixelsY(), 1.0e-7f);
-        assertNotEquals(advanced.jitterPixelsX(), fresh.jitterPixelsX());
-        assertNotEquals(advanced.jitterPixelsY(), fresh.jitterPixelsY());
+    @Test
+    void longSubmissionCountsRemainWithinTheRenderPixel() {
+        var sample = RtJitter.sample(Long.MAX_VALUE, 1280, 1920);
+        assertTrue(sample.x() >= -.5f && sample.x() < .5f);
+        assertTrue(sample.y() >= -.5f && sample.y() < .5f);
+        assertEquals(RtJitter.sample(31, 1280, 1920), sample);
     }
 }

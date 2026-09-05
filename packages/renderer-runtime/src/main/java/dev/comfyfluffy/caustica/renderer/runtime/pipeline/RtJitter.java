@@ -2,26 +2,13 @@ package dev.comfyfluffy.caustica.renderer.runtime.pipeline;
 
 /** Sub-pixel Halton jitter in render-pixel space for temporal reconstruction. */
 public final class RtJitter {
-    private int frameIndex;
-    private float pixelsX;
-    private float pixelsY;
+    private RtJitter() { }
 
-    public RtJitter() {
-    }
+    public record Sample(float x, float y) { }
 
-    public void prepare(int renderWidth, int renderHeight, int displayWidth) {
-        int phaseCount = jitterPhaseCount(renderWidth, displayWidth);
-        int index = (frameIndex++ % phaseCount) + 1;
-        pixelsX = halton(index, 2) - 0.5f;
-        pixelsY = halton(index, 3) - 0.5f;
-    }
-
-    public float jitterPixelsX() {
-        return pixelsX;
-    }
-
-    public float jitterPixelsY() {
-        return pixelsY;
+    public static Sample sample(long submittedFrames, int renderWidth, int displayWidth) {
+        int index = (int) (submittedFrames % jitterPhaseCount(renderWidth, displayWidth)) + 1;
+        return new Sample(halton(index, 2) - .5f, halton(index, 3) - .5f);
     }
 
     static int jitterPhaseCount(int renderWidth, int displayWidth) {

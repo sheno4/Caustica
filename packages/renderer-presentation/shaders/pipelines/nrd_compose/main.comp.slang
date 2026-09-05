@@ -71,14 +71,12 @@ float disocclusionRelaxation(DevicePtr<float4> records, uint2 pixel, uint2 exten
     return saturate((value - 0.00002) * 25.0);
 }
 
-float luminance(float3 value) {
-    return dot(max(value, float3(0.0)), float3(0.2126, 0.7152, 0.0722));
-}
-
-void clampRadiance(inout float3 radiance, NrdPlaneFrame frame) {
-    float maximum = min(255.0, 0.18 * frame.preExposure * frame.radianceClampRange);
-    float value = luminance(radiance);
-    if (value > maximum) radiance *= maximum / value;
+float3 encodeRadiance(float3 radiance, NrdPlaneFrame frame) {
+    // NRD history uses a fixed scene-linear scale. RELAX stores second moments in FP16,
+    // so each input component must stay below sqrt(65504), independently of display exposure.
+    float3 signal = max(radiance, float3(0.0)) * frame.radianceScale;
+    float peak = max(signal.x, max(signal.y, signal.z));
+    return signal * (250.0 / max(250.0, peak));
 }
 
 float3 linearToYCoCg(float3 c) {
@@ -143,7 +141,8 @@ void prepare(uint2 pixel, uint2 extent, DevicePtr<float4> records, NrdPlaneFrame
         if (p1.branchId != STABLE_PLANE_INVALID_BRANCH
                 && p2.branchId != STABLE_PLANE_INVALID_BRANCH) specular *= 0.4;
     }
-    clampRadiance(diffuse, frame); clampRadiance(specular, frame);
+    diffuse = encodeRadiance(diffuse, frame);
+    specular = encodeRadiance(specular, frame);
     float specHit = (r.flags & STABLE_PLANE_FLAG_DOMINANT) != 0u
             ? max(r.specularHitDistance, 0.0) : 0.0;
     diffuseSignal[pixel] = packSignal(diffuse, 0.0, currentViewZ, 1.0);
@@ -164,7 +163,14 @@ void merge(uint2 pixel, uint2 extent, DevicePtr<float4> records, NrdPlaneFrame f
     if (validSurface(r)) {
         float3 diffuse = unpackRadiance(denoisedDiffuse[pixel].rgb) * r.diffuseBsdfEstimate;
         float3 specular = unpackRadiance(denoisedSpecular[pixel].rgb) * r.specularBsdfEstimate;
-        accumulated += max(diffuse + specular, float3(0.0)) * frame.preExposure;
+        accumulated += max(diffuse + specular, float3(0.0))
+                * (frame.preExposure / frame.radianceScale);
+    } else if (r.branchId != STABLE_PLANE_INVALID_BRANCH
+            && (r.flags & STABLE_PLANE_FLAG_SKY) != 0u) {
+        // Reflected and transmitted sky contributions have no surface to denoise.
+        // Their plane records already contain scene-linear radiance with the BSDF applied.
+        accumulated += max(r.noisyDiffuseRadiance + r.noisySpecularRadiance, float3(0.0))
+                * frame.preExposure;
     }
     outputImage[pixel] = float4(clamp(accumulated, float3(0.0), float3(65504.0)), 1.0);
 }

@@ -18,7 +18,7 @@ final class NrdPlaneFrameDataTest {
         Matrix4f previous = new Matrix4f().m11(3.0f);
         new NrdPlaneFrameData(current, previous,
                 new NrdPlaneFrameData.Float3(5.0f, 7.0f, 11.0f), 13.0f,
-                new NrdPlaneFrameData.Float3(17.0f, 19.0f, 23.0f), 128.0f,
+                new NrdPlaneFrameData.Float3(17.0f, 19.0f, 23.0f), RtNrdComposePipeline.RADIANCE_SCALE,
                 1920, 1080).write(data);
 
         assertEquals(176, NrdPlaneFrameData.BYTE_SIZE);
@@ -27,7 +27,7 @@ final class NrdPlaneFrameDataTest {
         assertEquals(5.0f, data.getFloat(128));
         assertEquals(13.0f, data.getFloat(140));
         assertEquals(17.0f, data.getFloat(144));
-        assertEquals(128.0f, data.getFloat(156));
+        assertEquals(RtNrdComposePipeline.RADIANCE_SCALE, data.getFloat(156));
         assertEquals(1920, data.getInt(160));
         assertEquals(1080, data.getInt(164));
     }
