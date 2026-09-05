@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.geometry.ReadyMesh;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
@@ -37,7 +36,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
@@ -48,9 +46,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final RtNeeAtBackend neeAt;
     private final Map<GraphicsUse, FrameSnapshot> inFlightFrames = new IdentityHashMap<>();
     private final Map<SceneId, SharedResource<SceneMotionHistory>> motionHistoryByScene = new IdentityHashMap<>();
-    private SharedResource<SceneRevisionRoot> current;
-    private Map<Long, Long> placementOrdinals = Map.of();
-    private long nextPlacementOrdinal;
+    private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
     private boolean closed;
     private boolean sessionClosing;
 
@@ -59,45 +55,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         this.neeAt = new RtNeeAtBackend(ctx);
     }
 
-    /** Captures owning references and CPU layout only; meshes already contain completed acceleration structures. */
-    @Override public synchronized void apply(RetainedSceneSnapshot snapshot) {
-        requireOpen();
-        Map<Long, MeshGeneration> meshes = new LinkedHashMap<>();
-        Map<Long, Long> ordinals = new LinkedHashMap<>();
-        SceneRevisionRoot root;
-        try {
-            for (RetainedSceneSnapshot.Mesh mesh : snapshot.meshes()) {
-                meshes.put(mesh.identity(), new MeshGeneration(mesh));
-            }
-            Map<SceneId, SceneContent> content = assembleContent(snapshot.scenes(), snapshot.lights());
-            Map<SceneId, List<NativeInstance>> instances = new IdentityHashMap<>();
-            content.keySet().forEach(scene -> {
-                instances.put(scene, new ArrayList<>());
-            });
-            for (RetainedSceneSnapshot.Instance instance : snapshot.instances()) {
-                MeshGeneration mesh = meshes.get(instance.meshIdentity());
-                long ordinal = placementOrdinals.containsKey(instance.identity())
-                        ? placementOrdinals.get(instance.identity()) : ++nextPlacementOrdinal;
-                ordinals.put(instance.identity(), ordinal);
-                instances.get(instance.scene()).add(new NativeInstance(instance, mesh, ordinal));
-            }
-            instances.replaceAll((scene, values) -> List.copyOf(values));
-            root = new SceneRevisionRoot(new SceneLayoutGeneration(meshes, instances), content);
-        } catch (Throwable failure) {
-            closeAll(meshes.values(), failure);
-            throw failure;
-        }
-        SharedResource<SceneRevisionRoot> previous = current;
-        current = SharedResource.owned(root, SceneRevisionRoot::destroy);
-        placementOrdinals = Map.copyOf(ordinals);
-        if (previous != null) previous.close();
-    }
-
-    @Override public synchronized void progress() {
-        if (current == null) return;
-        var scenes = current.get().content.keySet();
-        neeAt.retainScenes(scenes);
-        retainRenderedScenes(scenes);
+    @Override public synchronized void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
+        this.capture = Objects.requireNonNull(capture);
     }
 
     public synchronized PreparedLighting prepareLighting(SceneId scene, LightingFrame frame,
@@ -127,12 +86,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             throw new IllegalArgumentException("prepared lighting belongs to another scene");
         }
         neeAt.abandon(scene, lighting.delegate);
-    }
-
-    private static void addEnvironmentResources(Map<SceneId, SceneContent> content, List<ResourceRef> references) {
-        content.values().forEach(value -> {
-            if (value.environment() != null) references.add(value.environment().bindingData().resource());
-        });
     }
 
     @Override
@@ -353,8 +306,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (closed) return;
         closed = true;
         releaseTerminalFrameRoots();
-        if (current != null) current.close();
-        current = null;
+        capture = null;
         neeAt.destroyAfterDeviceIdle();
     }
 
@@ -399,21 +351,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         closeAll(removed, null);
     }
 
-    private SharedResource<SceneRevisionRoot> requireCurrentScene(SceneId scene) {
-        requireOpen();
-        if (current == null || !current.get().content.containsKey(scene)) {
-            throw new IllegalArgumentException("scene is absent from the current snapshot");
-        }
-        return current;
-    }
-
     private FrameSnapshot frameLease(SceneId scene, GraphicsUse graphicsUse) {
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         requireOpen();
         boolean created = !inFlightFrames.containsKey(graphicsUse);
-        FrameSnapshot frame = latchFrameRoot(inFlightFrames, graphicsUse, () -> {
-            return new FrameSnapshot(graphicsUse, requireCurrentScene(scene).retain());
-        });
+        FrameSnapshot frame = latchFrameRoot(inFlightFrames, graphicsUse,
+                () -> new FrameSnapshot(graphicsUse, capture.get()));
         if (created) {
             try {
                 graphicsUse.whenSubmitted(frame::accept);
@@ -423,8 +366,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 throw failure;
             }
         }
-        SceneRevisionRoot root = frame.root();
-        if (!root.content.containsKey(scene)) {
+        if (!frame.currentContent.containsKey(scene)) {
             throw new IllegalArgumentException("scene is not in the frame's scene revision");
         }
         return frame;
@@ -436,38 +378,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         V created = Objects.requireNonNull(currentRoot.get(), "currentRoot");
         frames.put(graphicsUse, created);
         return created;
-    }
-
-    static <K, S, T> Map<K, List<T>> captureFrameValues(
-            Map<K, List<S>> source, Function<S, T> capture) {
-        Map<K, List<T>> captured = new IdentityHashMap<>();
-        source.forEach((scene, values) -> captured.put(scene, values.stream().map(capture).toList()));
-        return Collections.unmodifiableMap(captured);
-    }
-
-    private static List<ResourceRef> frameResourceReferences(SceneRevisionRoot root,
-                                                               Map<SceneId, List<LatchedInstance>> instances) {
-        List<ResourceRef> references = new ArrayList<>();
-        root.content.values().forEach(content -> {
-            if (content.environment() != null) {
-                references.add(content.environment().bindingData().resource());
-            }
-        });
-        instances.values().forEach(values -> values.forEach(instance -> {
-            MeshBuild<?> build = instance.nativeInstance.mesh.logical.build();
-            references.add(build.positions().resource());
-            references.add(build.indices().resource());
-            build.geometries().forEach(geometry -> {
-                if (geometry.surface() != null) {
-                    references.add(geometry.surface().bindingData().resource());
-                }
-                if (geometry.volume() != null) {
-                    references.add(geometry.volume().bindingData().resource());
-                }
-            });
-            references.add(instance.current.instanceData().resource());
-        }));
-        return List.copyOf(references);
     }
 
     static ResolvedFrameInput resolveFrameInput(RetainedSceneSnapshot.Mesh mesh,
@@ -487,15 +397,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     private static Map<SceneId, List<LatchedInstance>> resolveFrameInstances(
-            Map<SceneId, List<LatchedInstance>> captured) {
+            Map<SceneId, List<NativeInstance>> captured) {
         Map<SceneId, List<LatchedInstance>> resolved = new IdentityHashMap<>();
         captured.forEach((scene, values) -> {
             List<LatchedInstance> instances = new ArrayList<>();
             int geometryBase = 0;
-            for (LatchedInstance instance : values) {
-                var input = resolveFrameInput(instance.nativeInstance.mesh.logical, instance.current);
-                instances.add(instance.resolve(input.mesh(), input.placement(), geometryBase));
-                geometryBase += instance.nativeInstance.mesh.logical.build().geometries().size();
+            for (NativeInstance instance : values) {
+                var input = resolveFrameInput(instance.mesh.logical, instance.logical);
+                instances.add(new LatchedInstance(instance, instance.logical, input.mesh(), input.placement(),
+                        geometryBase, Math.multiplyExact(geometryBase, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY)));
+                geometryBase += instance.mesh.logical.build().geometries().size();
             }
             resolved.put(scene, List.copyOf(instances));
         });
@@ -539,35 +450,35 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     private final class FrameSnapshot implements AutoCloseable {
         private final GraphicsUse graphicsUse;
-        private SharedResource<SceneRevisionRoot> root;
+        private SharedResource<RetainedSceneSnapshot> root;
         private final Map<SceneId, List<LatchedInstance>> currentInstances;
         private final Map<SceneId, SceneContent> currentContent;
-        private ResourceOwners resources;
         private final Map<SceneId, FrameSceneSnapshot> scenes = new IdentityHashMap<>();
 
-        FrameSnapshot(GraphicsUse graphicsUse, SharedResource<SceneRevisionRoot> root) {
+        FrameSnapshot(GraphicsUse graphicsUse, SharedResource<RetainedSceneSnapshot> root) {
             this.graphicsUse = graphicsUse;
             this.root = root;
-            ResourceOwners acquired = null;
             try {
-                Map<SceneId, List<LatchedInstance>> captured = captureFrameValues(
-                        root.get().geometry().instances,
-                        instance -> new LatchedInstance(
-                                instance, instance.logical));
-                acquired = ResourceOwners.capture(frameResourceReferences(root.get(), captured));
-                this.currentInstances = resolveFrameInstances(captured);
-                this.currentContent = root.get().content;
-                this.resources = acquired;
+                RetainedSceneSnapshot snapshot = root.get();
+                Map<Long, FrameMesh> meshes = new LinkedHashMap<>();
+                for (RetainedSceneSnapshot.Mesh mesh : snapshot.meshes()) {
+                    meshes.put(mesh.identity(), new FrameMesh(mesh));
+                }
+                currentContent = assembleContent(snapshot.scenes(), snapshot.lights());
+                Map<SceneId, List<NativeInstance>> instances = new IdentityHashMap<>();
+                currentContent.keySet().forEach(scene -> instances.put(scene, new ArrayList<>()));
+                for (RetainedSceneSnapshot.Instance instance : snapshot.instances()) {
+                    instances.get(instance.scene()).add(new NativeInstance(instance, meshes.get(instance.meshIdentity()),
+                            instance.placementOrdinal()));
+                }
+                currentInstances = resolveFrameInstances(instances);
+                neeAt.retainScenes(currentContent.keySet());
+                retainRenderedScenes(currentContent.keySet());
             } catch (Throwable failure) {
                 this.root = null;
-                if (acquired != null) suppressCleanupFailure(failure, acquired::close);
                 suppressCleanupFailure(failure, root::close);
                 throw failure;
             }
-        }
-
-        SceneRevisionRoot root() {
-            return root.get();
         }
 
         FrameSceneSnapshot scene(SceneId scene) {
@@ -617,7 +528,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     if (!entry.getValue().traced()) continue;
                     List<ResourceRef> positions = entry.getValue().instances.stream().map(instance ->
                             instance.nativeInstance.mesh.logical.build().positions().resource()).toList();
-                    ResourceOwners positionResources = resources.retainOnly(positions);
+                    ResourceOwners positionResources = ResourceOwners.capture(positions);
                     SharedResource<SceneMotionHistory> replacement = null;
                     try {
                         Map<Long, MotionInstanceHistory> historyInstances = new LinkedHashMap<>();
@@ -646,16 +557,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
         @Override
         public void close() {
-            SharedResource<SceneRevisionRoot> released;
-            ResourceOwners releasedResources;
+            SharedResource<RetainedSceneSnapshot> released;
             List<FrameSceneSnapshot> releasedScenes;
             synchronized (RtRetainedSceneBackend.this) {
                 if (root == null) return;
                 inFlightFrames.remove(graphicsUse, this);
                 released = root;
                 root = null;
-                releasedResources = resources;
-                resources = null;
                 releasedScenes = List.copyOf(scenes.values());
                 scenes.clear();
             }
@@ -664,12 +572,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 released.close();
             } catch (Throwable releaseFailure) {
                 failure = releaseFailure;
-            }
-            try {
-                releasedResources.close();
-            } catch (Throwable releaseFailure) {
-                if (failure == null) failure = releaseFailure;
-                else failure.addSuppressed(releaseFailure);
             }
             closeAll(releasedScenes, failure);
             throwFailure(failure, "frame snapshot release failed");
@@ -711,14 +613,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                                    RtRetainedGeometryPlan.ResolvedMesh resolvedMesh,
                                    RtRetainedGeometryPlan.ResolvedPlacement resolvedPlacement,
                                    int geometryBase, int sbtRecordOffset) {
-        LatchedInstance(NativeInstance nativeInstance, RetainedSceneSnapshot.Instance current) {
-            this(nativeInstance, current, null, null, 0, 0);
-        }
-        LatchedInstance resolve(RtRetainedGeometryPlan.ResolvedMesh mesh,
-                                RtRetainedGeometryPlan.ResolvedPlacement placement, int geometryBase) {
-            return new LatchedInstance(nativeInstance, current, mesh, placement, geometryBase,
-                    Math.multiplyExact(geometryBase, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY));
-        }
     }
 
     record ResolvedFrameInput(RtRetainedGeometryPlan.ResolvedMesh mesh,
@@ -880,49 +774,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         MutableSceneContent(EnvironmentBinding<?> environment) { this.environment = environment; }
     }
 
-    private record NativeInstance(RetainedSceneSnapshot.Instance logical, MeshGeneration mesh,
+    private record NativeInstance(RetainedSceneSnapshot.Instance logical, FrameMesh mesh,
                                   long placementOrdinal) { }
 
-    private static final class SceneRevisionRoot {
-        final SceneLayoutGeneration geometry;
-        final Map<SceneId, SceneContent> content;
-        final ResourceOwners resources;
-        SceneRevisionRoot(SceneLayoutGeneration geometry, Map<SceneId, SceneContent> content) {
-            this.geometry = geometry;
-            this.content = Map.copyOf(content);
-            var references = new ArrayList<ResourceRef>();
-            geometry.instances.values().forEach(instances -> instances.forEach(instance ->
-                    references.add(instance.logical.instanceData().resource())));
-            addEnvironmentResources(content, references);
-            resources = ResourceOwners.capture(references);
-        }
-        SceneLayoutGeneration geometry() { return geometry; }
-        void destroy() {
-            closeAll(List.of(geometry, resources), null);
-        }
-    }
-
-    private static final class SceneLayoutGeneration implements AutoCloseable {
-        final Map<Long, MeshGeneration> meshes;
-        final Map<SceneId, List<NativeInstance>> instances;
-
-        SceneLayoutGeneration(Map<Long, MeshGeneration> meshes, Map<SceneId, List<NativeInstance>> instances) {
-            this.meshes = Map.copyOf(meshes);
-            this.instances = Map.copyOf(instances);
-        }
-        @Override public void close() { closeAll(meshes.values(), null); }
-    }
-
-    private static final class MeshGeneration implements AutoCloseable {
+    /** Borrows the ready mesh from the owning scene capture. */
+    private static final class FrameMesh {
         final RetainedSceneSnapshot.Mesh logical;
-        final ReadyMesh<?> owner;
         final RtPreparedMesh nativeMesh;
-        MeshGeneration(RetainedSceneSnapshot.Mesh logical) {
+        FrameMesh(RetainedSceneSnapshot.Mesh logical) {
             this.logical = logical;
-            owner = logical.ready().retain();
-            nativeMesh = (RtPreparedMesh) SceneDirectory.preparedResource(owner);
+            nativeMesh = (RtPreparedMesh) SceneDirectory.preparedResource(logical.ready());
         }
         RtPreparedMesh.State blas() { return nativeMesh.value(); }
-        @Override public void close() { owner.close(); }
     }
 }

@@ -16,6 +16,7 @@ import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
@@ -26,6 +27,7 @@ import org.lwjgl.vulkan.VkDevice;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -36,7 +38,6 @@ final class MinecraftEngineWorldSessionTest {
     @Test
     void composesBothProcessHostsOverSharedServicesAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();
-        List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(OPTIONS);
         List<Object> programs = new ArrayList<>();
@@ -51,8 +52,7 @@ final class MinecraftEngineWorldSessionTest {
         });
 
         RetainedSceneBackend sceneBackend = new RetainedSceneBackend() {
-            @Override public void apply(RetainedSceneSnapshot snapshot) {
-                snapshots.add(snapshot);
+            @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
             }
         };
         MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE,
@@ -68,7 +68,7 @@ final class MinecraftEngineWorldSessionTest {
 
         assertEquals(List.of("minecraft:pack:3", "minecraft:stop", "core:stop",
                 "minecraft:close", "core:close"), events);
-        assertEquals(0, snapshots.getLast().scenes().size());
+        assertEquals(0, session.services().scenes().snapshot().scenes().size());
         assertThrows(IllegalStateException.class, session::progress);
     }
 
@@ -81,7 +81,7 @@ final class MinecraftEngineWorldSessionTest {
         minecraftHost.api().sessions().add(context -> minecraftContribution("minecraft", events));
         minecraftHost.api().sessions().add(context -> { throw new IllegalStateException("minecraft-open"); });
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void apply(RetainedSceneSnapshot snapshot) {
+            @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
             }
             @Override public void prepareForSessionClose() {
                 events.add("scene:settle");

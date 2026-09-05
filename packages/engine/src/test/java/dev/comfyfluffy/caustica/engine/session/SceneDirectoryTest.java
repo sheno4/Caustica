@@ -97,14 +97,136 @@ final class SceneDirectoryTest {
         assertEquals(1,snapshot.instances().size());assertEquals(1,snapshot.lights().size());
         assertEquals(10,snapshot.scenes().getLast().environment().bindingData().bits());
     }
-    @Test void backendRejectionReleasesCandidateClaimsAndPreservesRevision() {
-        var f=new Fixture();var ready=f.channel.prepare(INSTANCE,mesh(f.surface)).join();
-        long before=f.directory.snapshot().revision();f.reject=true;
-        assertThrows(IllegalStateException.class,()->f.channel.edit(List.of(set(f.channel.newInstance(),f.scene,ready))));
-        assertEquals(before,f.directory.snapshot().revision());assertTrue(f.directory.snapshot().instances().isEmpty());
-        f.reject=false;f.channel.edit(List.of(set(f.channel.newInstance(),f.scene,ready)));
-        assertEquals(1,f.directory.snapshot().instances().size());
+    @Test void capturedFramesOwnResourcesAcrossReplacementAndProducerInvalidation() {
+        var f = new Fixture();
+        var destroyed = new AtomicInteger();
+        var nativeDestroyed = new AtomicInteger();
+        var retirementThread = new AtomicReference<Thread>();
+        var resource = f.programs.resources.openFactory(new ContributionOwner(9)).create(() -> {
+            retirementThread.set(Thread.currentThread());
+            destroyed.incrementAndGet();
+        });
+        f.preparing = CompletableFuture.completedFuture(nativeOwner(nativeDestroyed));
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface, null, resource.reference(),
+                resource.reference(), resource.reference(), ResourceRef.none())).join();
+        var id = f.channel.newInstance();
+        f.channel.edit(List.of(set(id, f.scene, ready)));
+        var first = f.capture.get();
+        var second = first.retain();
+        ready.close();
+        resource.close();
+        f.channel.edit(List.of(new SceneEdit.SetTransform(id, GeometryTransform.translation(5, 0, 0), 7)));
+        try (var next = f.capture.get()) {
+            assertEquals(255, first.get().instances().getFirst().mask());
+            assertEquals(7, next.get().instances().getFirst().mask());
+        }
+        f.channel.invalidate();
+        f.directory.dropScene(f.scene);
+        first.close();
+        f.programs.resources.awaitRetirements();
+        assertEquals(0, nativeDestroyed.get());
+        assertEquals(0, destroyed.get());
+        try (var claim = second.get().meshes().getFirst().ready().retain()) {
+            assertSame(INSTANCE, claim.instanceDataType());
+        }
+        second.close();
+        f.programs.resources.awaitRetirements();
+        assertEquals(1, nativeDestroyed.get());
+        assertEquals(1, destroyed.get());
+        assertNotSame(Thread.currentThread(), retirementThread.get());
     }
+
+    @Test void placementIdentityChangesOnlyAfterRemoval() {
+        var f = new Fixture();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var id = f.channel.newInstance();
+        f.channel.edit(List.of(set(id, f.scene, ready)));
+        long original = f.directory.snapshot().instances().getFirst().placementOrdinal();
+        f.channel.edit(List.of(set(id, f.scene, ready)));
+        assertEquals(original, f.directory.snapshot().instances().getFirst().placementOrdinal());
+        f.channel.edit(List.of(new SceneEdit.DropInstance(id), set(id, f.scene, ready)));
+        assertNotEquals(original, f.directory.snapshot().instances().getFirst().placementOrdinal());
+    }
+
+    @Test void capturedInstanceAndEnvironmentDataOutliveTheirScene() {
+        var f = new Fixture();
+        var factory = f.programs.resources.openFactory(new ContributionOwner(9));
+        var instanceDestroyed = new AtomicInteger();
+        var environmentDestroyed = new AtomicInteger();
+        var data = factory.create(instanceDestroyed::incrementAndGet);
+        var skyData = factory.create(environmentDestroyed::incrementAndGet);
+        var environment = f.programs.environment(new ContributionOwner(6)).exports();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        f.channel.edit(List.of(new SceneEdit.SetInstance<>(f.channel.newInstance(), f.scene, ready,
+                        GeometryTransform.translation(0, 0, 0), 255, INSTANCE.data(17, data.reference())),
+                new SceneEdit.SetEnvironment(f.scene,
+                        new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(23, skyData.reference())))));
+        var captured = f.capture.get();
+        data.close();
+        skyData.close();
+        ready.close();
+        f.directory.dropScene(f.scene);
+        f.programs.resources.awaitRetirements();
+        assertEquals(0, instanceDestroyed.get());
+        assertEquals(0, environmentDestroyed.get());
+        assertEquals(17, captured.get().instances().getFirst().instanceData().bits());
+        assertEquals(23, captured.get().scenes().getFirst().environment().bindingData().bits());
+        captured.close();
+        f.programs.resources.awaitRetirements();
+        assertEquals(1, instanceDestroyed.get());
+        assertEquals(1, environmentDestroyed.get());
+    }
+
+    @Test void invalidFinalOperationPreservesMixedEditAndExistingOwnership() {
+        var f = new Fixture();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var id = f.channel.newInstance();
+        f.channel.edit(List.of(set(id, f.scene, ready)));
+        ready.close();
+        long revision = f.directory.snapshot().revision();
+        assertThrows(IllegalArgumentException.class, () -> f.channel.edit(List.of(
+                new SceneEdit.SetTransform(id, GeometryTransform.translation(5, 0, 0), 7),
+                new SceneEdit.SetLight(f.channel.newLight(), f.scene,
+                        new LightDescriptor.Distant(0, 1, 0, 1, 1, 1, 0, false)),
+                new SceneEdit.SetTransform(f.channel.newInstance(), GeometryTransform.translation(0, 0, 0), 7))));
+        try (var frame = f.capture.get()) {
+            assertEquals(revision, frame.get().revision());
+            assertEquals(255, frame.get().instances().getFirst().mask());
+            assertTrue(frame.get().lights().isEmpty());
+        }
+    }
+
+    @Test void capturesCannotObservePartOfCrossSceneEditGroup() throws Exception {
+        var f = new Fixture();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var other = f.directory.createScene();
+        var a = f.channel.newInstance();
+        var b = f.channel.newInstance();
+        f.channel.edit(List.of(set(a, f.scene, ready), set(b, other, ready)));
+        var start = new CountDownLatch(1);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var editing = executor.submit(() -> {
+                start.await();
+                for (int i = 0; i < 300; i++) {
+                    f.channel.edit(List.of(
+                            new SceneEdit.SetTransform(a, GeometryTransform.translation(i, 0, 0), i % 256),
+                            new SceneEdit.SetTransform(b, GeometryTransform.translation(i, 0, 0), i % 256)));
+                }
+                return null;
+            });
+            start.countDown();
+            for (int i = 0; i < 300; i++) {
+                try (var frame = f.capture.get()) {
+                    var instances = frame.get().instances();
+                    assertEquals(2, instances.size());
+                    assertEquals(instances.getFirst().mask(), instances.getLast().mask());
+                    assertEquals(instances.getFirst().transform(), instances.getLast().transform());
+                }
+            }
+            editing.get(10, TimeUnit.SECONDS);
+        }
+    }
+
     @Test void preparationRejectsWrongSchemaBeforeCallingBackend() {
         var f=new Fixture();
         assertThrows(IllegalArgumentException.class,()->f.channel.prepare((ShaderDataType)ShaderDataType.create("wrong"),(MeshBuild)mesh(f.surface)));
@@ -123,8 +245,8 @@ final class SceneDirectoryTest {
         final ProgramFixture programs=new ProgramFixture();
         final SurfaceId<Binding,Instance> surface=programs.surface(new ContributionOwner(1));
         CompletableFuture<ResourceOwner> preparing;
-        boolean reject;
-        final SceneDirectory directory=new SceneDirectory(programs.session,programs.resources,snapshot->{if(reject)throw new IllegalStateException("rejected");},
+        java.util.function.Supplier<dev.comfyfluffy.caustica.support.SharedResource<RetainedSceneSnapshot>> capture;
+        final SceneDirectory directory=new SceneDirectory(programs.session,programs.resources,capture -> this.capture = capture,
             (mesh,source)->preparing==null?CompletableFuture.completedFuture(nativeOwner(new AtomicInteger())):preparing);
         final SceneId scene=directory.createScene();
         final SceneContributionChannel channel=directory.openChannel(new ContributionOwner(2));

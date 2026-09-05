@@ -5,14 +5,14 @@ import java.util.function.Consumer;
 
 /** One independently closeable strong reference to a shared resource. */
 public final class SharedResource<T> implements AutoCloseable {
-    private State<T> state;
+    private Reference<T> state;
 
-    private SharedResource(State<T> state) {
+    private SharedResource(Reference<T> state) {
         this.state = state;
     }
 
     public static <T> SharedResource<T> owned(T value, Consumer<? super T> disposer) {
-        return new SharedResource<>(new State<>(
+        return new SharedResource<>(new Reference<>(
                 Objects.requireNonNull(value, "value"),
                 Objects.requireNonNull(disposer, "disposer")
         ));
@@ -23,14 +23,17 @@ public final class SharedResource<T> implements AutoCloseable {
     }
 
     public synchronized SharedResource<T> retain() {
-        State<T> current = openState();
-        current.retain();
-        return new SharedResource<>(current);
+        return openState().retain();
+    }
+
+    /** Non-owning identity which can acquire a claim while any strong owner remains. */
+    public synchronized Reference<T> reference() {
+        return openState();
     }
 
     @Override
     public void close() {
-        State<T> released;
+        Reference<T> released;
         synchronized (this) {
             released = state;
             state = null;
@@ -38,17 +41,17 @@ public final class SharedResource<T> implements AutoCloseable {
         if (released != null) released.release();
     }
 
-    private State<T> openState() {
+    private Reference<T> openState() {
         if (state == null) throw new IllegalStateException("shared resource is closed");
         return state;
     }
 
-    private static final class State<T> {
+    public static final class Reference<T> {
         private T value;
         private Consumer<? super T> disposer;
         private int references = 1;
 
-        private State(T value, Consumer<? super T> disposer) {
+        private Reference(T value, Consumer<? super T> disposer) {
             this.value = value;
             this.disposer = disposer;
         }
@@ -57,8 +60,14 @@ public final class SharedResource<T> implements AutoCloseable {
             return value;
         }
 
-        private synchronized void retain() {
+        public synchronized boolean isAlive() {
+            return references != 0;
+        }
+
+        public synchronized SharedResource<T> retain() {
+            if (references == 0) throw new IllegalStateException("shared resource is released");
             references++;
+            return new SharedResource<>(this);
         }
 
         private void release() {

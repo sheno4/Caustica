@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
+import dev.comfyfluffy.caustica.support.SharedResource;
 
 import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
@@ -45,7 +46,7 @@ public final class ResourceDirectory implements AutoCloseable {
         if (!(reference instanceof State state) || state.directory != this) {
             throw new IllegalArgumentException("resource belongs to another device session");
         }
-        if (state.references == 0) throw new IllegalStateException("resource has been released");
+        if (!state.lifetime.isAlive()) throw new IllegalStateException("resource has been released");
     }
 
     public synchronized ResourceOwner acquire(ContributionOwner owner, ResourceRef reference) {
@@ -53,14 +54,7 @@ public final class ResourceDirectory implements AutoCloseable {
         return reference.retain();
     }
 
-    private synchronized ResourceOwner retain(State state) {
-        if (state.references == 0) throw new IllegalStateException("resource has been released");
-        state.references++;
-        return new Claim(state);
-    }
-
-    private synchronized void release(State state) {
-        if (--state.references != 0) return;
+    private synchronized void retire(State state) {
         retirement.execute(() -> {
             try {
                 state.destroy.run();
@@ -97,7 +91,7 @@ public final class ResourceDirectory implements AutoCloseable {
     /** Wait for all currently queued destruction work, including callbacks releasing dependencies. */
     public void awaitRetirements() {
         synchronized (this) {
-            while (resources.stream().anyMatch(state -> state.references == 0)) awaitChange();
+            while (resources.stream().anyMatch(state -> !state.lifetime.isAlive())) awaitChange();
         }
     }
 
@@ -105,7 +99,7 @@ public final class ResourceDirectory implements AutoCloseable {
         synchronized (this) {
             if (closed) return;
             awaitRetirements();
-            if (resources.stream().anyMatch(state -> state.references != 0)) {
+            if (resources.stream().anyMatch(state -> state.lifetime.isAlive())) {
                 throw new IllegalStateException("resource owners remain live");
             }
             while (!resources.isEmpty()) awaitChange();
@@ -128,34 +122,30 @@ public final class ResourceDirectory implements AutoCloseable {
         final ContributionOwner owner;
         final Runnable destroy;
         final Claim producer;
-        int references = 1;
+        final SharedResource.Reference<State> lifetime;
 
         State(ResourceDirectory directory, ContributionOwner owner, Runnable destroy) {
             this.directory = directory;
             this.owner = owner;
             this.destroy = destroy;
-            producer = new Claim(this);
+            SharedResource<State> initial = SharedResource.owned(this, directory::retire);
+            lifetime = initial.reference();
+            producer = new Claim(initial);
         }
 
-        @Override public ResourceOwner retain() { return directory.retain(this); }
+        @Override public ResourceOwner retain() { return new Claim(lifetime.retain()); }
     }
 
     private static final class Claim implements ResourceOwner {
         private final State state;
-        private boolean closed;
+        private final SharedResource<State> owner;
 
-        Claim(State state) { this.state = state; }
+        Claim(SharedResource<State> owner) {
+            this.owner = owner;
+            state = owner.get();
+        }
         @Override public ResourceRef reference() { return state; }
-        @Override public synchronized ResourceOwner retain() {
-            if (closed) throw new IllegalStateException("resource claim is closed");
-            return state.retain();
-        }
-        @Override public void close() {
-            synchronized (this) {
-                if (closed) return;
-                closed = true;
-            }
-            state.directory.release(state);
-        }
+        @Override public ResourceOwner retain() { return new Claim(owner.retain()); }
+        @Override public void close() { owner.close(); }
     }
 }

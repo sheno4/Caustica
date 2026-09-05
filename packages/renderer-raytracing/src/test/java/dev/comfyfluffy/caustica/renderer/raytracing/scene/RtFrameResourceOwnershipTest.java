@@ -57,7 +57,7 @@ final class RtFrameResourceOwnershipTest {
                 new MeshBuild.IndexRevision(1), List.of(geometry));
         RetainedSceneSnapshot.Mesh mesh = new RetainedSceneSnapshot.Mesh(1, build,
                 List.of(new RetainedSceneSnapshot.GeometryPrograms(3, 5)), null);
-        RetainedSceneSnapshot.Instance placement = new RetainedSceneSnapshot.Instance(2, SCENE, 1,
+        RetainedSceneSnapshot.Instance placement = new RetainedSceneSnapshot.Instance(2, 2, SCENE, 1,
                 GeometryTransform.translation(1, 2, 3), 0xff,
                 new ShaderData<>(INSTANCE, 0x3333, instance.reference()), List.of());
         EnvironmentBinding<Binding> environmentBinding = EnvironmentBinding.of(ENVIRONMENT,

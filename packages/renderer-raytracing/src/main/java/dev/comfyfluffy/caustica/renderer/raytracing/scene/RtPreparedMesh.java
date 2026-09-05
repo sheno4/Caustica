@@ -6,32 +6,24 @@ import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
+import dev.comfyfluffy.caustica.support.SharedResource;
 
 /** Strong native ownership of one completed, immutable bottom-level acceleration structure. */
 final class RtPreparedMesh implements ResourceOwner {
     private final State state;
-    private boolean closed;
+    private final SharedResource<State> owner;
 
     RtPreparedMesh(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.PersistentBuild nativeBuild) {
-        state = new State(context, build, nativeBuild);
+        this(new State(context, build, nativeBuild).initial);
     }
-    private RtPreparedMesh(State state) { this.state = state; }
-    State value() { return state; }
+    private RtPreparedMesh(SharedResource<State> owner) {
+        this.owner = owner;
+        state = owner.get();
+    }
+    State value() { return owner.get(); }
     @Override public ResourceRef reference() { return state; }
-    @Override public ResourceOwner retain() {
-        synchronized (state) {
-            if (closed) throw new IllegalStateException("native mesh claim is closed");
-            return state.retain();
-        }
-    }
-    @Override public void close() {
-        synchronized (state) {
-            if (closed) return;
-            closed = true;
-            if (--state.references == 0) state.context.deferDestroy(
-                    () -> RtAccel.destroyCallerOwnedAccel(state.accel, state.backing));
-        }
-    }
+    @Override public ResourceOwner retain() { return new RtPreparedMesh(owner.retain()); }
+    @Override public void close() { owner.close(); }
 
     static final class State implements ResourceRef {
         final VulkanDeviceContext context;
@@ -39,18 +31,20 @@ final class RtPreparedMesh implements ResourceOwner {
         final RtAccel.PreparedBlas operation;
         final RtAccel accel;
         final GpuBuffer backing;
-        private int references = 1;
+        final SharedResource<State> initial;
+        final SharedResource.Reference<State> lifetime;
         State(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.PersistentBuild nativeBuild) {
             this.context = context;
             this.build = build;
             operation = nativeBuild.op();
             accel = nativeBuild.accel();
             backing = nativeBuild.backing();
+            initial = SharedResource.owned(this, ignored -> context.deferDestroy(
+                    () -> RtAccel.destroyCallerOwnedAccel(accel, backing)));
+            lifetime = initial.reference();
         }
-        @Override public synchronized ResourceOwner retain() {
-            if (references == 0) throw new IllegalStateException("native mesh is released");
-            references++;
-            return new RtPreparedMesh(this);
+        @Override public ResourceOwner retain() {
+            return new RtPreparedMesh(lifetime.retain());
         }
     }
 }

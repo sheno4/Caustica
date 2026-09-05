@@ -24,21 +24,6 @@ public final class ResourceOwners implements AutoCloseable {
         }
     }
 
-    public synchronized ResourceOwners retainOnly(Iterable<? extends ResourceRef> references) {
-        ResourceOwners retained = new ResourceOwners();
-        try {
-            for (ResourceRef reference : references) {
-                if (reference != ResourceRef.none() && !retained.owners.containsKey(reference)) {
-                    retained.owners.put(reference, owners.get(reference).retain());
-                }
-            }
-            return retained;
-        } catch (Throwable failure) {
-            retained.close();
-            throw failure;
-        }
-    }
-
     /** Borrow a captured claim while this collection remains retained. */
     public synchronized ResourceOwner borrowed(ResourceRef reference) { return owners.get(reference); }
 

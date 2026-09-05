@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 
 import java.util.List;
 
-/** Immutable scene values referencing prepared meshes. Frame capture retains independent resource claims. */
+/** Immutable scene values. An owning capture retains meshes, instance data, and selected environment data. */
 public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh> meshes,
                                     List<Instance> instances, List<Light> lights) {
     public RetainedSceneSnapshot {
@@ -57,7 +57,7 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
             }
         }
     }
-    public record Instance(long identity, SceneId scene, long meshIdentity,
+    public record Instance(long identity, long placementOrdinal, SceneId scene, long meshIdentity,
                            GeometryTransform transform, int mask, ShaderData<?> instanceData,
                            List<PrimitiveEmitter> primitiveEmitters) {
         public Instance { primitiveEmitters = List.copyOf(primitiveEmitters); }

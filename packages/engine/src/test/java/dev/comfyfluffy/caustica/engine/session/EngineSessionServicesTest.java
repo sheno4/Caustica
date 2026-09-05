@@ -20,6 +20,7 @@ import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -27,6 +28,7 @@ import org.lwjgl.vulkan.VkDevice;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -137,7 +139,7 @@ final class EngineSessionServicesTest {
             @Override public void drainPublishedUses() { }
         };
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void apply(RetainedSceneSnapshot snapshot) {
+            @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
             }
         };
         return new EngineSessionServices(GPU, COMPUTE, programs, scenes, (mesh, source) -> { throw new AssertionError(); }, passes,

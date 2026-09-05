@@ -24,7 +24,7 @@ final class ResourceOwnersTest {
 
         ResourceOwners first = ResourceOwners.capture(List.of(
                 generation.reference(), generation.reference(), ResourceRef.none()));
-        ResourceOwners history = first.retainOnly(List.of(generation.reference()));
+        ResourceOwners history = ResourceOwners.capture(List.of(generation.reference()));
         generation.close();
         ResourceOwners second = ResourceOwners.capture(List.of(generation.reference()));
 

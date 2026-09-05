@@ -19,15 +19,15 @@ import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class ProgramSceneFallbackTest {
     interface Implementation { }
@@ -42,7 +42,7 @@ final class ProgramSceneFallbackTest {
                            VolumeId<Binding, Instance> volume) { }
 
     @Test
-    void removingProgramsLeavesRetainedMeshPublicationOnStableFallbackSlots() {
+    void programRemovalChangesOnlyFutureCapturesWithoutSceneRepublishing() {
         ImmediateProgramBackend programsBackend = new ImmediateProgramBackend();
         ResourceDirectory resources = new ResourceDirectory(
                 failure -> { throw new AssertionError(failure); });
@@ -66,8 +66,8 @@ final class ProgramSceneFallbackTest {
         var mesh = geometry.prepare(INSTANCE,mesh(registration.exports())).join();
         geometry.edit(List.of(new SceneEdit.SetInstance<>(geometry.newInstance(),scene,mesh,GeometryTransform.translation(0,0,0),255,INSTANCE.data(0))));
 
-        assertEquals(2, scenesBackend.snapshots.size());
-        RetainedSceneSnapshot published = scenesBackend.snapshots.getLast();
+        var frame = scenesBackend.capture.get();
+        RetainedSceneSnapshot published = frame.get();
         RetainedSceneSnapshot.Mesh retainedMesh = published.meshes().getFirst();
         assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1, 1),
                 retainedMesh.geometryPrograms().getFirst());
@@ -78,12 +78,15 @@ final class ProgramSceneFallbackTest {
         assertEquals(0, programs.resolve(registration.exports().surface()));
         assertEquals(0, programs.resolve(registration.exports().volume()));
         assertEquals(List.of(), programsBackend.activeComposition.declarations());
-        assertEquals(2, scenesBackend.snapshots.size(),
-                "program removal must not require a retained-scene republish");
-        assertSame(published, scenesBackend.snapshots.getLast());
         assertEquals(retainedMesh.identity(), scenes.snapshot().meshes().getFirst().identity());
         assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1, 1),
-                scenesBackend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
+                frame.get().meshes().getFirst().geometryPrograms().getFirst());
+        try (var next = scenesBackend.capture.get()) {
+            assertEquals(published.revision(), next.get().revision());
+            assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0, 0),
+                    next.get().meshes().getFirst().geometryPrograms().getFirst());
+        }
+        frame.close();
     }
 
     @Test
@@ -101,11 +104,11 @@ final class ProgramSceneFallbackTest {
         var ready=channel.prepare(INSTANCE,mesh(registration.exports())).join();
         channel.edit(List.of(new SceneEdit.SetInstance<>(channel.newInstance(),scene,ready,
             GeometryTransform.translation(0,0,0),255,INSTANCE.data(0))));
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
-        progress(programs);scenes.progress();
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1,1),backend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
-        registration.close();progress(programs);scenes.progress();
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.snapshots.getLast().meshes().getFirst().geometryPrograms().getFirst());
+        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.programs());
+        progress(programs);
+        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1,1),backend.programs());
+        registration.close();progress(programs);
+        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.programs());
     }
 
     private static void progress(ProgramSession programs) {
@@ -156,12 +159,16 @@ final class ProgramSceneFallbackTest {
     }
 
     private static final class CapturingSceneBackend implements RetainedSceneBackend {
-        private final List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
+        private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
 
-        @Override
-        public void apply(RetainedSceneSnapshot snapshot) {
-            snapshots.add(snapshot);
+        @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
+            this.capture = capture;
         }
 
+        RetainedSceneSnapshot.GeometryPrograms programs() {
+            try (var frame = capture.get()) {
+                return frame.get().meshes().getFirst().geometryPrograms().getFirst();
+            }
+        }
     }
 }

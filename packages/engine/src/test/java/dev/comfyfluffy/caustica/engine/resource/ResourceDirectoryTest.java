@@ -143,7 +143,7 @@ final class ResourceDirectoryTest {
             assertThrows(IllegalStateException.class,
                     () -> ResourceOwners.capture(List.of(live.reference(), released.reference())));
             var scene = ResourceOwners.capture(List.of(live.reference(), live.reference()));
-            var history = scene.retainOnly(List.of(live.reference()));
+            var history = ResourceOwners.capture(List.of(live.reference()));
             live.close();
             scene.close();
             directory.awaitRetirements();

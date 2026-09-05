@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,6 +14,57 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class SharedResourceTest {
+    @Test
+    void referenceCanAcquireThroughAnotherOwnerButCannotResurrectDisposedValue() {
+        AtomicInteger disposals = new AtomicInteger();
+        var owner = SharedResource.owned(new Object(), ignored -> disposals.incrementAndGet());
+        var reference = owner.reference();
+        var survivor = owner.retain();
+        assertSame(reference, survivor.reference());
+        owner.close();
+        try (var acquired = reference.retain()) {
+            survivor.close();
+            assertEquals(true, reference.isAlive());
+            assertEquals(0, disposals.get());
+        }
+        assertEquals(false, reference.isAlive());
+        assertEquals(1, disposals.get());
+        assertThrows(IllegalStateException.class, reference::retain);
+    }
+
+    @Test
+    void referenceAcquisitionRacingFinalReleaseEitherOwnsValueOrFails() throws Exception {
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            for (int attempt = 0; attempt < 100; attempt++) {
+                AtomicInteger disposals = new AtomicInteger();
+                var owner = SharedResource.owned(new Object(), ignored -> disposals.incrementAndGet());
+                var reference = owner.reference();
+                var start = new CountDownLatch(1);
+                var release = executor.submit(() -> {
+                    start.await();
+                    owner.close();
+                    return null;
+                });
+                var acquire = executor.submit(() -> {
+                    start.await();
+                    SharedResource<Object> claim;
+                    try { claim = reference.retain(); }
+                    catch (IllegalStateException released) { return null; }
+                    try (claim) {
+                        assertEquals(0, disposals.get());
+                        claim.get();
+                    }
+                    return null;
+                });
+                start.countDown();
+                release.get(10, TimeUnit.SECONDS);
+                acquire.get(10, TimeUnit.SECONDS);
+                assertEquals(1, disposals.get());
+                assertThrows(IllegalStateException.class, reference::retain);
+            }
+        }
+    }
+
     @Test
     void disposesOwnedValueWhenLastHandleCloses() {
         Object value = new Object();

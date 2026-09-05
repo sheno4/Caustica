@@ -14,6 +14,7 @@ import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
+import dev.comfyfluffy.caustica.support.SharedResource;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -31,13 +32,11 @@ public final class SceneDirectory {
     private final RetainedSceneBackend backend;
     private final MeshPreparationBackend preparation;
     private final Set<SceneRef> scenes = new LinkedHashSet<>();
-    private Map<InstanceRef, SceneEdit.SetInstance<?>> instances = new LinkedHashMap<>();
-    private Map<LightRef, SceneEdit.SetLight> lights = new LinkedHashMap<>();
-    private Map<SceneRef, LinkedHashMap<Object, EnvironmentBinding<?>>> selections = new LinkedHashMap<>();
-    private ResourceOwners retained = ResourceOwners.capture(List.of());
+    private final Map<InstanceRef, RetainedInstance> instances = new LinkedHashMap<>();
+    private final Map<LightRef, SceneEdit.SetLight> lights = new LinkedHashMap<>();
+    private final Map<SceneRef, LinkedHashMap<Object, RetainedEnvironment>> selections = new LinkedHashMap<>();
     private long identity;
     private long revision;
-    private RetainedSceneSnapshot published;
 
     public SceneDirectory(ProgramSession programs,
             ResourceDirectory resources,
@@ -47,35 +46,24 @@ public final class SceneDirectory {
         this.resources = Objects.requireNonNull(resources);
         this.backend = Objects.requireNonNull(backend);
         this.preparation = Objects.requireNonNull(preparation);
+        backend.bind(this::capture);
     }
 
     public synchronized SceneId createScene() {
         SceneRef scene = new SceneRef(this, ++identity);
         scenes.add(scene);
-        try {
-            commit(instances, lights, selections);
-        } catch (Throwable failure) {
-            scenes.remove(scene);
-            throw failure;
-        }
+        revision++;
         return scene;
     }
 
     public synchronized void dropScene(SceneId id) {
         SceneRef scene = requireScene(id);
-        var nextInstances = new LinkedHashMap<>(instances);
-        var nextLights = new LinkedHashMap<>(lights);
-        var nextSelections = copySelections();
-        nextInstances.values().removeIf(value -> value.scene() == scene);
-        nextLights.values().removeIf(value -> value.scene() == scene);
-        nextSelections.remove(scene);
+        removeInstances(entry -> entry.getValue().value.scene() == scene);
+        lights.values().removeIf(value -> value.scene() == scene);
+        var removed = selections.remove(scene);
+        if (removed != null) removed.values().forEach(RetainedEnvironment::close);
         scenes.remove(scene);
-        try {
-            commit(nextInstances, nextLights, nextSelections);
-        } catch (Throwable failure) {
-            scenes.add(scene);
-            throw failure;
-        }
+        revision++;
     }
 
     public synchronized SceneContributionChannel openChannel(ContributionOwner owner) {
@@ -182,34 +170,75 @@ public final class SceneDirectory {
 
     synchronized void edit(SceneContributionChannel channel, List<? extends SceneEdit> edits) {
         requireEdits(channel);
-        var nextInstances = new LinkedHashMap<>(instances);
-        var nextLights = new LinkedHashMap<>(lights);
-        var nextSelections = copySelections();
+        var changedInstances = new LinkedHashMap<InstanceRef, RetainedInstance>();
+        var changedLights = new LinkedHashMap<LightRef, SceneEdit.SetLight>();
+        var changedEnvironments = new LinkedHashMap<SceneRef, EnvironmentBinding<?>>();
         for (SceneEdit edit : List.copyOf(edits)) {
             if (edit instanceof SceneEdit.SetInstance<?> set) {
                 InstanceRef id = requireInstance(channel, set.instance());
                 validateInstance(channel, set);
-                nextInstances.put(id, set);
+                RetainedInstance current = changedInstances.containsKey(id) ? changedInstances.get(id) : instances.get(id);
+                changedInstances.put(id, new RetainedInstance(set,
+                        current == null ? ++identity : current.placementOrdinal, null));
             } else if (edit instanceof SceneEdit.DropInstance drop) {
-                nextInstances.remove(requireInstance(channel, drop.instance()));
+                changedInstances.put(requireInstance(channel, drop.instance()), null);
             } else if (edit instanceof SceneEdit.SetTransform set) {
                 InstanceRef id = requireInstance(channel, set.instance());
-                var current = nextInstances.get(id);
-                if (current == null) {
-                    throw new IllegalArgumentException("transform names absent instance");
-                }
-                nextInstances.put(id, withTransform(current, set));
+                RetainedInstance current = changedInstances.containsKey(id) ? changedInstances.get(id) : instances.get(id);
+                if (current == null) throw new IllegalArgumentException("transform names absent instance");
+                changedInstances.put(id, new RetainedInstance(withTransform(current.value, set),
+                        current.placementOrdinal, current.resources));
             } else if (edit instanceof SceneEdit.SetLight set) {
                 LightRef id = requireLight(channel, set.light());
                 requireScene(set.scene());
-                nextLights.put(id, set);
+                changedLights.put(id, set);
             } else if (edit instanceof SceneEdit.DropLight drop) {
-                nextLights.remove(requireLight(channel, drop.light()));
+                changedLights.put(requireLight(channel, drop.light()), null);
             } else if (edit instanceof SceneEdit.SetEnvironment set) {
-                select(nextSelections, channel, channel.owner, set.scene(), set.binding());
+                SceneRef scene = validateEnvironment(channel.owner, set.scene(), set.binding());
+                changedEnvironments.put(scene, set.binding());
             }
         }
-        commit(nextInstances, nextLights, nextSelections);
+        // Acquire only replacement entries before changing the database so a failed claim leaves the group intact.
+        var acquired = new ArrayList<AutoCloseable>();
+        var environments = new LinkedHashMap<SceneRef, RetainedEnvironment>();
+        try {
+            changedInstances.replaceAll((id, entry) -> {
+                if (entry == null || entry.resources != null) return entry;
+                ResourceOwners owners = ResourceOwners.capture(List.of(
+                        entry.value.mesh().reference(), entry.value.instanceData().resource()));
+                acquired.add(owners);
+                return new RetainedInstance(ownInstance(entry.value, owners), entry.placementOrdinal, owners);
+            });
+            changedEnvironments.forEach((scene, binding) -> {
+                RetainedEnvironment entry = new RetainedEnvironment(binding, binding.bindingData().resource().retain());
+                acquired.add(entry);
+                environments.put(scene, entry);
+            });
+        } catch (Throwable failure) {
+            acquired.forEach(value -> {
+                try { value.close(); } catch (Exception closeFailure) { failure.addSuppressed(closeFailure); }
+            });
+            throw failure;
+        }
+        var retired = new ArrayList<ResourceOwners>();
+        changedInstances.forEach((id, entry) -> {
+            RetainedInstance previous = entry == null ? instances.remove(id) : instances.put(id, entry);
+            if (previous != null && (entry == null || previous.resources != entry.resources)) retired.add(previous.resources);
+        });
+        changedLights.forEach((id, value) -> {
+            if (value == null) lights.remove(id); else lights.put(id, value);
+        });
+        environments.forEach((scene, entry) -> replaceEnvironment(scene, channel, entry));
+        revision++;
+        retired.forEach(ResourceOwners::close);
+    }
+
+    private static <N> SceneEdit.SetInstance<N> ownInstance(SceneEdit.SetInstance<N> value, ResourceOwners owners) {
+        @SuppressWarnings("unchecked")
+        ReadyMesh<N> mesh = (ReadyMesh<N>) owners.borrowed(value.mesh().reference());
+        return new SceneEdit.SetInstance<>(value.instance(), value.scene(), mesh, value.transform(), value.mask(),
+                value.instanceData(), value.primitiveLights());
     }
 
     private void validateInstance(SceneContributionChannel channel, SceneEdit.SetInstance<?> instance) {
@@ -243,22 +272,39 @@ public final class SceneDirectory {
         if (!channel.accepting) {
             throw new IllegalStateException("environment scope closed");
         }
-        var nextSelections = copySelections();
-        select(nextSelections, channel, channel.owner, channel.scene, binding);
-        commit(instances, lights, nextSelections);
+        SceneRef scene = validateEnvironment(channel.owner, channel.scene, binding);
+        replaceEnvironment(scene, channel,
+                new RetainedEnvironment(binding, binding.bindingData().resource().retain()));
+        revision++;
     }
 
-    private void select(Map<SceneRef, LinkedHashMap<Object, EnvironmentBinding<?>>> next,
-            Object slot,
-            ContributionOwner owner,
-            SceneId id,
-            EnvironmentBinding<?> binding) {
+    private SceneRef validateEnvironment(ContributionOwner owner, SceneId id, EnvironmentBinding<?> binding) {
         SceneRef scene = requireScene(id);
         programs.validateEnvironment(binding.implementation(), binding.bindingData());
         resources.validate(owner, binding.bindingData().resource());
-        var values = next.computeIfAbsent(scene, key -> new LinkedHashMap<>());
-        values.remove(slot);
-        values.put(slot, binding);
+        return scene;
+    }
+
+    private void replaceEnvironment(SceneRef scene, Object slot, RetainedEnvironment entry) {
+        var values = selections.computeIfAbsent(scene, key -> new LinkedHashMap<>());
+        RetainedEnvironment previous = values.remove(slot);
+        values.put(slot, entry);
+        if (previous != null) previous.close();
+    }
+
+    private void removeInstances(java.util.function.Predicate<Map.Entry<InstanceRef, RetainedInstance>> predicate) {
+        instances.entrySet().removeIf(entry -> {
+            if (!predicate.test(entry)) return false;
+            entry.getValue().resources.close();
+            return true;
+        });
+    }
+
+    private void removeEnvironments(Object slot) {
+        selections.values().forEach(values -> {
+            RetainedEnvironment previous = values.remove(slot);
+            if (previous != null) previous.close();
+        });
     }
 
     synchronized void quiesce(SceneContributionChannel channel) {
@@ -266,17 +312,12 @@ public final class SceneDirectory {
     }
 
     synchronized void invalidate(SceneContributionChannel channel) {
-        if (!channel.acceptingEdits) {
-            return;
-        }
+        if (!channel.acceptingEdits) return;
         quiesce(channel);
-        var nextInstances = new LinkedHashMap<>(instances);
-        nextInstances.keySet().removeIf(id -> id.owner == channel);
-        var nextLights = new LinkedHashMap<>(lights);
-        nextLights.keySet().removeIf(id -> id.owner == channel);
-        var nextSelections = copySelections();
-        nextSelections.values().forEach(values -> values.remove(channel));
-        commit(nextInstances, nextLights, nextSelections);
+        removeInstances(entry -> entry.getKey().owner == channel);
+        lights.keySet().removeIf(id -> id.owner == channel);
+        removeEnvironments(channel);
+        revision++;
         channel.acceptingEdits = false;
         var claims = List.copyOf(channel.meshes);
         channel.meshes.clear();
@@ -284,12 +325,9 @@ public final class SceneDirectory {
     }
 
     synchronized void invalidate(SceneEnvironmentContributionChannel channel) {
-        if (!channel.accepting) {
-            return;
-        }
-        var nextSelections = copySelections();
-        nextSelections.values().forEach(values -> values.remove(channel));
-        commit(instances, lights, nextSelections);
+        if (!channel.accepting) return;
+        removeEnvironments(channel);
+        revision++;
         channel.accepting = false;
     }
 
@@ -306,103 +344,78 @@ public final class SceneDirectory {
         backend.settleFrameUses();
     }
 
-    public void progress() {
-        synchronized (this) {
-            RetainedSceneSnapshot next = snapshot(revision + 1, instances, lights, selections, retained);
-            if (published != null && !next.meshes().equals(published.meshes())) {
-                backend.apply(next);
-                published = next;
-                revision++;
+    public void progress() { backend.progress(); }
+
+    public void settleFrameUses() { backend.settleFrameUses(); }
+
+    public void prepareForSessionClose() { backend.prepareForSessionClose(); }
+
+    /** Borrowed diagnostic values; callers needing stable resource lifetime use capture(). */
+    public synchronized RetainedSceneSnapshot snapshot() {
+        synchronized (programs) {
+            return snapshot(null);
+        }
+    }
+
+    /** Captures all scenes and their direct ownership claims at one atomic edit boundary. */
+    public synchronized SharedResource<RetainedSceneSnapshot> capture() {
+        var references = new ArrayList<ResourceRef>();
+        instances.values().forEach(entry -> {
+            references.add(entry.value.mesh().reference());
+            references.add(entry.value.instanceData().resource());
+        });
+        scenes.forEach(scene -> {
+            EnvironmentBinding<?> environment = selectedEnvironment(selections.get(scene));
+            if (environment != null) references.add(environment.bindingData().resource());
+        });
+        ResourceOwners owners = ResourceOwners.capture(references);
+        try {
+            synchronized (programs) {
+                return SharedResource.owned(snapshot(owners), ignored -> owners.close());
+            }
+        } catch (Throwable failure) {
+            owners.close();
+            throw failure;
+        }
+    }
+
+    private RetainedSceneSnapshot snapshot(ResourceOwners owners) {
+        var meshSnapshots = new LinkedHashMap<Long, RetainedSceneSnapshot.Mesh>();
+        for (var entry : instances.values()) {
+            var instance = entry.value;
+            var mesh = ((ReadyClaim<?>) instance.mesh()).state;
+            var ready = owners == null ? instance.mesh() : (ReadyMesh<?>) owners.borrowed(instance.mesh().reference());
+            if (!meshSnapshots.containsKey(mesh.mesh.identity())) {
+                meshSnapshots.put(mesh.mesh.identity(), meshSnapshot(mesh.mesh.identity(), mesh.mesh.build(), ready));
             }
         }
-        backend.progress();
-    }
-
-    public void settleFrameUses() {
-        backend.settleFrameUses();
-    }
-
-    public void prepareForSessionClose() {
-        backend.prepareForSessionClose();
-    }
-
-    /** Diagnostic values with borrowed resource claims; rendering captures the owning backend root. */
-    public synchronized RetainedSceneSnapshot snapshot() {
-        return snapshot(revision, instances, lights, selections, retained);
-    }
-
-    private Map<SceneRef, LinkedHashMap<Object, EnvironmentBinding<?>>> copySelections() {
-        var copy = new LinkedHashMap<SceneRef, LinkedHashMap<Object, EnvironmentBinding<?>>>();
-        selections.forEach((key, value) -> copy.put(key, new LinkedHashMap<>(value)));
-        return copy;
-    }
-
-    private void commit(Map<InstanceRef, SceneEdit.SetInstance<?>> nextInstances,
-            Map<LightRef, SceneEdit.SetLight> nextLights,
-            Map<SceneRef, LinkedHashMap<Object, EnvironmentBinding<?>>> nextSelections) {
-        List<ResourceRef> references = new ArrayList<>();
-        nextInstances.values().forEach(value -> {
-            references.add(value.mesh().reference());
-            references.add(value.instanceData().resource());
-        });
-        nextSelections.values().forEach(values -> values.values().forEach(
-                binding -> references.add(binding.bindingData().resource())));
-        ResourceOwners nextResources = ResourceOwners.capture(references);
-        RetainedSceneSnapshot candidate;
-        try {
-            candidate = snapshot(revision + 1, nextInstances, nextLights, nextSelections, nextResources);
-            backend.apply(candidate);
-        } catch (Throwable error) {
-            nextResources.close();
-            throw error;
-        }
-        ResourceOwners previousResources = retained;
-        retained = nextResources;
-        instances = nextInstances;
-        lights = nextLights;
-        selections = nextSelections;
-        published = candidate;
-        revision++;
-        previousResources.close();
-    }
-
-    private RetainedSceneSnapshot snapshot(
-            long snapshotRevision,
-            Map<InstanceRef, SceneEdit.SetInstance<?>> nextInstances,
-            Map<LightRef, SceneEdit.SetLight> nextLights,
-            Map<SceneRef, LinkedHashMap<Object, EnvironmentBinding<?>>> nextSelections,
-            ResourceOwners owners) {
-        var meshSnapshots = new LinkedHashMap<Long, RetainedSceneSnapshot.Mesh>();
-        for (var instance : nextInstances.values()) {
-            var mesh = ((ReadyClaim<?>) instance.mesh()).state;
-            var ready = (ReadyMesh<?>) owners.borrowed(instance.mesh().reference());
-            meshSnapshots.putIfAbsent(mesh.mesh.identity(),
-                    meshSnapshot(mesh.mesh.identity(), mesh.mesh.build(), ready));
-        }
         List<RetainedSceneSnapshot.Scene> sceneSnapshots = scenes.stream()
-                .map(scene -> new RetainedSceneSnapshot.Scene(scene, selectedEnvironment(nextSelections.get(scene))))
+                .map(scene -> new RetainedSceneSnapshot.Scene(scene, selectedEnvironment(selections.get(scene))))
                 .toList();
-        List<RetainedSceneSnapshot.Instance> instanceSnapshots = nextInstances.entrySet().stream()
+        List<RetainedSceneSnapshot.Instance> instanceSnapshots = instances.entrySet().stream()
                 .map(entry -> instanceSnapshot(entry.getKey(), entry.getValue())).toList();
-        List<RetainedSceneSnapshot.Light> lightSnapshots = nextLights.entrySet().stream()
+        List<RetainedSceneSnapshot.Light> lightSnapshots = lights.entrySet().stream()
                 .map(entry -> new RetainedSceneSnapshot.Light(entry.getKey().identity,
                         entry.getValue().scene(), entry.getValue().descriptor())).toList();
-        return new RetainedSceneSnapshot(snapshotRevision,
-                sceneSnapshots,
-                List.copyOf(meshSnapshots.values()),
-                instanceSnapshots,
-                lightSnapshots);
+        return new RetainedSceneSnapshot(revision, sceneSnapshots, List.copyOf(meshSnapshots.values()),
+                instanceSnapshots, lightSnapshots);
     }
 
-    private static EnvironmentBinding<?> selectedEnvironment(LinkedHashMap<Object, EnvironmentBinding<?>> selections) {
-        return selections == null || selections.isEmpty() ? null : selections.lastEntry().getValue();
+    private static EnvironmentBinding<?> selectedEnvironment(LinkedHashMap<Object, RetainedEnvironment> selections) {
+        return selections == null || selections.isEmpty() ? null : selections.lastEntry().getValue().binding;
     }
 
-    private static RetainedSceneSnapshot.Instance instanceSnapshot(InstanceRef id, SceneEdit.SetInstance<?> instance) {
+    private record RetainedInstance(SceneEdit.SetInstance<?> value, long placementOrdinal, ResourceOwners resources) { }
+    private record RetainedEnvironment(EnvironmentBinding<?> binding, ResourceOwner owner) implements AutoCloseable {
+        @Override public void close() { owner.close(); }
+    }
+
+    private static RetainedSceneSnapshot.Instance instanceSnapshot(InstanceRef id, RetainedInstance entry) {
+        var instance = entry.value;
         var primitiveEmitters = instance.primitiveLights().ranges().stream()
                 .map(range -> new RetainedSceneSnapshot.PrimitiveEmitter(range.firstPrimitive(),
                         range.primitiveCount(), ((LightRef) range.light()).identity)).toList();
-        return new RetainedSceneSnapshot.Instance(id.identity,
+        return new RetainedSceneSnapshot.Instance(id.identity, entry.placementOrdinal,
                 instance.scene(),
                 ((ReadyClaim<?>) instance.mesh()).state.mesh.identity(),
                 instance.transform(),
@@ -459,12 +472,7 @@ public final class SceneDirectory {
         if (!(mesh instanceof ReadyClaim<?> claim) || claim.state.directory != this) {
             throw new IllegalArgumentException("mesh belongs to another session");
         }
-        synchronized (claim.state) {
-            if (claim.closed) {
-                throw new IllegalStateException("mesh claim closed");
-            }
-        }
-        return claim.state;
+        return claim.owner.get();
     }
 
     private InstanceRef requireInstance(SceneContributionChannel owner, InstanceId id) {
@@ -519,8 +527,8 @@ public final class SceneDirectory {
         final RetainedSceneSnapshot.Mesh mesh;
         final ShaderDataType<N> type;
         final ResourceOwner nativeOwner;
-        final ResourceOwners inputs;
-        int references = 1;
+        final SharedResource.Reference<ReadyState<N>> lifetime;
+        final SharedResource<ReadyState<N>> initial;
 
         ReadyState(SceneDirectory directory,
                 RetainedSceneSnapshot.Mesh mesh,
@@ -531,26 +539,29 @@ public final class SceneDirectory {
             this.mesh = mesh;
             this.type = type;
             this.nativeOwner = nativeOwner;
-            this.inputs = inputs;
+            initial = SharedResource.owned(this, ignored -> {
+                try { nativeOwner.close(); } finally { inputs.close(); }
+            });
+            lifetime = initial.reference();
         }
 
         @Override
-        public synchronized ReadyMesh<N> retain() {
-            if (references == 0) {
-                throw new IllegalStateException("mesh released");
-            }
-            references++;
-            return new ReadyClaim<>(this);
+        public ReadyMesh<N> retain() {
+            return new ReadyClaim<>(this, lifetime.retain());
         }
     }
 
     private static final class ReadyClaim<N> implements ReadyMesh<N> {
         final ReadyState<N> state;
-        boolean closed;
         SceneContributionChannel producer;
 
-        ReadyClaim(ReadyState<N> state) {
+        final SharedResource<ReadyState<N>> owner;
+
+        ReadyClaim(ReadyState<N> state) { this(state, state.initial); }
+
+        ReadyClaim(ReadyState<N> state, SharedResource<ReadyState<N>> owner) {
             this.state = state;
+            this.owner = owner;
         }
 
         @Override
@@ -565,12 +576,7 @@ public final class SceneDirectory {
 
         @Override
         public ReadyMesh<N> retain() {
-            synchronized (state) {
-                if (closed) {
-                    throw new IllegalStateException("mesh claim closed");
-                }
-                return state.retain();
-            }
+            return new ReadyClaim<>(state, owner.retain());
         }
 
         @Override
@@ -578,24 +584,9 @@ public final class SceneDirectory {
             if (producer != null) {
                 synchronized (state.directory) {
                     producer.meshes.remove(this);
-                    release();
-                }
-            } else {
-                release();
-            }
-        }
-
-        private void release() {
-            synchronized (state) {
-                if (closed) {
-                    return;
-                }
-                closed = true;
-                if (--state.references == 0) {
-                    state.nativeOwner.close();
-                    state.inputs.close();
                 }
             }
+            owner.close();
         }
     }
 }

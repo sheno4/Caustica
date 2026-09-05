@@ -16,11 +16,13 @@ import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkDevice;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -30,13 +32,11 @@ final class EngineWorldSessionTest {
     @Test
     void ownsGenericRenderContributionsAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();
-        List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         renderHost.api().sessions().add(context -> contribution("core", events));
 
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void apply(RetainedSceneSnapshot snapshot) {
-                snapshots.add(snapshot);
+            @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
             }
         };
         EngineWorldSession session = new EngineWorldSession(renderHost, GPU, COMPUTE, PROGRAMS, scenes, (mesh, source) -> { throw new AssertionError(); }, PASSES,
@@ -47,7 +47,7 @@ final class EngineWorldSessionTest {
         session.close();
 
         assertEquals(List.of("core:stop", "core:close"), events);
-        assertEquals(0, snapshots.getLast().scenes().size());
+        assertEquals(0, session.services().scenes().snapshot().scenes().size());
         assertThrows(IllegalStateException.class, session::progress);
     }
 
@@ -69,7 +69,7 @@ final class EngineWorldSessionTest {
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         renderHost.api().sessions().add(context -> contribution("core", events));
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void apply(RetainedSceneSnapshot snapshot) {
+            @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
             }
             @Override public void prepareForSessionClose() { throw new IllegalStateException("settle"); }
         };
@@ -106,7 +106,7 @@ final class EngineWorldSessionTest {
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         renderHost.api().sessions().add(context -> { throw new IllegalStateException("open"); });
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
-            @Override public void apply(RetainedSceneSnapshot snapshot) {
+            @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
             }
             @Override public void prepareForSessionClose() { throw new IllegalArgumentException("settle"); }
         };
@@ -124,7 +124,7 @@ final class EngineWorldSessionTest {
         private final List<Runnable> completed = new ArrayList<>();
         private boolean prepared;
 
-        @Override public synchronized void apply(RetainedSceneSnapshot snapshot) {
+        @Override public synchronized void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
 
         }
         @Override public synchronized void prepareForSessionClose() {

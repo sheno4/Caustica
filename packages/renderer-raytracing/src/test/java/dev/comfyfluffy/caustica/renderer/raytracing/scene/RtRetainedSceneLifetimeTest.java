@@ -23,24 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtRetainedSceneLifetimeTest {
     @Test
-    void frameCapturesEveryScenesEffectiveValuesBeforeAnySceneRead() {
-        Object firstScene = new Object();
-        Object secondScene = new Object();
-        Map<Object, List<String>> root = new IdentityHashMap<>();
-        root.put(firstScene, List.of("first instance"));
-        root.put(secondScene, List.of("second instance"));
-        AtomicInteger latestTransformEpoch = new AtomicInteger(1);
-
-        Map<Object, List<Integer>> frame = RtRetainedSceneBackend.captureFrameValues(
-                root, ignored -> latestTransformEpoch.get());
-        assertEquals(1, frame.get(firstScene).getFirst());
-
-        latestTransformEpoch.set(2);
-
-        assertEquals(1, frame.get(secondScene).getFirst());
-    }
-
-    @Test
     void graphicsUseLatchesGeometryAndContentFromOneRevision() {
         record Root(int geometryRevision, int contentRevision) { }
         Object firstUse = new Object();
@@ -123,7 +105,7 @@ final class RtRetainedSceneLifetimeTest {
         var position = resources.create(positionRetirements::incrementAndGet);
         ResourceOwners frameResources = ResourceOwners.capture(List.of(
                 position.reference(), ResourceRef.none()));
-        ResourceOwners historyResources = frameResources.retainOnly(List.of(
+        ResourceOwners historyResources = ResourceOwners.capture(List.of(
                 position.reference(), ResourceRef.none()));
         AtomicInteger rootRetirements = new AtomicInteger();
         SharedResource<String> sceneRoot = SharedResource.owned(

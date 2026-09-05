@@ -1,9 +1,12 @@
 package dev.comfyfluffy.caustica.engine.scene;
 
-/** Direct retained database replacement. apply performs no GPU allocation or submission. */
+import dev.comfyfluffy.caustica.support.SharedResource;
+import java.util.function.Supplier;
+
+/** Frame execution pulls an owning snapshot from the retained database. */
 public interface RetainedSceneBackend {
-    /** Captures independent ownership before returning; a throw leaves the preceding snapshot current. */
-    void apply(RetainedSceneSnapshot snapshot);
+    /** Capture runs at the frame boundary on the program publication/control thread. */
+    void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture);
 
     default void progress() {
     }
