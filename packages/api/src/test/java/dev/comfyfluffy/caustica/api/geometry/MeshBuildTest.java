@@ -66,7 +66,7 @@ final class MeshBuildTest {
     void rejectsPositionStrideThatIsNotAFloatMultiple() {
         assertThrows(IllegalArgumentException.class, () -> new MeshBuild<Instance>(
                 stream(range(0x1000L, 38L), 13),
-                stream(range(0x2000L, 12L), 4), 3, null,
+                stream(range(0x2000L, 12L), 4), 3, null, MeshBuild.BuildPolicy.STATIC,
                 List.of(geometry(new SurfaceId<Binding, Instance>() { }, 0, 3))));
     }
 
@@ -87,7 +87,7 @@ final class MeshBuildTest {
         assertThrows(IllegalArgumentException.class, () -> new MeshBuild<Instance>(
                 stream(range(0x1000L, 36L), 12),
                 stream(range(0x2000L, 24L), 4), 3,
-                null,
+                null, MeshBuild.BuildPolicy.STATIC,
                 List.of(geometry(surface, 0, 6), geometry(surface, 3, 3))));
     }
 
@@ -132,7 +132,7 @@ final class MeshBuildTest {
         SurfaceId<Binding, Instance> surface = new SurfaceId<>() { };
         return new MeshBuild<>(
                 stream(range(0x1000L, 36L), 12),
-                stream(range(0x2000L, 12L), 4), 3, revision,
+                stream(range(0x2000L, 12L), 4), 3, revision, MeshBuild.BuildPolicy.STATIC,
                 List.of(geometry(surface, 0, 3)));
     }
 

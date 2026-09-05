@@ -30,7 +30,7 @@ final class RtResolvedGeometryPlanTest {
                         new MeshBuild.CoveragePolicy.Cutout(0.4f)),
                 new MeshBuild.VolumeSlot<>(VOLUME, BINDING.data(0x2222)), 0, 3);
         MeshBuild<Instance> build = new MeshBuild<>(stream(0x1000, 36, 12),
-                stream(0x2000, 12, 4), 3, new MeshBuild.IndexRevision(1), List.of(geometry));
+                stream(0x2000, 12, 4), 3, new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.REFITTABLE, List.of(geometry));
         var resolved = new RtRetainedGeometryPlan.ResolvedMesh(build, List.of(
                 new RtRetainedGeometryPlan.ResolvedGeometry(geometry, 0, 0, 0, 0)));
         GeometryTransform transform = GeometryTransform.translation(1, 2, 3);

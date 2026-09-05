@@ -243,7 +243,7 @@ final class MinecraftTerrainGeometryTest {
                     MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
                     MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),
                     new MeshBuild.CoveragePolicy.Opaque());
-            return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(3),
+            return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(3), MeshBuild.BuildPolicy.STATIC,
                     List.of(new MeshBuild.Geometry<>(surface, null, 0, 3)));
         }
 

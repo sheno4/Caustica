@@ -270,7 +270,7 @@ final class SceneDirectoryTest {
                 new MeshBuild.CoveragePolicy.Opaque());
         MeshBuild.VolumeSlot<Binding, Instance> volumeSlot = volume == null
                 ? null : new MeshBuild.VolumeSlot<>(volume, BINDING.data(0, volumeResource));
-        return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(1),
+        return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.STATIC,
                 List.of(new MeshBuild.Geometry<>(surfaceSlot, volumeSlot, 0, 3)));
     }
 

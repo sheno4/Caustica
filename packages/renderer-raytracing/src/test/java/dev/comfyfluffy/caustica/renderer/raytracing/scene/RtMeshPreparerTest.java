@@ -51,11 +51,62 @@ final class RtMeshPreparerTest {
         assertEquals(List.of("destroy"), events);
     }
 
+    @Test void compactedMeshPublishesOnlyAfterCopyCompletionAndSourceRelease() {
+        List<String> events = new ArrayList<>();
+        var source = owner(events, "source");
+        var destination = owner(events, "compacted");
+        var result = new CompletableFuture<ResourceOwner>();
+        result.thenAccept(ready -> events.add("ready"));
+        assertFalse(result.isDone());
+        assertEquals(List.of(), events);
+        RtMeshPreparer.finishCompaction(result, source, destination, new GpuComputeCompletion.Succeeded());
+        assertSame(destination, result.join());
+        assertEquals(List.of("source", "ready"), events);
+        result.join().close();
+        assertEquals(List.of("source", "ready", "compacted"), events);
+    }
+
+    @Test void cancelledCompactionConsumerRetainsBothGenerationsUntilGpuCompletion() {
+        List<String> events = new ArrayList<>();
+        var result = new CompletableFuture<ResourceOwner>();
+        var source = owner(events, "source");
+        var destination = owner(events, "compacted");
+        result.cancel(false);
+        assertEquals(List.of(), events);
+        RtMeshPreparer.finishCompaction(result, source, destination, new GpuComputeCompletion.Succeeded());
+        assertEquals(List.of("source", "compacted"), events);
+        assertTrue(result.isCancelled());
+    }
+
+    @Test void failedCompactionReleasesBothGenerationsWithoutPublishing() {
+        List<String> events = new ArrayList<>();
+        var result = new CompletableFuture<ResourceOwner>();
+        var failure = new IllegalStateException("copy");
+        RtMeshPreparer.finishCompaction(result, owner(events, "source"), owner(events, "compacted"),
+                new GpuComputeCompletion.Failed(failure));
+        assertEquals(List.of("source", "compacted"), events);
+        assertSame(failure, assertThrows(java.util.concurrent.CompletionException.class, result::join).getCause());
+    }
+
+    @Test void destinationAllocationFailureStillReleasesUncompactedSource() {
+        List<String> events = new ArrayList<>();
+        var result = new CompletableFuture<ResourceOwner>();
+        var failure = new IllegalStateException("allocation");
+        RtMeshPreparer.finishCompaction(result, owner(events, "source"), null,
+                new GpuComputeCompletion.Failed(failure));
+        assertEquals(List.of("source"), events);
+        assertSame(failure, assertThrows(java.util.concurrent.CompletionException.class, result::join).getCause());
+    }
+
     private static ResourceOwner owner(List<String> events) {
+        return owner(events, "destroy");
+    }
+
+    private static ResourceOwner owner(List<String> events, String label) {
         return new ResourceOwner() {
             public ResourceRef reference() { return ResourceRef.none(); }
             public ResourceOwner retain() { throw new UnsupportedOperationException(); }
-            public void close() { events.add("destroy"); }
+            public void close() { events.add(label); }
         };
     }
 }

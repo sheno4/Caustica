@@ -14,7 +14,11 @@ final class RtPreparedMesh implements ResourceOwner {
     private final SharedResource<State> owner;
 
     RtPreparedMesh(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.PersistentBuild nativeBuild) {
-        this(new State(context, build, nativeBuild).initial);
+        this(context, build, nativeBuild.op().operation(), nativeBuild.accel(), nativeBuild.backing());
+    }
+    RtPreparedMesh(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.BlasOperation operation,
+                   RtAccel accel, GpuBuffer backing) {
+        this(new State(context, build, operation, accel, backing).initial);
     }
     private RtPreparedMesh(SharedResource<State> owner) {
         this.owner = owner;
@@ -28,17 +32,18 @@ final class RtPreparedMesh implements ResourceOwner {
     static final class State implements ResourceRef {
         final VulkanDeviceContext context;
         final MeshBuild<?> build;
-        final RtAccel.PreparedBlas operation;
+        final RtAccel.BlasOperation operation;
         final RtAccel accel;
         final GpuBuffer backing;
         final SharedResource<State> initial;
         final SharedResource.Reference<State> lifetime;
-        State(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.PersistentBuild nativeBuild) {
+        State(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.BlasOperation operation,
+              RtAccel accel, GpuBuffer backing) {
             this.context = context;
             this.build = build;
-            operation = nativeBuild.op();
-            accel = nativeBuild.accel();
-            backing = nativeBuild.backing();
+            this.operation = operation;
+            this.accel = accel;
+            this.backing = backing;
             initial = SharedResource.owned(this, ignored -> context.deferDestroy(
                     () -> RtAccel.destroyCallerOwnedAccel(accel, backing)));
             lifetime = initial.reference();

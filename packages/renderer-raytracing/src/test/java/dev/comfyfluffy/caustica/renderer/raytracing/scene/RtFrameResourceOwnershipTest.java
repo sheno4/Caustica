@@ -54,7 +54,7 @@ final class RtFrameResourceOwnershipTest {
         MeshBuild<Instance> build = new MeshBuild<>(
                 stream(0x1000, 36, 12, positions.reference()),
                 stream(0x2000, 12, 4, indices.reference()), 3,
-                new MeshBuild.IndexRevision(1), List.of(geometry));
+                new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.STATIC, List.of(geometry));
         RetainedSceneSnapshot.Mesh mesh = new RetainedSceneSnapshot.Mesh(1, build,
                 List.of(new RetainedSceneSnapshot.GeometryPrograms(3, 5)), null);
         RetainedSceneSnapshot.Instance placement = new RetainedSceneSnapshot.Instance(2, 2, SCENE, 1,

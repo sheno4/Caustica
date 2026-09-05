@@ -36,11 +36,13 @@ public record MeshBuild<N>(Stream positions,
                            Stream indices,
                            int vertexCount,
                            IndexRevision indexRevision,
+                           BuildPolicy buildPolicy,
                            List<Geometry<N>> geometries) {
 
     public MeshBuild {
         Objects.requireNonNull(positions, "positions");
         Objects.requireNonNull(indices, "indices");
+        Objects.requireNonNull(buildPolicy, "buildPolicy");
         geometries = List.copyOf(geometries);
         if (vertexCount <= 0) throw new IllegalArgumentException("vertexCount must be positive");
         if (geometries.isEmpty()) throw new IllegalArgumentException("a mesh needs at least one geometry");
@@ -65,6 +67,14 @@ public record MeshBuild<N>(Stream positions,
             }
             previousEnd = end;
         }
+    }
+
+    /** Acceleration-structure preparation policy, independent of instance transform changes. */
+    public enum BuildPolicy {
+        /** Changed geometry requires a rebuild; its acceleration structure may be compacted. */
+        STATIC,
+        /** Compatible replacements may use this revision as the source for an out-of-place refit. */
+        REFITTABLE
     }
 
     private static long requiredBytes(int count, int stride, int elementBytes) {

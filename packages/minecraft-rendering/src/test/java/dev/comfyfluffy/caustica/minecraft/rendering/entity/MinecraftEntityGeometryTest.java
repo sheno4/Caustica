@@ -224,7 +224,7 @@ final class MinecraftEntityGeometryTest {
                     MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
                     MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),
                     new MeshBuild.CoveragePolicy.Opaque());
-            return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(17),
+            return new MeshBuild<>(positions, indices, 3, new MeshBuild.IndexRevision(17), MeshBuild.BuildPolicy.REFITTABLE,
                     List.of(new MeshBuild.Geometry<>(surface, null, 0, 3)));
         }
 

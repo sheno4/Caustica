@@ -144,7 +144,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
                     new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration.reference()),
                     new MeshBuild.Stream(indices.deviceRange(), 4, indexGeneration.reference()), source.vertexCount(),
-                    new MeshBuild.IndexRevision(source.indexRevision()), geometries);
+                    new MeshBuild.IndexRevision(source.indexRevision()), MeshBuild.BuildPolicy.STATIC, geometries);
             ShaderData<MinecraftProgramTypes.InstanceData> instanceData =
                     MinecraftProgramTypes.INSTANCE_DATA.data(instance.deviceRange().address().value(),
                             instanceGeneration.reference());

@@ -129,7 +129,7 @@ final class ProgramSceneFallbackTest {
                 new MeshBuild.Stream(new VulkanDeviceAddressRange(
                         new VulkanDeviceAddress(0x2000), 3L * Integer.BYTES), Integer.BYTES,
                         ResourceRef.none()),
-                3, new MeshBuild.IndexRevision(1), List.of(new MeshBuild.Geometry<>(
+                3, new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.STATIC, List.of(new MeshBuild.Geometry<>(
                         new MeshBuild.SurfaceSlot<>(exports.surface(), BINDING.data(21),
                                 new MeshBuild.CoveragePolicy.Cutout(0.5f)),
                         new MeshBuild.VolumeSlot<>(exports.volume(), BINDING.data(22)), 0, 3)));

@@ -148,6 +148,29 @@ final class RtRetainedGeometryPlanTest {
     }
 
     @Test
+    void staticBlasCanBeSharedButCannotBeRefittedOrReusedAcrossPolicies() {
+        var slot = new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1),
+                new MeshBuild.CoveragePolicy.Opaque());
+        var refittable = build(new MeshBuild.IndexRevision(9), 0x1000, slot, slot);
+        var moved = build(new MeshBuild.IndexRevision(9), 0x3000, slot, slot);
+        var fixed = withPolicy(refittable, MeshBuild.BuildPolicy.STATIC);
+        var fixedMoved = withPolicy(moved, MeshBuild.BuildPolicy.STATIC);
+
+        assertTrue(RtRetainedGeometryPlan.canReuseBlas(fixed, fixed));
+        assertFalse(RtRetainedGeometryPlan.canReuseBlas(fixed, refittable));
+        assertFalse(RtRetainedGeometryPlan.canReuseBlas(refittable, fixed));
+        assertFalse(RtRetainedGeometryPlan.canRefitBlas(fixed, fixedMoved));
+        assertFalse(RtRetainedGeometryPlan.canRefitBlas(fixed, moved));
+        assertFalse(RtRetainedGeometryPlan.canRefitBlas(refittable, fixedMoved));
+        assertTrue(RtRetainedGeometryPlan.canRefitBlas(refittable, moved));
+    }
+
+    private static MeshBuild<Instance> withPolicy(MeshBuild<Instance> build, MeshBuild.BuildPolicy policy) {
+        return new MeshBuild<>(build.positions(), build.indices(), build.vertexCount(),
+                build.indexRevision(), policy, build.geometries());
+    }
+
+    @Test
     void geometryAbiPacksProgramsRootsAndRebasedTransformHistory() {
         GeometryTransform current = GeometryTransform.translation(110, 220, 330);
         GeometryTransform previous = GeometryTransform.translation(109, 218, 327);
@@ -192,7 +215,7 @@ final class RtRetainedGeometryPlanTest {
         MeshBuild.Stream positions = stream(0x1000, 256, 12);
         MeshBuild.Stream indices = stream(0x2000, 64, 4);
         MeshBuild<Instance> build = new MeshBuild<>(positions, indices, 8,
-                new MeshBuild.IndexRevision(1), List.of(new MeshBuild.Geometry<>(
+                new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.REFITTABLE, List.of(new MeshBuild.Geometry<>(
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1),
                         new MeshBuild.CoveragePolicy.Cutout(0.5f)),
                 new MeshBuild.VolumeSlot<>(VOLUME, BINDING.data(2)), 0, 6)));
@@ -233,7 +256,7 @@ final class RtRetainedGeometryPlanTest {
                                              MeshBuild.SurfaceSlot<Binding, Instance> first,
                                              MeshBuild.SurfaceSlot<Binding, Instance> second) {
         return new MeshBuild<>(stream(positionAddress, 256, 12),
-                stream(0x2000, 128, 4), 8, revision, List.of(
+                stream(0x2000, 128, 4), 8, revision, MeshBuild.BuildPolicy.REFITTABLE, List.of(
                 new MeshBuild.Geometry<>(first, null, 3, 6),
                 new MeshBuild.Geometry<>(second, null, 12, 9)));
     }

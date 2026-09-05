@@ -50,7 +50,8 @@ public final class RtRetainedGeometryPlan {
 
     /** A BLAS can be shared only when every acceleration-structure-visible input is identical. */
     public static boolean canReuseBlas(MeshBuild<?> previous, MeshBuild<?> next) {
-        return previous.positions().equals(next.positions())
+        return previous.buildPolicy() == next.buildPolicy()
+                && previous.positions().equals(next.positions())
                 && previous.indices().equals(next.indices())
                 && previous.vertexCount() == next.vertexCount()
                 && previous.indexRevision() != null
@@ -58,9 +59,11 @@ public final class RtRetainedGeometryPlan {
                 && blasRanges(previous).equals(blasRanges(next));
     }
 
-    /** A BLAS can be updated when only its vertex generation changes and its UPDATE layout stays identical. */
+    /** Refit requires both revisions to permit updates and preserve the UPDATE layout. */
     public static boolean canRefitBlas(MeshBuild<?> previous, MeshBuild<?> next) {
-        return !previous.positions().equals(next.positions())
+        return previous.buildPolicy() == MeshBuild.BuildPolicy.REFITTABLE
+                && next.buildPolicy() == MeshBuild.BuildPolicy.REFITTABLE
+                && !previous.positions().equals(next.positions())
                 && previous.positions().byteStride() == next.positions().byteStride()
                 && RetainedSceneSnapshot.vertexTopologyCompatible(previous, next)
                 && blasRanges(previous).equals(blasRanges(next));

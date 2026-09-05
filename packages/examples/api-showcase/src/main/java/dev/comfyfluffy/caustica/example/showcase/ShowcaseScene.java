@@ -81,7 +81,7 @@ final class ShowcaseScene {
         return new MeshBuild<>(
                 new MeshBuild.Stream(currentPositions, 12, resource),
                 new MeshBuild.Stream(indices, 4, resource),
-                4, new MeshBuild.IndexRevision(indexRevision),
+                4, new MeshBuild.IndexRevision(indexRevision), MeshBuild.BuildPolicy.STATIC,
                 List.of(
                         new MeshBuild.Geometry<>(opaque, null, 0, 3),
                         new MeshBuild.Geometry<>(cutout, null, 3, 3),

@@ -142,7 +142,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                     GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
                             upload.primitiveDataResource()), coverage);
             var build = new MeshBuild<>(upload.positionsStream(), upload.indexStream(), upload.vertexCount(),
-                    new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
+                    new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()), MeshBuild.BuildPolicy.STATIC,
                     List.of(new MeshBuild.Geometry<>(slot, null, 0, upload.indexCount())));
             return context.renderSession().meshes().prepare(GltfProgramExports.INSTANCE, build);
         } finally {

@@ -15,6 +15,8 @@ import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkCopyAccelerationStructureInfoKHR;
+import org.lwjgl.vulkan.VkQueryPoolCreateInfo;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
@@ -25,6 +27,9 @@ import java.util.List;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
 import static org.lwjgl.vulkan.KHRRayTracingPositionFetch.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
@@ -35,6 +40,8 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_NO_DUPLICATE
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_OPAQUE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_TYPE_TRIANGLES_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCmdCopyAccelerationStructureKHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCmdWriteAccelerationStructuresPropertiesKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCreateAccelerationStructureKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkDestroyAccelerationStructureKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR;
@@ -164,6 +171,80 @@ public final class RtAccel {
     public record PersistentBuild(PreparedBlas op, RtAccel accel, GpuBuffer backing, GpuBuffer scratch) {
     }
 
+    /** Caller-owned destination whose compact copy must complete before publication. */
+    public record CompactedBlas(RtAccel accel, GpuBuffer backing) {
+    }
+
+    /** One compacted-size query, retained until its recorded GPU work completes. */
+    public static final class CompactionQuery implements AutoCloseable {
+        private final VulkanDeviceContext context;
+        private final long pool;
+
+        public CompactionQuery(VulkanDeviceContext context) {
+            this.context = context;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkQueryPoolCreateInfo info = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
+                        .queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR).queryCount(1);
+                var result = stack.mallocLong(1);
+                context.checkDeviceResult(VK10.vkCreateQueryPool(context.vk(), info, null, result),
+                        "vkCreateQueryPool(BLAS compaction)");
+                pool = result.get(0);
+            }
+        }
+
+        /** Record after the source BUILD; the query reads that build's acceleration-structure writes. */
+        public void record(VkCommandBuffer cmd, RtAccel source) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VK10.vkCmdResetQueryPool(cmd, pool, 0, 1);
+                VulkanBarriers.accelerationStructureBuildToUpdate(cmd, stack);
+                vkCmdWriteAccelerationStructuresPropertiesKHR(cmd, stack.longs(source.handle),
+                        VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, pool, 0);
+            }
+        }
+
+        /** Read the byte size only after the submission containing the query has completed. */
+        public long readSize() {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                var result = stack.mallocLong(1);
+                context.checkDeviceResult(VK10.vkGetQueryPoolResults(context.vk(), pool, 0, 1, result,
+                        Long.BYTES, VK10.VK_QUERY_RESULT_64_BIT), "vkGetQueryPoolResults(BLAS compaction)");
+                return result.get(0);
+            }
+        }
+
+        @Override
+        public void close() {
+            VK10.vkDestroyQueryPool(context.vk(), pool, null);
+        }
+    }
+
+    /** Allocate a compact-copy destination with backing owned separately from its AS handle. */
+    public static CompactedBlas prepareCompactedBlas(VulkanDeviceContext ctx, long size, String label) {
+        String debugLabel = labelOr(label, "compacted BLAS");
+        GpuBuffer backing = ctx.createAsyncBuffer(size, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                false, debugLabel + " backing");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            return new CompactedBlas(createBlasOn(ctx, stack, backing, size, false, debugLabel), backing);
+        } catch (Throwable failure) {
+            backing.destroy();
+            throw failure;
+        }
+    }
+
+    /** Source and destination must remain alive until this compact copy completes. */
+    public static void recordCompaction(VulkanDeviceContext ctx, VkCommandBuffer cmd, RtAccel source,
+                                        RtAccel destination, String label) {
+        try (MemoryStack stack = MemoryStack.stackPush();
+             RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, labelOr(label, "BLAS compact copy"))) {
+            // Compact-copy source reads use the acceleration-structure build stage and access scope.
+            VulkanBarriers.accelerationStructureBuildToUpdate(cmd, stack);
+            VkCopyAccelerationStructureInfoKHR copy = VkCopyAccelerationStructureInfoKHR.calloc(stack)
+                    .sType$Default().src(source.handle).dst(destination.handle)
+                    .mode(VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR);
+            vkCmdCopyAccelerationStructureKHR(cmd, copy);
+        }
+    }
+
     /** One ordered indexed geometry in a multi-geometry BLAS. */
     public record GeometryRange(int firstIndex, int indexCount, boolean opaque) {
         public GeometryRange {
@@ -278,12 +359,12 @@ public final class RtAccel {
      * input buffers must remain alive until the recorded UPDATE completes.
      */
     public static PersistentBuild preparePersistentBlasUpdate(VulkanDeviceContext ctx,
-                                                               PreparedBlas source,
+                                                               BlasOperation source, long sourceHandle,
                                                                VulkanDeviceAddress vertexAddr,
                                                                VulkanDeviceAddress indexAddr,
                                                                String label) {
         java.util.Objects.requireNonNull(source, "source");
-        BlasOperation operation = cowUpdateOperation(source.operation, source.accel.handle);
+        BlasOperation operation = cowUpdateOperation(source, sourceHandle);
         BlasLayout layout = operation.layout();
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "multi-geometry BLAS update");
@@ -363,7 +444,8 @@ public final class RtAccel {
                 : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
         return trace
                 | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR
-                | (allowUpdate ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR : 0);
+                | (allowUpdate ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR
+                        : VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
     }
 
     private static RtAccel createBlasOn(VulkanDeviceContext ctx, MemoryStack stack, GpuBuffer backing, long accelSize,
