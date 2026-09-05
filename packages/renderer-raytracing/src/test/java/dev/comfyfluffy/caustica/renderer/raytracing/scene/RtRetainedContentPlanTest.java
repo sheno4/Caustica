@@ -68,4 +68,27 @@ final class RtRetainedContentPlanTest {
         assertTrue(RtRetainedSceneBackend.hasEmitterMapping(ranges, 3, 2));
         assertFalse(RtRetainedSceneBackend.hasEmitterMapping(ranges, 6, 3));
     }
+
+    @Test
+    void emitterPackingClipsRangesAndPreservesMissingLightGaps() {
+        var ranges = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(1, 3, 42L),
+                new RetainedSceneSnapshot.PrimitiveEmitter(5, 2, 84L));
+        var indices = Map.of(42L, 0);
+        for (int first = 0; first < 9; first++) {
+            for (int count = 0; count <= 9 - first; count++) {
+                var output = ByteBuffer.allocate(count * Integer.BYTES).order(ByteOrder.nativeOrder());
+                boolean[] linked = new boolean[1];
+                RtRetainedSceneBackend.putEmitterIndices(output, first, count, ranges, indices, linked);
+                assertEquals(count * Integer.BYTES, output.position());
+                output.flip();
+                boolean expectedLinked = false;
+                for (int primitive = first; primitive < first + count; primitive++) {
+                    int expected = RtRetainedSceneBackend.emitterIndex(ranges, primitive, indices);
+                    assertEquals(expected, output.getInt());
+                    expectedLinked |= expected >= 0;
+                }
+                assertEquals(expectedLinked, linked[0]);
+            }
+        }
+    }
 }

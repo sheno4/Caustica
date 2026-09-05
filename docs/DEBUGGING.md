@@ -59,7 +59,7 @@ This external Python analysis computes descriptive statistics and exposure chang
 
 - `Frame`: CPU envelope, including RT tick preparation when present; not display cadence or generated-frame FPS.
 - `CpuStage`: each elapsed CPU scope, with stage and frame ID. Nested scopes overlap; do not sum everything.
-- `GpuStage`: command-stage timestamps on the graphics queue; query pools are reused after existing completion. No telemetry wait is added. These intervals are not utilization counters or a total display frame time. Recording GPU timestamps still perturbs execution; compare runs with the same instrumentation.
+- `GpuStage`: command-stage timestamps on the graphics queue; query pools are reused after existing completion. No telemetry wait is added. Named build/local-bake/fill intervals sit inside `world resources and trace`; do not add them to that parent interval. These intervals are not utilization counters or a total display frame time. Recording GPU timestamps still perturbs execution; compare runs with the same instrumentation.
 - `FrameCounter`: raw per-frame count or gauge. A latest snapshot is only updated while frame collection is enabled by a recording.
 - `GeometryVisibility`: raw extraction/publication/assembly timestamps. Assembly is not GPU completion or a guarantee that the object contributes visible pixels.
 - `EntityMeshFrame`: source and assembled mesh revisions/frames, including prior values. Superseded revisions need not appear.

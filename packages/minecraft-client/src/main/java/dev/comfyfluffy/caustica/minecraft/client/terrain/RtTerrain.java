@@ -363,7 +363,7 @@ public final class RtTerrain {
                           OptionValues settings) {
         int slots = Math.min(settings.get(MinecraftOptions.Rt.Terrain.ASYNC_DISPATCH_PER_PASS),
                 settings.get(MinecraftOptions.Rt.Terrain.MAX_INFLIGHT_SECTIONS) - outstandingBuilds.get());
-        if (slots <= 0) return;
+        if (slots <= 0 || updates.pending().isEmpty()) return;
         int cx = mc.player.getBlockX() >> 4, cy = mc.player.getBlockY() >> 4, cz = mc.player.getBlockZ() >> 4;
         Comparator<TerrainUpdates.Request<Build>> order = Comparator
                 .comparingInt((TerrainUpdates.Request<Build> request) -> request.section.ready ? 0 : 1)
@@ -371,9 +371,8 @@ public final class RtTerrain {
         var candidates = new PriorityQueue<TerrainUpdates.Request<Build>>(slots, order.reversed());
         var readyColumns = new LongOpenHashSet();
         var blockedColumns = new LongOpenHashSet();
-        for (var section : updates.sections.values()) {
-            var request = section.request;
-            if (!section.wanted || request == null || request.dispatched || request.complete) continue;
+        for (var request : updates.pending()) {
+            var section = request.section;
             long key = section.key;
             long column = columnKey(sectionX(key), sectionZ(key));
             if (blockedColumns.contains(column)) continue;
@@ -405,7 +404,7 @@ public final class RtTerrain {
         long taskEpoch = epoch;
         long taskRevision = ++revision;
         Object extraction = instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1);
-        request.dispatched = true;
+        updates.dispatched(request);
         outstandingBuilds.incrementAndGet();
         instrumentation.count("sectionsSnapshotted", 1);
         recordJob(request, taskEpoch, taskRevision, "dispatch", false);
@@ -433,7 +432,7 @@ public final class RtTerrain {
             }, outstandingBuilds::decrementAndGet);
         } catch (RuntimeException | Error failure) {
             outstandingBuilds.decrementAndGet();
-            request.dispatched = false;
+            updates.retry(request);
             throw failure;
         }
     }

@@ -283,28 +283,26 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
                                   List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
                                   Map<Long, Integer> lightIndices, boolean[] linkedEmitters) {
-        int rangeIndex = 0;
-        while (rangeIndex < ranges.size()) {
-            RetainedSceneSnapshot.PrimitiveEmitter range = ranges.get(rangeIndex);
-            if ((long) range.firstPrimitive() + range.primitiveCount() > firstPrimitive) break;
-            rangeIndex++;
-        }
-        for (int primitive = firstPrimitive, end = Math.addExact(firstPrimitive, primitiveCount);
-             primitive < end; primitive++) {
-            while (rangeIndex < ranges.size()) {
-                RetainedSceneSnapshot.PrimitiveEmitter range = ranges.get(rangeIndex);
-                if ((long) range.firstPrimitive() + range.primitiveCount() > primitive) break;
-                rangeIndex++;
+        int primitive = firstPrimitive;
+        int end = Math.addExact(firstPrimitive, primitiveCount);
+        for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
+            if (range.firstPrimitive() >= end) break;
+            int rangeEnd = (int) Math.min((long) end, (long) range.firstPrimitive() + range.primitiveCount());
+            if (rangeEnd <= primitive) continue;
+            while (primitive < range.firstPrimitive()) {
+                output.putInt(-1);
+                primitive++;
             }
-            int dense = -1;
-            if (rangeIndex < ranges.size()) {
-                RetainedSceneSnapshot.PrimitiveEmitter range = ranges.get(rangeIndex);
-                if (primitive >= range.firstPrimitive()) {
-                    dense = lightIndices.getOrDefault(range.lightIdentity(), -1);
-                }
-            }
-            output.putInt(dense);
+            int dense = lightIndices.getOrDefault(range.lightIdentity(), -1);
             if (dense >= 0) linkedEmitters[dense] = true;
+            while (primitive < rangeEnd) {
+                output.putInt(dense);
+                primitive++;
+            }
+        }
+        while (primitive < end) {
+            output.putInt(-1);
+            primitive++;
         }
     }
 

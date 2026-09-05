@@ -209,6 +209,7 @@ float neeAtProposalPdf(NeeAtState state, uint2 pixel, uint lightIndex,
                        uint candidateCount, bool allowLocal) {
     bool localAvailable = allowLocal && neeAtLocalAvailable(state, pixel);
     uint localDrawCount = localAvailable ? neeAtLocalCandidateCount(state, candidateCount) : 0u;
+    if (localDrawCount == 0u) return neeAtGlobalPdf(state, lightIndex);
     float localFraction = float(localDrawCount) / float(candidateCount);
     float globalFraction = float(candidateCount - localDrawCount) / float(candidateCount);
     return globalFraction * neeAtGlobalPdf(state, lightIndex)

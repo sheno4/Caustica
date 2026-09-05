@@ -16,6 +16,7 @@ import java.util.List;
 final class TerrainUpdates<T> {
     final Long2ObjectOpenHashMap<Section<T>> sections = new Long2ObjectOpenHashMap<>();
     private final LinkedHashSet<Group<T>> groups = new LinkedHashSet<>();
+    private final LinkedHashSet<Request<T>> pending = new LinkedHashSet<>();
 
     private final java.util.function.Consumer<T> discard;
     TerrainUpdates() { this(value -> { }); }
@@ -62,6 +63,7 @@ final class TerrainUpdates<T> {
                 Group<T> old = section.request.group;
                 if (groups.remove(old)) {
                     for (Request<T> request : old.requests) {
+                        pending.remove(request);
                         if (request.result != null) discard.accept(request.result);
                     }
                 }
@@ -75,15 +77,32 @@ final class TerrainUpdates<T> {
             Request<T> request = new Request<>(section, group);
             section.request = request;
             group.requests.add(request);
+            if (section.wanted) pending.add(request);
         }
         groups.add(group);
     }
 
     boolean complete(Request<T> request, T result) {
         if (request.section.request != request) return false;
+        pending.remove(request);
         request.result = result;
         request.complete = true;
         return true;
+    }
+
+    /** Only current requests awaiting extraction participate in dispatch selection. */
+    Collection<Request<T>> pending() {
+        return pending;
+    }
+
+    void dispatched(Request<T> request) {
+        pending.remove(request);
+        request.dispatched = true;
+    }
+
+    void retry(Request<T> request) {
+        request.dispatched = false;
+        pending.add(request);
     }
 
     /** Empty no-op groups cost nothing; actual scene changes are budgeted without splitting groups. */
@@ -150,6 +169,7 @@ final class TerrainUpdates<T> {
         for (Section<T> section : sections.values()) section.request = null;
         sections.clear();
         groups.clear();
+        pending.clear();
     }
 
     static final class Section<T> {

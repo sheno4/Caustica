@@ -13,10 +13,17 @@ import surface_bsdf;
 public void runClosestHit<TComposition : IComposition>(inout WorldPayload payload,
         in BuiltInTriangleIntersectionAttributes attributes) {
     RetainedGeometryRecord record = worldGeometryRecord();
+    bool volume = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u;
+    // Coverage has already accepted this hit. An opaque shadow blocker needs no material evaluation.
+    if ((payload.pathFlags & WORLD_PATH_SHADOW) != 0u && !volume) {
+        payload.hitDistance = RayTCurrent();
+        payload.pathFlags &= ~WORLD_PATH_MISS;
+        payload.radiance = float3(0.0);
+        return;
+    }
     SurfaceInput input = worldSurfaceInput(attributes);
     TComposition.Surfaces surfaces = {};
     OpenPbrSurface material = surfaces.evaluateSurface(record.surfaceImplementation, input);
-    bool volume = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u;
     material.geometry_thin_walled = !volume;
     payload.surface = surfaceClosure(material, input.geometricNormal);
     if ((payload.pathFlags & WORLD_PATH_SHADOW) != 0u) {

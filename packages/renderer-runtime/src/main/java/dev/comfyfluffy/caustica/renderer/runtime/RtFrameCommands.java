@@ -15,6 +15,7 @@ final class RtFrameCommands implements AutoCloseable {
     private final VulkanDeviceContext context;
     private final ArrayList<OwnedCommandBuffer> stages = new ArrayList<>();
     private final ArrayList<RtGpuTiming.Stage> timings = new ArrayList<>();
+    private ArrayList<RtGpuTiming.Stage> passTimings;
     private final RtGpuTiming gpuTiming;
     private final GraphicsUse graphicsUse;
     private final long frameId;
@@ -32,6 +33,20 @@ final class RtFrameCommands implements AutoCloseable {
 
     VkCommandBuffer external(String label) {
         return begin(label, false);
+    }
+
+    interface Timing extends AutoCloseable {
+        Timing DISABLED = () -> { };
+        @Override void close();
+    }
+
+    Timing time(String label) {
+        RtGpuTiming.Stage timing = gpuTiming.begin(stages.getLast().commandBuffer(), frameId, label);
+        if (timing == null) return Timing.DISABLED;
+        if (passTimings == null) passTimings = new ArrayList<>();
+        passTimings.add(timing);
+        graphicsUse.whenComplete(timing::complete);
+        return timing::end;
     }
 
     private VkCommandBuffer begin(String label, boolean heaps) {
@@ -60,6 +75,9 @@ final class RtFrameCommands implements AutoCloseable {
             stages.get(i).submit(submission, use);
             RtGpuTiming.Stage timing = timings.get(i);
             if (timing != null) timing.submitted();
+        }
+        if (passTimings != null) {
+            for (RtGpuTiming.Stage timing : passTimings) timing.submitted();
         }
     }
 
