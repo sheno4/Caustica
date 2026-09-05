@@ -57,8 +57,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
     WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
     DevicePtr<PackedPathSegment> endpoints = (DevicePtr<PackedPathSegment>)worldBindings.pathQueueAddress;
     for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
-        stablePlaneStoreRecord(pixel, extent, i, stablePlaneInvalidRecord());
-        endpoints[stablePlaneRecordIndex(pixel, extent, i)] = {};
+        endpoints[stablePlaneRecordIndex(pixel, extent, i)].flags = 0u;
     }
     StableBranch branches[STABLE_PLANE_COUNT];
     branches[0] = {};
@@ -131,6 +130,9 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             stablePlaneStoreRecord(pixel, extent, plane, record);
             break;
         }
+    }
+    for (uint i = count; i < STABLE_PLANE_COUNT; i++) {
+        stablePlaneStoreRecord(pixel, extent, i, stablePlaneInvalidRecord());
     }
     worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel] = float4(stableRadiance, 1.0);
     stablePlaneExport(pixel, extent, frame, false);

@@ -21,9 +21,10 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
     TTrace tracer = {};
     for (uint plane = 0u; plane < STABLE_PLANE_COUNT; plane++) {
         uint address = stablePlaneRecordIndex(pixel, extent, plane);
+        if ((endpoints[address].flags & PATH_ENDPOINT_VALID) == 0u) continue;
         PackedPathSegment path = endpoints[address];
-        if ((path.flags & PATH_ENDPOINT_VALID) == 0u) continue;
-        StablePlaneRecord record = stablePlaneRecords()[address];
+        float3 noisyDiffuseRadiance = float3(0.0), noisySpecularRadiance = float3(0.0);
+        float specularHitDistance = 0.0;
         bool first = true, diffusePath = false, coherent = true;
         bool previousCoherent = true;
         float previousPdf = 0.0;
@@ -60,14 +61,14 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
                 }
                 emission *= path.throughput;
                 if (diffusePath) {
-                    record.noisyDiffuseRadiance += emission;
+                    noisyDiffuseRadiance += emission;
                     float weight = traceLuminance(emission);
                     diffuseWeight += weight;
                     diffuseDistanceSum += weight * signalDistance;
                 } else {
-                    record.noisySpecularRadiance += emission;
-                    if (!missed && any(emission > 0.0) && record.specularHitDistance == 0.0)
-                        record.specularHitDistance = signalDistance;
+                    noisySpecularRadiance += emission;
+                    if (!missed && any(emission > 0.0) && specularHitDistance == 0.0)
+                        specularHitDistance = signalDistance;
                 }
             }
             // The last scatter's emission is consumed before stopping, preserving the NEE/MIS pair.
@@ -78,18 +79,18 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
             float3 diffuse = path.throughput * direct.diffuse;
             float3 specular = path.throughput * direct.specular;
             if (first) {
-                record.noisyDiffuseRadiance += diffuse;
-                record.noisySpecularRadiance += specular;
+                noisyDiffuseRadiance += diffuse;
+                noisySpecularRadiance += specular;
             } else if (diffusePath) {
-                record.noisyDiffuseRadiance += diffuse + specular;
+                noisyDiffuseRadiance += diffuse + specular;
             } else {
-                record.noisySpecularRadiance += diffuse + specular;
+                noisySpecularRadiance += diffuse + specular;
             }
             float weight = traceLuminance(first ? diffuse : diffusePath ? diffuse + specular : float3(0.0));
             diffuseWeight += weight;
             diffuseDistanceSum += weight * (first ? direct.distance : signalDistance);
-            if (record.specularHitDistance == 0.0 && any((first ? specular : diffusePath ? float3(0.0) : diffuse + specular) > 0.0))
-                record.specularHitDistance = first ? direct.distance : signalDistance;
+            if (specularHitDistance == 0.0 && any((first ? specular : diffusePath ? float3(0.0) : diffuse + specular) > 0.0))
+                specularHitDistance = first ? direct.distance : signalDistance;
             previousPosition = hit.position;
             previousCoherent = coherent;
             uint event;
@@ -103,8 +104,11 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
                 path.throughput /= survival;
             }
         }
-        record.diffuseHitDistance = diffuseWeight > 0.0 ? diffuseDistanceSum / diffuseWeight : 0.0;
-        stablePlaneRecords()[address] = record;
+        float diffuseHitDistance = diffuseWeight > 0.0 ? diffuseDistanceSum / diffuseWeight : 0.0;
+        stablePlaneRecords()[address].noisyDiffuseRadiance = noisyDiffuseRadiance;
+        stablePlaneRecords()[address].noisySpecularRadiance = noisySpecularRadiance;
+        stablePlaneRecords()[address].diffuseHitDistance = diffuseHitDistance;
+        stablePlaneRecords()[address].specularHitDistance = specularHitDistance;
     }
     stablePlaneExport(pixel, extent, frame, true);
 }
