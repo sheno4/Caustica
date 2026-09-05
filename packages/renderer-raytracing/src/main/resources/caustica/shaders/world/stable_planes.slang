@@ -12,11 +12,6 @@ public DevicePtr<StablePlaneRecord> stablePlaneRecords() {
 public uint stablePlaneRecordIndex(uint2 pixel, uint2 extent, uint plane) {
     return plane * extent.x * extent.y + pixel.y * extent.x + pixel.x;
 }
-public StablePlaneRecord stablePlaneInvalidRecord() {
-    StablePlaneRecord record = {};
-    record.branchId = STABLE_PLANE_INVALID_BRANCH;
-    return record;
-}
 public void stablePlaneStoreRecord(uint2 pixel, uint2 extent, uint plane, StablePlaneRecord record) {
     stablePlaneRecords()[stablePlaneRecordIndex(pixel, extent, plane)] = record;
 }
@@ -29,8 +24,9 @@ public void stablePlaneExport(uint2 pixel, uint2 extent, WorldPush frame, bool f
     float3 diffuse = float3(0.0), specular = float3(0.0);
     float3 diffuseEstimate = float3(0.0), specularEstimate = float3(0.0);
     for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
-        StablePlaneRecord record = stablePlaneRecords()[stablePlaneRecordIndex(pixel, extent, i)];
-        if (record.branchId == STABLE_PLANE_INVALID_BRANCH) continue;
+        uint address = stablePlaneRecordIndex(pixel, extent, i);
+        if (stablePlaneRecords()[address].branchId == STABLE_PLANE_INVALID_BRANCH) continue;
+        StablePlaneRecord record = stablePlaneRecords()[address];
         if (finalSignals) {
             if ((record.flags & STABLE_PLANE_FLAG_DOMINANT) != 0u) dominant = i;
             diffuse += record.noisyDiffuseRadiance;

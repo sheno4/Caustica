@@ -26,18 +26,20 @@ struct PlaneRecord {
 // that cross-module ABI explicit without duplicating its source struct in presentation ownership.
 PlaneRecord loadPlane(DevicePtr<float4> records, uint recordIndex) {
     uint base = recordIndex * STABLE_PLANE_RECORD_SLOTS;
+    PlaneRecord r = {};
+    r.branchId = asuint(records[base + 6u].w);
+    if (r.branchId == STABLE_PLANE_INVALID_BRANCH) return r;
     float4 s0 = records[base]; float4 s1 = records[base + 1u];
     float4 s2 = records[base + 2u]; float4 s3 = records[base + 3u];
     float4 s4 = records[base + 4u]; float4 s5 = records[base + 5u];
     float4 s6 = records[base + 6u];
-    PlaneRecord r;
     r.currentVirtualPosition = s0.xyz; r.roughness = s0.w;
     r.previousVirtualPosition = s1.xyz; r.throughputLuminance = s1.w;
     r.normal = s2.xyz; r.diffuseHitDistance = s2.w;
     r.diffuseBsdfEstimate = s3.xyz; r.specularHitDistance = s3.w;
     r.specularBsdfEstimate = s4.xyz; r.branchWeight = s4.w;
     r.noisyDiffuseRadiance = s5.xyz; r.flags = asuint(s5.w);
-    r.noisySpecularRadiance = s6.xyz; r.branchId = asuint(s6.w);
+    r.noisySpecularRadiance = s6.xyz;
     return r;
 }
 

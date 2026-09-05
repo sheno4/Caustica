@@ -67,7 +67,9 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
     float3 cameraDirection = branches[0].path.direction;
     uint count = 1u;
     float3 stableRadiance = float3(0.0);
-    for (uint plane = 0u; plane < count; plane++) {
+    [unroll]
+    for (uint plane = 0u; plane < STABLE_PLANE_COUNT; plane++) {
+        if (plane >= count) break;
         StableBranch branch = branches[plane];
         for (uint step = 0u; step <= STABLE_PLANE_MAX_DELTA_SEGMENTS; step++) {
             WorldPayload hit = {};
@@ -95,11 +97,26 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
                     && branch.path.depth < STABLE_PLANE_MAX_DELTA_SEGMENTS && branch.path.depth <= frame.maxBounces;
             if (split) {
                 if (continuous) {
-                    if (reflectDelta) branches[count++] = branchAdvance(branch, hit, lobes, false);
-                    if (transmitDelta) branches[count++] = branchAdvance(branch, hit, lobes, true);
+                    if (reflectDelta) {
+                        StableBranch queued = branchAdvance(branch, hit, lobes, false);
+                        if (count == 1u) branches[1] = queued;
+                        else branches[2] = queued;
+                        count++;
+                    }
+                    if (transmitDelta) {
+                        StableBranch queued = branchAdvance(branch, hit, lobes, true);
+                        if (count == 1u) branches[1] = queued;
+                        else branches[2] = queued;
+                        count++;
+                    }
                     restart.flags |= PATH_ENDPOINT_CONTINUOUS;
                 } else {
-                    if (reflectDelta && transmitDelta) branches[count++] = branchAdvance(branch, hit, lobes, true);
+                    if (reflectDelta && transmitDelta) {
+                        StableBranch queued = branchAdvance(branch, hit, lobes, true);
+                        if (count == 1u) branches[1] = queued;
+                        else branches[2] = queued;
+                        count++;
+                    }
                     branch = branchAdvance(branch, hit, lobes, !reflectDelta);
                     continue;
                 }
@@ -132,7 +149,9 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
         }
     }
     for (uint i = count; i < STABLE_PLANE_COUNT; i++) {
-        stablePlaneStoreRecord(pixel, extent, i, stablePlaneInvalidRecord());
+        uint address = stablePlaneRecordIndex(pixel, extent, i);
+        stablePlaneRecords()[address].branchId = STABLE_PLANE_INVALID_BRANCH;
+        stablePlaneRecords()[address].flags = 0u;
     }
     worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel] = float4(stableRadiance, 1.0);
     stablePlaneExport(pixel, extent, frame, false);
