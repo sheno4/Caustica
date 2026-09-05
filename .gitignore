@@ -2,11 +2,7 @@
 .idea/
 .DS_Store
 /build/
-/buildSrc/build/
-native/ngx_shim/build/
 run/
-run-gltf-viewer/
-out/
 *.log
 *.class
 __pycache__/
@@ -17,9 +13,6 @@ __pycache__/
 !/third_party/NRD
 bin/
 /logs
-/config/
 /.cache
 packages/**/build/
-/api/build/
-/api-settings/build/
-/api-support/build/
+/tmp
