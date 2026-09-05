@@ -722,15 +722,15 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         GpuBuffer emitters = null;
         GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
         try {
-            geometry = ctx.createBuffer(Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "retained geometry records");
-            hits = ctx.createAlignedBuffer(Math.max(pipeline.retainedHitRecordStride(), hitBytes),
-                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, true, "retained hit SBT",
+            geometry = ctx.createMappedGpuUploadBuffer(Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes),
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained geometry records");
+            hits = ctx.createMappedGpuUploadBuffer(Math.max(pipeline.retainedHitRecordStride(), hitBytes),
+                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, "retained hit SBT",
                     pipeline.retainedHitTableAlignment());
-            lights = ctx.createBuffer(Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "retained light records");
-            emitters = ctx.createBuffer(Math.max(Integer.BYTES, emitterBytes),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "retained primitive-light indices");
+            lights = ctx.createMappedGpuUploadBuffer(Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes),
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained light records");
+            emitters = ctx.createMappedGpuUploadBuffer(Math.max(Integer.BYTES, emitterBytes),
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained primitive-light indices");
             descriptor = ctx.descriptorHeap().allocateResources(1);
             TraceSlot slot = new TraceSlot(geometry, hits, lights, emitters, descriptor,
                     pipeline.retainedHitRecordStride());

@@ -300,8 +300,26 @@ public final class VulkanDeviceContext implements GpuDevice {
                 Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT, 0L);
     }
 
+    /** Create a mapped GPU input buffer that prefers device-local memory and is only written by the host. */
+    public GpuBuffer createMappedGpuUploadBuffer(long size, int usage, String label) {
+        return createMappedGpuUploadBuffer(size, usage, label, 0L);
+    }
+
+    /** Create a mapped GPU input buffer with the device-address alignment required by its consumer. */
+    public GpuBuffer createMappedGpuUploadBuffer(long size, int usage, String label, long addressAlignment) {
+        return createBuffer(size, usage, true, label, false,
+                Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, addressAlignment,
+                Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+    }
+
     private GpuBuffer createBuffer(long size, int usage, boolean hostVisible, String label, boolean asyncShared,
                                   int hostAccessFlags, long addressAlignment) {
+        return createBuffer(size, usage, hostVisible, label, asyncShared, hostAccessFlags, addressAlignment,
+                hostVisible ? Vma.VMA_MEMORY_USAGE_AUTO : Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+    }
+
+    private GpuBuffer createBuffer(long size, int usage, boolean hostVisible, String label, boolean asyncShared,
+                                  int hostAccessFlags, long addressAlignment, int memoryUsage) {
         if (addressAlignment < 0L
                 || (addressAlignment != 0L && (addressAlignment & (addressAlignment - 1L)) != 0L)) {
             throw new IllegalArgumentException("Device-address alignment must be zero or a positive power of two: "
@@ -317,9 +335,7 @@ public final class VulkanDeviceContext implements GpuDevice {
                 bci.sharingMode(VK10.VK_SHARING_MODE_CONCURRENT)
                         .pQueueFamilyIndices(stack.ints(graphicsQueue.familyIndex(), computeQueue.familyIndex()));
             }
-            VmaAllocationCreateInfo aci = VmaAllocationCreateInfo.calloc(stack).usage(hostVisible
-                    ? Vma.VMA_MEMORY_USAGE_AUTO
-                    : Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+            VmaAllocationCreateInfo aci = VmaAllocationCreateInfo.calloc(stack).usage(memoryUsage);
             if (hostVisible) {
                 aci.flags(hostAccessFlags | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
             }

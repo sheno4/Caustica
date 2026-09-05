@@ -454,7 +454,7 @@ final class RtNeeAtBackend {
         void allocate(int lightCapacity, int width, int height, int tiles) {
             int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
             int cleared = usage | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            state = context.createBuffer(NeeAtStateData.BYTE_SIZE, usage, true, "NEE-AT state");
+            state = context.createMappedGpuUploadBuffer(NeeAtStateData.BYTE_SIZE, usage, "NEE-AT state");
             // One entry past the last light carries the total proxy count.
             global = context.createBuffer(Math.multiplyExact(lightCapacity + 1, GLOBAL_ENTRY_BYTES),
                     usage, false, "NEE-AT global distribution");
@@ -473,8 +473,8 @@ final class RtNeeAtBackend {
                     PIXEL_FEEDBACK_BYTES), cleared, false, "NEE-AT pixel feedback");
             depth = context.createBuffer(Math.multiplyExact(Math.multiplyExact(width, height), Float.BYTES),
                     usage, false, "NEE-AT linear depth history");
-            plan = context.createBuffer(Math.multiplyExact(lightCapacity, PLAN_ENTRY_BYTES), usage,
-                    true, "NEE-AT identity plan");
+            plan = context.createMappedGpuUploadBuffer(Math.multiplyExact(lightCapacity, PLAN_ENTRY_BYTES), usage,
+                    "NEE-AT identity plan");
         }
 
         void destroy() {
