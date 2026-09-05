@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.GpuSurface;
 import com.mojang.blaze3d.textures.GpuTextureView;
@@ -133,12 +135,12 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Inject(method = "pickSwapchainSurfaceFormat", at = @At("HEAD"), cancellable = true)
 	private void caustica$pickPqFormat(VkSurfaceFormatKHR.Buffer formats, CallbackInfoReturnable<VkSurfaceFormatKHR> cir) {
 		VkSurfaceFormatKHR pq = caustica$findPq(formats);
-		CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
+		CausticaClientComposition.current().runtime().setSwapchainPqAvailable(pq != null);
 		this.caustica$colorSpace = 0;
-		CausticaConfig.Rt.Hdr.setSwapchainPqActive(false);
+		CausticaClientComposition.current().runtime().setSwapchainPqActive(false);
 		if (CausticaClientComposition.current().runtime().wantsPqSwapchain() && pq != null) {
 			this.caustica$colorSpace = VK_COLOR_SPACE_HDR10_ST2084_EXT;
-			CausticaConfig.Rt.Hdr.setSwapchainPqActive(true);
+			CausticaClientComposition.current().runtime().setSwapchainPqActive(true);
 			CausticaMod.LOGGER.info("HDR: surface supports PQ (format={}, colorSpace=HDR10_ST2084); "
 					+ "creating the initial swapchain in PQ", pq.format());
 			cir.setReturnValue(pq);
@@ -158,7 +160,7 @@ public abstract class VulkanGpuSurfaceMixin {
 					this.device.vkDevice().getPhysicalDevice(), this.surface);
 			MinecraftHdr.SurfaceFormat pq = caustica$findPqValue(formats);
 			MinecraftHdr.SurfaceFormat sdr = caustica$findSdrValue(formats);
-			CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
+			CausticaClientComposition.current().runtime().setSwapchainPqAvailable(pq != null);
 			boolean usePq = CausticaClientComposition.current().runtime().wantsPqSwapchain() && pq != null;
 			if (!usePq && sdr == null && pq != null) {
 				// Extremely unusual, but safer than destroying the only viable presentation path.
@@ -177,7 +179,7 @@ public abstract class VulkanGpuSurfaceMixin {
 				this.swapchainImageFormat = sdr.format();
 				this.caustica$colorSpace = 0;
 			}
-			CausticaConfig.Rt.Hdr.setSwapchainPqActive(usePq);
+			CausticaClientComposition.current().runtime().setSwapchainPqActive(usePq);
 			CausticaMod.LOGGER.info("HDR: recreating swapchain as {} (format={}, colorSpace={})",
 					usePq ? "PQ" : "native SDR", this.swapchainImageFormat,
 					usePq ? "HDR10_ST2084" : "SRGB_NONLINEAR");
@@ -387,7 +389,7 @@ public abstract class VulkanGpuSurfaceMixin {
 				|| !backend.capabilities().hdrMetadata() || this.swapchain == 0L) {
 			return;
 		}
-		int peakNits = CausticaConfig.Rt.Hdr.PEAK_NITS.value();
+		int peakNits = CausticaConfig.get(RendererOptions.Rt.Hdr.PEAK_NITS);
 		if (this.caustica$metadataSwapchain == this.swapchain
 				&& this.caustica$metadataPeakNits == peakNits) {
 			return;

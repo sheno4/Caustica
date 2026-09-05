@@ -85,6 +85,7 @@ if (loader == "fabric") {
 }
 
 dependencies {
+    testImplementation testFixtures(project(":packages:settings-api"))
     compileOnly project(":packages:api")
     compileOnly project(":packages:minecraft-api")
     implementation project(":packages:examples:gltf-content")

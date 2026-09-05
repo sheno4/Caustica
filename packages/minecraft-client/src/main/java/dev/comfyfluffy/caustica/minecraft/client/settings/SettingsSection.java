@@ -28,10 +28,10 @@ public record SettingsSection(String id, Component title, int accent, List<Setti
     }
 
     public boolean isModified() {
-        return allControls().stream().anyMatch(SettingControl::isModified);
+        return allControls().stream().filter(SettingControl::enabled).anyMatch(SettingControl::isModified);
     }
 
     public void reset() {
-        allControls().forEach(SettingControl::reset);
+        allControls().stream().filter(SettingControl::enabled).forEach(SettingControl::reset);
     }
 }

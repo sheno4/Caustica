@@ -30,7 +30,8 @@ public abstract class VideoSettingsScreenMixin {
                 () -> {
                     var services = CausticaClientComposition.current().apiServices();
                     Minecraft.getInstance().setScreenAndShow(
-                            new CausticaOptionsScreen(self, services.settings(), services.options()));
+                            new CausticaOptionsScreen(self, services.settings(), services.options(),
+                                    CausticaClientComposition.current().runtime()::settingAvailable));
                 }));
     }
 }

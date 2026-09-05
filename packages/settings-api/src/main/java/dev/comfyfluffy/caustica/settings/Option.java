@@ -2,14 +2,24 @@ package dev.comfyfluffy.caustica.settings;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Double maximum,
-                        List<T> choices, Display display) {
+                        List<T> choices, Display display, String tomlPath, String systemPropertyKey) {
     public enum Kind {
         BOOL,
         RANGE,
+        INTEGER,
+        INT_CHOICE,
+        STRING_CHOICE,
+        OPTIONAL_STRING,
         ENUM,
         COLOR
+    }
+
+    public Option(String id, Kind kind, T defaultValue, Double minimum, Double maximum,
+                  List<T> choices, Display display) {
+        this(id, kind, defaultValue, minimum, maximum, choices, display, null, null);
     }
 
     /**
@@ -33,20 +43,23 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
         if (!id.matches("[a-z][a-z0-9_.-]*")) {
             throw new IllegalArgumentException("invalid option id: " + id);
         }
-        if (kind == Kind.RANGE && (minimum == null || maximum == null || minimum > maximum)) {
+        if ((kind == Kind.RANGE || kind == Kind.INTEGER)
+                && (minimum == null || maximum == null || !Double.isFinite(minimum)
+                || !Double.isFinite(maximum) || minimum > maximum)) {
             throw new IllegalArgumentException("range option requires an ordered minimum and maximum");
         }
-        if (kind == Kind.ENUM && (choices.isEmpty() || !choices.contains(defaultValue))) {
+        if ((kind == Kind.ENUM || kind == Kind.INT_CHOICE || kind == Kind.STRING_CHOICE)
+                && (choices.isEmpty() || !choices.contains(defaultValue))) {
             throw new IllegalArgumentException("enum option choices must contain its default");
         }
         if (display.groupHeader() && (kind != Kind.BOOL || display.group() == null)) {
             throw new IllegalArgumentException(id + ": a group header must be a bool option in a group");
         }
-        if (display.step() > 0.0 && kind != Kind.RANGE) {
+        if (display.step() > 0.0 && kind != Kind.RANGE && kind != Kind.INTEGER) {
             throw new IllegalArgumentException(id + ": only a range option can declare a step");
         }
         if (display.sliderMinimum() != null || display.sliderMaximum() != null) {
-            if (kind != Kind.RANGE) {
+            if (kind != Kind.RANGE && kind != Kind.INTEGER) {
                 throw new IllegalArgumentException(id + ": only a range option can declare a slider range");
             }
             double low = display.sliderMinimum() != null ? display.sliderMinimum() : minimum;
@@ -89,11 +102,89 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
     }
 
     public static Option<Float> range(String id, float minimum, float maximum, float defaultValue) {
-        if (defaultValue < minimum || defaultValue > maximum) {
+        if (!Float.isFinite(defaultValue) || defaultValue < minimum || defaultValue > maximum) {
             throw new IllegalArgumentException("range default is outside its bounds");
         }
         return new Option<>(id, Kind.RANGE, defaultValue, (double) minimum, (double) maximum,
                 List.of(), Display.NONE);
+    }
+
+    public static Option<Integer> integer(String id, int minimum, int maximum, int defaultValue) {
+        if (defaultValue < minimum || defaultValue > maximum) {
+            throw new IllegalArgumentException("integer default is outside its bounds");
+        }
+        return new Option<>(id, Kind.INTEGER, defaultValue, (double) minimum, (double) maximum,
+                List.of(), Display.NONE);
+    }
+
+    public static Option<Integer> intChoice(String id, int defaultValue, List<Integer> choices) {
+        return new Option<>(id, Kind.INT_CHOICE, defaultValue, null, null, choices, Display.NONE);
+    }
+
+    public static Option<String> stringChoice(String id, String defaultValue, List<String> choices) {
+        return new Option<>(id, Kind.STRING_CHOICE, defaultValue, null, null, choices, Display.NONE);
+    }
+
+    public static Option<Optional<String>> optionalString(String id) {
+        return new Option<>(id, Kind.OPTIONAL_STRING, Optional.empty(), null, null, List.of(), Display.NONE);
+    }
+
+    /** Assigns the persisted path and process override key used by this option. */
+    public Option<T> storage(String tomlPath, String systemPropertyKey) {
+        return new Option<>(id, kind, defaultValue, minimum, maximum, choices, display,
+                Objects.requireNonNull(tomlPath), Objects.requireNonNull(systemPropertyKey));
+    }
+
+    /** Converts a TOML or widget value to this option's type and clamps bounded numeric values. */
+    @SuppressWarnings("unchecked")
+    public T normalize(Object raw) {
+        Objects.requireNonNull(raw, "option value");
+        Object normalized = switch (kind) {
+            case BOOL -> {
+                if (raw instanceof Boolean value) yield value;
+                String text = raw.toString().trim();
+                if (!text.equalsIgnoreCase("true") && !text.equalsIgnoreCase("false")) {
+                    throw new IllegalArgumentException(id + ": expected true or false");
+                }
+                yield Boolean.parseBoolean(text);
+            }
+            case RANGE -> (float) Math.clamp(number(raw), minimum, maximum);
+            case INTEGER -> (int) Math.clamp(Math.round(number(raw)), minimum.longValue(), maximum.longValue());
+            case INT_CHOICE -> choice((int) number(raw));
+            case STRING_CHOICE -> choice(raw.toString());
+            case ENUM -> choices.stream().filter(value -> ((Enum<?>) value).name().equalsIgnoreCase(raw.toString()))
+                    .findFirst().orElseThrow(() -> new IllegalArgumentException(id + ": unknown enum value " + raw));
+            case COLOR -> (int) Math.clamp(number(raw), 0.0, 0xffffff);
+            case OPTIONAL_STRING -> {
+                Object value = raw instanceof Optional<?> optional ? optional.map(Object::toString).orElse("") : raw;
+                String text = value.toString().trim();
+                yield text.isEmpty() ? Optional.empty() : Optional.of(text);
+            }
+        };
+        return (T) normalized;
+    }
+
+    public T parse(String raw) {
+        return normalize(raw);
+    }
+
+    /** Empty optional strings remove the key; every present value is directly serializable as TOML. */
+    public Optional<Object> encode(Object value) {
+        T normalized = normalize(value);
+        if (normalized instanceof Optional<?> optional) return optional.map(v -> (Object) v);
+        if (normalized instanceof Enum<?> enumeration) return Optional.of(enumeration.name());
+        return Optional.of(normalized);
+    }
+
+    private Object choice(Object value) {
+        if (!choices.contains(value)) throw new IllegalArgumentException(id + ": unknown choice " + value);
+        return value;
+    }
+
+    private double number(Object raw) {
+        double value = raw instanceof Number number ? number.doubleValue() : Double.parseDouble(raw.toString().trim());
+        if (!Double.isFinite(value)) throw new IllegalArgumentException(id + ": expected a finite number");
+        return value;
     }
 
     public static <E extends Enum<E>> Option<E> enumOf(String id, E defaultValue, List<E> choices) {
@@ -137,6 +228,6 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
     }
 
     private Option<T> withDisplay(Display updated) {
-        return new Option<>(id, kind, defaultValue, minimum, maximum, choices, updated);
+        return new Option<>(id, kind, defaultValue, minimum, maximum, choices, updated, tomlPath, systemPropertyKey);
     }
 }

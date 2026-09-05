@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.settings;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftDisplayText;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 /**
  * Builds the screen's pages from engine settings and extension settings. Nothing here knows about widgets, so the
@@ -20,7 +22,7 @@ import java.util.Map;
  */
 public final class CausticaSections {
     /**
-     * Engine groups in the order they appear. Explicit because {@code RuntimeSetting.group()} carries the
+     * Engine groups in the order they appear. Explicit because {@code Option.group()} carries the
      * membership but not the ordering, and a screen that reorders itself between launches is worse than a
      * list to maintain.
      */
@@ -41,9 +43,15 @@ public final class CausticaSections {
     }
 
     public static List<SettingsSection> build(SettingsRegistry registry, CausticaOptions options) {
+        return build(registry, options, ignored -> true);
+    }
+
+    public static List<SettingsSection> build(SettingsRegistry registry, CausticaOptions options,
+                                               Predicate<Option<?>> available) {
         List<SettingsSection> sections = new ArrayList<>();
-        sections.add(engine());
+        sections.add(engine(options, available));
         for (FeatureSettings feature : registry.all()) {
+            if (feature.id().equals(CausticaConfig.FEATURE)) continue;
             SettingsSection section = feature(feature, options);
             if (section != null) {
                 sections.add(section);
@@ -52,18 +60,17 @@ public final class CausticaSections {
         return List.copyOf(sections);
     }
 
-    static SettingsSection engine() {
-        CausticaConfig.ensureRegistered();
+    static SettingsSection engine(CausticaOptions options, Predicate<Option<?>> available) {
         Map<String, List<SettingControl>> byGroup = new LinkedHashMap<>();
         for (String group : ENGINE_GROUPS) {
             byGroup.put(group, new ArrayList<>());
         }
-        for (CausticaConfig.RuntimeSetting<?> setting : CausticaConfig.settings()) {
+        for (Option<?> setting : MinecraftOptions.allSettings()) {
             List<SettingControl> rows = byGroup.get(setting.group());
             if (rows == null) {
                 continue;
             }
-            SettingControl control = ConfigControls.of(setting);
+            SettingControl control = OptionControls.of(options, CausticaConfig.FEATURE, setting, available);
             if (control != null) {
                 rows.add(control);
             }
@@ -78,7 +85,7 @@ public final class CausticaSections {
                 ACCENT_ENGINE, groups);
     }
 
-    /** Null for a feature that declares no options — a provider-only extension has nothing to show. */
+    /** Null for a feature without options that the native screen can display. */
     static SettingsSection feature(FeatureSettings feature, CausticaOptions options) {
         if (feature.options().isEmpty()) {
             return null;
@@ -92,6 +99,7 @@ public final class CausticaSections {
                     continue;
                 }
                 SettingControl control = OptionControls.of(options, feature.id(), option);
+                if (control == null) continue;
                 if (option.isGroupHeader()) {
                     header = (SettingControl.BoolControl) control;
                 } else {
@@ -105,12 +113,14 @@ public final class CausticaSections {
         List<SettingControl> ungrouped = new ArrayList<>();
         for (Option<?> option : feature.options()) {
             if (option.group() == null) {
-                ungrouped.add(OptionControls.of(options, feature.id(), option));
+                SettingControl control = OptionControls.of(options, feature.id(), option);
+                if (control != null) ungrouped.add(control);
             }
         }
         if (!ungrouped.isEmpty()) {
             groups.add(new SettingGroup("other", Component.translatable("caustica.group.other"), null, ungrouped));
         }
+        if (groups.isEmpty()) return null;
         return new SettingsSection(feature.id().toString(), MinecraftDisplayText.component(feature.title()),
                 accentFor(feature.id()), groups);
     }

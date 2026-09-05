@@ -1,6 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
@@ -155,7 +158,7 @@ public final class RtTerrain {
         columns.addAll(loaded);
         lowY = minY;
         highY = maxY;
-        int distance = CausticaConfig.Rt.Terrain.REBASE_DISTANCE_BLOCKS.value();
+        int distance = CausticaConfig.get(MinecraftOptions.Rt.Terrain.REBASE_DISTANCE_BLOCKS);
         int x = mc.player.getBlockX(), y = mc.player.getBlockY(), z = mc.player.getBlockZ();
         if (Math.abs(x - blockX) >= distance || Math.abs(y - blockY) >= distance
                 || Math.abs(z - blockZ) >= distance) {
@@ -176,7 +179,8 @@ public final class RtTerrain {
     private void stream(Minecraft mc) {
         if (geometry == null) return;
         MinecraftMaterialLookup lookup = materials;
-        int limit = CausticaConfig.Rt.Terrain.COMPLETION_RESULTS_PER_PASS.value();
+        var settings = CausticaConfig.snapshot();
+        int limit = settings.get(MinecraftOptions.Rt.Terrain.COMPLETION_RESULTS_PER_PASS);
         for (int i = 0; i < limit; i++) {
             Build build = completed.poll();
             if (build == null) break;
@@ -215,12 +219,13 @@ public final class RtTerrain {
             updates.complete(build.request, build);
         }
         publishReady(mc);
-        dispatch(mc, lookup);
+        dispatch(mc, lookup, settings);
     }
 
-    private void dispatch(Minecraft mc, MinecraftMaterialLookup lookup) {
-        int slots = Math.min(CausticaConfig.Rt.Terrain.ASYNC_DISPATCH_PER_PASS.value(),
-                CausticaConfig.Rt.Terrain.MAX_INFLIGHT_SECTIONS.value() - outstandingBuilds.get());
+    private void dispatch(Minecraft mc, MinecraftMaterialLookup lookup,
+                          OptionValues settings) {
+        int slots = Math.min(settings.get(MinecraftOptions.Rt.Terrain.ASYNC_DISPATCH_PER_PASS),
+                settings.get(MinecraftOptions.Rt.Terrain.MAX_INFLIGHT_SECTIONS) - outstandingBuilds.get());
         if (slots <= 0) return;
         int cx = mc.player.getBlockX() >> 4, cy = mc.player.getBlockY() >> 4, cz = mc.player.getBlockZ() >> 4;
         Comparator<TerrainUpdates.Request<Build>> order = Comparator

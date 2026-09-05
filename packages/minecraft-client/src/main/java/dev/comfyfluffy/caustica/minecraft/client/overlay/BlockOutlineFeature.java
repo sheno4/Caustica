@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.overlay;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
@@ -49,7 +51,7 @@ final class BlockOutlineFeature implements OverlayFeature {
 
     @Override public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
             int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height) {
-        if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value() || worldTlasDescriptor == 0) return false;
+        if (!CausticaConfig.get(MinecraftOptions.Rt.Overlay.BLOCK_OUTLINE_ENABLED) || worldTlasDescriptor == 0) return false;
         RtTerrain currentTerrain = terrain.currentOrNull();
         if (currentTerrain == null) return false;
         var game = Minecraft.getInstance().gameRenderer.gameRenderState();

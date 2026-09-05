@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftEngineWorldSessionTest {
-    private static final dev.comfyfluffy.caustica.settings.OptionLookup OPTIONS = id -> { throw new AssertionError(id); };
+    private static final dev.comfyfluffy.caustica.settings.SettingsAccess OPTIONS = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
     @Test
     void composesBothProcessHostsOverSharedServicesAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();

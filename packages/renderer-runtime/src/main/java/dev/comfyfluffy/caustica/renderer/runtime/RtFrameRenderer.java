@@ -14,7 +14,6 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
@@ -71,48 +70,11 @@ public final class RtFrameRenderer {
     // WorldPushData and its serializer are generated from Slang's reflected Std430DataLayout. Java never
     // owns or calculates a shader byte offset, struct size, array stride, or fixed-array capacity.
     private static final int WORLD_PUSH_SIZE = WorldPushData.BYTE_SIZE;
-    private static int debugView() {
-        return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
-    }
-
-    private static RtExposure.Settings exposureSettings() {
-        return new RtExposure.Settings(
-                CausticaConfig.Rt.Exposure.MODE.get(),
-                CausticaConfig.Rt.Exposure.MANUAL_EV.value(),
-                CausticaConfig.Rt.Exposure.KEY.value(),
-                CausticaConfig.Rt.Exposure.ADAPT_DARKEN.value(),
-                CausticaConfig.Rt.Exposure.ADAPT_BRIGHTEN.value(),
-                CausticaConfig.Rt.Exposure.LOW_PERCENTILE.value(),
-                CausticaConfig.Rt.Exposure.HIGH_PERCENTILE.value(),
-                CausticaConfig.Rt.Exposure.STRIDE.value(),
-                CausticaConfig.Rt.Exposure.CENTER_WEIGHT_SIGMA.value(),
-                CausticaConfig.Rt.Exposure.CENTER_WEIGHT_FLOOR.value(),
-                CausticaConfig.Rt.Exposure.SKY_WEIGHT_CAP.value(),
-                CausticaConfig.Rt.Exposure.EMISSIVE_WEIGHT_CAP.value(),
-                CausticaConfig.Rt.Exposure.PRE_EXPOSURE.value(),
-                CausticaConfig.Rt.FrameStats.ENABLED.value(),
-                CausticaConfig.Rt.Tonemap.GAMMA.value());
-    }
-
-    private static int maxBounces() {
-        return CausticaConfig.Rt.Composite.MAX_BOUNCES.value();
-    }
-
     // Modulus of the world-pinned procedural domain anchor. Documented engine constant, not a per-surface
     // tunable: a very low-frequency field could alias across it where the wave spectrum does not.
     private static final int PROCEDURAL_ANCHOR_MASK = 4095;
     // Renderer look metadata is exposure/LMT only; scene providers own their photometric calibration.
     private static final RtLookPackage LOOK = RtLookPackage.loadDefault();
-    // Sign applied to primary-ray jitter. NRD receives that actual offset; DLSS-RR receives its inverse
-    // at evaluation, matching the validated Vulkan clip-space convention.
-    private static float jitterSignX() {
-        return CausticaConfig.Rt.Composite.JITTER_SIGN_X.value();
-    }
-
-    private static float jitterSignY() {
-        return CausticaConfig.Rt.Composite.JITTER_SIGN_Y.value();
-    }
-
     // Host-frame serial also detects gaps where the host rendered without an RT composite.
     private volatile long frameCounter;
 
@@ -129,6 +91,7 @@ public final class RtFrameRenderer {
     private final RtReconstruction reconstruction;
     private final RtTelemetry telemetry;
     private final RtFrameResources frameResources;
+    private RtRenderSettings settings;
     private final RtFrameHistory history = new RtFrameHistory();
     private FrameSnapshot frameSnapshot;
     private RtFrameInput currentFrame;
@@ -142,7 +105,8 @@ public final class RtFrameRenderer {
                     RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
                     RtUpscaler upscaler,
                     DenoiserBackendFactory denoiserFactory, RtDenoisingSettings denoisingSettings,
-                    RtTelemetry telemetry) {
+                    RtTelemetry telemetry, RtRenderSettings settings) {
+        this.settings = settings;
         this.context = Objects.requireNonNull(context, "context");
         this.programs = Objects.requireNonNull(programs, "programs");
         this.scenes = Objects.requireNonNull(scenes, "scenes");
@@ -152,7 +116,11 @@ public final class RtFrameRenderer {
         this.reconstruction = new RtReconstruction(context, rayReconstruction, upscaler,
                 denoiserFactory, denoisingSettings, telemetry);
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
-        this.frameResources = new RtFrameResources(presenter, rayReconstruction, upscaler, LOOK, exposureSettings());
+        this.frameResources = new RtFrameResources(presenter, rayReconstruction, upscaler, LOOK, settings.exposure());
+    }
+
+    public void configureSettings(RtRenderSettings settings) {
+        this.settings = Objects.requireNonNull(settings);
     }
 
     /** Applies one mutually exclusive output route at the next frame boundary. */
@@ -336,8 +304,8 @@ public final class RtFrameRenderer {
 
     private boolean ensurePresentationResources(VulkanDeviceContext ctx, int width, int height)
             throws IOException {
-        presentationResources().configureExposure(exposureSettings());
-        frameResources.ensurePresentationPipelines(ctx);
+        presentationResources().configureExposure(settings.exposure());
+        frameResources.ensurePresentationPipelines(ctx, settings.peakNits());
         if (frameResources.ensureSized(ctx, width, height, reconstruction.settings().route(),
                 reconstruction::closeBackendAfterIdle)) {
             resetSceneHistory();
@@ -377,9 +345,9 @@ public final class RtFrameRenderer {
         GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter = graphics.graphicsUseWaiter();
         presentationResources().exposure().beginFrame(graphicsUseWaiter);
         currentFrame = history.capture(snapshot, frameCounter, System.nanoTime(), traceExtent(),
-                reconstruction.settings().route(), exposure().preExposure(), jitterSignX(), jitterSignY());
+                reconstruction.settings().route(), exposure().preExposure(), settings.jitterSignX(), settings.jitterSignY());
         if (!currentFrame.historyContinuous()) reconstruction.resetHistory();
-        int debugView = debugView();
+        int debugView = settings.debugView();
         try (RtFrameCommands commands = new RtFrameCommands(ctx);
              MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer cmd = commands.heap("world resources and trace");
@@ -398,7 +366,7 @@ public final class RtFrameRenderer {
                 presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().depth(),
                 traceExtent().renderWidth(), traceExtent().renderHeight(),
                 new Matrix4f(currentFrame.projectionView()), new Matrix4f(currentFrame.previousProjectionView()),
-                CausticaConfig.Rt.Hdr.enabled() && debugView == 0));
+                settings.hdr() && debugView == 0));
     }
 
     static void retainViewResources(ViewMedium medium, GpuFrameUse frameUse) {
@@ -445,7 +413,7 @@ public final class RtFrameRenderer {
                 frame.cameraDelta(),
                 new Float2(frame.jitterX(), frame.jitterY()),
                 flags,
-                maxBounces(),
+                settings.maxBounces(),
                 time,
                 proceduralDomainOffset,
                 new Matrix4f(frame.projectionView()),
@@ -542,7 +510,7 @@ public final class RtFrameRenderer {
                         passes.sceneColor(), presentationResources().exposure().image(),
                         presentationResources().hdrDisplayImage(), presentationResources().sdrToneLut(),
                         presentationResources().hdrToneLut(), displayLookLut,
-                        CausticaConfig.Rt.Hdr.enabled(), CausticaConfig.Rt.Tonemap.GAMMA.value(),
+                        settings.hdr(), settings.exposure().gamma(),
                         presentationResources().loadedHdrLutNits(), true);
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // display output visible to debug composite
@@ -561,8 +529,8 @@ public final class RtFrameRenderer {
                             traceImages().reconstructedColor(), presentationResources().exposure().image(),
                             traceImages().traceColor(), traceImages().stablePlaneMetadata(),
                             presentationResources().exposure().stateBuffer(), debugView,
-                            CausticaConfig.Rt.Exposure.CENTER_WEIGHT_SIGMA.value(),
-                            CausticaConfig.Rt.Exposure.CENTER_WEIGHT_FLOOR.value());
+                            settings.exposure().centerWeightSigma(),
+                            settings.exposure().centerWeightFloor());
                 }
             }
             VulkanBarriers.memoryBarrier(cmd, stack);

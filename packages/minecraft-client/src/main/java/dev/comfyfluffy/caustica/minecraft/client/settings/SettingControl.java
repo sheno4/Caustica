@@ -5,14 +5,10 @@ import net.minecraft.network.chat.Component;
 import java.util.List;
 
 /**
- * One editable row, independent of which store backs it. Caustica keeps engine settings
- * ({@code CausticaConfig}) and extension-declared options ({@code CausticaOptions}) in separate stores
- * because they differ in every way that matters to them — a fixed compile-time schema read on hot paths as
- * a volatile field, against a runtime-declared one resolved through a map — but they do not differ in any
- * way that matters to a slider. This is the seam between the two, and the only thing the widgets see.
+ * One editable row derived from a declared option. Widgets consume this interface for renderer and
+ * extension preferences alike.
  *
- * <p>Writes here are in-memory and take effect on the next frame; {@link SettingsCommit} decides when they
- * reach disk.
+ * <p>Writes here are in-memory; the screen saves the shared preference store when it closes.
  */
 public sealed interface SettingControl {
     /** Stable identity for debugging and test assertions, not shown to the player. */

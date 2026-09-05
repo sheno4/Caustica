@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -107,7 +109,7 @@ final class RtTerrainMesher {
         // Only opaque and masked surfaces contribute light descriptors; transmissive surfaces use
         // their material path, while lava is represented by opaque terrain geometry.
         FloatArrayList collected = new FloatArrayList();
-        collectLights(collected, mesh.geometry, CausticaConfig.Rt.Lights.MIN_FILL_RATIO.value());
+        collectLights(collected, mesh.geometry, CausticaConfig.get(MinecraftOptions.Rt.Lights.MIN_FILL_RATIO));
         float[] lights = EMPTY_LIGHTS;
         if (!collected.isEmpty()) {
             lights = collected.toFloatArray();

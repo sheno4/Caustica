@@ -16,6 +16,7 @@ repositories {
 }
 
 dependencies {
+    testImplementation testFixtures(project(":packages:settings-api"))
     api project(":packages:shader-api")
     api project(":packages:settings-api")
     api "org.joml:joml:${project.joml_version}"

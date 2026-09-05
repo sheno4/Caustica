@@ -1,16 +1,17 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
 import dev.comfyfluffy.caustica.builtin.BloomPass;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+import dev.comfyfluffy.caustica.settings.Option;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class ConfigOptionVocabularyTest {
     @Test
-    void runtimeAndExtensionStoresExposeTheSameSliderVocabulary() {
-        CausticaConfig.IntSetting runtimeInt = CausticaConfig.Rt.Composite.MAX_BOUNCES;
-        CausticaConfig.FloatSetting runtimeFloat = CausticaConfig.Rt.Tonemap.GAMMA;
+    void rendererAndExtensionDeclarationsExposeTheSameSliderVocabulary() {
+        Option<Integer> runtimeInt = RendererOptions.Rt.Composite.MAX_BOUNCES;
+        Option<Float> runtimeFloat = RendererOptions.Rt.Tonemap.GAMMA;
         var extensionOption = BloomPass.THRESHOLD_SCENE_LINEAR;
 
         assertEquals(2, runtimeInt.sliderMinimum());

@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.vulkan;
 
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -121,9 +123,9 @@ public final class MinecraftHdr {
     public static void logConfig() {
         CausticaMod.LOGGER.info(
                 "HDR config: enabled={} ui={}nits peak={}nits -> {}",
-                CausticaConfig.Rt.Hdr.enabled(),
-                CausticaConfig.Rt.Hdr.UI_NITS.value(), CausticaConfig.Rt.Hdr.PEAK_NITS.value(),
-                CausticaConfig.Rt.Hdr.enabled() ? "HDR display path active" : "SDR display path");
+                dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().runtime().hdrEnabled(),
+                CausticaConfig.get(RendererOptions.Rt.Hdr.UI_NITS), CausticaConfig.get(RendererOptions.Rt.Hdr.PEAK_NITS),
+                dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().runtime().hdrEnabled() ? "HDR display path active" : "SDR display path");
     }
 
     /**

@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.vulkan;
 
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import com.mojang.blaze3d.vulkan.VulkanBackend;
 import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
@@ -240,7 +242,7 @@ public final class MinecraftDeviceBringup {
         requireProfile(support.profile());
         REQUIRED_PROFILE.deviceExtensions().forEach(extension -> addOnce(extensions, extension));
         if (support.ser()) addOnce(extensions, VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
-        if (CausticaConfig.Rt.Reflex.ENABLED.value()
+        if (CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED)
                 && device.hasDeviceExtension(VK_NV_LOW_LATENCY_2_EXTENSION_NAME)) {
             addOnce(extensions, VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
             if (support.presentId()) addOnce(extensions, VK_KHR_PRESENT_ID_EXTENSION_NAME);
@@ -271,7 +273,7 @@ public final class MinecraftDeviceBringup {
         if (support.ser()) features.add(SER);
         if (support.wideLines()) features.add(WIDE_LINES);
 
-        boolean lowLatency = CausticaConfig.Rt.Reflex.ENABLED.value()
+        boolean lowLatency = CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED)
                 && device.hasDeviceExtension(VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
         boolean presentIds = lowLatency && support.presentId();
         if (presentIds) features.add(PRESENT_ID);
@@ -406,7 +408,7 @@ public final class MinecraftDeviceBringup {
             PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(
                     feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
             boolean querySer = device.hasDeviceExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
-            boolean queryPresent = CausticaConfig.Rt.Reflex.ENABLED.value()
+            boolean queryPresent = CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED)
                     && device.hasDeviceExtension(VK_NV_LOW_LATENCY_2_EXTENSION_NAME)
                     && device.hasDeviceExtension(VK_KHR_PRESENT_ID_EXTENSION_NAME);
             if (querySer) SER.struct().findOrCreateStructInPNextChain(available, stack);

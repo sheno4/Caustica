@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.renderer.runtime;
 
 import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.presentation.PresentationResources;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
@@ -40,8 +39,8 @@ final class RtFrameResources {
         return presentation;
     }
 
-    void ensurePresentationPipelines(VulkanDeviceContext context) throws IOException {
-        presentation.ensurePipelines(context, CausticaConfig.Rt.Hdr.PEAK_NITS.value());
+    void ensurePresentationPipelines(VulkanDeviceContext context, int peakNits) throws IOException {
+        presentation.ensurePipelines(context, peakNits);
     }
 
     /** Resizes both owners after one shared drain of all prior frame use. */

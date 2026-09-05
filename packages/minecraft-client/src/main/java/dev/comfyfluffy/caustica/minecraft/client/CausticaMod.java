@@ -13,6 +13,8 @@ import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import dev.comfyfluffy.caustica.minecraft.client.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetryImpl;
@@ -27,17 +29,18 @@ public final class CausticaMod {
     }
 
     public static void initialize(CausticaPlatform platform) {
-        CausticaConfig.configure(platform.configDir());
-        // Register every setting (applying TOML file values) and write a default config on first run.
-        CausticaConfig.ensureRegistered();
-        CausticaConfig.saveIfMissing();
+        var settings = new SettingsRegistry();
+        MinecraftOptions.register(settings);
+        var configPath = platform.configDir().resolve("caustica.toml");
+        var options = CausticaOptions.load(configPath, settings);
+        CausticaConfig.install(options);
         RtTelemetryImpl telemetry = new RtTelemetryImpl();
         MinecraftTelemetry.Instrumentation minecraftTelemetry = MinecraftTelemetry.renderer(telemetry);
         RtWorkerPool terrainWorkers = new RtWorkerPool();
         RtTerrain terrain = new RtTerrain(terrainWorkers, minecraftTelemetry);
         MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter(terrain, minecraftTelemetry);
         MinecraftApiBootstrap.ApiServices apiServices = MinecraftApiBootstrap.initialize(
-                platform, telemetry, frameAdapter, terrain);
+                platform, telemetry, frameAdapter, terrain, settings, options);
         MinecraftRtRuntime runtime = new MinecraftRtRuntime(apiServices.renderSessionHost(), apiServices.minecraftWorldSessionHost(),
                 apiServices.slangRuntime(), apiServices.shaderCacheRoot(), telemetry, apiServices.ngxSettings());
         VanillaRenderController renderController = new VanillaRenderController(terrain);
@@ -49,6 +52,6 @@ public final class CausticaMod {
         CausticaClientComposition.publish(new CausticaClientComposition(runtime, apiServices, frameAdapter,
                 runtimeHost, uiOverlay, renderController, renderScaler, deviceBringup, vulkanBackend,
                 terrainWorkers, terrain));
-        LOGGER.info("Caustica initialized (common); config: {}", CausticaConfig.configPath());
+        LOGGER.info("Caustica initialized (common); config: {}", configPath);
     }
 }

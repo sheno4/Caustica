@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.settings;
 
 import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -28,6 +29,7 @@ final class CausticaSectionsTest {
     Path configDir;
 
     private CausticaOptions options(SettingsRegistry registry) {
+        MinecraftOptions.register(registry);
         return CausticaOptions.load(configDir.resolve("caustica-options.toml"), registry);
     }
 
@@ -61,6 +63,13 @@ final class CausticaSectionsTest {
         List<SettingsSection> sections = CausticaSections.build(registry, options(registry));
 
         assertTrue(sections.stream().noneMatch(section -> section.id().equals(PROVIDER_ONLY.toString())));
+    }
+
+    @Test
+    void optionsWithoutNativeRowsDoNotCreateAnEmptySection() {
+        SettingsRegistry registry = new SettingsRegistry();
+        FeatureSettings feature = registry.feature(PROVIDER_ONLY).option(Option.optionalString("path")).register();
+        assertNull(CausticaSections.feature(feature, options(registry)));
     }
 
     @Test
@@ -99,7 +108,7 @@ final class CausticaSectionsTest {
 
     @Test
     void theEngineSectionShowsOnlySettingsThatOptedIntoAGroup() {
-        SettingsSection engine = CausticaSections.engine();
+        SettingsSection engine = CausticaSections.engine(options(new SettingsRegistry()), ignored -> true);
 
         assertFalse(engine.groups().isEmpty());
         List<String> ids = engine.allControls().stream().map(SettingControl::id).toList();

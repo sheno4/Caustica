@@ -11,6 +11,7 @@ base { archivesName = "caustica-minecraft-api" }
 repositories { mavenCentral() }
 
 dependencies {
+    testImplementation testFixtures(project(":packages:settings-api"))
     api project(":packages:api")
     api project(":packages:settings-api")
     testImplementation platform("org.junit:junit-bom:5.12.2")

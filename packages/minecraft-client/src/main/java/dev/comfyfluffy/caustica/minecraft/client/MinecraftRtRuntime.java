@@ -1,9 +1,16 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.OptionValues;
+import dev.comfyfluffy.caustica.renderer.runtime.RtRenderSettings;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftEngineWorldSession;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
@@ -176,6 +183,20 @@ public final class MinecraftRtRuntime {
         }
     }
 
+    private OptionValues settings = CausticaConfig.snapshot();
+    private boolean swapchainPqAvailable;
+    private boolean swapchainPqActive;
+    private boolean requestedHdr;
+
+    public void setSwapchainPqAvailable(boolean available) { swapchainPqAvailable = available; }
+    public void setSwapchainPqActive(boolean active) { swapchainPqActive = active; }
+    public boolean swapchainPqAvailable() { return swapchainPqAvailable; }
+    public boolean hdrEnabled() { return swapchainPqActive && settings.get(RendererOptions.Rt.Hdr.ENABLED); }
+    public boolean settingAvailable(Option<?> option) {
+        return (option != RendererOptions.Rt.Hdr.ENABLED && option != RendererOptions.Rt.Hdr.UI_NITS
+                && option != RendererOptions.Rt.Hdr.PEAK_NITS) || swapchainPqAvailable;
+    }
+
     private NgxRuntime requireNgxRuntime() {
         requireVulkanContext();
         return java.util.Objects.requireNonNull(ngxRuntime, "NGX runtime was not created with the Vulkan device");
@@ -184,12 +205,12 @@ public final class MinecraftRtRuntime {
     private DlssRayReconstruction.Settings rayReconstructionSettings(RtDenoisingSettings denoising) {
         return new DlssRayReconstruction.Settings(
                 denoising.route() == DenoiserRoute.RAY_RECONSTRUCTION,
-                CausticaConfig.Rt.DlssRr.QUALITY.value(), CausticaConfig.Rt.DlssRr.PRESET.value());
+                settings.get(RendererOptions.Rt.DlssRr.QUALITY), settings.get(RendererOptions.Rt.DlssRr.PRESET));
     }
 
     private DlssSuperResolution.Settings superResolutionSettings(RtDenoisingSettings denoising) {
         return superResolutionSettings(denoising,
-                CausticaConfig.Rt.DlssSr.QUALITY.value(), CausticaConfig.Rt.DlssSr.PRESET.value());
+                settings.get(RendererOptions.Rt.DlssSr.QUALITY), settings.get(RendererOptions.Rt.DlssSr.PRESET));
     }
 
     static DlssSuperResolution.Settings superResolutionSettings(
@@ -200,8 +221,8 @@ public final class MinecraftRtRuntime {
     }
 
     private RtDenoisingSettings denoisingSettings() {
-        return denoisingSettings(CausticaConfig.Rt.Denoising.ROUTE.get(),
-                CausticaConfig.Rt.Denoising.METHOD.get());
+        return denoisingSettings(settings.get(RendererOptions.Rt.Denoising.ROUTE),
+                settings.get(RendererOptions.Rt.Denoising.METHOD));
     }
 
     static RtDenoisingSettings denoisingSettings(String routeValue, String methodValue) {
@@ -225,12 +246,12 @@ public final class MinecraftRtRuntime {
     }
 
     private DlssFrameGeneration.Settings frameGenerationSettings() {
-        return new DlssFrameGeneration.Settings(CausticaConfig.Rt.Fg.ENABLED.value());
+        return new DlssFrameGeneration.Settings(settings.get(RendererOptions.Rt.Fg.ENABLED));
     }
 
     private RtFramePresenter.Settings presentationSettings() {
-        return new RtFramePresenter.Settings(CausticaConfig.Rt.Hdr.enabled(),
-                CausticaConfig.Rt.Hdr.swapchainPqActive(), CausticaConfig.Rt.Hdr.uiNits());
+        return new RtFramePresenter.Settings(hdrEnabled(),
+                swapchainPqActive, settings.get(RendererOptions.Rt.Hdr.UI_NITS));
     }
 
     public void installHost(RuntimeHost installedHost) {
@@ -379,8 +400,14 @@ public final class MinecraftRtRuntime {
     public void tick(SceneResources sceneResources, boolean startupSceneReady, long worldEpoch,
                      MinecraftDimensionKey dimension,
                      int displayWidth, int displayHeight, Runnable reconfigureSurface) {
+        settings = CausticaConfig.snapshot();
+        boolean hdr = settings.get(RendererOptions.Rt.Hdr.ENABLED);
+        if (hdr != requestedHdr) {
+            requestedHdr = hdr;
+            reconfigureSurface.run();
+        }
         lifecycle.drainResourcePackCompletions();
-        boolean requested = CausticaConfig.Rt.ENABLED.value();
+        boolean requested = settings.get(MinecraftOptions.Rt.ENABLED);
         if (!requested) {
             if (state == State.STARTING || state == State.ACTIVE) {
                 stop(reconfigureSurface);
@@ -414,7 +441,7 @@ public final class MinecraftRtRuntime {
         state = State.ACTIVE;
         session.renderer.resetExposureHistory();
         host().resetPresentationFailure();
-        if (CausticaConfig.Rt.Hdr.ENABLED.value()) {
+        if (settings.get(RendererOptions.Rt.Hdr.ENABLED)) {
             reconfigureSurface.run();
         }
         LOGGER.info("RT runtime active");
@@ -422,11 +449,17 @@ public final class MinecraftRtRuntime {
 
     /** Latch the session state consumed by every hook in this render frame. */
     public void beginRenderFrame() {
+        settings = CausticaConfig.snapshot();
+        if (session != null && session.renderer != null) {
+            session.renderer.configureSettings(RtRenderSettings.capture(settings, swapchainPqActive));
+        }
         frameActive = state == State.ACTIVE;
     }
 
     public void shutdown() {
         frameActive = false;
+        swapchainPqAvailable = false;
+        swapchainPqActive = false;
         try {
             if (session != null) {
                 state = State.STOPPING;
@@ -518,7 +551,7 @@ public final class MinecraftRtRuntime {
 
     /** PQ belongs to an active RT session; Off and Starting use the host's native SDR swapchain. */
     public boolean wantsPqSwapchain() {
-        return active() && CausticaConfig.Rt.Hdr.ENABLED.value();
+        return active() && settings.get(RendererOptions.Rt.Hdr.ENABLED);
     }
 
     private void start() {
@@ -690,7 +723,7 @@ public final class MinecraftRtRuntime {
                 renderer = new RtFrameRenderer(context, programs, scenes, passes,
                         world.services(), presenter, rayReconstruction,
                         new RtDlssSuperResolution(superResolution),
-                        requireDenoiserFactory(), denoising, telemetry);
+                        requireDenoiserFactory(), denoising, telemetry, RtRenderSettings.capture(settings, swapchainPqActive));
                 worldEpoch = epoch;
             } catch (Throwable failure) {
                 closeWorld();

@@ -1,9 +1,15 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.StageMetric;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -17,6 +23,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtFrameStatsBoundaryTest {
+    @TempDir Path configDirectory;
+    private CausticaOptions previousStore;
+
+    @BeforeEach
+    void installRendererSettings() {
+        previousStore = CausticaConfig.store();
+        SettingsRegistry registry = new SettingsRegistry();
+        RendererOptions.register(registry);
+        CausticaConfig.install(CausticaOptions.load(configDirectory.resolve("caustica.toml"), registry));
+    }
+
+    @AfterEach
+    void restoreProcessSettings() {
+        CausticaConfig.install(previousStore);
+    }
+
     @Test
     void outputLocationIsAbsoluteLazyAndFixedAfterWriterInitialization(@TempDir Path temporary) {
         Path requested = temporary.resolve("nested").resolve("..").resolve("stats");
@@ -95,8 +117,8 @@ final class RtFrameStatsBoundaryTest {
 
     @Test
     void counterSetAndMaxRetainTheExpectedFrameValue() {
-        boolean previous = CausticaConfig.Rt.FrameStats.ENABLED.value();
-        CausticaConfig.Rt.FrameStats.ENABLED.set(true);
+        boolean previous = CausticaConfig.get(RendererOptions.Rt.FrameStats.ENABLED);
+        CausticaConfig.store().apply(CausticaConfig.FEATURE, RendererOptions.Rt.FrameStats.ENABLED, true);
         try {
             RtFrameStats.Profile profile = new RtFrameStats.Profile("counter-semantics",
                     new MetricSchema(List.of(), List.of("depth")), false);
@@ -108,7 +130,7 @@ final class RtFrameStatsBoundaryTest {
             profile.set("depth", 2);
             assertEquals(2L, profile.counterValue("depth"));
         } finally {
-            CausticaConfig.Rt.FrameStats.ENABLED.set(previous);
+            CausticaConfig.store().apply(CausticaConfig.FEATURE, RendererOptions.Rt.FrameStats.ENABLED, previous);
         }
     }
 

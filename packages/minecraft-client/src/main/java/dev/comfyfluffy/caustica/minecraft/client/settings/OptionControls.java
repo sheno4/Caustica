@@ -2,27 +2,28 @@ package dev.comfyfluffy.caustica.minecraft.client.settings;
 
 import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.settings.Option;
-import net.minecraft.network.chat.Component;
 import dev.comfyfluffy.caustica.settings.ResourceId;
+import net.minecraft.network.chat.Component;
 
-/**
- * Adapts an extension's declared {@link Option}s to {@link SettingControl}. Reads go through the live view
- * so an edit shows up in the row it came from; writes go through {@link CausticaOptions#apply}, which is
- * in-memory, leaving {@link SettingsCommit} to decide when anything reaches disk.
- *
- * <p>Only {@code BOOL} and {@code RANGE} appear here because those are the only kinds the store backs, and
- * {@code SettingsBuilder} rejects the others at registration.
- */
+import java.util.List;
+import java.util.function.Predicate;
+
+/** Adapts declared options to native screen controls backed by the shared in-memory preference store. */
 public final class OptionControls {
-    private OptionControls() {
-    }
+    private OptionControls() { }
 
     public static SettingControl of(CausticaOptions store, ResourceId featureId, Option<?> option) {
+        return of(store, featureId, option, ignored -> true);
+    }
+
+    /** Null for options without a native row, including optional paths and unrestricted colors. */
+    public static SettingControl of(CausticaOptions store, ResourceId featureId, Option<?> option,
+                                    Predicate<Option<?>> available) {
         return switch (option.kind()) {
-            case BOOL -> new BoolRow(store, featureId, cast(option));
-            case RANGE -> new RangeRow(store, featureId, cast(option));
-            case ENUM, COLOR -> throw new IllegalStateException(
-                    "unreachable: SettingsBuilder rejects " + option.kind() + " at registration");
+            case BOOL -> new BoolRow(store, featureId, cast(option), available);
+            case RANGE, INTEGER -> new RangeRow(store, featureId, cast(option), available);
+            case INT_CHOICE, STRING_CHOICE, ENUM -> new ChoiceRow<>(store, featureId, option, available);
+            case OPTIONAL_STRING, COLOR -> null;
         };
     }
 
@@ -31,101 +32,66 @@ public final class OptionControls {
         return (Option<T>) option;
     }
 
-    private record BoolRow(CausticaOptions store, ResourceId featureId, Option<Boolean> option)
-            implements SettingControl.BoolControl {
-        @Override
-        public String id() {
-            return option.id();
+    private abstract static class Row<T> {
+        final CausticaOptions store;
+        final ResourceId featureId;
+        final Option<T> option;
+        final Predicate<Option<?>> available;
+
+        Row(CausticaOptions store, ResourceId featureId, Option<T> option, Predicate<Option<?>> available) {
+            this.store = store;
+            this.featureId = featureId;
+            this.option = option;
+            this.available = available;
         }
 
-        @Override
-        public Component label() {
-            return LangKeys.optionLabel(featureId, option);
+        public String id() { return option.id(); }
+        public Component label() { return LangKeys.optionLabel(featureId, option); }
+        public Component tooltip() { return LangKeys.optionTooltip(featureId, option); }
+        public boolean enabled() { return available.test(option) && !store.overridden(featureId, option); }
+        final T value() { return store.options(featureId).get(option); }
+        final void write(Object value) { store.apply(featureId, option, value); }
+    }
+
+    private static final class BoolRow extends Row<Boolean> implements SettingControl.BoolControl {
+        BoolRow(CausticaOptions store, ResourceId featureId, Option<Boolean> option,
+                Predicate<Option<?>> available) {
+            super(store, featureId, option, available);
         }
 
-        @Override
-        public Component tooltip() {
-            return LangKeys.optionTooltip(featureId, option);
+        @Override public boolean get() { return value(); }
+        @Override public void set(boolean value) { write(value); }
+        @Override public boolean defaultValue() { return option.defaultValue(); }
+    }
+
+    private static final class RangeRow extends Row<Number> implements SettingControl.RangeControl {
+        RangeRow(CausticaOptions store, ResourceId featureId, Option<Number> option,
+                 Predicate<Option<?>> available) {
+            super(store, featureId, option, available);
         }
 
-        @Override
-        public boolean enabled() {
-            return true;
-        }
-
-        @Override
-        public boolean get() {
-            return store.options(featureId).get(option);
-        }
-
-        @Override
-        public void set(boolean value) {
-            store.apply(featureId, option, value);
-        }
-
-        @Override
-        public boolean defaultValue() {
-            return option.defaultValue();
+        @Override public double get() { return value().doubleValue(); }
+        @Override public void set(double value) { write(value); }
+        @Override public double defaultValue() { return option.defaultValue().doubleValue(); }
+        @Override public double sliderMinimum() { return option.sliderMinimum(); }
+        @Override public double sliderMaximum() { return option.sliderMaximum(); }
+        @Override public double step() { return option.kind() == Option.Kind.INTEGER ? 1 : option.step(); }
+        @Override public Component format(double value) {
+            return Component.literal(step() == 1.0
+                    ? Integer.toString((int) Math.round(value)) : SettingsFormat.decimal(value));
         }
     }
 
-    private record RangeRow(CausticaOptions store, ResourceId featureId, Option<Float> option)
-            implements SettingControl.RangeControl {
-        @Override
-        public String id() {
-            return option.id();
+    private static final class ChoiceRow<T> extends Row<T> implements SettingControl.ChoiceControl<T> {
+        ChoiceRow(CausticaOptions store, ResourceId featureId, Option<T> option,
+                  Predicate<Option<?>> available) {
+            super(store, featureId, option, available);
         }
 
-        @Override
-        public Component label() {
-            return LangKeys.optionLabel(featureId, option);
-        }
-
-        @Override
-        public Component tooltip() {
-            return LangKeys.optionTooltip(featureId, option);
-        }
-
-        @Override
-        public boolean enabled() {
-            return true;
-        }
-
-        @Override
-        public double get() {
-            return store.options(featureId).get(option);
-        }
-
-        @Override
-        public void set(double value) {
-            store.apply(featureId, option, value);
-        }
-
-        @Override
-        public double defaultValue() {
-            return option.defaultValue();
-        }
-
-        @Override
-        public double sliderMinimum() {
-            return option.sliderMinimum();
-        }
-
-        @Override
-        public double sliderMaximum() {
-            return option.sliderMaximum();
-        }
-
-        @Override
-        public double step() {
-            return option.step();
-        }
-
-        @Override
-        public Component format(double value) {
-            return Component.literal(step() == 1.0
-                    ? Integer.toString((int) Math.round(value))
-                    : SettingsFormat.decimal(value));
-        }
+        @Override public List<T> choices() { return option.choices(); }
+        @Override public T get() { return value(); }
+        @Override public void set(T value) { write(value); }
+        @Override public T defaultValue() { return option.defaultValue(); }
+        @Override public Component labelOf(T value) { return LangKeys.optionChoice(featureId, option, value); }
     }
 }

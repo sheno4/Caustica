@@ -10,6 +10,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -217,5 +219,89 @@ final class CausticaOptionsTest {
 
         assertThrows(NullPointerException.class, () -> options.options(unknown));
         assertThrows(NullPointerException.class, () -> options.set(unknown, ALPHA, 0.5));
+    }
+
+    @Test
+    void processOverrideRemainsEffectiveWhilePreferenceChangesAndSaves() {
+        String property = "caustica.option.test.options.alpha";
+        Path path = configDir.resolve("caustica.toml");
+        System.setProperty(property, "0.9");
+        try {
+            CausticaOptions options = CausticaOptions.load(path, settings());
+            options.set(FEATURE, ALPHA, 0.6);
+            assertTrue(options.overridden(FEATURE, ALPHA));
+            assertEquals(0.9f, options.options(FEATURE).get(ALPHA));
+            assertEquals(0.6f, options.preference(FEATURE, ALPHA));
+        } finally {
+            System.clearProperty(property);
+        }
+        assertEquals(0.6f, CausticaOptions.load(path, settings()).options(FEATURE).get(ALPHA));
+    }
+
+    @Test
+    void laterExtensionRegistrationKeepsExistingEditsAndSnapshots() throws IOException {
+        Path path = configDir.resolve("caustica.toml");
+        Files.writeString(path, "[\"test:extension\"]\ncount=7\n");
+        CausticaOptions options = CausticaOptions.load(path, settings());
+        options.apply(FEATURE, ALPHA, 0.6);
+        var before = options.snapshot();
+        ResourceId extension = ResourceId.of("test", "extension");
+        Option<Integer> count = Option.integer("count", 0, 10, 2);
+        SettingsRegistry additions = new SettingsRegistry();
+        additions.feature(extension).option(count).register();
+        options.register(additions);
+        options.register(additions);
+        assertEquals(7, options.options(extension).get(count));
+        assertEquals(0.6f, options.options(FEATURE).get(ALPHA));
+        assertEquals(0.6f, before.options(FEATURE).get(ALPHA));
+        assertThrows(NullPointerException.class, () -> before.options(extension));
+    }
+
+    private enum Quality { LOW, HIGH }
+
+    @Test
+    void allTypesRoundTripThroughExplicitStorageKeys() {
+        Option<Integer> count = Option.integer("count", 0, 10, 2).storage("render.count", "test.render.count");
+        Option<Integer> selection = Option.intChoice("selection", 0, List.of(0, 2));
+        Option<String> mode = Option.stringChoice("mode", "raw", List.of("raw", "nrd"));
+        Option<Quality> quality = Option.enumOf("quality", Quality.LOW, List.of(Quality.values()));
+        Option<Integer> color = Option.color("color", 0);
+        Option<Optional<String>> asset = Option.optionalString("asset");
+        SettingsRegistry registry = new SettingsRegistry();
+        registry.feature(FEATURE).option(count).option(selection).option(mode).option(quality)
+                .option(color).option(asset).register();
+        Path path = configDir.resolve("caustica.toml");
+        CausticaOptions options = CausticaOptions.load(path, registry);
+        options.apply(FEATURE, count, 99);
+        options.apply(FEATURE, selection, 2);
+        options.apply(FEATURE, mode, "nrd");
+        options.apply(FEATURE, quality, Quality.HIGH);
+        options.apply(FEATURE, color, 0x12abef);
+        options.set(FEATURE, asset, Optional.of("scene.gltf"));
+        CausticaOptions reloaded = CausticaOptions.load(path, registry);
+        assertEquals(10, reloaded.options(FEATURE).get(count));
+        assertEquals(2, reloaded.options(FEATURE).get(selection));
+        assertEquals("nrd", reloaded.options(FEATURE).get(mode));
+        assertEquals(Quality.HIGH, reloaded.options(FEATURE).get(quality));
+        assertEquals(0x12abef, reloaded.options(FEATURE).get(color));
+        assertEquals(Optional.of("scene.gltf"), reloaded.options(FEATURE).get(asset));
+        reloaded.set(FEATURE, asset, Optional.empty());
+        assertEquals(Optional.empty(), CausticaOptions.load(path, registry).options(FEATURE).get(asset));
+    }
+
+    @Test
+    void legacyImportPreservesCanonicalPreferencesAndUnknownKeys() throws IOException {
+        Path path = configDir.resolve("caustica.toml");
+        Path legacy = configDir.resolve("caustica-options.toml");
+        Files.writeString(path, "[\"test:options\"]\nalpha=0.8\nunknown=42\n");
+        Files.writeString(legacy, "[\"test:options\"]\nalpha=0.1\nflag=false\n");
+        CausticaOptions options = CausticaOptions.load(path, settings());
+        options.importLegacy(legacy);
+        assertEquals(0.8f, options.options(FEATURE).get(ALPHA));
+        assertEquals(false, options.options(FEATURE).get(FLAG));
+        try (var parsed = com.electronwill.nightconfig.core.file.CommentedFileConfig.of(path)) {
+            parsed.load();
+            assertEquals(42, parsed.<Integer>get("test:options.unknown"));
+        }
     }
 }

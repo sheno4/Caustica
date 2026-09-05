@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.RtScreenshotExporter;
@@ -33,7 +35,7 @@ public abstract class ScreenshotMixin {
     ) {
         if (forceName == null && downscaleFactor == 1
                 && CausticaClientComposition.current().runtime().frameActive()
-                && CausticaConfig.Rt.Screenshots.EXR_ENABLED.value()) {
+                && CausticaConfig.get(RendererOptions.Rt.Screenshots.EXR_ENABLED)) {
             String pairedPngName = RtScreenshotExporter.exportPaired(workDir, callback);
             if (pairedPngName != null) {
                 // Re-enter vanilla's named path with our reserved PNG name. The non-null name bypasses

@@ -32,6 +32,7 @@ configurations {
 }
 
 dependencies {
+    testImplementation testFixtures(project(":packages:settings-api"))
     compileOnly project(":packages:api")
     compileOnly project(":packages:minecraft-api")
     compileOnly project(":packages:vulkan-support")

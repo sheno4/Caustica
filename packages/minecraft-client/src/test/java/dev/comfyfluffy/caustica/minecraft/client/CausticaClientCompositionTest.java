@@ -16,9 +16,12 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetryImpl;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import dev.comfyfluffy.caustica.slang.SlangRuntimeConfig;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
@@ -29,11 +32,20 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class CausticaClientCompositionTest {
     @TempDir Path temporaryDirectory;
+    private CausticaOptions previousStore;
+
+    @BeforeEach
+    void retainProcessSettings() { previousStore = CausticaConfig.store(); }
+
+    @AfterEach
+    void restoreProcessSettings() { CausticaConfig.install(previousStore); }
 
     @Test
     void publishesOneEagerlyConstructedRootExactlyOnce() {
         SettingsRegistry settings = new SettingsRegistry();
+        MinecraftOptions.register(settings);
         CausticaOptions options = CausticaOptions.load(temporaryDirectory.resolve("options.toml"), settings);
+        CausticaConfig.install(options);
         RenderSessionHost renderHost = new RenderSessionHost(options);
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
         SlangRuntime slang = new SlangRuntime(new SlangRuntimeConfig(

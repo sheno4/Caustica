@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.client.settings;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -10,11 +12,13 @@ import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * is the seam where the two drift apart.
  */
 final class LangKeysTest {
+    @TempDir Path configDir;
     private static JsonObject lang() throws IOException {
         try (InputStream stream = LangKeysTest.class.getResourceAsStream("/assets/caustica/lang/en_us.json")) {
             assertNotNull(stream, "en_us.json is not on the test classpath");
@@ -60,22 +65,16 @@ final class LangKeysTest {
                 .option(Option.bool("bloom.enabled", true).inGroupAsHeader("bloom"))
                 .option(Option.range("bloom.strength", 0.0f, 2.0f, 0.35f).inGroup("bloom"))
                 .register();
-        CausticaConfig.ensureRegistered();
         List<String> missing = new ArrayList<>();
 
-        for (CausticaConfig.RuntimeSetting<?> setting : CausticaConfig.settings()) {
+        for (Option<?> setting : MinecraftOptions.allSettings()) {
             if (setting.group() == null) {
                 continue;
             }
-            require(lang, missing, LangKeys.settingLabel(setting));
-            require(lang, missing, LangKeys.settingTooltip(setting));
-            if (setting instanceof CausticaConfig.IntSetting integer) {
-                integer.choices().forEach(
-                        choice -> require(lang, missing, LangKeys.settingChoice(setting, choice)));
-            }
-            if (setting instanceof CausticaConfig.StringSetting text) {
-                text.choices().forEach(choice -> require(lang, missing, LangKeys.settingChoice(setting, choice)));
-            }
+            require(lang, missing, LangKeys.optionLabel(CausticaConfig.FEATURE, setting));
+            require(lang, missing, LangKeys.optionTooltip(CausticaConfig.FEATURE, setting));
+            setting.choices().forEach(choice ->
+                    require(lang, missing, LangKeys.optionChoice(CausticaConfig.FEATURE, setting, choice)));
         }
 
         for (FeatureSettings feature : registry.all()) {
@@ -118,7 +117,10 @@ final class LangKeysTest {
     void everyEngineGroupThatHasRowsHasATitle() throws IOException {
         JsonObject lang = lang();
         List<String> missing = new ArrayList<>();
-        SettingsSection engine = CausticaSections.engine();
+        SettingsRegistry registry = new SettingsRegistry();
+        MinecraftOptions.register(registry);
+        CausticaOptions options = CausticaOptions.load(configDir.resolve("settings.toml"), registry);
+        SettingsSection engine = CausticaSections.engine(options, ignored -> true);
 
         assertFalse(engine.groups().isEmpty());
         engine.groups().forEach(group -> require(lang, missing, group.title()));

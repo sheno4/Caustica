@@ -16,6 +16,13 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.io.TempDir;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import java.nio.file.Path;
 
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -24,6 +31,20 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftFrameAdapterTest {
+    @TempDir Path temporaryDirectory;
+    private CausticaOptions previousStore;
+
+    @BeforeEach
+    void installSettings() {
+        previousStore = CausticaConfig.store();
+        SettingsRegistry registry = new SettingsRegistry();
+        MinecraftOptions.register(registry);
+        CausticaConfig.install(CausticaOptions.load(temporaryDirectory.resolve("caustica.toml"), registry));
+    }
+
+    @AfterEach
+    void restoreSettings() { CausticaConfig.install(previousStore); }
+
     @Test
     void epochLeasePublishesAndRemovesOnlyItsOwnSelection() {
         MinecraftFrameAdapter adapter = adapter();

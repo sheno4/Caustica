@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.Frame;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
@@ -165,7 +167,7 @@ public final class RtFrameStats {
     }
 
     public static boolean enabled() {
-        return CausticaConfig.Rt.FrameStats.ENABLED.value();
+        return CausticaConfig.get(RendererOptions.Rt.FrameStats.ENABLED);
     }
 
     /** Renderer-internal scope alias used by instrumentation inside the RT implementation. */

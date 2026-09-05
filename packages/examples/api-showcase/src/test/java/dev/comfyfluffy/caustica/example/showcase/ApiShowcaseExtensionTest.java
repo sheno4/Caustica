@@ -22,7 +22,7 @@ final class ApiShowcaseExtensionTest {
         var api = new MinecraftApi(accepted -> {
             factories.add(accepted);
             return () -> { };
-        }, id -> { throw new AssertionError(id); });
+        }, new dev.comfyfluffy.caustica.settings.testing.InMemorySettings());
 
         ApiShowcaseExtension extension = new ApiShowcaseExtension();
         extension.registerMinecraft(api);

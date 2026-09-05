@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.entity;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityGeometry;
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -61,17 +63,14 @@ import java.util.UUID;
  * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
  * ignores) are skipped.
  *
- * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. Stable index revisions allow the
- * retained backend to derive compatible acceleration updates.
+ * <p>Entity, block-entity, and particle capture each have a frame-local configured cap. Stable index
+ * revisions allow the retained backend to derive compatible acceleration updates.
  */
 public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding {
     private static final long ENTITY_GEOMETRY = 1L;
     private static final long BLOCK_ENTITY_GEOMETRY = 2L;
     private static final long PARTICLE_GEOMETRY = 3L;
     private static final long PARTICLE_KEY = 0L;
-    public static boolean enabled() {
-        return CausticaConfig.Rt.Entities.ENABLED.value();
-    }
 
     // TLAS visibility-mask bits, ANDed against the per-ray cull mask in world.rgen. Bit 0 = secondary rays
     // (shadows / GI / reflections, CULL_SECONDARY); bit 1 = the primary camera ray (CULL_PRIMARY).
@@ -81,52 +80,29 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private static final int MASK_ALL = 0xFF;
     /** Particles are primary-ray-only: visible/lit by the camera path, invisible to shadows/GI/reflections. */
     private static final int PARTICLE_MASK = MASK_PRIMARY;
-    public static boolean particlesEnabled() {
-        return CausticaConfig.Rt.Entities.PARTICLES_ENABLED.value();
-    }
     public static boolean glowEnabled() {
-        return CausticaConfig.Rt.Entities.GLOW_ENABLED.value();
+        return CausticaConfig.get(MinecraftOptions.Rt.Entities.GLOW_ENABLED);
     }
     public static boolean nameTagsEnabled() {
-        return CausticaConfig.Rt.Entities.NAME_TAGS_ENABLED.value();
+        return CausticaConfig.get(MinecraftOptions.Rt.Entities.NAME_TAGS_ENABLED);
     }
 
-    private static int maxEntities() {
-        return CausticaConfig.Rt.Entities.maxEntities();
-    }
-
-    private static int maxOrdinaryEntities() {
-        return CausticaConfig.Rt.Entities.MAX_ORDINARY_ENTITIES.value();
-    }
-
-    private static int maxBlockEntities() {
-        return CausticaConfig.Rt.Entities.MAX_BLOCK_ENTITIES.value();
-    }
-
-    private static int maxParticles() {
-        return CausticaConfig.Rt.Entities.MAX_PARTICLES.value();
-    }
-
-    private static int entityListCapacity() {
-        return CausticaConfig.Rt.Entities.entityListCapacity();
-    }
-
-    private static int entityMapCapacity() {
-        return CausticaConfig.Rt.Entities.entityMapCapacity();
-    }
-
-    // Chunk radius around the player to scan for block entities (chests/signs/…) each frame.
-    private static int beViewChunks() {
-        return CausticaConfig.Rt.Entities.BE_VIEW_CHUNKS.value();
-    }
-
-    // Block entities keep a keyed cached mesh. Each frame the BE is re-meshed (cheap) and its mesh hashed;
-    // the retained owner replaces GPU geometry only when it changed, so static
-    // BEs cost no GPU work while animating ones (chest lid, spawner, …) rebuild every frame. New/changed
-    // rebuilds are capped per frame so a burst of newly loaded chunks can't stall (over-budget BEs keep
-    // their last geometry / pop in over later frames, like terrain's worker dispatch budget).
-    private static int beBuildsPerFrame() {
-        return CausticaConfig.Rt.Entities.BE_BUILDS_PER_FRAME.value();
+    private record CaptureSettings(boolean enabled, boolean particles, boolean glow, boolean nameTags,
+                                   int maxOrdinaryEntities, int maxBlockEntities, int maxParticles,
+                                   int blockEntityViewChunks, int blockEntityBuildsPerFrame) {
+        static CaptureSettings capture() {
+            var options = CausticaConfig.snapshot();
+            return new CaptureSettings(
+                    options.get(MinecraftOptions.Rt.Entities.ENABLED),
+                    options.get(MinecraftOptions.Rt.Entities.PARTICLES_ENABLED),
+                    options.get(MinecraftOptions.Rt.Entities.GLOW_ENABLED),
+                    options.get(MinecraftOptions.Rt.Entities.NAME_TAGS_ENABLED),
+                    options.get(MinecraftOptions.Rt.Entities.MAX_ORDINARY_ENTITIES),
+                    options.get(MinecraftOptions.Rt.Entities.MAX_BLOCK_ENTITIES),
+                    options.get(MinecraftOptions.Rt.Entities.MAX_PARTICLES),
+                    options.get(MinecraftOptions.Rt.Entities.BE_VIEW_CHUNKS),
+                    options.get(MinecraftOptions.Rt.Entities.BE_BUILDS_PER_FRAME));
+        }
     }
 
     // Stale-cache eviction horizon.
@@ -195,7 +171,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     }
 
     // CPU capture state for directly retained dynamic residents.
-    private final Int2ObjectOpenHashMap<EntityState> entityStates = new Int2ObjectOpenHashMap<>(entityMapCapacity());
+    private final Int2ObjectOpenHashMap<EntityState> entityStates = new Int2ObjectOpenHashMap<>();
 
     // Persistent per-block-entity placement state, keyed by BlockPos.asLong(). Unchanged captured mesh
     // revisions reuse that resident's retained mesh through MinecraftEntityGeometry.
@@ -381,7 +357,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         final long frameIndex;
         final MinecraftTelemetry.Instrumentation telemetry;
         int count;        // retained scene instances
-        int logicalCount; // ordinary entities + block entities + individual particles
+        final CaptureSettings settings = CaptureSettings.capture();
 
         FrameBuild(MinecraftEntityGeometry geometry, SceneOrigin origin, long frameIndex,
                    MinecraftTelemetry.Instrumentation telemetry) {
@@ -413,10 +389,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             geometry.drop(key);
             if (acknowledgment != null) acknowledgment.run();
         }
-
-        boolean full() {
-            return logicalCount >= maxEntities();
-        }
     }
 
     /**
@@ -439,7 +411,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         int rbx = (int) origin.x();
         int rby = (int) origin.y();
         int rbz = (int) origin.z();
-        if (!enabled()) {
+        if (!build.settings.enabled()) {
             try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
                 clearResidents(build);
                 finishFrame(build);
@@ -514,15 +486,15 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         boolean firstPerson = mc.options.getCameraType().isFirstPerson();
         glowBatches.clear();
         nameTagBatches.clear();
-        boolean glow = glowEnabled();
-        boolean nameTags = nameTagsEnabled();
+        boolean glow = build.settings.glow();
+        boolean nameTags = build.settings.nameTags();
         glowCamOffsetX = (float) (cameraState.pos.x - rbx);
         glowCamOffsetY = (float) (cameraState.pos.y - rby);
         glowCamOffsetZ = (float) (cameraState.pos.z - rbz);
         resetPoseStack(entityPoseStack);
         int capturedThisFrame = 0;
         for (Entity entity : level.entitiesForRendering()) {
-            if (build.full() || capturedThisFrame >= maxOrdinaryEntities()) {
+            if (capturedThisFrame >= build.settings.maxOrdinaryEntities()) {
                 break;
             }
             if (entity.isInvisible()) {
@@ -591,7 +563,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             }
             appendCapture(build, id, entity.getUUID(), mask,
                     translationTransform(ix - rbx, iy - rby, iz - rbz));
-            build.logicalCount++;
             build.telemetry.count("entitiesCaptured", 1);
             capturedThisFrame++;
         }
@@ -656,8 +627,8 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                                   int rbx, int rby, int rbz, Matrix4f projection, Matrix4f viewRotation) {
         capture.reset();
         particleMembers.clear();
-        int particleLimit = maxParticles();
-        if (!particlesEnabled() || particleLimit == 0 || build.full()) {
+        int particleLimit = build.settings.maxParticles();
+        if (!build.settings.particles() || particleLimit == 0) {
             submitParticles(build);
             return;
         }
@@ -689,7 +660,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             for (ParticleGroup<?> group : groups.values()) {
                 Queue<? extends Particle> queue = ((ParticleGroupAccessor) group).caustica$getParticles();
                 for (Particle p : queue) {
-                    if (build.full() || particlesCaptured >= particleLimit) {
+                    if (particlesCaptured >= particleLimit) {
                         break particleGroups;
                     }
                     if (!(p instanceof SingleQuadParticle sq)) {
@@ -729,7 +700,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                     }
                     particleMembers.add(new ParticleMember(p, vertAfter - vertBefore,
                             capture.idx.size() - ib, capture.surfaces.size() - surfaceCount));
-                    build.logicalCount++;
                     particlesCaptured++;
                 }
             }
@@ -828,7 +798,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             beCandidatePool.addLast(candidate);
         }
         candidates.clear();
-        int viewChunks = beViewChunks();
+        int viewChunks = build.settings.blockEntityViewChunks();
         for (int cx = pcx - viewChunks; cx <= pcx + viewChunks; cx++) {
             for (int cz = pcz - viewChunks; cz <= pcz + viewChunks; cz++) {
                 if (!level.getChunkSource().hasChunk(cx, cz) || !(level.getChunk(cx, cz) instanceof LevelChunk chunk)) {
@@ -853,7 +823,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         }
         int firstBlockEntity = build.count;
         for (BeCandidate candidate : candidates) {
-            if (build.full() || build.count - firstBlockEntity >= maxBlockEntities()) {
+            if (build.count - firstBlockEntity >= build.settings.maxBlockEntities()) {
                 break;
             }
             updateBlockEntity(build, beDispatcher, candidate.be, partial, now);
@@ -891,7 +861,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         if (entry == null || entry.meshHash != fingerprint.contentHash()) {
             // Geometry changed (or new BE) → rebuild, but only within this frame's budget. Over budget: keep
             // showing the previous geometry; a brand-new BE simply pops in over the next frames.
-            if (beBuildsThisFrame >= beBuildsPerFrame()) {
+            if (beBuildsThisFrame >= build.settings.blockEntityBuildsPerFrame()) {
                 if (entry != null) {
                     recordVisibleBlockEntity(build);
                 }
@@ -972,7 +942,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     /** Counts one selected cached block entity without resubmitting its unchanged retained state. */
     private static void recordVisibleBlockEntity(FrameBuild build) {
         build.count++;
-        build.logicalCount++;
         build.telemetry.count("blockEntitiesCaptured", 1);
     }
 

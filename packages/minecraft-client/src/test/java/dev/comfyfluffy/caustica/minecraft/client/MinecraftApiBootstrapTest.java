@@ -23,7 +23,7 @@ import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
-import dev.comfyfluffy.caustica.settings.OptionLookup;
+import dev.comfyfluffy.caustica.settings.SettingsAccess;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.config.CausticaOptions;
 import org.junit.jupiter.api.Test;
@@ -40,7 +40,7 @@ final class MinecraftApiBootstrapTest {
     @Test
     void registersMinecraftOnlyDiscoveryAndDeduplicatesDualCapabilityInstances() {
         SettingsRegistry settings = new SettingsRegistry();
-        OptionLookup options = id -> { throw new AssertionError(id); };
+        SettingsAccess options = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
         RenderSessionHost renderHost = new RenderSessionHost(options);
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
         class MinecraftOnly implements MinecraftExtension {
@@ -79,7 +79,7 @@ final class MinecraftApiBootstrapTest {
     @Test
     void sessionAndSettingsFailuresAreIsolatedForEachDiscoveredExtension() {
         SettingsRegistry settings = new SettingsRegistry();
-        OptionLookup options = id -> { throw new AssertionError(id); };
+        SettingsAccess options = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
         RenderSessionHost host = new RenderSessionHost(options);
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
         ResourceId settingsSurvived = ResourceId.of("test", "settings-survived");
@@ -150,7 +150,7 @@ final class MinecraftApiBootstrapTest {
         List<CausticaExtension> generic = List.of(extension);
         List<MinecraftExtension> minecraft = List.of(extension);
         MinecraftApiBootstrap.registerSettings(settings, generic, minecraft);
-        OptionLookup options = CausticaOptions.load(temporaryDirectory.resolve("options.toml"), settings);
+        SettingsAccess options = CausticaOptions.load(temporaryDirectory.resolve("options.toml"), settings);
         RenderSessionHost host = new RenderSessionHost(options);
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
 

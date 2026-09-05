@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureInstaller;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelectionInstaller;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
@@ -97,7 +99,7 @@ public final class MinecraftFrameAdapter {
         RtTerrain currentTerrain = terrain.currentOrNull();
         SceneOrigin sceneOrigin = currentTerrain != null ? currentTerrain.sceneOrigin() : SceneOrigin.ZERO;
         FrameSnapshot snapshot = new FrameSnapshot(new SceneView(selection.scene(), camera, selection.medium()), sceneOrigin,
-                CausticaConfig.Rt.Composite.WATER_WAVES.value(),
+                CausticaConfig.get(MinecraftOptions.Rt.Composite.WATER_WAVES),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);
         entities.submitFrame(snapshot.sceneOrigin(), camera.x(), camera.y(), camera.z(),
                 new Matrix4f().set(camera.clipFromView()), new Matrix4f(viewRotation),

@@ -166,6 +166,7 @@ configurations {
 sourceSets.main.runtimeClasspath += configurations.apiRuntime
 
 dependencies {
+    testImplementation testFixtures(project(":packages:settings-api"))
 	compileOnly project(":packages:api")
 	apiRuntime project(":packages:api")
 	compileOnly project(":packages:api-support")

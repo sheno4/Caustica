@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.vulkan;
 
+import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
@@ -37,7 +39,7 @@ final class MinecraftLowLatency implements VulkanLowLatency {
     @Override
     public boolean active() {
         return capabilities.lowLatency() && CausticaClientComposition.current().runtime().active()
-                && CausticaConfig.Rt.Reflex.ENABLED.value() && !failed;
+                && CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED) && !failed;
     }
 
     @Override public long appliedSwapchain() { return swapchain; }
@@ -47,8 +49,8 @@ final class MinecraftLowLatency implements VulkanLowLatency {
     @Override
     public void applySleepMode(VkDevice device, long targetSwapchain) {
         if (!active() || targetSwapchain == 0L) return;
-        boolean boost = CausticaConfig.Rt.Reflex.LOW_LATENCY_BOOST.value();
-        int minimumIntervalUs = CausticaConfig.Rt.Reflex.MINIMUM_INTERVAL_US.value();
+        boolean boost = CausticaConfig.get(RendererOptions.Rt.Reflex.LOW_LATENCY_BOOST);
+        int minimumIntervalUs = CausticaConfig.get(RendererOptions.Rt.Reflex.MINIMUM_INTERVAL_US);
         if (targetSwapchain == swapchain && boost == lastBoost && minimumIntervalUs == lastMinimumIntervalUs) return;
         try {
             ensureSemaphore(device);

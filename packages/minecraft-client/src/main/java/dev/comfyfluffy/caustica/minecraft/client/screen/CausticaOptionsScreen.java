@@ -12,9 +12,9 @@ import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaToggle;
 import dev.comfyfluffy.caustica.minecraft.client.settings.CausticaSections;
 import dev.comfyfluffy.caustica.minecraft.client.settings.SettingControl;
 import dev.comfyfluffy.caustica.minecraft.client.settings.SettingGroup;
-import dev.comfyfluffy.caustica.minecraft.client.settings.SettingsCommit;
 import dev.comfyfluffy.caustica.minecraft.client.settings.SettingsSection;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.settings.Option;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
@@ -23,30 +23,33 @@ import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * The Caustica settings screen: a header, a sidebar of sections, a scrolling content pane, and a footer.
  *
- * <p>Every row comes from {@link CausticaSections}, which derives them from the settings registry and the config
- * stores, so an installed extension gets a page without contributing any UI code.
+ * <p>Every row comes from {@link CausticaSections}, which derives them from the settings registry and shared
+ * preference store, so an installed extension gets a page without contributing any UI code.
  *
  * <p>Writes are in-memory as they happen — the renderer picks them up on the next frame — and reach disk
  * once, in {@link #removed()}.
  */
 public final class CausticaOptionsScreen extends Screen {
     private final Screen parent;
-    private final SettingsCommit commit;
+    private final CausticaOptions options;
     private final List<SettingsSection> sections;
     private final CausticaScrollPane content = new CausticaScrollPane();
     private int selectedSection;
     /** The one open dropdown, held here because its list is drawn and hit-tested outside the pane. */
     private CausticaDropdown<?> openDropdown;
 
-    public CausticaOptionsScreen(Screen parent, SettingsRegistry registry, CausticaOptions options) {
+    public CausticaOptionsScreen(Screen parent, SettingsRegistry registry, CausticaOptions options,
+                                Predicate<Option<?>> available) {
         super(Component.translatable("caustica.screen.title"));
         this.parent = parent;
-        this.commit = new SettingsCommit(java.util.Objects.requireNonNull(options, "options"));
-        this.sections = CausticaSections.build(java.util.Objects.requireNonNull(registry, "registry"), options);
+        this.options = java.util.Objects.requireNonNull(options, "options");
+        this.sections = CausticaSections.build(java.util.Objects.requireNonNull(registry, "registry"), options,
+                java.util.Objects.requireNonNull(available, "available"));
     }
 
     private SettingsSection section() {
@@ -291,6 +294,6 @@ public final class CausticaOptionsScreen extends Screen {
 
     @Override
     public void removed() {
-        commit.save();
+        options.save();
     }
 }

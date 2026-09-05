@@ -9,14 +9,14 @@ import dev.comfyfluffy.caustica.engine.session.ContributionScopeFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import dev.comfyfluffy.caustica.settings.OptionLookup;
+import dev.comfyfluffy.caustica.settings.SettingsAccess;
 
 /** Process-scoped Minecraft registration and creation of host-owned world-epoch controllers. */
 public final class MinecraftWorldSessionHost implements AutoCloseable {
     private final Channel channel = new Channel();
     private final MinecraftApi api;
 
-    public MinecraftWorldSessionHost(OptionLookup options) {
+    public MinecraftWorldSessionHost(SettingsAccess options) {
         api = new MinecraftApi(channel, Objects.requireNonNull(options, "options"));
     }
 

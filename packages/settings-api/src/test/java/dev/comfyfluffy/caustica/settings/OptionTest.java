@@ -1,0 +1,60 @@
+package dev.comfyfluffy.caustica.settings;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+final class OptionTest {
+    private enum Quality { LOW, HIGH }
+
+    @Test
+    void boundedNumbersNormalizeToTheirDeclaredType() {
+        Option<Integer> count = Option.integer("count", 1, 8, 4);
+        assertEquals(8, count.normalize(99L));
+        assertEquals(3, count.normalize(2.8));
+        assertEquals(1, count.parse("-5"));
+        assertEquals(0.5f, Option.range("weight", 0, 1, 1).parse("0.5"));
+        assertThrows(IllegalArgumentException.class, () -> count.parse("NaN"));
+        assertThrows(IllegalArgumentException.class, () -> Option.range("weight", 0, 1, Float.NaN));
+    }
+
+    @Test
+    void choicesValidateAndEnumsRoundTripAsNames() {
+        assertEquals(2, Option.intChoice("quality", 1, List.of(1, 2)).normalize(2L));
+        Option<String> choice = Option.stringChoice("mode", "raw", List.of("raw", "nrd"));
+        assertEquals("nrd", choice.parse("nrd"));
+        assertThrows(IllegalArgumentException.class, () -> choice.parse("missing"));
+        Option<Quality> quality = Option.enumOf("quality", Quality.LOW, List.of(Quality.values()));
+        assertEquals(Quality.HIGH, quality.parse("high"));
+        assertEquals(Optional.of("HIGH"), quality.encode(Quality.HIGH));
+    }
+
+    @Test
+    void optionalStringsUseAnExplicitAbsentValue() {
+        Option<Optional<String>> path = Option.optionalString("path");
+        assertEquals(Optional.empty(), path.defaultValue());
+        assertEquals(Optional.of("scene.gltf"), path.parse("scene.gltf"));
+        assertEquals(Optional.empty(), path.parse(" "));
+        assertEquals(Optional.empty(), path.encode(Optional.empty()));
+        assertEquals(Optional.of("scene.gltf"), path.encode(Optional.of("scene.gltf")));
+    }
+
+    @Test
+    void storageIdentitySurvivesDisplayMetadataChanges() {
+        Option<Integer> count = Option.integer("count", 0, 16, 4)
+                .storage("sampling.count", "caustica.count").inGroup("sampling").step(1).sliderRange(1, 8);
+        assertEquals("sampling.count", count.tomlPath());
+        assertEquals("caustica.count", count.systemPropertyKey());
+        assertEquals(1, count.sliderMinimum());
+        assertEquals(8, count.sliderMaximum());
+    }
+
+    @Test
+    void invalidBooleanTextIsRejectedAndColorsUseRgbBounds() {
+        assertThrows(IllegalArgumentException.class, () -> Option.bool("flag", true).parse("nope"));
+        assertEquals(0xffffff, Option.color("color", 0).normalize(0x1000000L));
+    }
+}

@@ -12,13 +12,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Always selects the native Wayland window system on Linux, unconditionally — not gated on whether HDR
- * is currently enabled. GLFW's platform is chosen once, before any window/surface exists, which is before
- * {@code CausticaConfig.Rt.Hdr.enabled()} can mean anything actionable and long before
- * {@code VulkanGpuSurfaceMixin} can know whether the resulting surface is PQ-capable. Since HDR is now a
- * live runtime toggle (see {@code CausticaConfig.Rt.Hdr.swapchainPqAvailable}), the window has to already
- * be running on whatever backend can expose an HDR-capable surface before the toggle is ever flipped —
- * there is no "switch to Wayland later" once GLFW has initialized on X11.
+ * Selects native Wayland when the Linux session and GLFW support it. GLFW chooses its platform before
+ * the Vulkan surface exists, so the window must already use an HDR-capable backend when the runtime
+ * later discovers PQ support or the player enables HDR. The platform cannot change after initialization.
  */
 @Mixin(GLX.class)
 public abstract class GlxMixin {

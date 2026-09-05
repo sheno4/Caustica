@@ -9,8 +9,14 @@ import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialEp
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
-import dev.comfyfluffy.caustica.settings.OptionLookup;
+import dev.comfyfluffy.caustica.settings.SettingsAccess;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.io.TempDir;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
+import java.nio.file.Path;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +25,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftProvidersExtensionTest {
+    @TempDir Path temporaryDirectory;
+    private CausticaOptions previousStore;
+
+    @BeforeEach
+    void installSettings() {
+        previousStore = CausticaConfig.store();
+        SettingsRegistry registry = new SettingsRegistry();
+        MinecraftOptions.register(registry);
+        CausticaConfig.install(CausticaOptions.load(temporaryDirectory.resolve("caustica.toml"), registry));
+    }
+
+    @AfterEach
+    void restoreSettings() { CausticaConfig.install(previousStore); }
+
     @Test
     void builtinAndMinecraftSettingsUseTheIndependentSettingsRegistry() {
         SettingsRegistry settings = new SettingsRegistry();
@@ -33,7 +53,7 @@ final class MinecraftProvidersExtensionTest {
     @Test
     void installsExactlyOneCoreMinecraftWorldSessionFactory() {
         List<MinecraftWorldSessionFactory> factories = new ArrayList<>();
-        OptionLookup options = id -> { throw new AssertionError(id); };
+        SettingsAccess options = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
         MinecraftApi api = new MinecraftApi(factory -> {
             factories.add(factory);
             return () -> { };

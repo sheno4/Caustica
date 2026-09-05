@@ -9,217 +9,193 @@ import dev.comfyfluffy.caustica.settings.OptionLookup;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.settings.SettingsAccess;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.Optional;
 
-/**
- * TOML-backed storage for settings declared in a {@link SettingsRegistry}.
- *
- * <p>The store has process lifetime and is independent of Vulkan device recreation. Values are keyed by
- * {@code <featureId>.<optionId>}; precedence is a
- * {@code -Dcaustica.option.<namespace>.<path>.<optionId>} system property, then the file, then the
- * {@link Option}'s own declared default.
- *
- * <p>Only {@link Option.Kind#BOOL} and {@link Option.Kind#RANGE} are backed. {@code ENUM} and
- * {@code COLOR} have no consumer yet, and {@link Option} carries no runtime {@code Class<T>} token that
- * would let generic code deserialize an enum value or validate a color int without one — supporting them
- * needs that first.
- */
-public final class CausticaOptions implements OptionLookup {
+/** One process-wide preference store. Immutable effective snapshots include latched process overrides. */
+public final class CausticaOptions implements SettingsAccess {
     private static final Logger LOGGER = LoggerFactory.getLogger("Caustica");
-    private static final String SYSTEM_PROPERTY_PREFIX = "caustica.option.";
-    private static final String FILE_NAME = "caustica-options.toml";
-
-    /** Per feature, its declared options by id — built once so a read is a map lookup, not a list scan. */
-    private final Map<ResourceId, Map<String, Option<?>>> declared;
     private final CommentedFileConfig file;
-    /**
-     * Immutable and swapped wholesale under {@code synchronized} by {@link #apply}, rather than a mutable
-     * concurrent map. A frame can then hold the reference it read at {@code beginFrame} and get
-     * {@link OptionValues}'s "fixed for the whole frame" guarantee for free — no per-frame defensive copy.
-     */
-    private volatile Map<String, Object> values;
-    /** TOML path to value for everything {@link #apply} has changed since the last {@link #save}. */
-    private final Map<String, Object> pending = new LinkedHashMap<>();
+    private final Map<String, Object> preferences = new LinkedHashMap<>();
+    private final Map<String, Object> overrides = new LinkedHashMap<>();
+    private final Map<String, Optional<Object>> pending = new LinkedHashMap<>();
+    private volatile State state = new State(Map.of(), Map.of());
 
-    private CausticaOptions(Map<ResourceId, Map<String, Option<?>>> declared, CommentedFileConfig file,
-                            Map<String, Object> values) {
-        this.declared = declared;
-        this.file = file;
-        this.values = values;
+    private record State(Map<ResourceId, Map<String, Option<?>>> declared, Map<String, Object> values) {
+        private OptionValues view(ResourceId feature) {
+            Map<String, Option<?>> options = Objects.requireNonNull(declared.get(feature),
+                    () -> "unknown feature " + feature);
+            return new View(feature, options, values);
+        }
     }
 
-    /** Loads the option store at the host-selected path. */
+    private CausticaOptions(CommentedFileConfig file) {
+        this.file = file;
+    }
+
     public static CausticaOptions load(Path path, SettingsRegistry registry) {
+        CausticaOptions store = new CausticaOptions(open(path));
+        store.register(registry);
+        return store;
+    }
+
+    private static CommentedFileConfig open(Path path) {
         CommentedFileConfig file = CommentedFileConfig.builder(path, TomlFormat.instance())
-                .onFileNotFound(FileNotFoundAction.CREATE_EMPTY)
-                .preserveInsertionOrder()
-                .sync()
-                .build();
+                .onFileNotFound(FileNotFoundAction.CREATE_EMPTY).preserveInsertionOrder().sync().build();
         try {
             file.load();
-        } catch (Exception e) {
-            LOGGER.warn("Failed to read Caustica options config {}: {}", path, e.toString());
+        } catch (Exception failure) {
+            LOGGER.warn("Failed to read Caustica config {}: {}", path, failure.toString());
         }
-        Map<ResourceId, Map<String, Option<?>>> declared = new LinkedHashMap<>();
-        Map<String, Object> values = new LinkedHashMap<>();
-        for (FeatureSettings feature : registry.all()) {
-            Map<String, Option<?>> byId = new LinkedHashMap<>();
-            for (Option<?> option : feature.options()) {
-                byId.put(option.id(), option);
-                values.put(key(feature.id(), option.id()), resolveInitial(file, feature.id(), option));
-            }
-            declared.put(feature.id(), Map.copyOf(byId));
-        }
-        return new CausticaOptions(Map.copyOf(declared), file, Map.copyOf(values));
+        return file;
     }
 
-    /** A live view scoped to one feature's declared options; reads whatever is current at each call. */
+    /** Adds declarations to the loaded store, retaining edits and overrides of existing features. */
+    public synchronized void register(SettingsRegistry registry) {
+        for (FeatureSettings feature : registry.all()) register(feature);
+    }
+
+    public synchronized void register(FeatureSettings feature) {
+        Map<String, Option<?>> existing = state.declared().get(feature.id());
+        Map<String, Option<?>> options = new LinkedHashMap<>();
+        for (Option<?> option : feature.options()) options.put(option.id(), option);
+        if (existing != null) {
+            if (!existing.equals(options)) throw new IllegalArgumentException("different settings for " + feature.id());
+            return;
+        }
+        Map<ResourceId, Map<String, Option<?>>> declared = new LinkedHashMap<>(state.declared());
+        declared.put(feature.id(), Map.copyOf(options));
+        for (Option<?> option : feature.options()) {
+            String key = key(feature.id(), option.id());
+            String path = tomlPath(feature.id(), option);
+            Object preference = option.defaultValue();
+            if (file.contains(path)) preference = decode(option, file.get(path)).orElse(preference);
+            preferences.put(key, preference);
+            String property = System.getProperty(systemPropertyKey(feature.id(), option));
+            if (property != null) decode(option, property).ifPresent(value -> overrides.put(key, value));
+        }
+        publish(declared);
+    }
+
+    private static Optional<Object> decode(Option<?> option, Object raw) {
+        try {
+            return Optional.of(option.normalize(raw));
+        } catch (IllegalArgumentException | ClassCastException failure) {
+            LOGGER.warn("Ignoring invalid value for Caustica option {}: {}", option.id(), raw);
+            return Optional.empty();
+        }
+    }
+
+    private void publish(Map<ResourceId, Map<String, Option<?>>> declared) {
+        Map<String, Object> effective = new LinkedHashMap<>(preferences);
+        effective.putAll(overrides);
+        state = new State(Map.copyOf(declared), Map.copyOf(effective));
+    }
+
+    @Override
     public OptionValues options(ResourceId featureId) {
-        return view(featureId, values);
+        return state.view(featureId);
     }
 
     @Override
     public OptionLookup snapshot() {
-        Map<String, Object> snapshot = values;
-        return featureId -> view(featureId, snapshot);
+        State snapshot = state;
+        return snapshot::view;
     }
 
-    /**
-     * A view scoped to one feature reading from {@code snapshot} instead of the current values. Pass
-     * factories use this to retain one immutable option view for their lifetime.
-     */
-    private OptionValues view(ResourceId featureId, Map<String, Object> snapshot) {
-        Map<String, Option<?>> featureOptions = declared.get(featureId);
-        Objects.requireNonNull(featureOptions, () -> "unknown feature " + featureId);
-        return new View(featureId, featureOptions, snapshot);
-    }
-
-    /**
-     * Applies a value in memory without touching disk. {@code rawValue} is whatever the widget produced (a
-     * slider's double, a checkbox's boolean) and is coerced and range-clamped against {@code option} before
-     * it is stored; the next frame's snapshot sees it.
-     *
-     * <p>Separate from {@link #save()} because a dragged slider writes once per tick: persisting each one
-     * would put a synchronous file write on the caller's thread at frame rate.
-     */
+    /** Changes the preference; a process override remains effective until process restart. */
+    @Override
     public synchronized void apply(ResourceId featureId, Option<?> option, Object rawValue) {
-        Option<?> declaredOption = declaredOption(featureId, option.id());
-        if (!declaredOption.equals(option)) {
-            throw new IllegalArgumentException(featureId + " declared a different option than the '"
-                    + option.id() + "' passed here");
-        }
-        Object value = coerce(declaredOption, rawValue);
-        Map<String, Object> updated = new LinkedHashMap<>(values);
-        updated.put(key(featureId, option.id()), value);
-        values = Map.copyOf(updated);
-        pending.put(tomlPath(featureId, option.id()), value);
+        requireOption(featureId, option);
+        Object value = option.normalize(rawValue);
+        preferences.put(key(featureId, option.id()), value);
+        pending.put(tomlPath(featureId, option), option.encode(value));
+        publish(state.declared());
     }
 
-    /** Writes everything applied since the last save. */
-    public synchronized void save() {
-        if (pending.isEmpty()) {
-            return;
-        }
-        pending.forEach(file::set);
-        pending.clear();
-        file.save();
-    }
-
-    /**
-     * Applies a value and persists it. Nothing invalidates a pass on a write, so an option a pass reads only
-     * at create/resize time takes effect when that next runs rather than immediately.
-     */
+    @Override
     public synchronized void set(ResourceId featureId, Option<?> option, Object rawValue) {
         apply(featureId, option, rawValue);
         save();
     }
 
-    private Option<?> declaredOption(ResourceId featureId, String optionId) {
-        Map<String, Option<?>> featureOptions = declared.get(featureId);
-        Objects.requireNonNull(featureOptions, () -> "unknown feature " + featureId);
-        Option<?> option = featureOptions.get(optionId);
-        if (option == null) {
-            throw new IllegalArgumentException(featureId + " has no option " + optionId);
-        }
-        return option;
+    @Override
+    public synchronized void save() {
+        if (pending.isEmpty()) return;
+        pending.forEach((path, value) -> {
+            if (value.isPresent()) file.set(path, value.get());
+            else file.remove(path);
+        });
+        file.save();
+        pending.clear();
     }
 
-    private record View(ResourceId featureId, Map<String, Option<?>> declared, Map<String, Object> values)
+    public synchronized boolean overridden(ResourceId featureId, Option<?> option) {
+        requireOption(featureId, option);
+        return overrides.containsKey(key(featureId, option.id()));
+    }
+
+    @SuppressWarnings("unchecked")
+    public synchronized <T> T preference(ResourceId featureId, Option<T> option) {
+        requireOption(featureId, option);
+        return (T) preferences.get(key(featureId, option.id()));
+    }
+
+    /** Imports missing extension preferences without replacing canonical values or unsaved edits. */
+    public synchronized void importLegacy(Path path) {
+        if (!Files.exists(path)) return;
+        try (CommentedFileConfig legacy = open(path)) {
+            state.declared().forEach((feature, options) -> options.values().forEach(option -> {
+                String destination = tomlPath(feature, option);
+                String source = feature + "." + option.id();
+                if (!file.contains(destination) && !pending.containsKey(destination) && legacy.contains(source)) {
+                    decode(option, legacy.get(source)).ifPresent(value -> apply(feature, option, value));
+                }
+            }));
+        }
+        save();
+    }
+
+    private void requireOption(ResourceId feature, Option<?> option) {
+        Map<String, Option<?>> declared = Objects.requireNonNull(state.declared().get(feature),
+                () -> "unknown feature " + feature);
+        requireToken(feature, declared, option);
+    }
+
+    private static void requireToken(ResourceId feature, Map<String, Option<?>> declared, Option<?> option) {
+        Option<?> found = declared.get(option.id());
+        if (found == null) throw new IllegalArgumentException(feature + " read undeclared option '" + option.id() + "'");
+        if (!found.equals(option)) throw new IllegalArgumentException(feature + " declared a different option '" + option.id() + "'");
+    }
+
+    private record View(ResourceId feature, Map<String, Option<?>> declared, Map<String, Object> values)
             implements OptionValues {
         @Override
         @SuppressWarnings("unchecked")
         public <T> T get(Option<T> option) {
-            Option<?> found = declared.get(option.id());
-            if (found == null) {
-                throw new IllegalArgumentException(
-                        featureId + " read undeclared option '" + option.id() + "'");
-            }
-            if (!found.equals(option)) {
-                throw new IllegalArgumentException(featureId + " declared a different option than the '"
-                        + option.id() + "' read here");
-            }
-            Object value = values.get(key(featureId, option.id()));
-            // Only reachable for a view built over a snapshot that predates the option; the declaration's
-            // own default is the answer either way, so no call site ever restates one.
-            return value != null ? (T) value : option.defaultValue();
+            requireToken(feature, declared, option);
+            return (T) values.get(key(feature, option.id()));
         }
     }
 
-    private static Object resolveInitial(CommentedFileConfig file, ResourceId featureId, Option<?> option) {
-        String property = System.getProperty(systemPropertyKey(featureId, option.id()));
-        if (property != null) {
-            Object parsed = parse(option, property);
-            if (parsed != null) {
-                return parsed;
-            }
-        }
-        String tomlPath = tomlPath(featureId, option.id());
-        if (file.contains(tomlPath)) {
-            return coerce(option, file.<Object>get(tomlPath));
-        }
-        return option.defaultValue();
+    private static String key(ResourceId feature, String option) {
+        return feature + "." + option;
     }
 
-    private static Object parse(Option<?> option, String raw) {
-        try {
-            return coerce(option, switch (option.kind()) {
-                case BOOL -> Boolean.parseBoolean(raw.trim());
-                case RANGE -> Float.parseFloat(raw.trim());
-                default -> throw unsupported(option);
-            });
-        } catch (NumberFormatException e) {
-            return null;
-        }
+    private static String tomlPath(ResourceId feature, Option<?> option) {
+        return option.tomlPath() != null ? option.tomlPath() : feature + "." + option.id();
     }
 
-    private static Object coerce(Option<?> option, Object raw) {
-        return switch (option.kind()) {
-            case BOOL -> (Boolean) raw;
-            case RANGE -> (float) Math.clamp(((Number) raw).doubleValue(), option.minimum(), option.maximum());
-            default -> throw unsupported(option);
-        };
-    }
-
-    private static UnsupportedOperationException unsupported(Option<?> option) {
-        return new UnsupportedOperationException(
-                "options storage does not yet support " + option.kind() + " (" + option.id() + ")");
-    }
-
-    private static String key(ResourceId featureId, String optionId) {
-        return featureId + "." + optionId;
-    }
-
-    private static String tomlPath(ResourceId featureId, String optionId) {
-        return featureId.namespace() + ":" + featureId.path() + "." + optionId;
-    }
-
-    private static String systemPropertyKey(ResourceId featureId, String optionId) {
-        return SYSTEM_PROPERTY_PREFIX + featureId.namespace() + "." + featureId.path() + "." + optionId;
+    private static String systemPropertyKey(ResourceId feature, Option<?> option) {
+        return option.systemPropertyKey() != null ? option.systemPropertyKey()
+                : "caustica.option." + feature.namespace() + "." + feature.path() + "." + option.id();
     }
 }

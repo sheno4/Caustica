@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
@@ -36,7 +38,7 @@ public final class RtWorkerPool {
     }
 
     private static int resolveThreads() {
-        return CausticaConfig.Rt.WORKER_THREADS.value();
+        return CausticaConfig.get(MinecraftOptions.Rt.WORKER_THREADS);
     }
 
     private synchronized ThreadPoolExecutor executor() {

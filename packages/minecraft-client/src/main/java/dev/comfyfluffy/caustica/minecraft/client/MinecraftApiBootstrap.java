@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
+
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.config.CausticaOptions;
@@ -31,8 +33,8 @@ public final class MinecraftApiBootstrap {
     private MinecraftApiBootstrap() { }
 
     public static ApiServices initialize(CausticaPlatform platform, RtTelemetry telemetry,
-                                         MinecraftFrameAdapter frameAdapter, RtTerrain terrain) {
-        SettingsRegistry settingsRegistry = new SettingsRegistry();
+                                         MinecraftFrameAdapter frameAdapter, RtTerrain terrain,
+                                         SettingsRegistry settingsRegistry, CausticaOptions options) {
         List<CausticaExtension> extensions = new ArrayList<>();
         extensions.add(new BuiltinExtension());
         extensions.addAll(platform.extensions());
@@ -48,17 +50,15 @@ public final class MinecraftApiBootstrap {
         registerSettings(settingsRegistry, extensions, minecraftExtensions);
 
         Path gameDirectory = platform.gameDir();
-        String configuredSlangPath = CausticaConfig.Slang.PATH.get();
-        Optional<Path> slangOverride = configuredSlangPath == null || configuredSlangPath.isBlank()
-                ? Optional.empty() : Optional.of(Path.of(configuredSlangPath));
+        Optional<Path> slangOverride = CausticaConfig.get(MinecraftOptions.Slang.PATH).map(Path::of);
         SlangRuntime slangRuntime = new SlangRuntime(new SlangRuntimeConfig(
                 gameDirectory.resolve("caustica-slang"), slangOverride));
         var shaderCache = gameDirectory.resolve("caustica-shaders");
         Path shaderCacheRoot = shaderCache.resolve("sources").toAbsolutePath().normalize();
         telemetry.configure(gameDirectory.resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());
-        CausticaOptions options = CausticaOptions.load(
-                platform.configDir().resolve("caustica-options.toml"),
-                settingsRegistry);
+        options.register(settingsRegistry);
+        options.importLegacy(platform.configDir().resolve("caustica-options.toml"));
+        options.save();
         RenderSessionHost host = new RenderSessionHost(options);
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
         registerExtensions(host, minecraftHost, extensions);
@@ -66,9 +66,7 @@ public final class MinecraftApiBootstrap {
 
         CausticaMod.LOGGER.info("Caustica extension API {} initialized with {} settings feature(s)",
                 dev.comfyfluffy.caustica.api.CausticaApi.VERSION, settingsRegistry.all().size());
-        String configuredNgxPath = CausticaConfig.Ngx.PATH.get();
-        Optional<Path> ngxOverride = configuredNgxPath == null || configuredNgxPath.isBlank()
-                ? Optional.empty() : Optional.of(Path.of(configuredNgxPath));
+        Optional<Path> ngxOverride = CausticaConfig.get(MinecraftOptions.Ngx.PATH).map(Path::of);
         return new ApiServices(host, minecraftHost, settingsRegistry, options, slangRuntime, shaderCacheRoot,
                 new NgxRuntime.Settings(gameDirectory.resolve("caustica-ngx"), ngxOverride));
     }
