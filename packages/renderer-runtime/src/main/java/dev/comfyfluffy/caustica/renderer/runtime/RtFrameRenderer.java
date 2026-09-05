@@ -458,8 +458,8 @@ public final class RtFrameRenderer {
         FrameSnapshot snapshot = frame.snapshot();
         SceneOrigin sceneOrigin = snapshot.sceneOrigin();
         SceneId entryScene = snapshot.view().entryScene();
-        GpuBuffer pushBuf = ctx.createBuffer(WORLD_PUSH_SIZE,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push");
+        GpuBuffer pushBuf = ctx.createMappedGpuUploadBuffer(WORLD_PUSH_SIZE,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "rt world push");
         graphicsUse.whenComplete(pushBuf::destroy);
         GpuBuffer pathScratch = traceResources().pathScratchBuffer();
         ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);

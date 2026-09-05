@@ -164,8 +164,8 @@ final class RtReconstruction implements AutoCloseable {
                 denoiserImage(trace.images().denoisedSpecularRadianceHitDistance()),
                 Optional.of(denoiserImage(trace.images().nrdDisocclusionThresholdMix())), Optional.empty());
 
-        GpuBuffer frameBuffer = ctx.createBuffer(NrdPlaneFrameData.BYTE_SIZE,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "NRD stable-plane frame");
+        GpuBuffer frameBuffer = ctx.createMappedGpuUploadBuffer(NrdPlaneFrameData.BYTE_SIZE,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "NRD stable-plane frame");
         graphicsUse.whenComplete(frameBuffer::destroy);
         ByteBuffer frameData = MemoryUtil.memByteBuffer(frameBuffer.mapped(), NrdPlaneFrameData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
