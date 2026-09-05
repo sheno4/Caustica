@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftResourceIds;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.client.color.block.BlockTintSource;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
 import net.minecraft.client.renderer.block.FluidModel;
-import net.minecraft.client.renderer.block.FluidRenderer;
 import net.minecraft.client.renderer.block.FluidStateModelSet;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -20,45 +21,19 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import static dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftFluidSurface.neighborOccludesFace;
 
 /**
- * Custom fluid mesher used in place of vanilla {@link FluidRenderer} for every fluid in the RT terrain
- * pipeline. Adapted from {@code FluidRenderer.tesselate} (26.2), keeping its corner-height averaging
- * and flow-direction UVs, but fixing three habits that are invisible in a backface-culled rasterizer
- * and actively wrong once every emitted triangle is a real path-traced dielectric interface:
- *
- * <ul>
- *   <li><b>No back faces.</b> Vanilla doubles the top face when {@code shouldRenderBackwardUpFace} and
- *       doubles every non-overlay side face unconditionally, relying on backface culling to hide one
- *       copy. We trace both sides of every triangle, so this doubled the water prim count and any-hit
- *       shadow work, and (with a duplicated, oppositely-wound copy at the same position) made the
- *       geometric normal ambiguous for medium tracking.
- *   <li><b>Real-shape neighbour occlusion.</b> Vanilla culls a fluid face using the neighbour's render
- *       <em>occlusion</em> shape ({@code getFaceOcclusionShape}), which is deliberately empty for any
- *       block with {@code noOcclusion()} — glass, stained glass, tinted glass, ice, slime, honey. Water
- *       therefore emits full faces against those blocks, and each one is a spurious water→air interface
- *       for us (an underwater glass structure reads as an air-filled dome: Fresnel + total internal
- *       reflection at grazing angles, absorption ending where it shouldn't). We cull instead using the
- *       neighbour's real (collision/visual) {@link BlockState#getShape}, which is still a full cube for
- *       all of those blocks — the boundary is then represented solely by the glass/ice/etc. block's own
- *       quad, never culled against a non-solid-shaped fluid.
- *   <li><b>Full height under any occluding ceiling.</b> Vanilla's {@code getHeight} only reports 1.0
- *       when the block above is the same fluid; a source block covered by an ordinary solid or a glass
- *       ceiling still reports {@code getOwnHeight()} (8/9), and its own occlusion special-case for the
- *       UP direction requires height==1.0 <em>and</em> a full occluder before it will cull that top
- *       face — so a covered fluid cell always gets a phantom top face (and, on the sides, a thin
- *       uncovered sliver up to y=1) that is merely invisible in vanilla (backface-culled from below, and
- *       no camera can be above an opaque ceiling to see the front). Here, a cell occluded from above
- *       (by real shape, so glass ceilings count too) reports height 1.0, matching the same-fluid-above
- *       rule and removing both the phantom face and the sliver.
- *   <li><b>Exact coordinates.</b> No 0.001 raster anti-z-fight insets/lifts — ray tracing doesn't
- *       z-fight, and the occlusion fixes above already remove every case that needed them.
- * </ul>
- *
- * Per-vertex cardinal lighting and the leaves/glass overlay sprite are also dropped: {@link RtTerrain}'s
- * {@code FluidCapture} never reads the light/overlay/normal fields {@link FluidRenderer.Output}'s
- * {@code VertexConsumer} is handed (it computes its own geometric normal and derives the water tint by
- * averaging the raw per-vertex colour), so there is nothing downstream to feed them for.
+ * Emits fluid interfaces with corner-height averaging and flow-oriented atlas UVs. Each face selects
+ * its sprite's material before emitting vertices so its material maps use the same atlas transform.
+ * Faces have one winding because rays intersect both sides. Neighbour occlusion uses real block
+ * shapes, including glass, and covered cells reach full height to avoid spurious medium interfaces.
+ * Coordinates have no raster depth bias. The capture computes geometric normals and water tint;
+ * vertex lighting and overlay fields are unused.
  */
 final class RtFluidMesher {
+    /** Selects the material whose atlas coordinates are emitted for the next face. */
+    interface Output {
+        VertexConsumer getBuilder(ResourceId material);
+    }
+
     private RtFluidMesher() {
     }
 
@@ -66,9 +41,7 @@ final class RtFluidMesher {
         return neighborFluidState.getType().isSame(fluidState.getType());
     }
 
-    /** Unchanged from vanilla: does THIS cell's own block state (a waterlogged partial block sharing
-     *  the cell with the fluid) occlude the fluid's own face in {@code direction}? Only matters for
-     *  waterlogged stairs/slabs/etc., which are solid-ish and already have a real occlusion shape. */
+    /** Tests whether the block sharing this fluid cell occludes the requested fluid face. */
     private static boolean isFaceOccludedBySelf(BlockState state, Direction direction) {
         VoxelShape occluder = state.getFaceOcclusionShape(direction);
         if (occluder == Shapes.empty()) {
@@ -86,7 +59,7 @@ final class RtFluidMesher {
         return !isNeighborSameFluid(fluidState, neighborFluidState) && !isFaceOccludedBySelf(blockState, direction);
     }
 
-    static void tesselate(BlockAndTintGetter level, BlockPos pos, FluidRenderer.Output output,
+    static void tesselate(BlockAndTintGetter level, BlockPos pos, Output output,
                           FluidStateModelSet fluidModels, BlockState blockState, FluidState fluidState) {
         BlockPos posDown = pos.below();
         BlockState blockStateDown = level.getBlockState(posDown);
@@ -113,7 +86,6 @@ final class RtFluidMesher {
         }
 
         FluidModel model = fluidModels.get(fluidState);
-        var builder = output.getBuilder(model.layer());
         BlockTintSource tintSource = model.tintSource();
         int tintColor = tintSource != null ? tintSource.colorInWorld(blockState, level, pos) : -1;
         MinecraftFluidSurface.CornerHeights heights = MinecraftFluidSurface.cornerHeights(
@@ -137,8 +109,10 @@ final class RtFluidMesher {
             float v01;
             float v10;
             float v11;
+            TextureAtlasSprite sprite;
             if (flow.x == 0.0 && flow.z == 0.0) {
                 TextureAtlasSprite stillSprite = model.stillMaterial().sprite();
+                sprite = stillSprite;
                 u00 = stillSprite.getU0();
                 v00 = stillSprite.getV0();
                 u01 = u00;
@@ -152,6 +126,7 @@ final class RtFluidMesher {
                 float s = Mth.sin(angle) * 0.25F;
                 float c = Mth.cos(angle) * 0.25F;
                 TextureAtlasSprite flowingSprite = model.flowingMaterial().sprite();
+                sprite = flowingSprite;
                 u00 = flowingSprite.getU(0.5F + (-c - s));
                 v00 = flowingSprite.getV(0.5F + (-c + s));
                 u01 = flowingSprite.getU(0.5F + (-c + s));
@@ -162,7 +137,7 @@ final class RtFluidMesher {
                 v11 = flowingSprite.getV(0.5F + (-c - s));
             }
 
-            addFace(builder,
+            addFace(output.getBuilder(MinecraftResourceIds.material(sprite)),
                     x + 0.0F, y + heightNorthWest, z + 0.0F, u00, v00,
                     x + 0.0F, y + heightSouthWest, z + 1.0F, u01, v01,
                     x + 1.0F, y + heightSouthEast, z + 1.0F, u10, v10,
@@ -176,7 +151,7 @@ final class RtFluidMesher {
             float u1 = stillSprite.getU1();
             float v0 = stillSprite.getV0();
             float v1 = stillSprite.getV1();
-            addFace(builder,
+            addFace(output.getBuilder(MinecraftResourceIds.material(stillSprite)),
                     x, y, z, u0, v0,
                     x + 1.0F, y, z, u1, v0,
                     x + 1.0F, y, z + 1.0F, u1, v1,
@@ -249,7 +224,7 @@ final class RtFluidMesher {
                 float v01 = sprite.getV((1.0F - hh0) * 0.5F);
                 float v02 = sprite.getV((1.0F - hh1) * 0.5F);
                 float v1 = sprite.getV(0.5F);
-                addFace(builder,
+                addFace(output.getBuilder(MinecraftResourceIds.material(sprite)),
                         x0, y + hh0, z0, u0, v01,
                         x1, y + hh1, z1, u1, v02,
                         x1, y, z1, u1, v1,
@@ -273,8 +248,7 @@ final class RtFluidMesher {
 
     private static void vertex(VertexConsumer builder,
                                float x, float y, float z, int color, float u, float v) {
-        // light/overlay/normal are unused by RtTerrain.FluidCapture (it computes its own geometric
-        // normal and never reads light/overlay), so these are placeholders, not vanilla's real values.
+        // FluidCapture computes geometric normals and ignores vertex lighting and overlays.
         builder.addVertex(x, y, z, color, u, v, OverlayTexture.NO_OVERLAY, 0, 0.0F, 1.0F, 0.0F);
     }
 

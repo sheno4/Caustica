@@ -41,21 +41,23 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
                         () -> new MaterialTextureImage() {
             @Override public int width() { return 1; }
             @Override public int height() { return 1; }
-            @Override public int albedoArgb(int x, int y) { throw new IllegalStateException("broken image"); }
+            @Override public int albedoArgb(int x, int y) { return 0xFFFFFFFF; }
             @Override public int alphaArgb(int frame, int x, int y) { return albedoArgb(x, y); }
-            @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
+            @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) {
+                throw new IllegalStateException("broken image");
+            }
             @Override public void close() { closes.incrementAndGet(); }
         }), MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                 OpenPbrDefaults.SPECULAR_IOR, 1.0f);
 
         assertThrows(IllegalStateException.class, () -> MaterialTextureAnalyzer.decode(
-                resource.analysisSource(), OpenPbrColorBinding.BASE_COLOR, 0));
+                resource.analysisSource(), 0));
         assertEquals(1, closes.get());
     }
 
     @Test
-    void decodeMultipliesEmissionColorByLinearBaseColor() throws Exception {
+    void decodeKeepsEmissionMultiplierSeparateFromLiveBaseColor() throws Exception {
         MaterialTextureAnalysisSource source = new MaterialTextureAnalysisSource(1, 1, 1,
                 () -> new MaterialTextureImage() {
                     @Override public int width() { return 1; }
@@ -72,13 +74,13 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
                 });
 
         MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
-                source, OpenPbrColorBinding.BASE_COLOR, 0);
+                source, 0);
         MaterialTextureLevels.Level level = decoded.levels().getFirst();
 
         assertEquals(0.75f, level.surface0()[2], 1.0e-6f);
-        assertEquals(0.10793025f, level.emissionColor()[0], 1.0e-6f);
-        assertEquals(0.012817365f, level.emissionColor()[1], 1.0e-6f);
-        assertEquals(0.014443844f, level.emissionColor()[2], 1.0e-6f);
+        assertEquals(0.5f, level.emissionColor()[0], 1.0e-6f);
+        assertEquals(0.25f, level.emissionColor()[1], 1.0e-6f);
+        assertEquals(1.0f, level.emissionColor()[2], 1.0e-6f);
     }
 
     @Test

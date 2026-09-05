@@ -155,8 +155,8 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
                     minecraftSampleMaterial(hit, data.emissionTexture, pageUv, pageLod).rgb);
         }
     }
-    if ((data.features & MINECRAFT_MATERIAL_EMISSION_COLOR_BASE) != 0u
-            && (data.features & MINECRAFT_MATERIAL_EMISSION_MASK) == 0u) {
+    // Base-bound emission follows the live atlas animation and geometry tint.
+    if ((data.features & MINECRAFT_MATERIAL_EMISSION_COLOR_BASE) != 0u) {
         material.emission_color *= emissionBaseColor;
     }
     if ((data.features & MINECRAFT_MATERIAL_SUBSURFACE_COLOR_BASE) != 0u) {

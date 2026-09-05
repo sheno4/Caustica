@@ -30,12 +30,6 @@ final class MaterialTextureLevels {
         return Math.round(Math.clamp(value, 0.0f, 1.0f) * 255.0f);
     }
 
-    static float srgbToLinear(float value) {
-        value = Math.clamp(value, 0.0f, 1.0f);
-        return value <= 0.04045f ? value / 12.92f
-                : (float) Math.pow((value + 0.055f) / 1.055f, 2.4f);
-    }
-
     static List<Level> mipChain(Level base, int maxLod) {
         List<Level> result = new ArrayList<>();
         result.add(base);

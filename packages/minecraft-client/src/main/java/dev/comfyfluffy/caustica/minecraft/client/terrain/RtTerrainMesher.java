@@ -35,7 +35,6 @@ import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
 import net.minecraft.client.renderer.block.BlockStateModelSet;
-import net.minecraft.client.renderer.block.FluidRenderer;
 import net.minecraft.client.renderer.block.FluidStateModelSet;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
@@ -723,26 +722,21 @@ final class RtTerrainMesher {
     }
 
     /**
-     * Captures the quads {@link FluidRenderer} emits (water/lava) into the current section's mesh. It
-     * is both the {@link FluidRenderer.Output} and the {@link VertexConsumer} it hands back. Vertices
+     * Captures the quads {@link RtFluidMesher} emits into the current section's mesh. It
+     * is both the {@link RtFluidMesher.Output} and the {@link VertexConsumer} it hands back. Vertices
      * arrive in groups of 4 (one quad) via the bulk {@code addVertex}; we keep position + atlas UV,
      * compute a geometric normal (sign is irrelevant — the closest-hit flips it toward the viewer), and
-     * emit two triangles like {@link QuadCapture}. Coords are already section-local (FluidRenderer uses
+     * emit two triangles like {@link QuadCapture}. Coords are already section-local (RtFluidMesher uses
      * {@code pos & 15}). Albedo comes from the atlas; RGB primitive tint carries the fluid source colour.
      * Topology and appearance come from the resolved named material rather than a primitive semantic bit.
      */
-    private static final class FluidCapture implements VertexConsumer, FluidRenderer.Output {
-        private static final MinecraftMaterialKey LAVA_KEY = new MinecraftMaterialKey(
-                MinecraftMaterialIds.LAVA, null,
-                MinecraftMaterialProfile.MEDIUM_ROUGH_DIELECTRIC, MinecraftMaterialTopology.SURFACE);
+    static final class FluidCapture implements VertexConsumer, RtFluidMesher.Output {
         private static final ResourceId BLOCK_ATLAS = ResourceId.of(
                 TextureAtlas.LOCATION_BLOCKS.getNamespace(), TextureAtlas.LOCATION_BLOCKS.getPath());
 
         SectionMesh cur;     // set before each section
         MinecraftMaterialLookup materials;
-        MinecraftMaterialEmission waterEmission;
-        MinecraftMaterialEmission lavaEmission;
-        TerrainMaterial lavaMaterial;
+        MinecraftMaterialResolution faceMaterial;
         float emission;      // set per fluid block (lava = 1, water = 0)
         boolean water;       // set per fluid block: true for water (dielectric), false for lava
         private int n;
@@ -752,14 +746,16 @@ final class RtTerrainMesher {
         /** Reset per-job assembly state (a mid-quad meshing throw could leave a partial quad buffered). */
         void reset() {
             n = 0;
-            waterEmission = null;
-            lavaEmission = null;
-            lavaMaterial = null;
+            faceMaterial = null;
         }
 
         @Override
-        public VertexConsumer getBuilder(ChunkSectionLayer layer) {
-            return this; // one capturing builder regardless of the fluid's render layer
+        public VertexConsumer getBuilder(ResourceId material) {
+            faceMaterial = water ? materials.resolve(MinecraftMaterialIds.WATER)
+                    : materials.resolve(new MinecraftMaterialKey(material, null,
+                            MinecraftMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
+                            MinecraftMaterialTopology.SURFACE));
+            return this;
         }
 
         @Override
@@ -774,25 +770,9 @@ final class RtTerrainMesher {
 
         private void emitQuad() {
             Geom g = cur.geometry();
-            TerrainMaterial material;
-            MinecraftMaterialEmission materialEmission;
-            if (water) {
-                MinecraftMaterialResolution waterMaterial = materials.resolve(MinecraftMaterialIds.WATER);
-                material = new TerrainMaterial(waterMaterial.materialIndex(), waterMaterial.material(), null);
-                materialEmission = waterEmission;
-                if (materialEmission == null) {
-                    materialEmission = waterEmission = waterMaterial.emission();
-                }
-            } else {
-                materialEmission = lavaEmission;
-                if (materialEmission == null) {
-                    var terrainMaterial = materials.resolve(LAVA_KEY);
-                    lavaMaterial = new TerrainMaterial(terrainMaterial.materialIndex(),
-                            terrainMaterial.material(), BLOCK_ATLAS);
-                    materialEmission = lavaEmission = terrainMaterial.emission();
-                }
-                material = lavaMaterial;
-            }
+            TerrainMaterial material = new TerrainMaterial(faceMaterial.materialIndex(),
+                    faceMaterial.material(), water ? null : BLOCK_ATLAS);
+            MinecraftMaterialEmission materialEmission = faceMaterial.emission();
             FloatArrayList verts = g.verts;
             IntArrayList idx = g.idx;
             int base = verts.size() / 3;
@@ -822,10 +802,8 @@ final class RtTerrainMesher {
                 ny /= len;
                 nz /= len;
             }
-            // Biome water tint: vanilla's FluidRenderer bakes BiomeColors.getAverageWaterColor into the
-            // per-vertex colour, so the average of the quad's four colours is this water body's tint. The
-            // path tracer turns it into a per-channel Beer–Lambert extinction (ocean blue vs swamp green).
-            // Lava keeps a white tint (its colour rides the emission channel, not absorption).
+            // The average source vertex colour supplies water's biome absorption tint.
+            // Lava's colour comes from its material textures.
             float tr = 1f, tg = 1f, tb = 1f;
             if (water) {
                 int sr = 0, sg = 0, sb = 0;
@@ -860,7 +838,7 @@ final class RtTerrainMesher {
             }
         }
 
-        // Unused VertexConsumer surface — FluidRenderer only calls the bulk addVertex above.
+        // RtFluidMesher calls only the bulk addVertex above.
         @Override public VertexConsumer addVertex(float x, float y, float z) { return this; }
         @Override public VertexConsumer setColor(int r, int g, int b, int a) { return this; }
         @Override public VertexConsumer setColor(int color) { return this; }

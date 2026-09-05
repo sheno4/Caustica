@@ -129,7 +129,7 @@ public final class MinecraftMaterialPageCompiler {
         candidates.parallelStream().filter(candidate -> candidate.page >= 0).forEach(candidate -> {
             try {
                 MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
-                        candidate.resource.analysisSource(), candidate.resource.emissionColorBinding(),
+                        candidate.resource.analysisSource(),
                         maxLodFor(candidate.width(), candidate.height()));
                 pixels[candidate.page].write(candidate.x, candidate.y, decoded.levels());
             } catch (Throwable failure) {

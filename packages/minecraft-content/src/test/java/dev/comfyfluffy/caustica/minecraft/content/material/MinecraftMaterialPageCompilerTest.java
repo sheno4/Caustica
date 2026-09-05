@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class MinecraftMaterialPageCompilerTest {
     @Test
-    void emissionPagePreservesLinearAlbedoColorAlongsideMask() {
+    void emissionPageLeavesBaseColorForTheLiveAtlasSample() {
         MaterialTextureResource resource = new MaterialTextureResource(ResourceId.of("test", "emitting"),
                 MaterialTextureKind.STANDALONE, new MaterialTextureAnalysisSource(1, 1, 1,
                 () -> new MaterialTextureImage() {
@@ -34,9 +34,11 @@ final class MinecraftMaterialPageCompilerTest {
         int offset = (y * emission.width() + x) * 4;
         byte[] color = emission.rgba8();
 
-        assertEquals(55, Byte.toUnsignedInt(color[offset]));
-        assertEquals(13, Byte.toUnsignedInt(color[offset + 1]));
-        assertEquals(4, Byte.toUnsignedInt(color[offset + 2]));
+        assertEquals(MinecraftMaterialPageCompiler.FEATURE_EMISSION_COLOR_BASE,
+                material.features() & MinecraftMaterialPageCompiler.FEATURE_EMISSION_COLOR_BASE);
+        assertEquals(255, Byte.toUnsignedInt(color[offset]));
+        assertEquals(255, Byte.toUnsignedInt(color[offset + 1]));
+        assertEquals(255, Byte.toUnsignedInt(color[offset + 2]));
         assertEquals(191, Byte.toUnsignedInt(result.textures().get(material.surface0Texture())
                 .levels().getFirst().rgba8()[offset + 2]));
     }
