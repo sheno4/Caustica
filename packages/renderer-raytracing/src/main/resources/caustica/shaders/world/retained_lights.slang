@@ -32,7 +32,7 @@ public uint retainedLightHash(uint value) {
 
 public float retainedLightRandom(inout uint state) {
     state = retainedLightHash(state);
-    return (float(state) + 0.5) * (1.0 / 4294967296.0);
+    return float(state >> 8u) * (1.0 / 16777216.0);
 }
 
 void retainedLightBasis(float3 normal, out float3 tangent, out float3 bitangent) {
@@ -273,7 +273,7 @@ public DirectLightSample sampleRetainedLight(WorldBindingRoots roots, float3 pos
 }
 
 public void neeAtWriteFeedback(WorldBindingRoots roots, uint2 pixel, uint lightIndex,
-                               float contribution) {
+                               float contribution, bool coherent) {
     NeeAtState state = neeAtState(roots.neeAtStateAddress)[0];
     if (lightIndex >= state.lightCount || pixel.x >= state.extentWidth || pixel.y >= state.extentHeight) return;
     if (!isfinite(contribution) || contribution <= 0.0) return;
@@ -294,7 +294,7 @@ public void neeAtWriteFeedback(WorldBindingRoots roots, uint2 pixel, uint lightI
     uint2 event = pixelFeedback[pixelIndex];
     float total = min(asfloat(event.y) + weight, NEE_AT_MAX_FEEDBACK_WEIGHT);
     uint selectionSeed = retainedLightHash(pixelIndex ^ state.frameIndex ^ lightIndex ^ event.y) | 1u;
-    if (retainedLightRandom(selectionSeed) * total <= weight) event.x = lightIndex;
+    if (retainedLightRandom(selectionSeed) * total <= weight) event.x = lightIndex | (coherent ? 0x80000000u : 0u);
     event.y = asuint(total);
     pixelFeedback[pixelIndex] = event;
 }

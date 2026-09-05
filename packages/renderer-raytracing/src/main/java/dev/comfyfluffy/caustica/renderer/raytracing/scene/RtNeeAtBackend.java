@@ -49,7 +49,7 @@ final class RtNeeAtBackend {
     private static final int LOCAL_ENTRY_BYTES = 2 * Integer.BYTES;
     private static final int PLAN_ENTRY_BYTES = 2 * Integer.BYTES;
     private static final int PIXEL_FEEDBACK_BYTES = 2 * Integer.BYTES;
-    private static final int PUSH_BYTES = 40;
+    private static final int PUSH_BYTES = 64;
     private static final String SHADER = "/caustica/shaders/pipelines/nee_at/bake.comp.spv";
 
     private final VulkanDeviceContext context;
@@ -74,7 +74,6 @@ final class RtNeeAtBackend {
                 Math.max(lights.size(), state.previousLights.size()));
         boolean continuous = historyValid(input, state.hasHistory, state.lastFrameIndex,
                 state.width, state.height);
-        boolean localContinuous = continuous && input.localHistoryContinuous();
         if (NEE_FRAME_EVENT.isEnabled()) {
             Telemetry telemetry = telemetry(lights, continuous);
             NeeFrameEvent event = new NeeFrameEvent();
@@ -84,7 +83,7 @@ final class RtNeeAtBackend {
             event.height = input.height();
             event.candidates = telemetry.candidates();
             event.historyValid = continuous;
-            event.localHistoryValid = localContinuous;
+            event.localHistoryValid = continuous;
             event.retainedLights = telemetry.lightCount();
             event.parallelograms = telemetry.parallelograms();
             event.spots = telemetry.spots();
@@ -101,7 +100,7 @@ final class RtNeeAtBackend {
         write(target.plan, plan.pack());
         int tileCountX = divideRoundUp(input.width(), TILE_SIZE);
         int tileCountY = divideRoundUp(input.height(), TILE_SIZE);
-        int flags = (localContinuous ? LOCAL_HISTORY_VALID : 0)
+        int flags = (continuous ? LOCAL_HISTORY_VALID : 0)
                 | (lights.stream().anyMatch(light -> light.descriptor() instanceof LightDescriptor.Distant distant
                         && distant.environmentEmitter())
                 ? ENVIRONMENT_EMITTERS_SAMPLED : 0);
@@ -144,9 +143,6 @@ final class RtNeeAtBackend {
         computeBarrier(commandBuffer);
         dispatch(commandBuffer, target, previous, input, continuous, 4,
                 divideRoundUp(Math.multiplyExact(lights.size(), PROXY_RATIO), SCAN_BLOCK));
-        computeBarrier(commandBuffer);
-        int localTiles = Math.multiplyExact(tileCountX, tileCountY);
-        dispatch(commandBuffer, target, previous, input, continuous, 5, localTiles);
         barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
@@ -161,6 +157,33 @@ final class RtNeeAtBackend {
         Prepared prepared = new Prepared(scene, target, control, continuous, use);
         state.active = prepared;
         return prepared;
+    }
+
+    /**
+     * Records the local distribution after BuildStablePlanes and before FillStablePlanes.
+     * The host binds the descriptor heap and retains both storage images in GENERAL layout
+     * through submission completion. Depth is linear view Z; motion is current-to-previous
+     * displacement in pixels. Depth history shares the feedback frame's lifetime and continuity.
+     */
+    void bakeLocal(SceneId scene, VkCommandBuffer commandBuffer, int currentLinearDepthIndex,
+                   int currentMotionIndex) {
+        SceneState state = require(scene);
+        Prepared prepared = state.active;
+        barrier(commandBuffer, KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
+                        | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        dispatch(commandBuffer, prepared.frame, state.frames[state.cursor ^ 1],
+                prepared.historyValid, 5,
+                Math.multiplyExact(prepared.control.tileCountX(), prepared.control.tileCountY()),
+                currentLinearDepthIndex, currentMotionIndex);
+        // Fill consumes both Build's stable-plane records and the baked local distribution.
+        barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        | KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     }
 
     void finish(SceneId scene, Prepared prepared, VkCommandBuffer commandBuffer, GraphicsUse use) {
@@ -211,12 +234,21 @@ final class RtNeeAtBackend {
 
     private void dispatch(VkCommandBuffer commandBuffer, Frame target, Frame previous,
                           FrameInput input, boolean continuous, int phase, int groups) {
+        dispatch(commandBuffer, target, previous, continuous, phase, groups, 0, 0);
+    }
+
+    private void dispatch(VkCommandBuffer commandBuffer, Frame target, Frame previous,
+                          boolean continuous, int phase, int groups, int currentLinearDepthIndex,
+                          int currentMotionIndex) {
         ByteBuffer push = MemoryUtil.memAlloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
         try {
             push.putLong(target.state.deviceAddress().value()).putLong(target.plan.deviceAddress().value())
                     .putLong(previous.pixelFeedback.deviceAddress().value())
                     .putLong(target.blockSums.deviceAddress().value())
-                    .putInt(phase).putInt(continuous ? 1 : 0).flip();
+                    .putLong(previous.depth.deviceAddress().value())
+                    .putLong(target.depth.deviceAddress().value())
+                    .putInt(phase).putInt(continuous ? 1 : 0)
+                    .putInt(currentLinearDepthIndex).putInt(currentMotionIndex).flip();
             bake.dispatch(commandBuffer, push, groups, 1, 1);
         } finally {
             MemoryUtil.memFree(push);
@@ -324,7 +356,7 @@ final class RtNeeAtBackend {
     }
 
     record FrameInput(int width, int height, long frameIndex, float metersPerSceneUnit,
-                      boolean historyContinuous, boolean localHistoryContinuous) {
+                      boolean historyContinuous) {
         FrameInput {
             if (width <= 0 || height <= 0) throw new IllegalArgumentException("extent must be positive");
             if (!(metersPerSceneUnit > 0.0f) || !Float.isFinite(metersPerSceneUnit)) {
@@ -415,6 +447,7 @@ final class RtNeeAtBackend {
         GpuBuffer local;
         GpuBuffer lightFeedback;
         GpuBuffer pixelFeedback;
+        GpuBuffer depth;
         GpuBuffer plan;
         final TrackedGraphicsUse use = new TrackedGraphicsUse();
 
@@ -438,6 +471,8 @@ final class RtNeeAtBackend {
                     cleared, false, "NEE-AT light feedback");
             pixelFeedback = context.createBuffer(Math.multiplyExact(Math.multiplyExact(width, height),
                     PIXEL_FEEDBACK_BYTES), cleared, false, "NEE-AT pixel feedback");
+            depth = context.createBuffer(Math.multiplyExact(Math.multiplyExact(width, height), Float.BYTES),
+                    usage, false, "NEE-AT linear depth history");
             plan = context.createBuffer(Math.multiplyExact(lightCapacity, PLAN_ENTRY_BYTES), usage,
                     true, "NEE-AT identity plan");
         }
@@ -445,9 +480,9 @@ final class RtNeeAtBackend {
         void destroy() {
             if (state == null) return;
             state.destroy(); global.destroy(); proxyIndices.destroy(); blockSums.destroy();
-            local.destroy(); lightFeedback.destroy(); pixelFeedback.destroy(); plan.destroy();
+            local.destroy(); lightFeedback.destroy(); pixelFeedback.destroy(); depth.destroy(); plan.destroy();
             state = global = proxyIndices = blockSums = local = lightFeedback = pixelFeedback
-                    = plan = null;
+                    = depth = plan = null;
         }
     }
 }

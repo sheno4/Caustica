@@ -135,12 +135,6 @@ void prepare(uint2 pixel, uint2 extent, DevicePtr<float4> records, NrdPlaneFrame
     float roughness = saturate(max(0.2, r.roughness) + relaxation);
     float3 diffuse = r.noisyDiffuseRadiance / max(r.diffuseBsdfEstimate, float3(1.0e-4));
     float3 specular = r.noisySpecularRadiance / max(r.specularBsdfEstimate, float3(1.0e-4));
-    if (pc.planeIndex == 0u) {
-        PlaneRecord p1 = loadPlane(records, recordIndex(pixel, extent, 1u));
-        PlaneRecord p2 = loadPlane(records, recordIndex(pixel, extent, 2u));
-        if (p1.branchId != STABLE_PLANE_INVALID_BRANCH
-                && p2.branchId != STABLE_PLANE_INVALID_BRANCH) specular *= 0.4;
-    }
     diffuse = encodeRadiance(diffuse, frame);
     specular = encodeRadiance(specular, frame);
     float specHit = (r.flags & STABLE_PLANE_FLAG_DOMINANT) != 0u

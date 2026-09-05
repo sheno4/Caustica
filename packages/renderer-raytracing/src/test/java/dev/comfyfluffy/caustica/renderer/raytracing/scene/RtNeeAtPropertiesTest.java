@@ -139,7 +139,7 @@ final class RtNeeAtPropertiesTest {
 
     @Test
     void historyRequiresIdentityContinuityWithoutResetResizeOrFrameGap() {
-        var next = new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, true, true);
+        var next = new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, true);
 
         assertTrue(RtNeeAtBackend.historyValid(next, true, 41, 1920, 1080));
         assertFalse(RtNeeAtBackend.historyValid(next, false, 41, 1920, 1080));
@@ -147,7 +147,7 @@ final class RtNeeAtPropertiesTest {
         assertFalse(RtNeeAtBackend.historyValid(next, true, 41, 1280, 1080));
         assertFalse(RtNeeAtBackend.historyValid(next, true, 41, 1920, 720));
         assertFalse(RtNeeAtBackend.historyValid(
-                new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, false, false),
+                new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, false),
                 true, 41, 1920, 1080));
     }
 

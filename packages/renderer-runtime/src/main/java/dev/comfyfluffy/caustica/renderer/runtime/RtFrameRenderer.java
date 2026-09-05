@@ -460,8 +460,7 @@ public final class RtFrameRenderer {
         GpuBuffer pushBuf = ctx.createBuffer(WORLD_PUSH_SIZE,
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push");
         graphicsUse.whenComplete(pushBuf::destroy);
-        GpuBuffer continuationQueue = traceResources().acquireContinuationQueue(ctx, graphicsUse);
-        VK10.vkCmdFillBuffer(cmd, continuationQueue.handle(), 0L, continuationQueue.size(), 0);
+        GpuBuffer pathScratch = traceResources().pathScratchBuffer();
         ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);
         Matrix4f frameInvViewProj = new Matrix4f(frame.projectionView()).invert();
         int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
@@ -511,7 +510,7 @@ public final class RtFrameRenderer {
             lighting = scenes.prepareLighting(entryScene,
                     new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
                             frameCounter, (float) snapshot.metersPerWorldUnit(),
-                            frame.historyContinuous(), frame.localHistoryContinuous()), cmd, graphicsUse);
+                            frame.historyContinuous()), cmd, graphicsUse);
         }
         boolean lightingFinished = false;
         try {
@@ -522,7 +521,7 @@ public final class RtFrameRenderer {
             }
             currentTrace = trace;
             ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
-            writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, continuationQueue);
+            writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, pathScratch);
             program.writeCompositionDataAddress(roots);
             trace.writeWorldRoots(roots);
 
@@ -535,14 +534,18 @@ public final class RtFrameRenderer {
             }
             VulkanBarriers.worldResourcesToPrimary(cmd, stack);
 
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
-                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.tracePrimary")) {
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "build stable planes");
+                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.buildStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                         roots, 0, trace.hitTable());
             }
-            VulkanBarriers.primaryToIndirect(cmd, stack);
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
-                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.traceIndirect")) {
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "local NEE bake");
+                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.bakeLocal")) {
+                scenes.bakeLocal(entryScene, cmd,
+                        storageIndex(traceImages().nrdViewZ()), storageIndex(traceImages().motion()));
+            }
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fill stable planes");
+                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.fillStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                         roots, 1, trace.hitTable());
             }
@@ -638,12 +641,12 @@ public final class RtFrameRenderer {
     }
 
     private void writeFrameRoots(ByteBuffer roots, VulkanDeviceAddress worldPushAddress, FrameSnapshot snapshot,
-                                 GpuBuffer continuationQueue) {
+                                 GpuBuffer pathScratch) {
         ByteBuffer target = roots.duplicate().order(ByteOrder.nativeOrder());
         int base = roots.position();
         target.putLong(base + RtBindings.WORLD_PUSH_ADDRESS_OFFSET, worldPushAddress.value());
         target.putLong(base + RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
-                continuationQueue.deviceAddress().value());
+                pathScratch.deviceAddress().value());
         target.putFloat(base + RtBindings.WORLD_RECONSTRUCTION_MICRO_JITTER_SCALE_OFFSET,
                 currentFrame.route() == DenoiserRoute.RAY_RECONSTRUCTION ? 0.1f : 0.0f);
         target.putLong(base + RtBindings.WORLD_STABLE_PLANE_BUFFER_ADDRESS_OFFSET,

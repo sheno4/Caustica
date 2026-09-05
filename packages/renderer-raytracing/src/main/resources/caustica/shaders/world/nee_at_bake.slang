@@ -13,9 +13,17 @@ public struct NeeAtBakePush {
     public uint64_t planAddress;
     public uint64_t previousPixelFeedbackAddress;
     public uint64_t blockSumAddress;
+    public uint64_t previousDepthAddress;
+    public uint64_t currentDepthAddress;
     public uint phase;
     public uint historyValid;
+    public uint currentLinearDepthIndex;
+    public uint currentMotionIndex;
 };
+
+// Feedback winners carry screen-space coherence in bit 31 and a light identity in bits 0–30.
+static const uint NEE_AT_BAKE_SCREEN_SPACE_COHERENT = 0x80000000u;
+static const uint NEE_AT_BAKE_LIGHT_INDEX_MASK = 0x7fffffffu;
 
 groupshared uint localLights[128];
 groupshared uint localMasses[128];
@@ -43,9 +51,10 @@ void collectGlobalFeedback(NeeAtState state, uint pixelIndex) {
     ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
     uint2 event = feedback[pixelIndex];
     uint slot = state.lightCount;
-    if (asfloat(event.y) > 0.0 && event.x < state.priorLightCount) {
+    uint previousLight = event.x & NEE_AT_BAKE_LIGHT_INDEX_MASK;
+    if (asfloat(event.y) > 0.0 && previousLight < state.priorLightCount) {
         ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
-        uint mapped = plan[event.x].previousToCurrent;
+        uint mapped = plan[previousLight].previousToCurrent;
         if (mapped < state.lightCount) slot = mapped;
     }
     DevicePtr<uint> counts = (DevicePtr<uint>)state.lightFeedbackAddress;
@@ -150,6 +159,25 @@ void fillProxies(NeeAtState state, uint proxy) {
     proxies[proxy] = low;
 }
 
+bool reprojectLocalPixel(NeeAtState state, uint2 pixel, float depth, out uint previousIndex) {
+    previousIndex = 0u;
+    RWTexture2D<float2> currentMotion = ResourceDescriptorHeap[neeAtBakePush.currentMotionIndex];
+    ConstPtr<float> previousDepth = (ConstPtr<float>)neeAtBakePush.previousDepthAddress;
+    float2 motion = currentMotion[pixel];
+    if (!isfinite(depth) || depth <= 0.0 || depth >= 65504.0 || !all(isfinite(motion))) return false;
+    float2 previousPixel = floor(float2(pixel) + 0.5 + motion);
+    if (any(previousPixel < 0.0)
+            || any(previousPixel >= float2(state.extentWidth, state.extentHeight))) return false;
+    uint2 previous = uint2(previousPixel);
+    float historyDepth = previousDepth[previous.y * state.extentWidth + previous.x];
+    // Linear view depths must agree within two percent. Without an expected previous depth this
+    // deliberately rejects history during appreciable motion along the view direction.
+    if (!isfinite(historyDepth) || historyDepth <= 0.0 || historyDepth >= 65504.0
+            || abs(depth - historyDepth) > 0.02 * max(depth, historyDepth)) return false;
+    previousIndex = previous.y * state.extentWidth + previous.x;
+    return true;
+}
+
 void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
     uint tileCount = state.tileCountX * state.tileCountY;
     if (tileIndex >= tileCount) return;
@@ -164,16 +192,26 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
             neeAtHash(state.frameIndex * 2u + 1u) % state.tileSize);
     ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
     ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
-    if ((state.flags & NEE_AT_LOCAL_HISTORY_VALID) != 0u && state.priorLightCount != 0u
-            && lane < state.tileSize * state.tileSize) {
+    if (lane < state.tileSize * state.tileSize) {
         uint2 local = uint2(lane % state.tileSize, lane / state.tileSize);
         uint2 paddedExtent = uint2(state.tileCountX, state.tileCountY) * state.tileSize;
         uint2 pixel = (tile * state.tileSize + local + paddedExtent - jitter) % paddedExtent;
-        bool inExtent = pixel.x < state.extentWidth && pixel.y < state.extentHeight;
         uint2 event = uint2(0u);
-        if (inExtent) event = feedback[pixel.y * state.extentWidth + pixel.x];
-        if (asfloat(event.y) > 0.0 && event.x < state.priorLightCount) {
-            uint currentLight = plan[event.x].previousToCurrent;
+        if (pixel.x < state.extentWidth && pixel.y < state.extentHeight) {
+            RWTexture2D<float> currentDepth = ResourceDescriptorHeap[neeAtBakePush.currentLinearDepthIndex];
+            DevicePtr<float> depthHistory = (DevicePtr<float>)neeAtBakePush.currentDepthAddress;
+            float depth = currentDepth[pixel];
+            // The jittered tile mapping visits every in-extent pixel once, including reset frames.
+            depthHistory[pixel.y * state.extentWidth + pixel.x] = depth;
+            if ((state.flags & NEE_AT_LOCAL_HISTORY_VALID) != 0u && state.priorLightCount != 0u) {
+                uint previousIndex;
+                if (reprojectLocalPixel(state, pixel, depth, previousIndex)) event = feedback[previousIndex];
+            }
+        }
+        uint previousLight = event.x & NEE_AT_BAKE_LIGHT_INDEX_MASK;
+        if (asfloat(event.y) > 0.0 && (event.x & NEE_AT_BAKE_SCREEN_SPACE_COHERENT) != 0u
+                && previousLight < state.priorLightCount) {
+            uint currentLight = plan[previousLight].previousToCurrent;
             if (currentLight < state.lightCount) {
                 uint slot = neeAtHash(currentLight) % state.localSlotCount;
                 for (uint probe = 0u; probe < state.localSlotCount; probe++) {

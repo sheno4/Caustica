@@ -9,7 +9,7 @@ import org.joml.Matrix4fc;
 /** Captured inputs shared by trace, reconstruction, presentation, and submitted-frame history. */
 record RtFrameInput(FrameSnapshot snapshot, long number, long nanos, TraceExtent extent,
                     DenoiserRoute route, float jitterX, float jitterY, float preExposure,
-                    boolean historyContinuous, boolean localHistoryContinuous,
+                    boolean historyContinuous,
                     Matrix4fc projection, Matrix4fc viewRotation, Matrix4fc projectionView,
                     Matrix4fc previousProjectionView, Matrix4fc previousViewRotation,
                     Matrix4fc previousProjection, Float3 cameraOffset, Float3 cameraDelta,

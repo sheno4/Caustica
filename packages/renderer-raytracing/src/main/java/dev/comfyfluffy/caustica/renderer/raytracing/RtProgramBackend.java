@@ -137,15 +137,15 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             List<Long> data = shaderCompiler.implementationData();
             table = ImplementationTable.create(context, data);
             boolean reordered = context.backend().capabilities().shaderExecutionReordering();
-            RtShaderCode primary = RtShaderCode.of("primary", shaderCompiler.compilePrimary());
-            RtShaderCode indirect = RtShaderCode.of("indirect", shaderCompiler.compileIndirect(reordered));
+            RtShaderCode build = RtShaderCode.of("build-stable-planes", shaderCompiler.compileBuildStablePlanes());
+            RtShaderCode fill = RtShaderCode.of("fill-stable-planes", shaderCompiler.compileFillStablePlanes(reordered));
             RtShaderCode environment = RtShaderCode.of("environment", shaderCompiler.compileSkyMiss());
             RtShaderCode guide = RtShaderCode.of("guide", shaderCompiler.compilePlain(
                     "guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
             RtShaderCode closest = RtShaderCode.of("closest-hit", shaderCompiler.compileClosestHit());
             RtShaderCode radiance = RtShaderCode.of("radiance-any-hit", shaderCompiler.compileRadianceAnyHit());
             RtShaderCode shadow = RtShaderCode.of("shadow-any-hit", shaderCompiler.compileShadowAnyHit());
-            pipeline = RtPipeline.create(context, new RtShaderCode[]{primary, indirect},
+            pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill},
                     new RtShaderCode[]{environment, guide}, closest, radiance, shadow);
             return new Candidate(shaderCompiler, table, pipeline);
         } catch (IOException | RuntimeException | Error failure) {

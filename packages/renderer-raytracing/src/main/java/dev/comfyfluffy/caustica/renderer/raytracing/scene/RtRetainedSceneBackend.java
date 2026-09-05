@@ -59,14 +59,21 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         this.capture = Objects.requireNonNull(capture);
     }
 
+    /** Prepares the global light distribution before the stable-plane build. */
     public synchronized PreparedLighting prepareLighting(SceneId scene, LightingFrame frame,
                                                           VkCommandBuffer commandBuffer,
                                                           GraphicsUse graphicsUse) {
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
         var input = new RtNeeAtBackend.FrameInput(frame.width(), frame.height(), frame.frameIndex(),
-                frame.metersPerSceneUnit(), frame.historyContinuous(), frame.localHistoryContinuous());
+                frame.metersPerSceneUnit(), frame.historyContinuous());
         return new PreparedLighting(neeAt.prepare(scene, current.content.lights(), input,
                 commandBuffer, graphicsUse));
+    }
+
+    /** Bakes the local distribution from BuildStablePlanes linear depth and pixel motion. */
+    public synchronized void bakeLocal(SceneId scene, VkCommandBuffer commandBuffer,
+                                       int currentLinearDepthIndex, int currentMotionIndex) {
+        neeAt.bakeLocal(scene, commandBuffer, currentLinearDepthIndex, currentMotionIndex);
     }
 
     public synchronized void finishLighting(SceneId scene, PreparedLighting lighting,
@@ -671,7 +678,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     public record LightingFrame(int width, int height, long frameIndex, float metersPerSceneUnit,
-                                boolean historyContinuous, boolean localHistoryContinuous) { }
+                                boolean historyContinuous) { }
 
     public static final class PreparedLighting {
         private final RtNeeAtBackend.Prepared delegate;

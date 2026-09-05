@@ -1,0 +1,110 @@
+module path_tracer;
+import retained_lights;
+import path_queue_types;
+import surface_bsdf;
+import caustica_volume;
+import caustica_types;
+import bindings;
+import world_minimal;
+import world_common;
+import caustica_api;
+import trace_transport;
+import retained_trace_policy;
+import stable_planes;
+import stable_plane_types;
+
+public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedRadianceTrace>() {
+    uint2 pixel = DispatchRaysIndex().xy;
+    uint2 extent = DispatchRaysDimensions().xy;
+    WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
+    ConstPtr<PackedPathSegment> endpoints = (ConstPtr<PackedPathSegment>)worldBindings.pathQueueAddress;
+    TTrace tracer = {};
+    for (uint plane = 0u; plane < STABLE_PLANE_COUNT; plane++) {
+        uint address = stablePlaneRecordIndex(pixel, extent, plane);
+        PackedPathSegment path = endpoints[address];
+        if ((path.flags & PATH_ENDPOINT_VALID) == 0u) continue;
+        StablePlaneRecord record = stablePlaneRecords()[address];
+        bool first = true, diffusePath = false, coherent = true;
+        bool previousCoherent = true;
+        float previousPdf = 0.0;
+        float3 previousPosition = path.origin;
+        float signalDistance = 0.0, diffuseWeight = 0.0, diffuseDistanceSum = 0.0;
+        uint seed = traceSeed(pixel, frame.frameIndex, plane);
+        while (true) {
+            WorldPayload hit = {};
+            hit.seed = seed;
+            hit.previousBsdfPdf = previousPdf;
+            hit.pathFlags = first ? WORLD_PATH_GUIDE : 0u;
+            RayDesc ray = traceRay(path);
+            if (first) {
+                ray.TMin = max(traceEpsilon(), path.hitDistance * 0.99);
+                ray.TMax = path.hitDistance * 1.01 + traceEpsilon();
+                uint mask = path.depth == 0u ? WORLD_RAY_MASK_PRIMARY : WORLD_RAY_MASK_SECONDARY;
+                TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, hit);
+            } else {
+                tracer.trace(hit, ray, path.depth > frame.maxBounces ? 1u : 0u);
+            }
+            bool missed = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
+            float distance = missed ? TRACE_MAX_DISTANCE : hit.hitDistance;
+            path.throughput *= exp(-path.absorption * distance);
+            if (!first && !missed) signalDistance += distance;
+            float3 emission = float3(0.0);
+            if (!first) {
+                emission = missed ? hit.radiance : hit.surface.emissionRadiance;
+                if (!missed && previousPdf > 0.0 && hit.lightIndex != NEE_AT_NO_LIGHT) {
+                    uint count = clamp(neeAtState(worldBindings.neeAtStateAddress)[0].candidateCount, 1u, 8u);
+                    float lightPdf = neeAtReverseParallelogramPdf(worldBindings, pixel, hit.lightIndex,
+                            previousPosition, hit.position, previousCoherent
+                                    ? NEE_AT_PROPOSAL_SCREEN_MIXTURE : NEE_AT_PROPOSAL_GLOBAL, count);
+                    emission *= previousPdf / (previousPdf + lightPdf);
+                }
+                emission *= path.throughput;
+                if (diffusePath) {
+                    record.noisyDiffuseRadiance += emission;
+                    float weight = traceLuminance(emission);
+                    diffuseWeight += weight;
+                    diffuseDistanceSum += weight * signalDistance;
+                } else {
+                    record.noisySpecularRadiance += emission;
+                    if (!missed && any(emission > 0.0) && record.specularHitDistance == 0.0)
+                        record.specularHitDistance = signalDistance;
+                }
+            }
+            // The last scatter's emission is consumed before stopping, preserving the NEE/MIS pair.
+            if (missed || path.depth > frame.maxBounces) break;
+            bool continuousOnly = first && (path.flags & PATH_ENDPOINT_CONTINUOUS) != 0u;
+            TraceLobes lobes = traceLobes(path, hit, continuousOnly);
+            TraceDirect direct = traceDirect(path, hit, lobes, pixel, coherent, seed);
+            float3 diffuse = path.throughput * direct.diffuse;
+            float3 specular = path.throughput * direct.specular;
+            if (first) {
+                record.noisyDiffuseRadiance += diffuse;
+                record.noisySpecularRadiance += specular;
+            } else if (diffusePath) {
+                record.noisyDiffuseRadiance += diffuse + specular;
+            } else {
+                record.noisySpecularRadiance += diffuse + specular;
+            }
+            float weight = traceLuminance(first ? diffuse : diffusePath ? diffuse + specular : float3(0.0));
+            diffuseWeight += weight;
+            diffuseDistanceSum += weight * (first ? direct.distance : signalDistance);
+            if (record.specularHitDistance == 0.0 && any((first ? specular : diffusePath ? float3(0.0) : diffuse + specular) > 0.0))
+                record.specularHitDistance = first ? direct.distance : signalDistance;
+            previousPosition = hit.position;
+            previousCoherent = coherent;
+            uint event;
+            if (!traceScatter(path, hit, lobes, seed, previousPdf, event)) break;
+            if (first) diffusePath = (event & EVENT_DIFFUSE) != 0u;
+            coherent = coherent && previousPdf == 0.0;
+            first = false;
+            if (path.depth >= 3u && path.depth <= frame.maxBounces) {
+                float survival = clamp(max(max(path.throughput.x, path.throughput.y), path.throughput.z), 0.05, 1.0);
+                if (retainedLightRandom(seed) >= survival) break;
+                path.throughput /= survival;
+            }
+        }
+        record.diffuseHitDistance = diffuseWeight > 0.0 ? diffuseDistanceSum / diffuseWeight : 0.0;
+        stablePlaneRecords()[address] = record;
+    }
+    stablePlaneExport(pixel, extent, frame, true);
+}

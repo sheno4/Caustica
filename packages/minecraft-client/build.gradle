@@ -304,9 +304,7 @@ def compileShaders = tasks.register("compileShaders", CompileSlangShaders) {
 	]
 	descriptorHeapNative = true
 	mappedDescriptorBindingSources = [
-			"pipelines/block_outline/fragment.frag.slang",
-			"pipelines/world/fixed_closest.rchit.slang",
-			"pipelines/world/minecraft_closest.rchit.slang"
+			"pipelines/block_outline/fragment.frag.slang"
 	]
 	outputDirectory = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
 }

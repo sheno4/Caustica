@@ -58,9 +58,9 @@ dependencies {
 
 def worldShaderNames = [
         "bindings.slang", "closest_hit.slang", "fixed_composition.slang", "guide.rmiss.slang",
-        "indirect.slang", "indirect_ser.slang", "nee_at_bake.slang", "path_queue_types.slang",
-        "primary_reflection.rgen.slang", "primary_rgen.slang", "radiance_any_hit.rahit.slang",
-        "retained_indirect.slang", "retained_lights.slang", "retained_path_queue.slang",
+        "fill_stable_planes.slang", "fill_stable_planes_ser.slang", "nee_at_bake.slang", "path_queue_types.slang",
+        "build_stable_planes.slang", "radiance_any_hit.rahit.slang",
+        "path_tracer.slang", "retained_lights.slang", "trace_transport.slang",
         "retained_trace_ordinary.slang", "retained_trace_policy.slang",
         "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "sky_miss.slang",
         "stable_planes.slang", "stable_plane_types.slang", "surface_bsdf.slang", "nrd_signals.slang",
@@ -72,6 +72,7 @@ def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
 def compileRayTracingShaders = tasks.register("compileRayTracingShaders", CompileSlangShaders) {
     group = "build"
     description = "Compiles and validates the ray renderer's compute shaders."
+    descriptorHeapNative = true
     sourceDirectory = file("shaders")
     includeDirectories.from(worldShaderModules, configurations.slangShaderModules)
     aliasSourceDirectory = worldShaderModules
@@ -107,7 +108,7 @@ def generateRayTracingRecords = tasks.register("generateRayTracingRecords", Gene
 def generatedBindingsRoot = layout.buildDirectory.dir("generated/sources/rtBindings")
 def generateRayTracingBindings = tasks.register("generateRayTracingBindings", GenerateRtBindings) {
     group = "build"
-    description = "Generates the descriptor-heap world roots from primary ray reflection."
+    description = "Generates the descriptor-heap world roots from world root reflection."
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
     includeDirectories.from(configurations.slangShaderModules)
@@ -144,9 +145,7 @@ def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
                     "putInt(48, lightCount())", "putInt(72, tileSize())",
                     "putInt(80, candidateCount())", "putFloat(88, metersPerSceneUnit())",
                     "putInt(92, frameIndex())", "putFloat(96, powerTotal())",
-                    "putFloat(100, localToGlobalRatio())"],
-            PackedPathSegmentData: ["BYTE_SIZE = 48", "putFloat(0, ro().x())",
-                    "putInt(12, rd())", "putInt(44, nextRecord())"]
+                    "putFloat(100, localToGlobalRatio())"]
     ]
     inputs.dir(generatedRecordRoot)
     inputs.dir(generatedBindingsRoot)
@@ -236,61 +235,6 @@ def verifyRayTracingSpirvTarget = tasks.register("verifyRayTracingSpirvTarget") 
                 throw new GradleException("${task.name} targets ${task.spirvProfile.get()}/${task.vulkanTarget.get()}")
             }
         }
-    }
-}
-
-def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
-    group = "verification"
-    description = "Verifies retained-light sampling and two-ray-type shadow tracing."
-    def sampler = new File(worldShaderModules, "retained_lights.slang")
-    def closestHit = new File(worldShaderModules, "closest_hit.slang")
-    def worldMinimal = new File(worldShaderModules, "world_minimal.slang")
-    def bake = new File(worldShaderModules, "nee_at_bake.slang")
-    inputs.files(sampler, closestHit, worldMinimal, bake)
-    doLast {
-        def samplerSource = sampler.getText("UTF-8")
-        def hitSource = closestHit.getText("UTF-8")
-        def worldSource = worldMinimal.getText("UTF-8")
-        def bakeSource = bake.getText("UTF-8")
-        def required = [
-                "RETAINED_LIGHT_PARALLELOGRAM", "RETAINED_LIGHT_SPOT", "RETAINED_LIGHT_DISTANT",
-                "distance * state.metersPerSceneUnit > light.rangeMeters",
-                "neeAtSampleGlobal", "neeAtSampleLocal", "neeAtLocalPdf",
-                "radianceOverShapePdf", "neeAtWriteFeedback", "pixelFeedback[pixelIndex] = event",
-                "(pixel + jitter) % (tileCount * tileSize)",
-                "neeAtProposalPdf", "neeAtLocalCandidateCount(state, candidateCount)",
-                "globalFraction * neeAtGlobalPdf", "NEE_AT_PROPOSAL_SCREEN_MIXTURE"
-        ].findAll { !samplerSource.contains(it) }
-        required += [
-                "1u, 2u, 1u, ray, shadow", "evaluateBsdf(query)",
-                "inout uint seed", "dot(input.geometricNormal, selected.direction)",
-                "weightSum / (float(candidateCount) * selectedTarget)",
-                "incomingFeedbackThroughput * estimator",
-                "neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex, feedback)",
-                "emission * retainedEmissionMis(payload, record, input.position)",
-                "payload.previousNeeProposalMode"
-        ].findAll { !hitSource.contains(it) }
-        required += [
-                "state.localSlotCount", "state.tileSize * state.tileSize",
-                "previousToCurrent", "InterlockedAdd(localMasses[slot], 1u)",
-                "InterlockedAdd(counts[slot], 1u)", "+ paddedExtent - jitter) % paddedExtent",
-                "GroupMemoryBarrierWithGroupSync", "uint2(localLights[slot], localScan[slot])",
-                "blockSums[group] = blockScan[0]", "chunk += 64u", "blockScanNext[lane]",
-                "distribution[state.lightCount] = uint2(0u, blockCarry)",
-                "count = max(1u, uint(ceil(budget * pdf)))"
-        ].findAll { !bakeSource.contains(it) }
-        if (samplerSource.contains("InterlockedCompareExchange")) required += "no tracing-path CAS feedback"
-        if (!worldSource.contains("records[worldInstanceCustomIndex() + GeometryIndex()]")) {
-            required += "worldInstanceCustomIndex() + GeometryIndex()"
-        }
-        if (worldSource.contains("records[InstanceID() + GeometryIndex()]")) {
-            required += "no InstanceID geometry-record addressing"
-        }
-        if (!worldSource.contains("HitTriangleVertexPosition(1u)")
-                || !worldSource.contains("previousGeometricNormal = previousNormal * orientation")) {
-            required += "position-fetch current/previous geometric normals"
-        }
-        if (!required.empty) throw new GradleException("retained light shader contract drifted: ${required}")
     }
 }
 
@@ -431,8 +375,7 @@ tasks.named("test", Test) {
 tasks.named("check") {
     dependsOn(verifyRendererRayTracingDependencies, verifyRendererRayTracingImports,
             verifyRendererRayTracingResources, verifyRendererRayTracingJar, verifyRayTracingAbi,
-            verifyRayTracingGenerationReproducible, verifyRayTracingSpirvTarget,
-            verifyRetainedLightShader)
+            verifyRayTracingGenerationReproducible, verifyRayTracingSpirvTarget)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 

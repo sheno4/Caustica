@@ -4,67 +4,31 @@ import bindings;
 import world_common;
 import caustica_types;
 import caustica_coverage;
+import surface_bsdf;
 
 [[vk::push_constant]] public WorldBindingRoots worldBindings;
 
+// Hit shaders only resolve geometry/material data. Transport and branch exploration belong to raygen.
 public struct WorldPayload {
-    public float3 radiance;
-    public float3 diffuseRadiance;
-    public float3 specularRadiance;
-    public float3 primaryStableRadiance;
-    public float diffuseHitDistance;
+    public SurfaceClosure surface;
+    public float3 position;
     public float hitDistance;
-    public float3 feedbackThroughput;
+    public float3 previousPosition;
+    public uint lightIndex;
+    public float3 geometricNormal;
+    public uint pathFlags;
+    public float3 previousNormal;
+    public uint seed;
+    public float3 radiance;
+    public float previousBsdfPdf;
     public float3 volumeAbsorption;
     public float volumeIor;
-    public float3 previousPosition;
-    public float previousBsdfPdf;
-    public uint seed;
-    public uint previousNeeProposalMode;
-    public uint previousNeeCandidateCount;
-    public uint currentNeeProposalMode;
-    public uint currentNeeCandidateCount;
-    // Continuation, current-medium, miss, primary-ray, and guide-only state.
-    public uint pathFlags;
-    public float3 hitPosition;
-    public float roughness;
-    public float3 previousHitPosition;
-    public uint guideNormal;
-    public uint previousGuideNormal;
-    public uint guideAlbedo;
-    public uint guideSpecularAlbedo;
-    public uint queueRecordIndex;
-    public float3 guideContinuationOrigin;
-    public float3 guideContinuationDirection;
-    public float3 guideContinuationAbsorption;
-    public float guideContinuationIor;
-    public uint guideContinuationVolumeActive;
-    public uint guideContinuationEvent;
-    public float guideContinuationWeight;
-    public float3 guideAlternateOrigin;
-    public float3 guideAlternateDirection;
-    public float3 guideAlternateAbsorption;
-    public float guideAlternateIor;
-    public uint guideAlternateVolumeActive;
-    public uint guideAlternateEvent;
-    public float guideAlternateWeight;
-    public float guideBaseWeight;
-    public float guideTransmissionWeight;
-    public float signalHitDistance;
-    public uint firstLobeEvent;
 };
-
-public static const uint WORLD_PATH_REQUEST_CONTINUATION = 1u;
 public static const uint WORLD_PATH_VOLUME_ACTIVE = 2u;
 public static const uint WORLD_PATH_MISS = 4u;
 public static const uint WORLD_PATH_PRIMARY = 8u;
 public static const uint WORLD_PATH_GUIDE = 16u;
 public static const uint WORLD_PATH_SHADOW = 32u;
-public static const uint WORLD_PATH_EMISSIVE = 64u;
-public static const uint WORLD_PATH_GUIDE_CONTINUATION = 128u;
-public static const uint WORLD_GUIDE_EVENT_NONE = 0u;
-public static const uint WORLD_GUIDE_EVENT_REFLECTION = 1u;
-public static const uint WORLD_GUIDE_EVENT_TRANSMISSION = 2u;
 public static const uint WORLD_RAY_MASK_SECONDARY = 0x01u;
 public static const uint WORLD_RAY_MASK_PRIMARY = 0x02u;
 
@@ -76,7 +40,7 @@ public float worldCoverageRandom(uint seed, uint instanceIndex, uint geometryInd
     state ^= state >> 16u;
     state *= 2654435769u;
     state ^= state >> 16u;
-    return (float(state) + 0.5) * (1.0 / 4294967296.0);
+    return float(state >> 8u) * (1.0 / 16777216.0);
 }
 
 public ShaderRootData worldShaderRoot() {

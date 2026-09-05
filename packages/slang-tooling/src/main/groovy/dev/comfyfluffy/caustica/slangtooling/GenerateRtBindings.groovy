@@ -38,7 +38,7 @@ abstract class GenerateRtBindings extends DefaultTask {
     @Inject abstract ExecOperations getExecOps()
 
     private static final List<Map> PIPELINES = [
-            [prefix: "WORLD", source: "pipelines/world/primary_reflection.rgen.slang",
+            [prefix: "WORLD", source: "layout/build_reflection.rgen.slang",
              pushParameter: "worldBindings", pushType: "WorldBindingRoots",
              mappedDescriptors: [worldTopLevelAS: [index: 0, set: 0]],
              addresses: [PUSH: "worldPushAddress", COMPOSITION_DATA: "compositionDataAddress",

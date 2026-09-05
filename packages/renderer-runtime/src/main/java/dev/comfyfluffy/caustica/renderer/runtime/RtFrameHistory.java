@@ -28,10 +28,6 @@ final class RtFrameHistory {
                 (float) (snapshot.cameraX() - previous.snapshot().cameraX()),
                 (float) (snapshot.cameraY() - previous.snapshot().cameraY()),
                 (float) (snapshot.cameraZ() - previous.snapshot().cameraZ())) : new Float3(0, 0, 0);
-        boolean stationary = continuous && distanceSquared(snapshot, previous.snapshot()) <= 1.0e-12
-                && projection.equals(previous.projection(), 1.0e-6f)
-                && rotation.equals(previous.viewRotation(), 1.0e-6f)
-                && !snapshot.proceduralSurfaceAnimationEnabled();
         var jitter = route == DenoiserRoute.RAW ? new RtJitter.Sample(0, 0)
                 : RtJitter.sample(samples, extent.renderWidth(), extent.displayWidth());
         float jitterX = jitter.x() * jitterSignX;
@@ -40,7 +36,7 @@ final class RtFrameHistory {
         float priorTime = continuous ? (float) (previous.snapshot().timeSeconds() % 3600.0) : time;
         if (time - priorTime < 0 || time - priorTime > .25f) priorTime = time;
         return new RtFrameInput(snapshot, number, nanos, extent, route, jitterX, jitterY, preExposure,
-                continuous, stationary, projection, rotation, projectionView,
+                continuous, projection, rotation, projectionView,
                 continuous ? previous.projectionView() : projectionView,
                 continuous ? previous.viewRotation() : rotation,
                 continuous ? previous.projection() : projection,

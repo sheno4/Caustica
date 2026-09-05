@@ -24,7 +24,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + float(retainedGeometryRecordLayoutProbe[0].values[0].surfaceImplementation)
                 + float(retainedLightRecordLayoutProbe[0].values[0].type)
                 + float(neeAtStateLayoutProbe[0].values[0].lightCount)
-                + float(packedPathSegmentLayoutProbe[0].values[0].nextRecord)
+                + float(packedPathSegmentLayoutProbe[0].values[0].flags)
                 + float(stablePlaneRecordLayoutProbe[0].values[0].flags);
     }
 }

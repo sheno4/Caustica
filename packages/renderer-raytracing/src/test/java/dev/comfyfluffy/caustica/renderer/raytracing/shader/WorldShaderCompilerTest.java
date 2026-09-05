@@ -88,13 +88,13 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileShadowAnyHit());
             assertSpirv(compiler.compileSkyMiss());
             assertSpirv(compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
-            assertSpirv(compiler.compilePrimary());
-            byte[] ordinary = compiler.compileIndirect(false);
-            byte[] reordered = compiler.compileIndirect(true);
+            assertSpirv(compiler.compileBuildStablePlanes());
+            byte[] ordinary = compiler.compileFillStablePlanes(false);
+            byte[] reordered = compiler.compileFillStablePlanes(true);
             assertSpirv(ordinary);
             assertSpirv(reordered);
-            assertVulkan14(cache.resolve("indirect-ordinary.spv"), ordinary);
-            assertVulkan14(cache.resolve("indirect-ser.spv"), reordered);
+            assertVulkan14(cache.resolve("fill-stable-planes-ordinary.spv"), ordinary);
+            assertVulkan14(cache.resolve("fill-stable-planes-ser.spv"), reordered);
         }
     }
 

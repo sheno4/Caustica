@@ -2,19 +2,19 @@ package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.PackedPathSegmentData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.StablePlaneRecordData;
 import org.lwjgl.vulkan.VK10;
 
-/** Owns extent-keyed trace images and continuation queues. */
+/** Owns extent-keyed trace images and stable-plane scratch. */
 public final class TraceResources {
-    private static final int PATH_RECORDS_PER_PIXEL = 2;
+    private static final int PATH_RECORDS_PER_PIXEL = 3;
 
     private TraceExtent extent;
     private TraceImages images;
     private GpuBuffer stablePlaneBuffer;
+    private GpuBuffer pathScratchBuffer;
 
     public boolean hasDisplayExtent(int width, int height) {
         return extent != null && extent.displayWidth() == width && extent.displayHeight() == height;
@@ -95,6 +95,10 @@ public final class TraceResources {
         stablePlaneBuffer = context.createBuffer(stablePlaneBytes(renderWidth, renderHeight),
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 false, "stable planes " + renderWidth + "x" + renderHeight + "x3");
+        pathScratchBuffer = context.createBuffer(pathScratchBytes(renderWidth, renderHeight),
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                false, "stable plane path scratch " + renderWidth + "x" + renderHeight
+                        + "x" + PATH_RECORDS_PER_PIXEL);
         images = new TraceImages(traceColor, stablePlaneMetadata,
                 normalRoughness, diffuseAlbedo, depth, motion,
                 specularAlbedo, specularMotion, diffuseRadianceHitDistance,
@@ -104,16 +108,9 @@ public final class TraceResources {
         extent = wanted;
     }
 
-    /** Allocates this frame's path continuation queue; it retires with the frame that traced against it. */
-    public GpuBuffer acquireContinuationQueue(VulkanDeviceContext context, GraphicsUse graphicsUse) {
-        TraceExtent current = extent();
-        GpuBuffer queue = context.createBuffer(
-                continuationBytes(current.renderWidth(), current.renderHeight()),
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                false, "path continuation queue " + current.renderWidth() + "x" + current.renderHeight()
-                        + "x" + PATH_RECORDS_PER_PIXEL);
-        graphicsUse.whenComplete(queue::destroy);
-        return queue;
+    /** Reused by the ordered graphics queue; resizing requires drained GPU use. */
+    public GpuBuffer pathScratchBuffer() {
+        return pathScratchBuffer;
     }
 
     public void destroy() {
@@ -145,10 +142,14 @@ public final class TraceResources {
             stablePlaneBuffer.destroy();
             stablePlaneBuffer = null;
         }
+        if (pathScratchBuffer != null) {
+            pathScratchBuffer.destroy();
+            pathScratchBuffer = null;
+        }
         extent = null;
     }
 
-    static long continuationBytes(int width, int height) {
+    static long pathScratchBytes(int width, int height) {
         long pixels = Math.multiplyExact((long) width, (long) height);
         return Math.multiplyExact(Math.multiplyExact(pixels, PATH_RECORDS_PER_PIXEL),
                 PackedPathSegmentData.BYTE_SIZE);

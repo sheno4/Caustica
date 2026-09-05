@@ -1,20 +1,16 @@
 module path_queue_types;
 
-// Device-addressable continuation record shared by the primary producer, indirect consumer, and host
-// reflection. Packing helpers live with the transport implementation; this module has no composition
-// dependency so its exact std430 stride is always reflectable.
+// One restart ray per stable plane. Only the build/fill boundary uses device storage.
 public struct PackedPathSegment {
-    public float3 ro;
-    public uint rd;
-    public uint throughput;
-    public uint currentExtinction;
-    public uint outerExtinction;
-    public uint mediumIors;
-    public uint rayCone;
-    public uint seed;
-    public uint pathFlags;
-    public uint nextRecord;
+    public float3 origin;
+    public float hitDistance;
+    public float3 direction;
+    public float ior;
+    public float3 throughput;
+    public uint depth;
+    public float3 absorption;
+    public uint flags;
 };
-
-public static const uint PATH_NO_NEXT = 0xffffffffu;
-public static const uint MAX_PATH_SEGMENTS = 2u;
+public static const uint PATH_ENDPOINT_VALID = 1u;
+public static const uint PATH_ENDPOINT_CONTINUOUS = 2u;
+public static const uint PATH_ENDPOINT_VOLUME = 4u;

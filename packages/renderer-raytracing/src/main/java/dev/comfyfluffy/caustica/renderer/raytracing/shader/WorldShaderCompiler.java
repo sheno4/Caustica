@@ -36,9 +36,9 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     private static final Logger LOGGER = LoggerFactory.getLogger(WorldShaderCompiler.class);
     public static final String SKY_MISS_MODULE = "sky_miss";
     public static final String CLOSEST_HIT_MODULE = "closest_hit";
-    public static final String PRIMARY_MODULE = "primary_rgen";
-    public static final String INDIRECT_MODULE = "indirect";
-    public static final String INDIRECT_SER_MODULE = "indirect_ser";
+    public static final String BUILD_STABLE_PLANES_MODULE = "build_stable_planes";
+    public static final String FILL_STABLE_PLANES_MODULE = "fill_stable_planes";
+    public static final String FILL_STABLE_PLANES_SER_MODULE = "fill_stable_planes_ser";
     public static final String RADIANCE_ANY_HIT_MODULE = "radiance_any_hit_rahit";
     public static final String SHADOW_ANY_HIT_MODULE = "shadow_any_hit_rahit";
     public static final String ENTRY_POINT = "main";
@@ -52,11 +52,11 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_.]*)\\s*;");
 
     private static final List<String> WORLD_MODULES = List.of(
-            "bindings.slang", "world_common.slang", "world_minimal.slang", "primary_rgen.slang",
-            "indirect.slang", "indirect_ser.slang", "closest_hit.slang", "sky_miss.slang",
+            "bindings.slang", "world_common.slang", "world_minimal.slang", "build_stable_planes.slang",
+            "fill_stable_planes.slang", "fill_stable_planes_ser.slang", "closest_hit.slang", "sky_miss.slang",
             "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang", "guide.rmiss.slang",
             "retained_lights.slang", "surface_bsdf.slang", "path_queue_types.slang",
-            "retained_path_queue.slang", "retained_indirect.slang", "retained_trace_policy.slang",
+            "trace_transport.slang", "path_tracer.slang", "retained_trace_policy.slang",
             "retained_trace_ordinary.slang", "retained_trace_reordered.slang", "stable_planes.slang",
             "stable_plane_types.slang", "nrd_signals.slang");
     private static final List<String> API_MODULES = List.of(
@@ -179,9 +179,9 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     public byte[] compileClosestHit() { return compileSpecialized(CLOSEST_HIT_MODULE, ENTRY_POINT); }
     public byte[] compileRadianceAnyHit() { return compileSpecialized(RADIANCE_ANY_HIT_MODULE, ENTRY_POINT); }
     public byte[] compileShadowAnyHit() { return compileSpecialized(SHADOW_ANY_HIT_MODULE, ENTRY_POINT); }
-    public byte[] compilePrimary() { return compileSpecialized(PRIMARY_MODULE, ENTRY_POINT); }
-    public byte[] compileIndirect(boolean reordered) {
-        return compileSpecialized(reordered ? INDIRECT_SER_MODULE : INDIRECT_MODULE, ENTRY_POINT);
+    public byte[] compileBuildStablePlanes() { return compileSpecialized(BUILD_STABLE_PLANES_MODULE, ENTRY_POINT); }
+    public byte[] compileFillStablePlanes(boolean reordered) {
+        return compileSpecialized(reordered ? FILL_STABLE_PLANES_SER_MODULE : FILL_STABLE_PLANES_MODULE, ENTRY_POINT);
     }
 
     public byte[] compilePlain(String moduleFileName, String entryPoint) {

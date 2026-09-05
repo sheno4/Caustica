@@ -1,10 +1,8 @@
-module indirect_ser;
-
+module fill_stable_planes_ser;
 import caustica_api;
-import retained_indirect;
+import path_tracer;
 import retained_trace_reordered;
-
 [shader("raygeneration")]
 void main<TComposition : IComposition>() {
-    runRetainedIndirect<TComposition, RetainedReorderedTrace>();
+    runFillStablePlanes<TComposition, RetainedReorderedTrace>();
 }

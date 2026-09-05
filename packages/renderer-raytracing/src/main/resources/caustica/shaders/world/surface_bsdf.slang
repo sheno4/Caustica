@@ -47,6 +47,8 @@ public struct SurfaceClosure {
     public float3 emissionRadiance;
     public float3 thinTransmissionColor;
     public float thinTransmissionWeight;
+    public float boundaryWeight;
+    public bool deltaSurface;
 };
 
 public struct BsdfQuery {
@@ -116,6 +118,8 @@ public SurfaceClosure surfaceClosure(OpenPbrSurface material, float3 geometryNor
     float transmissionWeight = clamp(material.transmission_weight, 0.0, 1.0);
     float subsurfaceWeight = clamp(material.subsurface_weight, 0.0, 1.0);
     float anisotropy = clamp(material.subsurface_scatter_anisotropy, -1.0, 1.0);
+    float boundaryWeight = material.geometry_thin_walled ? 0.0
+            : dielectricWeight * transmissionWeight;
     float opaqueDielectricWeight = dielectricWeight * (1.0 - transmissionWeight);
     float3 baseColor = clamp(material.base_color, float3(0.0), float3(1.0));
     float3 subsurfaceColor = clamp(material.subsurface_color, float3(0.0), float3(1.0));
@@ -139,8 +143,28 @@ public SurfaceClosure surfaceClosure(OpenPbrSurface material, float3 geometryNor
             * max(material.emission_luminance, 0.0);
     surface.thinTransmissionColor = clamp(material.transmission_color,
             float3(0.0), float3(1.0));
-    surface.thinTransmissionWeight = dielectricWeight * transmissionWeight;
+    surface.thinTransmissionWeight = material.geometry_thin_walled
+            ? dielectricWeight * transmissionWeight : 0.0;
+    surface.boundaryWeight = boundaryWeight;
+    surface.deltaSurface = roughness <= 0.001;
     return surface;
+}
+
+// Integrated surface weights exclude the thick glass boundary owned by volume transport.
+public void surfaceDeltaLobes(SurfaceClosure surface, float3 outgoingDirection,
+        out float3 reflection, out float3 transmission) {
+    reflection = float3(0.0);
+    transmission = float3(0.0);
+    float cosine = dot(surface.shadingNormal, outgoingDirection);
+    if (!surface.deltaSurface || cosine <= 0.0) return;
+    float3 fresnel = surfaceFresnelSchlick(cosine, surface.specularF0);
+    float3 sheetReflection;
+    float3 sheetTransmission;
+    thinSheetFactors(fresnel, surface.thinTransmissionColor,
+            sheetReflection, sheetTransmission);
+    reflection = lerp(fresnel, sheetReflection, surface.thinTransmissionWeight)
+            * (1.0 - surface.boundaryWeight);
+    transmission = sheetTransmission * surface.thinTransmissionWeight;
 }
 
 // Probabilities are scalar importance estimates; RGB lobe values remain untouched. Evaluation and
@@ -156,10 +180,11 @@ public float4 surfaceLobeProbabilities(SurfaceClosure surface, float outgoingCos
     float thinWeight = clamp(surface.thinTransmissionWeight, 0.0, 1.0);
 
     float4 importance = float4(
-            maxComponent(lerp(fresnel, sheetReflection, thinWeight)),
+            surface.deltaSurface ? 0.0 : maxComponent(lerp(fresnel, sheetReflection, thinWeight))
+                    * (1.0 - surface.boundaryWeight),
             maxComponent(diffuseReflection),
             maxComponent(surface.diffuseTransmissionAlbedo),
-            maxComponent(sheetTransmission) * thinWeight);
+            surface.deltaSurface ? 0.0 : maxComponent(sheetTransmission) * thinWeight);
     float total = importance.x + importance.y + importance.z + importance.w;
     if (total <= 0.0) return float4(0.0);
     float4 probabilities = importance / total;
@@ -185,11 +210,12 @@ public void surfaceDenoiserEstimates(SurfaceClosure surface, float3 outgoingDire
             sheetReflection, sheetTransmission);
     float thinWeight = clamp(surface.thinTransmissionWeight, 0.0, 1.0);
     diffuseEstimate = max(surface.diffuseAlbedo * (float3(1.0) - fresnel), float3(0.0));
-    specularEstimate = max(lerp(fresnel, sheetReflection, thinWeight)
-            + sheetTransmission * thinWeight, float3(0.0));
+    specularEstimate = surface.deltaSurface ? float3(0.0)
+            : max(lerp(fresnel, sheetReflection, thinWeight) * (1.0 - surface.boundaryWeight)
+                    + sheetTransmission * thinWeight, float3(0.0));
 }
 
-public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
+BsdfEvaluation evaluateBsdf(BsdfQuery query, float4 probabilities) {
     BsdfEvaluation result;
     result.value = float3(0.0);
     result.diffuseValue = float3(0.0);
@@ -204,7 +230,6 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     float ndl = dot(n, query.incomingDirection);
     if (ndv <= 0.0) return result;
 
-    float4 probabilities = surfaceLobeProbabilities(query.surface, ndv);
     float alpha = query.surface.alphaRoughness;
     if (ndl > 0.0) {
         float3 halfVector = normalize(query.incomingDirection + query.outgoingDirection);
@@ -223,7 +248,8 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
         float3 diffuseReflection = max(query.surface.diffuseAlbedo
                 - query.surface.diffuseTransmissionAlbedo, float3(0.0));
         float3 diffuse = diffuseReflection * layerTransmission * SURFACE_INV_PI;
-        float3 specular = distribution * geometry * reflectedFresnel
+        float3 specular = query.surface.deltaSurface ? float3(0.0)
+                : distribution * geometry * reflectedFresnel * (1.0 - query.surface.boundaryWeight)
                 / max(4.0 * ndv * ndl, 1.0e-6);
         float diffusePdf = ndl * SURFACE_INV_PI * probabilities.y;
         float specularPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6)
@@ -259,7 +285,8 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     thinSheetFactors(fresnel, query.surface.thinTransmissionColor,
             sheetReflection, sheetTransmission);
     float thinWeight = clamp(query.surface.thinTransmissionWeight, 0.0, 1.0);
-    float3 glossyTransmission = distribution * geometry * sheetTransmission * thinWeight
+    float3 glossyTransmission = query.surface.deltaSurface ? float3(0.0)
+            : distribution * geometry * sheetTransmission * thinWeight
             / max(4.0 * ndv * backNdl, 1.0e-6);
     float glossyPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6) * probabilities.w;
 
@@ -271,6 +298,34 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     result.pdf = diffusePdf + glossyPdf;
     result.eventFlags = EVENT_DIFFUSE | EVENT_GLOSSY | EVENT_TRANSMISSION;
     return result;
+}
+
+public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
+    return evaluateBsdf(query, surfaceLobeProbabilities(query.surface,
+            dot(query.surface.shadingNormal, query.outgoingDirection)));
+}
+
+// Probabilities are conditional on selecting continuous transport, with no delta probability mass.
+public float evaluateBsdfPdf(BsdfQuery query, float4 probabilities) {
+    float3 n = query.surface.shadingNormal;
+    float ndv = dot(n, query.outgoingDirection);
+    float ndl = dot(n, query.incomingDirection);
+    if (ndv <= 0.0 || ndl == 0.0) return 0.0;
+    float diffuseProbability = ndl > 0.0 ? probabilities.y : probabilities.z;
+    float glossyProbability = ndl > 0.0 ? probabilities.x : probabilities.w;
+    float pdf = abs(ndl) * SURFACE_INV_PI * diffuseProbability;
+    if (glossyProbability == 0.0) return pdf;
+    float3 incoming = ndl > 0.0 ? query.incomingDirection : reflect(query.incomingDirection, n);
+    float3 halfVector = normalize(incoming + query.outgoingDirection);
+    float ndh = max(0.0, dot(n, halfVector));
+    float vdh = max(0.0, dot(query.outgoingDirection, halfVector));
+    return pdf + surfaceGgxD(ndh, query.surface.alphaRoughness) * ndh
+            / max(4.0 * vdh, 1.0e-6) * glossyProbability;
+}
+
+public float evaluateBsdfPdf(BsdfQuery query) {
+    return evaluateBsdfPdf(query, surfaceLobeProbabilities(query.surface,
+            dot(query.surface.shadingNormal, query.outgoingDirection)));
 }
 
 public BsdfSample sampleBsdf(BsdfSampleQuery query) {
@@ -285,6 +340,7 @@ public BsdfSample sampleBsdf(BsdfSampleQuery query) {
     if (ndv <= 0.0) return result;
 
     float4 probabilities = surfaceLobeProbabilities(query.surface, ndv);
+    if (!any(probabilities > 0.0)) return result;
     float selector = query.random.x;
     float diffuseReflectionEnd = probabilities.x + probabilities.y;
     float diffuseTransmissionEnd = diffuseReflectionEnd + probabilities.z;
@@ -319,7 +375,7 @@ public BsdfSample sampleBsdf(BsdfSampleQuery query) {
     evaluationQuery.surface = query.surface;
     evaluationQuery.outgoingDirection = query.outgoingDirection;
     evaluationQuery.incomingDirection = result.incomingDirection;
-    BsdfEvaluation evaluation = evaluateBsdf(evaluationQuery);
+    BsdfEvaluation evaluation = evaluateBsdf(evaluationQuery, probabilities);
     if (sampleReflectionGlossy) result.eventFlags = EVENT_GLOSSY | EVENT_REFLECTION;
     if (sampleDiffuseReflection) result.eventFlags = EVENT_DIFFUSE | EVENT_REFLECTION;
     if (sampleDiffuseTransmission) result.eventFlags = EVENT_DIFFUSE | EVENT_TRANSMISSION;

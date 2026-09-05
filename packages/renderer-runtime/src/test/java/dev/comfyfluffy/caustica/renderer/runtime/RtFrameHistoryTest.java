@@ -25,7 +25,6 @@ final class RtFrameHistoryTest {
         capture(history, snapshot(7, 1), 0);
         var retry = capture(history, snapshot(0, 2), 0);
         assertFalse(retry.historyContinuous());
-        assertFalse(retry.localHistoryContinuous());
         assertTrue(history.changesScene(retry.snapshot()));
         assertEquals(RtJitter.sample(0, 1280, 1920).x(), retry.jitterX());
         assertEquals(new Float3(0, 0, 0), retry.cameraDelta());
@@ -91,15 +90,23 @@ final class RtFrameHistoryTest {
     }
 
     @Test
-    void localAccumulationRequiresStationaryCameraAndInactiveAnimation() {
-        assertTrue(capture(seeded(), snapshot(0, .01), 1).localHistoryContinuous());
+    void ordinaryCameraMotionAndAnimationPreserveHistoryForReprojection() {
+        assertTrue(capture(seeded(), snapshot(0, .01), 1).historyContinuous());
         var moved = capture(seeded(), snapshot(1, .01), 1);
         assertTrue(moved.historyContinuous());
-        assertFalse(moved.localHistoryContinuous());
-        var animated = capture(seeded(), snapshot(SCENE, SceneOrigin.ZERO, 0, .01,
-                1, true, new Matrix4f(), new Matrix4f()), 1);
+        assertEquals(new Float3(1, 0, 0), moved.cameraDelta());
+
+        Matrix4f rotation = new Matrix4f().rotationY(.1f);
+        Matrix4f projection = new Matrix4f().m00(1.05f);
+        var animated = capture(seeded(), snapshot(SCENE, SceneOrigin.ZERO, 1, .01,
+                1, true, projection, rotation), 1);
         assertTrue(animated.historyContinuous());
-        assertFalse(animated.localHistoryContinuous());
+        assertEquals(new Float3(1, 0, 0), animated.cameraDelta());
+        assertEquals(new Matrix4f(), animated.previousProjection());
+        assertEquals(new Matrix4f(), animated.previousViewRotation());
+        assertEquals(projection, animated.projection());
+        assertEquals(rotation, animated.viewRotation());
+        assertEquals(0, animated.previousProceduralTime());
     }
 
     @Test
@@ -133,7 +140,6 @@ final class RtFrameHistoryTest {
 
     private static void assertReset(RtFrameInput frame) {
         assertFalse(frame.historyContinuous());
-        assertFalse(frame.localHistoryContinuous());
         assertEquals(new Float3(0, 0, 0), frame.cameraDelta());
         assertEquals(frame.projectionView(), frame.previousProjectionView());
         assertEquals(frame.jitterX(), frame.previousJitterX());
