@@ -5,8 +5,7 @@ import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
-import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.rendering.CelestialAtlasImage;
@@ -31,7 +30,7 @@ import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Owns the Overworld atmosphere LUTs and publishes immutable environment binding generations. */
+/** Owns the Overworld atmosphere LUTs and publishes immutable environment binding revisions. */
 public final class SkyLutPass implements Pass<PassFrame> {
     private static final Logger LOGGER = LoggerFactory.getLogger(SkyLutPass.class);
     public static final ResourceId ID = ResourceId.of("caustica", "sky_lut");
@@ -69,7 +68,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private final ShaderObjectCompute transmittanceShader, multiScatterShader, skyViewShader;
     private final SharedResource<AutoCloseable[]> resources;
     private final AtomicLong resourcePackEpoch;
-    private final List<ResourceGeneration> bindingGenerations = new ArrayList<>();
+    private ResourceOwner bindingOwner;
     private SharedResource<AtlasEntry> atlas;
     private boolean initialized, baked, closed;
     private float bakedGroundAlbedo;
@@ -144,55 +143,44 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 snapshot.image().vkImage(), epoch)) return;
         SharedResource<AtlasEntry> replacement = AtlasEntry.create(
                 gpu, snapshot.image(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
-        BindingGeneration binding = null;
-        ResourceGeneration generation = null;
+        BindingResources binding = null;
+        ResourceOwner owner = null;
         boolean published = false;
         try {
             binding = createBinding(replacement.retain());
-            generation = resourceFactory.create(binding::retire);
-            RetainedPublication publication = publishBinding(
-                    generation, environment, selector, binding.root.deviceRange().address().value());
-            trackReplacementPublication(bindingGenerations, generation, publication);
+            owner = resourceFactory.create(binding::close);
+            publishBinding(owner, environment, selector, binding.root.deviceRange().address().value());
             published = true;
         } catch (RuntimeException | Error failure) {
-            if (generation != null) generation.drop();
+            if (owner != null) owner.close();
             throw failure;
         } finally {
             if (!published) {
-                if (binding != null && generation == null) binding.closeStrict();
+                if (binding != null && owner == null) binding.close();
                 replacement.close();
             }
         }
-        SharedResource<AtlasEntry> previous = atlas;
+        ResourceOwner previousOwner = bindingOwner;
+        SharedResource<AtlasEntry> previousAtlas = atlas;
+        bindingOwner = owner;
         atlas = replacement;
         baked = false;
-        if (previous != null) previous.close();
+        if (previousOwner != null) previousOwner.close();
+        if (previousAtlas != null) previousAtlas.close();
     }
 
-    static RetainedPublication publishBinding(ResourceGeneration generation,
-                                              EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
-                                              MinecraftEnvironmentSelector selector, long address) {
-        generation.seal();
-        return selector.select(new EnvironmentBinding<>(environment,
-                MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(address, generation.reference())));
-    }
-
-    static void trackReplacementPublication(List<ResourceGeneration> generations,
-                                            ResourceGeneration replacement,
-                                            RetainedPublication publication) {
-        List<ResourceGeneration> displaced;
-        synchronized (generations) {
-            displaced = List.copyOf(generations);
-            generations.add(replacement);
-        }
-        publication.whenVisible(() -> dropOwned(generations, displaced));
+    static void publishBinding(ResourceOwner owner,
+                               EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
+                               MinecraftEnvironmentSelector selector, long address) {
+        selector.select(new EnvironmentBinding<>(environment,
+                MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(address, owner.reference())));
     }
 
     static boolean sameBindingEpoch(long image, long epoch, long nextImage, long nextEpoch) {
         return image == nextImage && epoch == nextEpoch;
     }
 
-    private BindingGeneration createBinding(SharedResource<AtlasEntry> atlasLease) {
+    private BindingResources createBinding(SharedResource<AtlasEntry> atlasLease) {
         VmaMappedBuffer root = null;
         try {
             root = createBuffer(MinecraftEnvironmentBindingData.BYTE_SIZE, bytes ->
@@ -201,7 +189,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
                             sampled(atlasLease.get().index()), sampler(lutSampler.index()),
                             sampler(celestialSampler.index()),
                             skyInputsAddress()).write(bytes));
-            return new BindingGeneration(root, atlasLease, resources.retain());
+            return new BindingResources(root, atlasLease, resources.retain());
         } catch (RuntimeException | Error failure) {
             closeAll(root);
             atlasLease.close();
@@ -381,62 +369,27 @@ public final class SkyLutPass implements Pass<PassFrame> {
     @Override public void close() {
         if (closed) return;
         closed = true;
-        dropAll(bindingGenerations);
+        if (bindingOwner != null) bindingOwner.close();
+        bindingOwner = null;
         if (atlas != null) try { atlas.close(); }
         catch (Throwable failure) { LOGGER.error("Sky atlas cleanup failed", failure); }
         atlas = null;
         closeAll(skyViewShader, multiScatterShader, transmittanceShader);
         resources.close();
     }
-    static void dropAll(List<ResourceGeneration> generations) {
-        List<ResourceGeneration> dropped;
-        synchronized (generations) {
-            if (generations.isEmpty()) return;
-            dropped = List.copyOf(generations);
-            generations.clear();
-        }
-        for (ResourceGeneration generation : dropped) generation.drop();
-    }
-    private static void dropOwned(List<ResourceGeneration> generations,
-                                  List<ResourceGeneration> candidates) {
-        List<ResourceGeneration> dropped = new ArrayList<>();
-        synchronized (generations) {
-            for (ResourceGeneration generation : candidates) {
-                if (generations.remove(generation)) dropped.add(generation);
-            }
-        }
-        for (ResourceGeneration generation : dropped) generation.drop();
-    }
     private static void closeAll(AutoCloseable... resources) {
         for (AutoCloseable r : resources) if (r != null) try { r.close(); }
         catch (Exception e) { LOGGER.error("Sky resource cleanup failed", e); }
     }
 
-    private final class BindingGeneration {
-        final VmaMappedBuffer root;
-        final SharedResource<AtlasEntry> atlas;
-        final SharedResource<AutoCloseable[]> resources;
-        boolean closed;
-        BindingGeneration(VmaMappedBuffer root, SharedResource<AtlasEntry> atlas,
-                          SharedResource<AutoCloseable[]> resources) {
-            this.root = root; this.atlas = atlas; this.resources = resources;
-        }
-        void closeStrict() {
-            Throwable failure = release();
-            if (failure instanceof RuntimeException runtime) throw runtime;
-            if (failure instanceof Error error) throw error;
-        }
-        void retire() {
-            Throwable failure = release();
-            if (failure != null) LOGGER.error("Sky binding retirement failed", failure);
-        }
-        synchronized Throwable release() {
-            if (closed) return null;
-            closed = true;
+    private record BindingResources(VmaMappedBuffer root, SharedResource<AtlasEntry> atlas,
+                                    SharedResource<AutoCloseable[]> resources) implements AutoCloseable {
+        @Override public void close() {
             Throwable failure = cleanup(null, root::close);
             failure = cleanup(failure, atlas::close);
             failure = cleanup(failure, resources::close);
-            return failure;
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
         }
     }
 

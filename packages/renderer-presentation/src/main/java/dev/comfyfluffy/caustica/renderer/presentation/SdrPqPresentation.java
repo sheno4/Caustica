@@ -2,15 +2,15 @@ package dev.comfyfluffy.caustica.renderer.presentation;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.OwnedCommandBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VK14;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDependencyInfo;
-import org.lwjgl.vulkan.VkMemoryBarrier2;
 
 import java.util.function.Supplier;
 
@@ -43,28 +43,22 @@ final class SdrPqPresentation {
         }
         int copyWidth = Math.min(target.width(), image.width());
         int copyHeight = Math.min(target.height(), image.height());
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
-            context.bindDescriptorHeaps(commandBuffer);
-            VkMemoryBarrier2.Buffer pre = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-            pre.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                    .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-                            | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            VK14.vkCmdPipelineBarrier2(commandBuffer,
-                    VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(pre));
+        GraphicsUse use = context.graphics().beginGraphicsUse();
+        try (OwnedCommandBuffer commands = context.beginGraphicsCommands("SDR to PQ presentation", true);
+             MemoryStack stack = MemoryStack.stackPush()) {
+            VkCommandBuffer commandBuffer = commands.commandBuffer();
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
 
             pipeline.dispatch(commandBuffer, image,
                     source.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
                     settings.get().uiNits());
             HdrPresentation.recordSwapchainBlit(
                     commandBuffer, stack, image.image(), target.image(), copyWidth, copyHeight);
-            if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
-                throw new IllegalStateException("vkEndCommandBuffer(sdr present) failed");
-            }
-            GeneratedFrameQueue.enqueuePresent(
-                    submission, commandBuffer, target.acquireSemaphore(), target.presentSemaphore());
+            submission.waitSemaphore(target.acquireSemaphore(), 0L, VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            commands.submit(submission, use);
+            submission.signalSemaphore(target.presentSemaphore(), 0L, VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+        } finally {
+            context.graphics().resolveGraphicsUse(submission, use);
         }
         return true;
     }

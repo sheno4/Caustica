@@ -84,6 +84,25 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
+    void acceptedReplacementReleasesDisplacedUploadBeforeVisibility() {
+        var channel = new RecordingChannel();
+        var first = new Uploaded(0x1010L);
+        var second = new Uploaded(0x1020L);
+        var uploads = new java.util.ArrayDeque<>(List.of(first, second));
+        var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { },
+                ignored -> uploads.removeFirst());
+
+        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(7L, 0, 0, 0, mesh())));
+        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(7L, 0, 0, 0, mesh())));
+
+        assertFalse(channel.publication.isVisible());
+        assertTrue(first.closed);
+        assertFalse(second.closed);
+        terrain.submit(List.of(new MinecraftTerrainGeometry.Drop(7L)));
+        assertTrue(second.closed);
+    }
+
+    @Test
     void transactionCoalescesASectionAndDropsMeshAndPlacementTogether() {
         var channel = new RecordingChannel();
         var terrain = new MinecraftTerrainGeometry(channel, new RecordingLights(), new SceneId() { }, ignored -> new Uploaded(0x2000L));
@@ -280,23 +299,31 @@ final class MinecraftTerrainGeometryTest {
         var environment = new dev.comfyfluffy.caustica.api.program.EnvironmentId<
                 MinecraftProgramTypes.EnvironmentBindingData>() { };
         var programs = new MinecraftPrograms(materialSurface, waterSurface, portalSurface, waterVolume, environment);
-        var bindingResource = new dev.comfyfluffy.caustica.api.resource.ResourceRef() { };
+        var releases = new java.util.concurrent.atomic.AtomicInteger();
+        try (var owner = dev.comfyfluffy.caustica.minecraft.rendering.TestResource.create(releases::incrementAndGet)) {
+            var bindingResource = owner.reference();
 
-        var geometries = MinecraftVulkanTerrainUploader.geometries(
-                source, programs, new VulkanDeviceAddress(0x4000L), bindingResource);
+            var geometries = MinecraftVulkanTerrainUploader.geometries(
+                    source, programs, new VulkanDeviceAddress(0x4000L), bindingResource);
 
-        assertEquals(2, geometries.size());
-        assertSame(materialSurface, geometries.get(0).surface().surface());
-        assertEquals(0x4000L, geometries.get(0).surface().bindingData().bits());
-        assertSame(waterSurface, geometries.get(1).surface().surface());
-        assertSame(waterVolume, geometries.get(1).volume().volume());
-        assertSame(bindingResource, geometries.get(0).surface().bindingData().resource());
-        assertSame(bindingResource, geometries.get(1).surface().bindingData().resource());
-        assertSame(bindingResource, geometries.get(1).volume().bindingData().resource());
-        assertEquals(0x4000L + MinecraftPrimitiveData.BYTE_SIZE,
-                geometries.get(1).surface().bindingData().bits());
-        assertEquals(3, geometries.get(1).firstIndex());
-        assertEquals(3, geometries.get(1).indexCount());
+            assertEquals(2, geometries.size());
+            assertSame(materialSurface, geometries.get(0).surface().surface());
+            assertEquals(0x4000L, geometries.get(0).surface().bindingData().bits());
+            assertSame(waterSurface, geometries.get(1).surface().surface());
+            assertSame(waterVolume, geometries.get(1).volume().volume());
+            assertSame(bindingResource, geometries.get(0).surface().bindingData().resource());
+            assertSame(bindingResource, geometries.get(1).surface().bindingData().resource());
+            assertSame(bindingResource, geometries.get(1).volume().bindingData().resource());
+            assertEquals(0x4000L + MinecraftPrimitiveData.BYTE_SIZE,
+                    geometries.get(1).surface().bindingData().bits());
+            assertEquals(3, geometries.get(1).firstIndex());
+            assertEquals(3, geometries.get(1).indexCount());
+            try (var frame = geometries.get(1).volume().bindingData().resource().retain()) {
+                owner.close();
+                assertEquals(0, releases.get());
+            }
+        }
+        assertEquals(1, releases.get());
     }
 
     @Test

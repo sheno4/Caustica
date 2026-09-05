@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;

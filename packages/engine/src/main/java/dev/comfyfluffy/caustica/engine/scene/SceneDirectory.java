@@ -13,6 +13,8 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
+import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.ArrayList;
@@ -40,6 +42,7 @@ public final class SceneDirectory {
     private boolean backendProgressAvailable;
     private long nextIdentity;
     private long revision;
+    private ResourceOwners retainedResources = ResourceOwners.capture(List.of());
 
     public SceneDirectory(ProgramSession programs, ResourceDirectory resources, RetainedSceneBackend backend,
                           SceneRetirementFailureHandler failures) {
@@ -180,9 +183,10 @@ public final class SceneDirectory {
         Map<LightRef, LightValue> currentLights = lights;
         Map<SceneRef, EnvironmentValue> currentEnvironments = environments;
         try {
-            backend.publishGeometry(delta,
-                    () -> snapshot(nextRevision, nextMeshes, nextInstances, currentLights, currentEnvironments),
-                    () -> { receipt.publish(); completePublication(publication); });
+            publishOwned(nextMeshes, nextInstances, environmentSelections, () ->
+                    backend.publishGeometry(delta,
+                            () -> snapshot(nextRevision, nextMeshes, nextInstances, currentLights, currentEnvironments),
+                            () -> { receipt.publish(); completePublication(publication); }));
         } catch (Throwable failure) {
             rejectPublication(publication);
             throw failure;
@@ -256,9 +260,10 @@ public final class SceneDirectory {
         PendingPublication publication = beginPublication(geometryChannel, ownedLights);
         Map<SceneRef, EnvironmentValue> currentEnvironments = environments;
         try {
-            backend.publishGeometryAndContent(geometryDelta, content,
-                    () -> snapshot(nextRevision, nextMeshes, nextInstances, nextLights, currentEnvironments),
-                    () -> { receipt.publish(); completePublication(publication); });
+            publishOwned(nextMeshes, nextInstances, environmentSelections, () ->
+                    backend.publishGeometryAndContent(geometryDelta, content,
+                            () -> snapshot(nextRevision, nextMeshes, nextInstances, nextLights, currentEnvironments),
+                            () -> { receipt.publish(); completePublication(publication); }));
         } catch (Throwable failure) {
             rejectPublication(publication);
             throw failure;
@@ -354,15 +359,16 @@ public final class SceneDirectory {
         RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, lights, nextEnvironments);
         PublicationReceipt receipt = new PublicationReceipt(failures);
         PendingPublication publication = beginPublication(channel);
+        Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>> nextSelections =
+                new LinkedHashMap<>(environmentSelections);
+        nextSelections.put(scene, selections);
         try {
-            backend.publishContent(next, () -> { receipt.publish(); completePublication(publication); });
+            publishOwned(meshes, instances, nextSelections, () ->
+                    backend.publishContent(next, () -> { receipt.publish(); completePublication(publication); }));
         } catch (Throwable failure) {
             rejectPublication(publication);
             throw failure;
         }
-        Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>> nextSelections =
-                new LinkedHashMap<>(environmentSelections);
-        nextSelections.put(scene, selections);
         environmentSelections = nextSelections;
         environments = nextEnvironments;
         revision++;
@@ -396,7 +402,8 @@ public final class SceneDirectory {
         RetainedSceneSnapshot next = snapshot(revision + 1, nextMeshes, nextInstances, lights);
         PendingPublication publication = beginPublication(channel);
         try {
-            backend.publish(next, () -> completePublication(publication));
+            publishOwned(nextMeshes, nextInstances, environmentSelections, () ->
+                    backend.publish(next, () -> completePublication(publication)));
         } catch (Throwable failure) {
             rejectPublication(publication);
             throw failure;
@@ -438,6 +445,7 @@ public final class SceneDirectory {
         if (nextSceneSelections.isEmpty()) nextSelections.remove(scene);
         else nextSelections.put(scene, nextSceneSelections);
         if (removed != current) {
+            publishOwned(meshes, instances, nextSelections, () -> { });
             environmentSelections = nextSelections;
             return;
         }
@@ -448,7 +456,8 @@ public final class SceneDirectory {
         RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, lights, nextEnvironments);
         PendingPublication publication = beginPublication(channel);
         try {
-            backend.publishContent(next, () -> completePublication(publication));
+            publishOwned(meshes, instances, nextSelections, () ->
+                    backend.publishContent(next, () -> completePublication(publication)));
         } catch (Throwable failure) {
             rejectPublication(publication);
             channel.accepting = true;
@@ -473,7 +482,6 @@ public final class SceneDirectory {
     public void settleFrameUses() {
         backend.settleFrameUses();
         progress();
-        resources.progress();
     }
 
     private void drainOwner(Object owner) {
@@ -680,8 +688,37 @@ public final class SceneDirectory {
 
     private void publish() {
         RetainedSceneSnapshot next = snapshot(revision + 1);
-        backend.publish(next, () -> { });
+        publishOwned(meshes, instances, environmentSelections, () -> backend.publish(next, () -> { }));
         revision++;
+    }
+
+    /** Retain candidate data before acceptance; old snapshots keep independent ownership claims. */
+    private void publishOwned(Map<MeshRef, MeshValue> nextMeshes,
+                              Map<InstanceRef, InstanceValue> nextInstances,
+                              Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>> selections,
+                              Runnable publish) {
+        List<ResourceRef> references = new ArrayList<>();
+        for (MeshValue value : nextMeshes.values()) {
+            references.add(value.build.positions().resource());
+            references.add(value.build.indices().resource());
+            for (MeshBuild.Geometry<?> geometry : value.build.geometries()) {
+                if (geometry.surface() != null) references.add(geometry.surface().bindingData().resource());
+                if (geometry.volume() != null) references.add(geometry.volume().bindingData().resource());
+            }
+        }
+        nextInstances.values().forEach(value -> references.add(value.operation.instanceData().resource()));
+        selections.values().forEach(values -> values.values().forEach(
+                value -> references.add(value.binding.bindingData().resource())));
+        ResourceOwners next = ResourceOwners.capture(references);
+        try {
+            publish.run();
+        } catch (Throwable failure) {
+            next.close();
+            throw failure;
+        }
+        ResourceOwners previous = retainedResources;
+        retainedResources = next;
+        previous.close();
     }
 
     private void awaitChange() {

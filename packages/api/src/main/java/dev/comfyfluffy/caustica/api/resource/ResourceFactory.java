@@ -1,17 +1,17 @@
 package dev.comfyfluffy.caustica.api.resource;
 
-/** Contribution-owned creation authority for immutable resource generations. */
+/** Creates shared ownership for provider-managed GPU allocations. */
 public interface ResourceFactory {
     /**
-     * Create an unsealed generation carrying one producer lifetime claim.
+     * Create one producer claim whose final release destroys its resource graph off the render thread.
      *
-     * <p>Creation synchronously transfers the callback to the render session. If the generation is never
-     * used, dropping it still schedules the callback through normal session progress.
+     * <p>The producer finishes initialization before publishing a value carrying this reference. Accepted
+     * scene entries and jobs retain their own claims. The callback runs exactly once after every claim ends.
      */
-    ResourceGeneration create(Runnable retired);
+    ResourceOwner create(Runnable retired);
 
-    /** Create a generation for which the producer requires no retirement notification. */
-    default ResourceGeneration create() {
+    /** Create an owner without a destruction callback. */
+    default ResourceOwner create() {
         return create(() -> { });
     }
 }

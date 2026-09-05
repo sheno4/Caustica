@@ -327,7 +327,7 @@ final class ProgramSessionTest {
     }
 
     @Test
-    void implementationResourcesRejectUnsealedAndForeignReferencesAndRollBackEarlierAcquisitions() {
+    void implementationResourcesRejectReleasedAndForeignDeviceReferencesAndRollBackAcquisitions() {
         ResourceDirectory resources = resources();
         ContributionOwner owner = new ContributionOwner(1);
         ProgramSession session = new ProgramSession(
@@ -336,29 +336,23 @@ final class ProgramSessionTest {
         var resourceChannel = resources.openFactory(owner);
         AtomicInteger firstRetired = new AtomicInteger();
         var first = resourceChannel.create(firstRetired::incrementAndGet);
-        first.seal();
-        var unsealed = resourceChannel.create();
+
+        var released = resourceChannel.create();
+        released.close();
 
         assertThrows(IllegalStateException.class, () -> channel.register(builder -> {
             builder.surface(new SurfaceDefinition<>(shader("first", "sample.ResourceFirst"), null,
                     IMPLEMENTATION.data(1, first.reference()), BINDING, INSTANCE));
             return builder.volume(new VolumeDefinition<>(shader("second", "sample.ResourceSecond"),
-                    IMPLEMENTATION.data(2, unsealed.reference()), BINDING, INSTANCE));
+                    IMPLEMENTATION.data(2, released.reference()), BINDING, INSTANCE));
         }));
-        first.drop();
-        resources.progress();
+        first.close();
+        resources.awaitRetirements();
         assertEquals(1, firstRetired.get(), "a rejected declaration must release earlier acquisitions");
-
-        var sameSessionForeignOwner = resources.openFactory(new ContributionOwner(2)).create();
-        sameSessionForeignOwner.seal();
-        assertThrows(IllegalArgumentException.class, () -> channel.register(builder -> builder.surface(
-                new SurfaceDefinition<>(shader("foreign_owner", "sample.ForeignOwner"), null,
-                        IMPLEMENTATION.data(3, sameSessionForeignOwner.reference()),
-                        BINDING, INSTANCE))));
 
         ResourceDirectory foreignDirectory = resources();
         var foreignSession = foreignDirectory.openFactory(owner).create();
-        foreignSession.seal();
+
         assertThrows(IllegalArgumentException.class, () -> channel.register(builder -> builder.surface(
                 new SurfaceDefinition<>(shader("foreign_session", "sample.ForeignSession"), null,
                         IMPLEMENTATION.data(4, foreignSession.reference()),
@@ -375,7 +369,7 @@ final class ProgramSessionTest {
         ProgramContributionChannel channel = session.openChannel(owner);
         List<String> events = new ArrayList<>();
         var generation = resources.openFactory(owner).create(() -> events.add("resource"));
-        generation.seal();
+
 
         ProgramRegistration<?> registration = channel.register(builder -> {
             builder.surface(new SurfaceDefinition<>(shader("surface_root", "sample.ResourceSurface"), null,
@@ -383,8 +377,8 @@ final class ProgramSessionTest {
             return builder.volume(new VolumeDefinition<>(shader("volume_root", "sample.ResourceVolume"),
                     IMPLEMENTATION.data(2, generation.reference()), BINDING, INSTANCE));
         });
-        generation.drop();
-        resources.progress();
+        generation.close();
+        resources.awaitRetirements();
         assertTrue(events.isEmpty());
 
         session.progress();
@@ -394,13 +388,12 @@ final class ProgramSessionTest {
         session.progress();
         backend.succeed();
         session.progress();
-        resources.progress();
+        resources.awaitRetirements();
         assertTrue(events.isEmpty(), "published use still owns the implementation generation");
 
         backend.retireLatestPrevious();
         session.progress();
-        assertTrue(events.isEmpty());
-        resources.progress();
+        resources.awaitRetirements();
         assertEquals(List.of("resource"), events);
     }
 
@@ -415,33 +408,33 @@ final class ProgramSessionTest {
         List<String> retired = new ArrayList<>();
 
         var failedRoot = resources.openFactory(owner).create(() -> retired.add("failed-resource"));
-        failedRoot.seal();
+
         channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                 shader("failed_root", "sample.FailedResource"), null,
                 IMPLEMENTATION.data(1, failedRoot.reference()), BINDING, INSTANCE)));
-        failedRoot.drop();
+        failedRoot.close();
         session.progress();
         backend.fail("failed");
-        resources.progress();
+        resources.awaitRetirements();
         assertTrue(retired.isEmpty());
         session.progress();
-        resources.progress();
+        resources.awaitRetirements();
         assertEquals(List.of("failed-resource"), retired);
 
         var cancelledRoot = resources.openFactory(owner).create(() -> retired.add("cancelled-resource"));
-        cancelledRoot.seal();
+
         ProgramRegistration<?> cancelled = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                 shader("cancelled_root", "sample.CancelledResource"), null,
                 IMPLEMENTATION.data(2, cancelledRoot.reference()), BINDING, INSTANCE)));
-        cancelledRoot.drop();
+        cancelledRoot.close();
         session.progress();
         cancelled.close();
-        resources.progress();
+        resources.awaitRetirements();
         assertEquals(List.of("failed-resource"), retired,
                 "cancellation must retain resources while its compile is in flight");
         backend.succeed();
         session.progress();
-        resources.progress();
+        resources.awaitRetirements();
         assertEquals(List.of("failed-resource", "cancelled-resource"), retired);
     }
 

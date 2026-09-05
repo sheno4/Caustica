@@ -13,7 +13,7 @@ import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import org.junit.jupiter.api.Test;
@@ -34,7 +34,7 @@ final class ShowcaseSceneApiTest {
     @Test
     void meshPublicationAcceptsTypedAddressRanges() throws Exception {
         assertNotNull(ShowcaseScene.class.getDeclaredMethod("publishMesh",
-                VulkanDeviceAddressRange.class, VulkanDeviceAddressRange.class, ResourceGeneration.class));
+                VulkanDeviceAddressRange.class, VulkanDeviceAddressRange.class, ResourceOwner.class));
     }
 
     @Test
@@ -64,9 +64,11 @@ final class ShowcaseSceneApiTest {
         var setMesh = (GeometryChannel.SetMesh<?>) group.getFirst().operations().getFirst();
         assertSame(resources.generations.getFirst().reference(), setMesh.build().positions().resource());
         assertSame(resources.generations.getFirst().reference(), setMesh.build().indices().resource());
+        var frame = setMesh.build().positions().resource().retain();
         scene.stop();
         assertFalse(retired.get());
-        geometry.publication.makeVisible();
+        assertFalse(geometry.publication.isVisible());
+        frame.close();
         assertTrue(retired.get());
     }
 
@@ -90,8 +92,8 @@ final class ShowcaseSceneApiTest {
         ShowcaseScene first = new ShowcaseScene(exports, sharedLights, primary, primaryGeometry);
         ShowcaseScene second = new ShowcaseScene(exports, sharedLights, alternate, alternateGeometry);
 
-        first.publishMesh(range(0x1000, 48), range(0x3000, 48), new TestGeneration(() -> { }));
-        second.publishMesh(range(0x4000, 48), range(0x6000, 48), new TestGeneration(() -> { }));
+        first.publishMesh(range(0x1000, 48), range(0x3000, 48), TestResource.create(() -> { }));
+        second.publishMesh(range(0x4000, 48), range(0x6000, 48), TestResource.create(() -> { }));
         var firstPlacement = (GeometryChannel.SetInstance<?>) primaryGeometry.operations.getFirst().get(1);
         var secondPlacement = (GeometryChannel.SetInstance<?>) alternateGeometry.operations.getFirst().get(1);
         assertSame(sharedLights.getFirst(), firstPlacement.primitiveLights().ranges().getFirst().light());
@@ -115,10 +117,11 @@ final class ShowcaseSceneApiTest {
         AtomicBoolean originalRetired = new AtomicBoolean();
         AtomicBoolean replacementRetired = new AtomicBoolean();
 
-        scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
-                new TestGeneration(() -> originalRetired.set(true)));
+        var original = TestResource.create(() -> originalRetired.set(true));
+        scene.publishMesh(range(0x1000, 48), range(0x3000, 48), original);
+        var oldFrame = original.retain();
         scene.replaceMesh(range(0x4000, 48), range(0x6000, 48), 2L,
-                new TestGeneration(() -> replacementRetired.set(true)));
+                TestResource.create(() -> replacementRetired.set(true)));
         scene.moveInstance(portalDestination, GeometryTransform.translation(4.0, 70.0, -3.0));
 
         var replacement = assertInstanceOf(GeometryChannel.SetMesh.class,
@@ -130,11 +133,12 @@ final class ShowcaseSceneApiTest {
         assertFalse(originalRetired.get());
         assertFalse(replacementRetired.get());
 
-        geometry.publications.get(1).makeVisible();
+        assertFalse(geometry.publications.get(1).isVisible());
+        oldFrame.close();
         assertTrue(originalRetired.get());
         assertFalse(replacementRetired.get());
         scene.stop();
-        geometry.publication.makeVisible();
+        assertFalse(geometry.publication.isVisible());
         assertTrue(replacementRetired.get());
     }
 
@@ -145,17 +149,16 @@ final class ShowcaseSceneApiTest {
         AtomicBoolean currentRetired = new AtomicBoolean();
         AtomicBoolean rejectedRetired = new AtomicBoolean();
         scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
-                new TestGeneration(() -> currentRetired.set(true)));
+                TestResource.create(() -> currentRetired.set(true)));
 
         geometry.rejectNext = true;
         assertThrows(IllegalStateException.class, () -> scene.replaceMesh(
                 range(0x4000, 48), range(0x6000, 48), 2L,
-                new TestGeneration(() -> rejectedRetired.set(true))));
+                TestResource.create(() -> rejectedRetired.set(true))));
 
         assertTrue(rejectedRetired.get());
         assertFalse(currentRetired.get());
         scene.stop();
-        geometry.publication.makeVisible();
         assertTrue(currentRetired.get());
     }
 
@@ -244,27 +247,13 @@ final class ShowcaseSceneApiTest {
     }
 
     private static final class TestResources implements ResourceFactory {
-        private final List<TestGeneration> generations = new ArrayList<>();
+        private final List<ResourceOwner> generations = new ArrayList<>();
 
-        @Override public ResourceGeneration create(Runnable retired) {
-            TestGeneration generation = new TestGeneration(retired);
+        @Override public ResourceOwner create(Runnable retired) {
+            ResourceOwner generation = TestResource.create(retired);
             generations.add(generation);
             return generation;
         }
     }
 
-    private static final class TestGeneration implements ResourceGeneration {
-        private final ResourceRef reference = new ResourceRef() { };
-        private final Runnable retired;
-        private boolean dropped;
-
-        private TestGeneration(Runnable retired) { this.retired = retired; }
-        @Override public ResourceRef reference() { return reference; }
-        @Override public void seal() { }
-        @Override public void drop() {
-            if (dropped) return;
-            dropped = true;
-            retired.run();
-        }
-    }
 }

@@ -107,7 +107,7 @@ final class EngineSessionServicesTest {
         AtomicInteger retired = new AtomicInteger();
         var generation = first.resources().create(retired::incrementAndGet);
         first.quiesce();
-        generation.seal();
+
         first.invalidate();
         assertEquals(0, retired.get());
         first.drain();

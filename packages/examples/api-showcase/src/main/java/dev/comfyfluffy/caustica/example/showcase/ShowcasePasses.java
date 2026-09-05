@@ -12,7 +12,7 @@ import dev.comfyfluffy.caustica.api.pass.PassPlacement;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.example.showcase.gen.ShowcasePostPushData;
 import dev.comfyfluffy.caustica.example.showcase.gen.ShowcaseUiPushData;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
@@ -120,7 +120,7 @@ final class ShowcasePasses {
             if (uploadRecorded) {
                 if (!uploadComplete) return;
                 VmaMappedBuffer accepted = upload;
-                ResourceGeneration generation = resources.create(accepted::close);
+                ResourceOwner generation = resources.create(accepted::close);
                 upload = null;
                 publication = scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
                         accepted.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), generation);

@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import org.junit.jupiter.api.Test;
@@ -23,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-final class RtFrameResourceFallbackTest {
+final class RtFrameResourceOwnershipTest {
     interface Binding { }
     interface Instance { }
     private static final ShaderDataType<Binding> BINDING = ShaderDataType.create("binding");
@@ -34,15 +35,15 @@ final class RtFrameResourceFallbackTest {
     private static final SceneId SCENE = new SceneId() { };
 
     @Test
-    void droppedDataChangesOnlyCapturesTakenAfterTheDrop() {
+    void producerReleasePreservesShaderDataForEveryRetainedFrame() {
         ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
         var channel = directory.openFactory(new ContributionOwner(1));
-        var positions = sealed(channel.create());
-        var indices = sealed(channel.create());
-        var surface = sealed(channel.create());
-        var volume = sealed(channel.create());
-        var instance = sealed(channel.create());
-        var environment = sealed(channel.create());
+        var positions = channel.create();
+        var indices = channel.create();
+        var surface = channel.create();
+        var volume = channel.create();
+        var instance = channel.create();
+        var environment = channel.create();
 
         MeshBuild.Geometry<Instance> geometry = new MeshBuild.Geometry<>(
                 new MeshBuild.SurfaceSlot<>(SURFACE,
@@ -65,48 +66,26 @@ final class RtFrameResourceFallbackTest {
                 positions.reference(), indices.reference(), surface.reference(), volume.reference(),
                 instance.reference(), environment.reference());
 
-        ResourceLeaseSet first = ResourceLeaseSet.capture(references);
-        surface.drop();
-        environment.drop();
-        ResourceLeaseSet second = ResourceLeaseSet.capture(references);
+        ResourceOwners first = ResourceOwners.capture(references);
+        surface.close();
+        environment.close();
+        ResourceOwners second = ResourceOwners.capture(references);
 
-        var firstInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement, first).orElseThrow();
-        var secondInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement, second).orElseThrow();
+        var firstInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement);
+        var secondInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement);
         assertEquals(3, firstInput.mesh().geometries().getFirst().surfaceImplementation());
         assertEquals(0x1111, firstInput.mesh().geometries().getFirst().surfaceBinding());
-        assertEquals(0, secondInput.mesh().geometries().getFirst().surfaceImplementation());
-        assertEquals(0, secondInput.mesh().geometries().getFirst().surfaceBinding());
+        assertEquals(firstInput, secondInput);
         assertEquals(5, secondInput.mesh().geometries().getFirst().volumeImplementation());
-        assertNotNull(RtRetainedSceneBackend.resolveFrameEnvironment(environmentBinding, first));
-        assertNull(RtRetainedSceneBackend.resolveFrameEnvironment(environmentBinding, second));
-
-        instance.drop();
-        ResourceLeaseSet third = ResourceLeaseSet.capture(references);
-        var instanceFallback = RtRetainedSceneBackend.resolveFrameInput(mesh, placement, third).orElseThrow();
-        var fallbackGeometry = instanceFallback.mesh().geometries().getFirst();
-        assertEquals(0, fallbackGeometry.surfaceImplementation());
-        assertEquals(0, fallbackGeometry.volumeImplementation());
-        assertEquals(0, fallbackGeometry.surfaceBinding());
-        assertEquals(0, fallbackGeometry.volumeBinding());
-        assertEquals(0, instanceFallback.placement().instanceData());
-
-        positions.drop();
-        ResourceLeaseSet fourth = ResourceLeaseSet.capture(references);
-        assertTrue(RtRetainedSceneBackend.resolveFrameInput(mesh, placement, first).isPresent(),
-                "the already captured frame keeps its position generation");
-        assertTrue(RtRetainedSceneBackend.resolveFrameInput(mesh, placement, fourth).isEmpty(),
-                "a new frame omits a mesh whose current positions are unavailable");
-
+        assertEquals(0x3333, secondInput.placement().instanceData());
         first.close();
+        positions.close();
+        indices.close();
+        volume.close();
+        instance.close();
         second.close();
-        third.close();
-        fourth.close();
-    }
-
-    private static dev.comfyfluffy.caustica.api.resource.ResourceGeneration sealed(
-            dev.comfyfluffy.caustica.api.resource.ResourceGeneration generation) {
-        generation.seal();
-        return generation;
+        directory.awaitRetirements();
+        directory.close();
     }
 
     private static MeshBuild.Stream stream(long address, long bytes, int stride,

@@ -9,17 +9,12 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/**
- * Acceleration-structure builds, transfers, and extension compute must reach the reserved queue the same
- * way. A submission entry point beyond the public contract would let internal callers take ordering or
- * cleanup guarantees an extension cannot ask for, which is how the cross-queue coupling grew last time.
- */
 final class GpuExecutorSubmissionPathTest {
     @Test
     void theExecutorSubmitsOnlyThroughTheComputeQueueContract() {
         List<String> contract = publicSubmitSignatures(GpuComputeQueue.class);
 
-        assertEquals(1, contract.size(), "the compute-queue contract should declare one submission");
+        assertEquals(2, contract.size(), "submission accepts explicit ownership or callback-owned dependencies");
         assertEquals(contract, publicSubmitSignatures(RtGpuExecutor.class),
                 "RtGpuExecutor must not expose a submission beyond GpuComputeQueue");
     }

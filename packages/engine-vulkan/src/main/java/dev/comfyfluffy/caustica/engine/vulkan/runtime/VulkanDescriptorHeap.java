@@ -29,16 +29,12 @@ import org.lwjgl.vulkan.VkBindHeapInfoEXT;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
 import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceAddressRangeEXT;
 import org.lwjgl.vulkan.VkHostAddressRangeConstEXT;
 import org.lwjgl.vulkan.VkHostAddressRangeEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceDescriptorHeapPropertiesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
-import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
 import org.lwjgl.vulkan.VkPushDataInfoEXT;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
@@ -63,7 +59,6 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     private final DescriptorHeapBinding samplerBinding;
     private final DescriptorHeapWriterCore writer;
     private final long maxPushDataSize;
-    private final ConventionalDescriptorState conventionalDescriptorState;
 
     static VulkanDescriptorHeap create(VkDevice vk, long vma, int graphicsQueueFamily, int computeQueueFamily) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -122,7 +117,6 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
         this.samplerBinding = new DescriptorHeapBinding(allocations.samplers().layout(), samplers);
         this.writer = new DescriptorHeapWriterCore(allocations, resources, samplers, this);
         this.maxPushDataSize = maxPushDataSize;
-        this.conventionalDescriptorState = ConventionalDescriptorState.create(vk);
     }
 
     @Override
@@ -170,14 +164,6 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
             VkPushDataInfoEXT info = VkPushDataInfoEXT.calloc(stack).sType$Default()
                     .offset(offset).data(range);
             EXTDescriptorHeap.vkCmdPushDataEXT(commandBuffer, info);
-        }
-    }
-
-    void invalidateForExternalCommand(VkCommandBuffer commandBuffer) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VK10.vkCmdBindDescriptorSets(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_COMPUTE,
-                    conventionalDescriptorState.pipelineLayout(), 0,
-                    stack.longs(conventionalDescriptorState.descriptorSet()), null);
         }
     }
 
@@ -258,47 +244,8 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
 
     @Override
     public void close() {
-        conventionalDescriptorState.close(vk);
         samplers.close();
         resources.close();
-    }
-
-    private record ConventionalDescriptorState(long descriptorSetLayout, long pipelineLayout,
-                                                long descriptorPool, long descriptorSet) {
-        static ConventionalDescriptorState create(VkDevice vk) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                LongBuffer handle = stack.mallocLong(1);
-                VkDescriptorSetLayoutCreateInfo setLayoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack)
-                        .sType$Default();
-                VulkanDeviceContext.check(VK10.vkCreateDescriptorSetLayout(vk, setLayoutInfo, null, handle),
-                        "vkCreateDescriptorSetLayout(external command reset)");
-                long setLayout = handle.get(0);
-
-                VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack)
-                        .sType$Default().pSetLayouts(stack.longs(setLayout));
-                VulkanDeviceContext.check(VK10.vkCreatePipelineLayout(vk, pipelineLayoutInfo, null, handle),
-                        "vkCreatePipelineLayout(external command reset)");
-                long pipelineLayout = handle.get(0);
-
-                VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack)
-                        .sType$Default().maxSets(1);
-                VulkanDeviceContext.check(VK10.vkCreateDescriptorPool(vk, poolInfo, null, handle),
-                        "vkCreateDescriptorPool(external command reset)");
-                long pool = handle.get(0);
-
-                VkDescriptorSetAllocateInfo allocateInfo = VkDescriptorSetAllocateInfo.calloc(stack)
-                        .sType$Default().descriptorPool(pool).pSetLayouts(stack.longs(setLayout));
-                VulkanDeviceContext.check(VK10.vkAllocateDescriptorSets(vk, allocateInfo, handle),
-                        "vkAllocateDescriptorSets(external command reset)");
-                return new ConventionalDescriptorState(setLayout, pipelineLayout, pool, handle.get(0));
-            }
-        }
-
-        void close(VkDevice vk) {
-            VK10.vkDestroyDescriptorPool(vk, descriptorPool, null);
-            VK10.vkDestroyPipelineLayout(vk, pipelineLayout, null);
-            VK10.vkDestroyDescriptorSetLayout(vk, descriptorSetLayout, null);
-        }
     }
 
     private static VkBindHeapInfoEXT bindInfo(DescriptorHeapBinding binding, MemoryStack stack) {

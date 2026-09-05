@@ -179,10 +179,16 @@ public final class DlssRayReconstruction {
         }
     }
 
+    public boolean featureReadyFor(int renderWidth, int renderHeight, int displayWidth, int displayHeight) {
+        return !isNull(feature) && featureRenderWidth == renderWidth && featureRenderHeight == renderHeight
+                && featureDisplayWidth == displayWidth && featureDisplayHeight == displayHeight
+                && featureQuality == quality() && featurePreset == renderPreset();
+    }
+
     /**
      * Ensure NGX is initialized and an RR feature exists for the given resolutions, creating it into
      * the supplied recording command buffer. Returns false (and disables itself) on any failure so the
-     * caller falls back to the non-RR path.
+     * caller falls back to the non-RR path. Before changing a feature, the caller must complete its prior GPU uses.
      */
     public boolean ensureFeature(VkCommandBuffer commandBuffer, int renderWidth, int renderHeight,
                                  int displayWidth, int displayHeight) {
@@ -193,10 +199,7 @@ public final class DlssRayReconstruction {
             ensureInitialized();
             int quality = quality();
             int preset = renderPreset();
-            if (featureRenderWidth != renderWidth || featureRenderHeight != renderHeight
-                    || featureDisplayWidth != displayWidth || featureDisplayHeight != displayHeight
-                    || featureQuality != quality || featurePreset != preset
-                    || isNull(feature)) {
+            if (!featureReadyFor(renderWidth, renderHeight, displayWidth, displayHeight)) {
                 releaseFeature();
                 feature = lib.createDlssd(commandBuffer.address(), renderWidth, renderHeight,
                         displayWidth, displayHeight, quality, FEATURE_FLAGS, preset);

@@ -83,7 +83,6 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         programs.progress();
         scenes.progress();
         passes.progress();
-        resources.progress();
     }
 
     /** Stops new owner scopes after the render-session orchestrator has closed its contributions. */

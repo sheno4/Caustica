@@ -16,7 +16,7 @@ import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class GltfWorldContributionTest {
@@ -77,12 +78,14 @@ final class GltfWorldContributionTest {
         assertSame(resources.generations.get(2).reference(),
                 authoredMesh.build().geometries().getFirst().surface().bindingData().resource());
 
+        var oldFrame = resources.generations.stream().map(ResourceOwner::retain).toList();
         contribution.resourcePackChanged(new ResourcePackEpoch(3));
         assertEquals(2, count(geometry.last(), GeometryChannel.DropMesh.class));
         assertEquals(2, count(geometry.last(), GeometryChannel.DropInstance.class));
         assertEquals(2, count(geometry.last(), GeometryChannel.SetMesh.class));
         assertEquals(0, destroyed.get());
-        geometry.publications.get(1).makeVisible();
+        assertFalse(geometry.publications.get(1).isVisible());
+        oldFrame.forEach(ResourceOwner::close);
         assertEquals(6, destroyed.get());
 
         stopOrder.clear();
@@ -91,8 +94,7 @@ final class GltfWorldContributionTest {
         assertEquals(2, count(geometry.last(), GeometryChannel.DropInstance.class));
         assertEquals(1, registrationCloses.get());
         assertEquals(List.of("geometry", "program"), stopOrder);
-        assertEquals(6, destroyed.get());
-        geometry.publications.get(2).makeVisible();
+        assertFalse(geometry.publications.get(2).isVisible());
         assertEquals(12, destroyed.get());
         contribution.close();
     }
@@ -155,9 +157,9 @@ final class GltfWorldContributionTest {
         @Override public Uploaded upload(ResourceFactory resources, GltfScene.Primitive primitive) {
             long base = address;
             address += 0x1000;
-            ResourceGeneration positions = generation(resources);
-            ResourceGeneration indices = generation(resources);
-            ResourceGeneration primitiveData = generation(resources);
+            ResourceOwner positions = generation(resources);
+            ResourceOwner indices = generation(resources);
+            ResourceOwner primitiveData = generation(resources);
             return new Uploaded() {
                 @Override public MeshBuild.Stream positionsStream() {
                     return stream(base, 36, 12, positions.reference());
@@ -172,16 +174,14 @@ final class GltfWorldContributionTest {
                 @Override public int vertexCount() { return 3; }
                 @Override public int indexCount() { return 3; }
                 @Override public void drop() {
-                    primitiveData.drop();
-                    indices.drop();
-                    positions.drop();
+                    primitiveData.close();
+                    indices.close();
+                    positions.close();
                 }
             };
         }
-        private ResourceGeneration generation(ResourceFactory resources) {
-            ResourceGeneration generation = resources.create(destroyed::incrementAndGet);
-            generation.seal();
-            return generation;
+        private ResourceOwner generation(ResourceFactory resources) {
+            return resources.create(destroyed::incrementAndGet);
         }
         private static MeshBuild.Stream stream(long address, long size, int stride, ResourceRef resource) {
             return new MeshBuild.Stream(new VulkanDeviceAddressRange(
@@ -229,27 +229,14 @@ final class GltfWorldContributionTest {
     }
 
     private static final class TestResources implements ResourceFactory {
-        private final List<TestGeneration> generations = new ArrayList<>();
-        @Override public ResourceGeneration create(Runnable retired) {
-            TestGeneration generation = new TestGeneration(retired);
+        private final List<ResourceOwner> generations = new ArrayList<>();
+        @Override public ResourceOwner create(Runnable retired) {
+            ResourceOwner generation = TestResource.create(retired);
             generations.add(generation);
             return generation;
         }
     }
 
-    private static final class TestGeneration implements ResourceGeneration {
-        private final ResourceRef reference = new ResourceRef() { };
-        private final Runnable retired;
-        private boolean dropped;
-        private TestGeneration(Runnable retired) { this.retired = retired; }
-        @Override public ResourceRef reference() { return reference; }
-        @Override public void seal() { }
-        @Override public void drop() {
-            if (dropped) return;
-            dropped = true;
-            retired.run();
-        }
-    }
 
     private static final SceneId SCENE = new SceneId() { };
 }

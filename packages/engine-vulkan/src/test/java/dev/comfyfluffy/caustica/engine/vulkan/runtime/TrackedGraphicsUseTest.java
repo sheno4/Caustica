@@ -14,8 +14,25 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 final class TrackedGraphicsUseTest {
     @Test
+    void abandonmentRetiresAgainstThePreviousSubmittedUse() {
+        var tracked = new GraphicsQueue.TrackedGraphicsUse();
+        var previous = new GraphicsUse(null, 2L);
+        tracked.adopt(previous);
+        previous.commandsAccepted();
+        previous.resolveSubmission();
+        var abandoned = new GraphicsUse(null, 3L);
+        tracked.adopt(abandoned);
+        List<Long> retiredAt = new ArrayList<>();
+        tracked.whenMarksApplied(() -> retiredAt.add(tracked.value()));
+        abandoned.resolveSubmission();
+        assertEquals(List.of(2L), retiredAt);
+        tracked.whenMarksApplied(() -> retiredAt.add(tracked.value()));
+        assertEquals(List.of(2L, 2L), retiredAt);
+    }
+
+    @Test
     void abandonedFrameLeavesTheLastSubmittedValue() {
-        RtGpuExecutor.TrackedGraphicsUse tracked = new RtGpuExecutor.TrackedGraphicsUse();
+        GraphicsQueue.TrackedGraphicsUse tracked = new GraphicsQueue.TrackedGraphicsUse();
 
         GraphicsUse submitted = new GraphicsUse(null, 7L);
         tracked.adopt(submitted);
@@ -32,7 +49,7 @@ final class TrackedGraphicsUseTest {
 
     @Test
     void adoptionIsNotVisibleBeforeSubmission() {
-        RtGpuExecutor.TrackedGraphicsUse tracked = new RtGpuExecutor.TrackedGraphicsUse();
+        GraphicsQueue.TrackedGraphicsUse tracked = new GraphicsQueue.TrackedGraphicsUse();
         GraphicsUse recording = new GraphicsUse(null, 3L);
 
         tracked.adopt(recording);
@@ -45,7 +62,7 @@ final class TrackedGraphicsUseTest {
 
     @Test
     void retirementObservesAMarkRecordedEarlierInTheSameFrame() {
-        RtGpuExecutor.TrackedGraphicsUse tracked = new RtGpuExecutor.TrackedGraphicsUse();
+        GraphicsQueue.TrackedGraphicsUse tracked = new GraphicsQueue.TrackedGraphicsUse();
         GraphicsUse recording = new GraphicsUse(null, 5L);
         List<Long> retiredAt = new ArrayList<>();
 
@@ -61,7 +78,7 @@ final class TrackedGraphicsUseTest {
 
     @Test
     void retirementRunsImmediatelyWithNoFrameRecording() {
-        RtGpuExecutor.TrackedGraphicsUse tracked = new RtGpuExecutor.TrackedGraphicsUse();
+        GraphicsQueue.TrackedGraphicsUse tracked = new GraphicsQueue.TrackedGraphicsUse();
         List<Long> retiredAt = new ArrayList<>();
 
         tracked.whenMarksApplied(() -> retiredAt.add(tracked.value()));

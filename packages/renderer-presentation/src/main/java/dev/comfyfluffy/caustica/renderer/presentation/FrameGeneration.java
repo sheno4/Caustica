@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.renderer.presentation;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.OwnedCommandBuffer;
 
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
@@ -121,26 +123,30 @@ final class FrameGeneration {
         boolean uiReady = ui.width() == swapWidth && ui.height() == swapHeight
                 && ui.colorView() != 0L && ui.colorImage() != 0L;
 
-        VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
-        boolean evaluated = backend.evaluate(commandBuffer,
-                backbuffer.view(), backbuffer.image(), backbuffer.format(),
-                frame.depth().view(), frame.depth().image(), VK10.VK_FORMAT_R32_SFLOAT,
-                frame.motion().view(), frame.motion().image(), VK10.VK_FORMAT_R16G16_SFLOAT,
-                hudlessReady ? hudless.view() : 0L, hudlessReady ? hudless.image() : 0L,
-                hudlessReady ? hudlessFormat : 0,
-                uiReady ? ui.colorView() : 0L, uiReady ? ui.colorImage() : 0L,
-                uiReady ? VK10.VK_FORMAT_R8G8B8A8_UNORM : 0,
-                interpolationImage.view(), interpolationImage.image(), format,
-                swapWidth, swapHeight, frame.renderWidth(), frame.renderHeight(), 1.0f, 1.0f,
-                true, hdrBackbuffer, true, reset, clipToPrevious, previousToClip);
-        if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("vkEndCommandBuffer(fg interpolate) failed");
+        GraphicsUse use = context.graphics().beginGraphicsUse();
+        try (OwnedCommandBuffer commands = context.beginGraphicsCommands("DLSS frame generation", false);
+             MemoryStack stack = MemoryStack.stackPush()) {
+            VkCommandBuffer commandBuffer = commands.commandBuffer();
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
+            boolean evaluated = backend.evaluate(commandBuffer,
+                    backbuffer.view(), backbuffer.image(), backbuffer.format(),
+                    frame.depth().view(), frame.depth().image(), VK10.VK_FORMAT_R32_SFLOAT,
+                    frame.motion().view(), frame.motion().image(), VK10.VK_FORMAT_R16G16_SFLOAT,
+                    hudlessReady ? hudless.view() : 0L, hudlessReady ? hudless.image() : 0L,
+                    hudlessReady ? hudlessFormat : 0,
+                    uiReady ? ui.colorView() : 0L, uiReady ? ui.colorImage() : 0L,
+                    uiReady ? VK10.VK_FORMAT_R8G8B8A8_UNORM : 0,
+                    interpolationImage.view(), interpolationImage.image(), format,
+                    swapWidth, swapHeight, frame.renderWidth(), frame.renderHeight(), 1.0f, 1.0f,
+                    true, hdrBackbuffer, true, reset, clipToPrevious, previousToClip);
+            if (!evaluated) {
+                throw new IllegalStateException("ngxshim_evaluate_dlssg_2x failed");
+            }
+            commands.submit(submission, use);
+            reset = false;
+        } finally {
+            context.graphics().resolveGraphicsUse(submission, use);
         }
-        reset = false;
-        if (!evaluated) {
-            throw new IllegalStateException("ngxshim_evaluate_dlssg_2x failed");
-        }
-        submission.execute(commandBuffer);
         return interpolationImage;
     }
 
@@ -149,6 +155,7 @@ final class FrameGeneration {
         if (backend.featureReadyFor(width, height, renderWidth, renderHeight, format)) {
             return true;
         }
+        context.waitIdle();
         context.submitSync(commandBuffer -> backend.ensureFeature(
                 commandBuffer, width, height, renderWidth, renderHeight, format));
         reset = true;

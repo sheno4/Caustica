@@ -15,6 +15,7 @@ public interface RtUpscaler {
         }
     }
 
+    /** The command buffer is dedicated to conventional descriptor bindings for this evaluation. */
     record Frame(VkCommandBuffer commandBuffer, GpuImage color, GpuImage depth, GpuImage motion,
                  GpuImage output, Extent extent, float jitterX, float jitterY,
                  boolean reset, float preExposure) {

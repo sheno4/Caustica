@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.material;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
@@ -40,7 +41,6 @@ final class MinecraftMaterialUpload {
     private final Consumer<? super GpuComputeCompletion> completion;
     private List<ImageUpload> uploads;
     private GpuComputeJob job;
-    private boolean finished;
 
     MinecraftMaterialUpload(GpuDevice gpu, GpuComputeQueue compute,
                             MinecraftProgramResources resources, MinecraftMaterialLookup lookup,
@@ -52,18 +52,21 @@ final class MinecraftMaterialUpload {
         this.completion = java.util.Objects.requireNonNull(completion, "completion");
         List<ImageUpload> allocated = allocateUploads(lookup.textures());
         MinecraftProgramResources.Epoch prepared = null;
+        ResourceOwner jobOwner = null;
         try {
             prepared = resources.createPreparedEpoch(lookup, allocated.stream()
                     .map(upload -> (MinecraftProgramResources.UploadedImage) upload.image()).toList());
             epoch = prepared;
             uploads = allocated;
             resources.populateMaterialRecords(epoch, lookup);
-            job = compute.submit(this::recordCopies, this::complete);
+            jobOwner = epoch.retain();
+            job = compute.submit(this::recordCopies, List.of(jobOwner), this::complete);
+            jobOwner = null;
         } catch (RuntimeException | Error failure) {
+            if (jobOwner != null) jobOwner.close();
             allocated.forEach(ImageUpload::destroyStaging);
             if (prepared != null) {
                 prepared.close();
-                prepared.finishInitialization();
             }
             throw failure;
         }
@@ -217,12 +220,9 @@ final class MinecraftMaterialUpload {
         return offsets;
     }
 
-    private synchronized void complete(GpuComputeCompletion result) {
-        if (finished) throw new IllegalStateException("material upload completed more than once");
-        finished = true;
+    private void complete(GpuComputeCompletion result) {
         uploads.forEach(ImageUpload::destroyStaging);
         uploads = List.of();
-        epoch.finishInitialization();
         completion.accept(result);
     }
 

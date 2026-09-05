@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
-import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackend;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackendFactory;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserCommonSettings;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserExtent;
@@ -17,7 +16,7 @@ import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdPlaneFrameData;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsQueue;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
@@ -30,6 +29,8 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
+import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.session.EngineSessionServices;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.WorldPushData;
@@ -41,7 +42,6 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
-import org.lwjgl.vulkan.KHRSynchronization2;
 import org.lwjgl.vulkan.VkBlitImageInfo2;
 import org.lwjgl.vulkan.VkBufferImageCopy2;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -67,7 +67,6 @@ import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceImages;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
 import dev.comfyfluffy.caustica.renderer.runtime.pass.RtPassSchedulerBackend;
-import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
@@ -78,6 +77,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -412,11 +412,6 @@ public final class RtFrameRenderer {
     }
 
     /**
-     * The frame's forward camera-relative view-projection (jitter-free), exactly what {@code world.rgen}
-     * traced with — host overlay raster passes reuse it so their content lands
-     * pixel-exact on the RT image. Valid after {@code updateMotion} ran this frame; do not mutate.
-     */
-    /**
      * Invalidate the published presentation snapshot at the start of host rendering. Menu and loading
      * frames do not call {@link #composite()}, so retaining the previous scene snapshot would present stale
      * HDR content instead of selecting the SDR-to-PQ path.
@@ -431,20 +426,23 @@ public final class RtFrameRenderer {
         frameSnapshot = null;
     }
 
-    /** Records UI passes into a host command buffer after the host has made its UI layer available. */
-    public void recordUiPasses(VkCommandBuffer commandBuffer, GpuImage uiLayer) {
-        Objects.requireNonNull(commandBuffer, "commandBuffer");
+    /** Records UI passes in an owned heap command buffer after the host UI layer is available. */
+    public void recordUiPasses(GpuImage uiLayer) {
         Objects.requireNonNull(uiLayer, "uiLayer");
         if (pendingGraphicsUse == null || currentTrace == null || frameSnapshot == null) {
             throw new IllegalStateException("no retained frame is available for UI recording");
         }
-        passes.beginFrame(passFrame(commandBuffer, pendingGraphicsUse,
-                new RtPassSchedulerBackend.UiState(uiLayer, mvCurProjView.get(new float[16]),
-                        currentTrace.tlasDescriptor())));
-        try {
-            services.passes().recordUi();
-        } finally {
-            passes.endFrame();
+        try (RtFrameCommands commands = new RtFrameCommands(context)) {
+            VkCommandBuffer commandBuffer = commands.heap("UI extensions");
+            passes.beginFrame(passFrame(commandBuffer, pendingGraphicsUse,
+                    new RtPassSchedulerBackend.UiState(uiLayer, mvCurProjView.get(new float[16]),
+                            currentTrace.tlasDescriptor())));
+            try {
+                services.passes().recordUi();
+            } finally {
+                passes.endFrame();
+            }
+            commands.submit(context.backend().createGraphicsSubmission(), pendingGraphicsUse);
         }
     }
 
@@ -457,7 +455,7 @@ public final class RtFrameRenderer {
         pendingGraphicsUse = null;
         currentTrace = null;
         GraphicsSubmission submission = context.backend().createGraphicsSubmission();
-        context.gpuExecutor().resolveGraphicsUse(submission, graphicsUse);
+        context.graphics().resolveGraphicsUse(submission, graphicsUse);
     }
 
     public void endFrame() {
@@ -467,7 +465,6 @@ public final class RtFrameRenderer {
     public boolean composite(long nativeColorImage, int width, int height) {
         frameCounter++; // renderer-local frame serial used by per-frame source rings and diagnostics
         VulkanDiagnostics.setInFlight("graphics-latest", "frame=" + frameCounter + " size=" + width + "x" + height);
-        context.gpuExecutor().throwIfFailed();
         services.progress();
         FrameSnapshot snapshot = frameSnapshot;
         if (snapshot == null) {
@@ -508,10 +505,13 @@ public final class RtFrameRenderer {
             }
             return true;
         } catch (Throwable t) {
-            // A frame that dies mid-recording leaves its reservation unresolved and the retained scene
-            // partially advanced. There is no defined state to resume from, so surface the original
-            // fault instead of masking it behind source rasterization.
             presenter.invalidateRenderedFrame();
+            try {
+                finishGraphicsUse();
+            } catch (Throwable resolutionFailure) {
+                t.addSuppressed(resolutionFailure);
+            }
+            resetSceneHistory();
             LOGGER.error("RT composite failed", t);
             if (t instanceof RuntimeException runtime) throw runtime;
             if (t instanceof Error error) throw error;
@@ -647,7 +647,7 @@ public final class RtFrameRenderer {
         return Math.abs(first - second) / Math.max(Math.max(Math.abs(first), Math.abs(second)), 1.0e-6f);
     }
 
-    private boolean recordTemporalDenoiser(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer,
+    private boolean recordTemporalDenoiser(VulkanDeviceContext ctx, RtFrameCommands commands,
                                            MemoryStack stack, GraphicsUse graphicsUse,
                                            boolean historyContinuous, float jitterX, float jitterY,
                                            Float3 cameraOffset, GpuImage output) {
@@ -703,16 +703,13 @@ public final class RtFrameRenderer {
                 traceImages().denoisedDiffuseRadianceHitDistance(),
                 traceImages().denoisedSpecularRadianceHitDistance(), traceImages().nrdStableRadiance());
         for (int plane = RtDenoiserState.PLANE_COUNT - 1; plane >= 0; plane--) {
+            VkCommandBuffer commandBuffer = commands.heap("NRD plane " + plane + " prepare");
             presentationResources().nrdComposePipeline().prepare(commandBuffer,
                     stablePlaneAddress, frameAddress, plane, nrdSignalEncoding(), exchange);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
-            ctx.invalidateDescriptorHeapsForExternalCommand(commandBuffer);
-            try {
-                denoiser.backend(plane).record(new DenoiserFrame(commandBuffer.address(), common, inputs));
-            } finally {
-                ctx.bindDescriptorHeaps(commandBuffer);
-            }
-            VulkanBarriers.memoryBarrier(commandBuffer, stack);
+            commandBuffer = commands.external("NRD plane " + plane + " evaluate");
+            denoiser.backend(plane).record(new DenoiserFrame(commandBuffer.address(), common, inputs));
+            commandBuffer = commands.heap("NRD plane " + plane + " merge");
             presentationResources().nrdComposePipeline().merge(commandBuffer,
                     stablePlaneAddress, frameAddress, plane, nrdSignalEncoding(), exchange);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
@@ -748,21 +745,17 @@ public final class RtFrameRenderer {
     private void recordFrame(VulkanDeviceContext ctx, RtProgramBackend.Published program, long nativeColorImage,
                              FrameSnapshot snapshot, boolean lightingHistoryContinuous,
                              boolean localLightingHistoryContinuous) {
-        long dstImage = nativeColorImage;
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
-        RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
-        GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse();
-        RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
-        presentationResources().exposure().beginFrame(graphicsUseWaiter);
+        GraphicsQueue graphics = ctx.graphics();
+        GraphicsUse graphicsUse = graphics.beginGraphicsUse();
         pendingGraphicsUse = graphicsUse;
-        GpuBuffer continuationQueue = null;
-        VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
-        RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
+        retainViewResources(snapshot.view().medium(), graphicsUse);
+        GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter = graphics.graphicsUseWaiter();
+        presentationResources().exposure().beginFrame(graphicsUseWaiter);
         int debugView = debugView();
-        SceneOrigin sceneOrigin = snapshot.sceneOrigin();
-        SceneId entryScene = snapshot.view().entryScene();
-        boolean passFrameOpen = false;
-        try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
+        try (RtFrameCommands commands = new RtFrameCommands(ctx);
+             MemoryStack stack = MemoryStack.stackPush()) {
+            VkCommandBuffer cmd = commands.heap("world resources and trace");
             // The selected route owns jitter and reconstruction. Debug presentation observes the completed
             // route and never changes its sampling or history behavior.
             DenoiserRoute denoiserRoute = denoiser.settings().route();
@@ -777,164 +770,150 @@ public final class RtFrameRenderer {
                 jitterY = jitter.jitterPixelsY() * jitterSignY();
             }
 
-            GpuBuffer pushBuf = ctx.createBuffer(WORLD_PUSH_SIZE,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push");
-            graphicsUse.whenComplete(pushBuf::destroy);
-            continuationQueue = traceResources().acquireContinuationQueue(ctx, graphicsUse);
-            VK10.vkCmdFillBuffer(cmd, continuationQueue.handle(), 0L, continuationQueue.size(), 0);
-            ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);
-            frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
-            int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
-            float time = (float) (snapshot.timeSeconds() % 3600.0);
-            float delta = time - previousProceduralTime;
-            // A first frame, long pause, or one-hour phase wrap has no adjacent frame to reproject. Use
-            // the current phase so a procedural surface reports no motion instead of a huge jump.
-            float previousTime = proceduralTimeValid && delta >= 0f && delta <= 0.25f
-                    ? previousProceduralTime : time;
-            previousProceduralTime = time;
-            proceduralTimeValid = true;
-            // Procedural domain anchor: the scene rebase origin reduced mod 4096 (kept small for shader
-            // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
-            // pattern stays fixed in the world as the player moves and the rebase origin shifts.
-            double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
-            Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
-                    sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
-            EnvironmentBinding<?> environment = scenes.content(entryScene, graphicsUse).environment();
-            EnvironmentPush environmentState = environmentPush(environment,
-                    environment == null ? 0 : services.programs().resolve(environment.implementation()));
-            Float3 cameraOffset = new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
-                    sceneOrigin.relativeY(snapshot.cameraY()), sceneOrigin.relativeZ(snapshot.cameraZ()));
+            Float3 cameraOffset = new Float3(snapshot.sceneOrigin().relativeX(snapshot.cameraX()),
+                    snapshot.sceneOrigin().relativeY(snapshot.cameraY()),
+                    snapshot.sceneOrigin().relativeZ(snapshot.cameraZ()));
+            recordTrace(ctx, cmd, stack, graphicsUse, program, snapshot,
+                    lightingHistoryContinuous, localLightingHistoryContinuous, jitterX, jitterY, cameraOffset);
+            boolean outputReady = recordReconstruction(ctx, commands, stack, graphicsUse,
+                    denoiserRoute, rrPath, lightingHistoryContinuous, jitterX, jitterY, cameraOffset);
+            recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
+                    graphicsUse, outputReady, nativeColorImage, debugView);
+            commands.submit(submission, graphicsUse);
+        }
+        // Submission makes every frame-owned address reachable until the final overlay consumer.
+        presentationResources().exposure().markStateReadbackUse(graphicsUse);
+        presenter.publish(new RtFramePresenter.RenderedFrame(
+                presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().depth(),
+                traceExtent().renderWidth(), traceExtent().renderHeight(), mvCurProjView, mvPushMatrix,
+                CausticaConfig.Rt.Hdr.enabled() && debugView == 0));
+    }
 
-            new WorldPushData(
-                    frameInvViewProj,
-                    cameraOffset,
-                    (int) frameCounter,
-                    mvPushMatrix,
-                    new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
-                    new Float2(jitterX, jitterY),
-                    flags,
-                    maxBounces(),
-                    time,
-                    proceduralDomainOffset,
-                    mvCurProjView,
-                    previousTime,
-                    // Must be the SAME value the exposure resolve divides out this frame (it reads it
-                    // from the same RtExposure accessor), or the two stop cancelling.
-                    presentationResources().exposure().preExposure(),
-                    environmentState.bindingData(),
-                    environmentState.implementation()
-            ).write(push);
-            pushBuf.flush(0L, WORLD_PUSH_SIZE);
-            TlasBuilder.Prepared frameTlas;
-            try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareTlas")) {
-                frameTlas = scenes.prepareTlas(entryScene, sceneOrigin, graphicsUse);
+    static void retainViewResources(ViewMedium medium, GpuFrameUse frameUse) {
+        if (!(medium instanceof ViewMedium.Volume<?, ?> volume)) return;
+        ResourceOwners owners = ResourceOwners.capture(List.of(
+                volume.bindingData().resource(), volume.instanceData().resource()));
+        try {
+            frameUse.whenComplete(owners::close);
+        } catch (RuntimeException | Error failure) {
+            owners.close();
+            throw failure;
+        }
+    }
+
+    private void recordTrace(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+            GraphicsUse graphicsUse, RtProgramBackend.Published program, FrameSnapshot snapshot,
+            boolean lightingHistoryContinuous, boolean localLightingHistoryContinuous,
+            float jitterX, float jitterY, Float3 cameraOffset) {
+        SceneOrigin sceneOrigin = snapshot.sceneOrigin();
+        SceneId entryScene = snapshot.view().entryScene();
+        GpuBuffer pushBuf = ctx.createBuffer(WORLD_PUSH_SIZE,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push");
+        graphicsUse.whenComplete(pushBuf::destroy);
+        GpuBuffer continuationQueue = traceResources().acquireContinuationQueue(ctx, graphicsUse);
+        VK10.vkCmdFillBuffer(cmd, continuationQueue.handle(), 0L, continuationQueue.size(), 0);
+        ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);
+        frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
+        int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
+        float time = (float) (snapshot.timeSeconds() % 3600.0);
+        float delta = time - previousProceduralTime;
+        // A first frame, long pause, or one-hour phase wrap has no adjacent frame to reproject. Use
+        // the current phase so a procedural surface reports no motion instead of a huge jump.
+        float previousTime = proceduralTimeValid && delta >= 0f && delta <= 0.25f
+                ? previousProceduralTime : time;
+        previousProceduralTime = time;
+        proceduralTimeValid = true;
+        // Procedural domain anchor: the scene rebase origin reduced mod 4096 (kept small for shader
+        // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
+        // pattern stays fixed in the world as the player moves and the rebase origin shifts.
+        double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
+        Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
+                sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
+        EnvironmentBinding<?> environment = scenes.content(entryScene, graphicsUse).environment();
+        EnvironmentPush environmentState = environmentPush(environment,
+                environment == null ? 0 : services.programs().resolve(environment.implementation()));
+
+        new WorldPushData(
+                frameInvViewProj,
+                cameraOffset,
+                (int) frameCounter,
+                mvPushMatrix,
+                new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
+                new Float2(jitterX, jitterY),
+                flags,
+                maxBounces(),
+                time,
+                proceduralDomainOffset,
+                mvCurProjView,
+                previousTime,
+                // Must be the SAME value the exposure resolve divides out this frame (it reads it
+                // from the same RtExposure accessor), or the two stop cancelling.
+                presentationResources().exposure().preExposure(),
+                environmentState.bindingData(),
+                environmentState.implementation()
+        ).write(push);
+        pushBuf.flush(0L, WORLD_PUSH_SIZE);
+        TlasBuilder.Prepared frameTlas;
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareTlas")) {
+            frameTlas = scenes.prepareTlas(entryScene, sceneOrigin, graphicsUse);
+        }
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.recordTlas")) {
+            TlasBuilder.record(ctx, cmd, frameTlas);
+        }
+        VulkanBarriers.memoryBarrier(cmd, stack);
+        RtRetainedSceneBackend.PreparedLighting lighting;
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareLighting")) {
+            lighting = scenes.prepareLighting(entryScene,
+                    new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                            frameCounter, (float) snapshot.metersPerWorldUnit(),
+                            lightingHistoryContinuous, localLightingHistoryContinuous), cmd, graphicsUse);
+        }
+        boolean lightingFinished = false;
+        try {
+            RtRetainedSceneBackend.PreparedTrace trace;
+            try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareTrace")) {
+                trace = scenes.prepareTrace(entryScene, sceneOrigin,
+                        program.pipeline(), frameTlas.accel.handle, graphicsUse);
             }
-            try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.recordTlas")) {
-                TlasBuilder.record(ctx, cmd, frameTlas);
-            }
-            VulkanBarriers.memoryBarrier(cmd, stack);
-            RtRetainedSceneBackend.PreparedLighting lighting;
-            try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareLighting")) {
-                lighting = scenes.prepareLighting(entryScene,
-                        new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
-                                frameCounter, (float) snapshot.metersPerWorldUnit(),
-                                lightingHistoryContinuous, localLightingHistoryContinuous), cmd, graphicsUse);
-            }
-            boolean lightingFinished = false;
+            currentTrace = trace;
+            ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
+            writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, continuationQueue);
+            program.writeCompositionDataAddress(roots);
+            trace.writeWorldRoots(roots);
+
+            passes.beginFrame(passFrame(cmd, graphicsUse, null));
+
             try {
-                RtRetainedSceneBackend.PreparedTrace trace;
-                try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareTrace")) {
-                    trace = scenes.prepareTrace(entryScene, sceneOrigin,
-                            program.pipeline(), frameTlas.accel.handle, graphicsUse);
-                }
-                currentTrace = trace;
-                ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
-                writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, continuationQueue);
-                program.writeCompositionDataAddress(roots);
-                trace.writeWorldRoots(roots);
-
-                passes.beginFrame(passFrame(cmd, graphicsUse, null));
-                passFrameOpen = true;
                 services.passes().recordWorldResources();
-                VulkanBarriers.worldResourcesToPrimary(cmd, stack);
-
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
-                     RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.tracePrimary")) {
-                    program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
-                            roots, 0, trace.hitTable());
-                }
-                VulkanBarriers.primaryToIndirect(cmd, stack);
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
-                     RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.traceIndirect")) {
-                    program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
-                            roots, 1, trace.hitTable());
-                }
-                VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to reconstruction reads
-                scenes.finishLighting(entryScene, lighting, cmd, graphicsUse);
-                lightingFinished = true;
-            } catch (Throwable failure) {
-                if (!lightingFinished) scenes.abandonLighting(entryScene, lighting);
-                throw failure;
+            } finally {
+                passes.endFrame();
             }
-            boolean outputReady = false;
-            if (denoiserRoute == DenoiserRoute.RAY_RECONSTRUCTION) {
-                if (rrPath) {
-                    ctx.invalidateDescriptorHeapsForExternalCommand(cmd);
-                    try {
-                        if (rayReconstruction.ensureFeature(cmd, traceExtent().renderWidth(),
-                                traceExtent().renderHeight(), traceExtent().displayWidth(),
-                                traceExtent().displayHeight())) {
-                            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
-                                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.dlssRr")) {
-                                outputReady = rayReconstruction.evaluate(cmd, traceImages().traceColor(),
-                                        traceImages().depth(), traceImages().motion(),
-                                        traceImages().diffuseAlbedo(), traceImages().specularAlbedo(),
-                                        traceImages().normalRoughness(), traceImages().specularMotion(),
-                                        traceImages().reconstructedColor(), traceExtent().renderWidth(),
-                                        traceExtent().renderHeight(), traceExtent().displayWidth(),
-                                        traceExtent().displayHeight(), -jitterX, -jitterY,
-                                        presentationResources().exposure().preExposure());
-                            }
-                        }
-                    } finally {
-                        ctx.bindDescriptorHeaps(cmd);
-                    }
-                }
-            } else if (denoiserRoute == DenoiserRoute.TEMPORAL_DENOISER) {
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "NRD evaluate");
-                     RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.nrd")) {
-                    boolean upscale = upscaler.configured();
-                    GpuImage composeOutput = upscale
-                            ? traceImages().traceColor() : traceImages().reconstructedColor();
-                    boolean temporalReset = recordTemporalDenoiser(ctx, cmd, stack, graphicsUse,
-                            lightingHistoryContinuous, jitterX, jitterY, cameraOffset, composeOutput);
-                    if (!upscale) {
-                        outputReady = true;
-                    } else {
-                        VulkanBarriers.memoryBarrier(cmd, stack);
-                        ctx.invalidateDescriptorHeapsForExternalCommand(cmd);
-                        try (RtDebugLabels.Scope ignoredUpscale = RtDebugLabels.scope(ctx, cmd, "temporal upscale");
-                             RtTelemetry.Scope ignoredUpscaleStats = telemetry.frame().stage("frame.upscale")) {
-                            outputReady = upscaler.record(new RtUpscaler.Frame(cmd, composeOutput,
-                                    traceImages().depth(), traceImages().motion(),
-                                    traceImages().reconstructedColor(),
-                                    new RtUpscaler.Extent(traceExtent().renderWidth(), traceExtent().renderHeight(),
-                                            traceExtent().displayWidth(), traceExtent().displayHeight()),
-                                    jitterX, jitterY, temporalReset,
-                                    presentationResources().exposure().preExposure()));
-                        } finally {
-                            ctx.bindDescriptorHeaps(cmd);
-                        }
-                    }
-                }
-            } else {
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "raw trace copy");
-                     RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.rawCopy")) {
-                    copyImage(cmd, stack, traceImages().traceColor(), traceImages().reconstructedColor());
-                    outputReady = true;
-                }
-            }
+            VulkanBarriers.worldResourcesToPrimary(cmd, stack);
 
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
+                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.tracePrimary")) {
+                program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
+                        roots, 0, trace.hitTable());
+            }
+            VulkanBarriers.primaryToIndirect(cmd, stack);
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
+                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.traceIndirect")) {
+                program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
+                        roots, 1, trace.hitTable());
+            }
+            VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to reconstruction reads
+            scenes.finishLighting(entryScene, lighting, cmd, graphicsUse);
+            lightingFinished = true;
+        } catch (Throwable failure) {
+            if (!lightingFinished) scenes.abandonLighting(entryScene, lighting);
+            throw failure;
+        }
+    }
+
+    private void recordPostProcessing(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+            GraphicsUse graphicsUse, boolean outputReady, long dstImage, int debugView) {
+        passes.beginFrame(passFrame(cmd, graphicsUse, null));
+        try {
             if (!outputReady) {
                 VulkanBarriers.memoryBarrier(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
@@ -999,22 +978,60 @@ public final class RtFrameRenderer {
                         .pRegions(copyRegion(stack, traceExtent().displayWidth(), traceExtent().displayHeight())));
             }
             VulkanBarriers.memoryBarrier(cmd, stack);
-            passes.endFrame();
-            passFrameOpen = false;
         } finally {
-            if (passFrameOpen) passes.endFrame();
+            passes.endFrame();
         }
-        if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
+    }
+
+    private boolean recordReconstruction(VulkanDeviceContext ctx, RtFrameCommands commands,
+            MemoryStack stack, GraphicsUse graphicsUse, DenoiserRoute route, boolean rrEnabled,
+            boolean historyContinuous, float jitterX, float jitterY, Float3 cameraOffset) {
+        return switch (route) {
+            case RAY_RECONSTRUCTION -> rrEnabled && recordRayReconstruction(commands, jitterX, jitterY);
+            case TEMPORAL_DENOISER -> {
+                boolean upscale = upscaler.configured();
+                GpuImage output = upscale ? traceImages().traceColor() : traceImages().reconstructedColor();
+                boolean reset;
+                try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.nrd")) {
+                    reset = recordTemporalDenoiser(ctx, commands, stack, graphicsUse,
+                            historyContinuous, jitterX, jitterY, cameraOffset, output);
+                }
+                if (!upscale) yield true;
+                VkCommandBuffer cmd = commands.external("temporal upscale");
+                try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.upscale")) {
+                    yield upscaler.record(new RtUpscaler.Frame(cmd, output,
+                            traceImages().depth(), traceImages().motion(), traceImages().reconstructedColor(),
+                            new RtUpscaler.Extent(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                                    traceExtent().displayWidth(), traceExtent().displayHeight()),
+                            jitterX, jitterY, reset, presentationResources().exposure().preExposure()));
+                }
+            }
+            case RAW -> {
+                VkCommandBuffer cmd = commands.external("raw trace copy");
+                try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.rawCopy")) {
+                    copyImage(cmd, stack, traceImages().traceColor(), traceImages().reconstructedColor());
+                }
+                yield true;
+            }
+        };
+    }
+
+    private boolean recordRayReconstruction(RtFrameCommands commands, float jitterX, float jitterY) {
+        if (!rayReconstruction.featureReadyFor(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                traceExtent().displayWidth(), traceExtent().displayHeight())) {
+            context.waitIdle();
         }
-        submission.execute(cmd);
-        graphicsUse.commandsAccepted();
-        // Submission makes every frame-owned address reachable until the final overlay consumer.
-        presentationResources().exposure().markStateReadbackUse(graphicsUse);
-        presenter.publish(new RtFramePresenter.RenderedFrame(
-                presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().depth(),
-                traceExtent().renderWidth(), traceExtent().renderHeight(), mvCurProjView, mvPushMatrix,
-                CausticaConfig.Rt.Hdr.enabled() && debugView == 0));
+        VkCommandBuffer cmd = commands.external("DLSS ray reconstruction");
+        if (!rayReconstruction.ensureFeature(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
+                traceExtent().displayWidth(), traceExtent().displayHeight())) return false;
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.dlssRr")) {
+            return rayReconstruction.evaluate(cmd, traceImages().traceColor(),
+                    traceImages().depth(), traceImages().motion(), traceImages().diffuseAlbedo(),
+                    traceImages().specularAlbedo(), traceImages().normalRoughness(), traceImages().specularMotion(),
+                    traceImages().reconstructedColor(), traceExtent().renderWidth(), traceExtent().renderHeight(),
+                    traceExtent().displayWidth(), traceExtent().displayHeight(), -jitterX, -jitterY,
+                    presentationResources().exposure().preExposure());
+        }
     }
 
     private RtPassSchedulerBackend.FrameState passFrame(

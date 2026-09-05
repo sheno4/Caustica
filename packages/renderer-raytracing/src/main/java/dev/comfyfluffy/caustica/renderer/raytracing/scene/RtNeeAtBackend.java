@@ -1,14 +1,13 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.TrackedGraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsQueue.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtStateData;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
@@ -91,7 +90,7 @@ final class RtNeeAtBackend {
         int targetIndex = state.cursor ^ 1;
         Frame target = state.frames[targetIndex];
         Frame previous = state.frames[state.cursor];
-        context.gpuExecutor().graphicsUseWaiter().await(target.use);
+        context.graphics().graphicsUseWaiter().await(target.use);
 
         RtNeeAtPlan.Plan plan = RtNeeAtPlan.build(lights,
                 continuous ? state.previousLights : List.of(), input.metersPerSceneUnit());
@@ -377,7 +376,7 @@ final class RtNeeAtBackend {
             if (frames[0].state != null && width == wantedWidth && height == wantedHeight
                     && lightCapacity >= lights) return;
             for (Frame frame : frames) {
-                context.gpuExecutor().graphicsUseWaiter().await(frame.use);
+                context.graphics().graphicsUseWaiter().await(frame.use);
                 frame.destroy();
             }
             int capacity = Math.max(1, lights);
@@ -397,7 +396,7 @@ final class RtNeeAtBackend {
         void retire() {
             AtomicInteger pending = new AtomicInteger(frames.length);
             for (Frame frame : frames) {
-                context.gpuExecutor().retireAfterGraphics(frame.use,
+                context.graphics().retireAfterGraphics(frame.use,
                         () -> { if (pending.decrementAndGet() == 0) destroy(); });
             }
         }

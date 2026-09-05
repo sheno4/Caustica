@@ -11,6 +11,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class GpuFrameSubmissionCallbackTest {
     @Test
+    void severalCommandBuffersShareOneCompletionReservation() {
+        var use = new GraphicsUse(null, 1L);
+        var released = new AtomicInteger();
+        var submitted = new AtomicInteger();
+        List<Runnable> completion = new ArrayList<>();
+        use.whenSubmitted(submitted::incrementAndGet);
+        use.commandsAccepted();
+        use.keepAlive(released::incrementAndGet);
+        use.commandsAccepted();
+        use.keepAlive(released::incrementAndGet);
+        use.resolveSubmission(() -> {}, completion::add);
+        assertEquals(1, submitted.get());
+        assertEquals(0, released.get());
+        completion.getFirst().run();
+        assertEquals(2, released.get());
+    }
+
+    @Test
     void acceptedCommandsPublishCallbacksOnceInRegistrationOrder() {
         GraphicsUse use = new GraphicsUse(null, 1L);
         List<String> events = new ArrayList<>();

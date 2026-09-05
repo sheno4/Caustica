@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api.program;
 
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.TestResource;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -115,17 +116,27 @@ final class ProgramContractTest {
     }
 
     @Test
-    void shaderDataCarriesIndependentResourceGenerationIdentity() {
+    void shaderDataCarriesIndependentResourceOwnerIdentity() {
         ShaderDataType<Object> type = ShaderDataType.create("pointer data");
-        ResourceRef firstResource = new ResourceRef() { };
-        ResourceRef secondResource = new ResourceRef() { };
+        var releases = new java.util.concurrent.atomic.AtomicInteger();
+        try (var firstOwner = TestResource.create(releases::incrementAndGet);
+             var secondOwner = TestResource.create(releases::incrementAndGet)) {
+            ResourceRef firstResource = firstOwner.reference();
+            ResourceRef secondResource = secondOwner.reference();
 
-        ShaderData<Object> first = type.data(0x1234L, firstResource);
-        ShaderData<Object> second = type.data(0x1234L, secondResource);
+            ShaderData<Object> first = type.data(0x1234L, firstResource);
+            ShaderData<Object> second = type.data(0x1234L, secondResource);
 
-        assertSame(firstResource, first.resource());
-        assertSame(secondResource, second.resource());
-        assertNotEquals(first, second);
-        assertSame(ResourceRef.none(), type.data(7L).resource());
+            assertSame(firstResource, first.resource());
+            assertSame(secondResource, second.resource());
+            assertNotEquals(first, second);
+            assertSame(ResourceRef.none(), type.data(7L).resource());
+            try (var reader = firstResource.retain()) {
+                firstOwner.close();
+                assertEquals(0, releases.get());
+            }
+            assertEquals(1, releases.get());
+        }
+        assertEquals(2, releases.get());
     }
 }

@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftImplementationData;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftInstanceData;
@@ -22,8 +22,6 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -35,12 +33,11 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Session-wide sampler and factory for immutable Minecraft program/material epochs. */
 public final class MinecraftProgramResources implements AutoCloseable {
-    private static final Logger LOGGER = LoggerFactory.getLogger(MinecraftProgramResources.class);
     private final GpuDevice gpu;
     private final GpuComputeQueue compute;
     private final ResourceFactory resourceFactory;
     private final GpuDescriptorRange<GpuDescriptorIndex.Sampler> sampler;
-    private int liveEpochs;
+    private final ResourceOwner samplerOwner;
     private boolean closed;
 
     public MinecraftProgramResources(GpuDevice gpu, GpuComputeQueue compute,
@@ -60,6 +57,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
                                 .addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
                                 .minLod(0f).maxLod(Float.MAX_VALUE));
             }
+            samplerOwner = resourceFactory.create(sampler::destroy);
         } catch (RuntimeException | Error failure) {
             sampler.destroy();
             throw failure;
@@ -98,8 +96,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
             if (cleanup != null) failure.addSuppressed(cleanup);
             throw failure;
         }
-        Epoch epoch = createEpoch(fallbackRecords, ownedImages, true);
-        liveEpochs++;
+        Epoch epoch = createEpoch(fallbackRecords, ownedImages);
         return epoch;
     }
 
@@ -128,14 +125,12 @@ public final class MinecraftProgramResources implements AutoCloseable {
     /** Creates the nonzero fallback root used before the first resource-pack upload. */
     public synchronized Epoch createFallbackEpoch() {
         requireOpen();
-        Epoch epoch = createEpoch(List.of(MinecraftMaterialRecord.fallback()), List.of(), false);
+        Epoch epoch = createEpoch(List.of(MinecraftMaterialRecord.fallback()), List.of());
         epoch.seal();
-        liveEpochs++;
         return epoch;
     }
 
-    private Epoch createEpoch(List<MinecraftMaterialRecord> records, List<UploadedImage> images,
-                              boolean initializationPending) {
+    private Epoch createEpoch(List<MinecraftMaterialRecord> records, List<UploadedImage> images) {
         GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors = null;
         VmaMappedBuffer materialTable = null;
         VmaMappedBuffer implementation = null;
@@ -166,30 +161,21 @@ public final class MinecraftProgramResources implements AutoCloseable {
                     new MinecraftInstanceData.Float3(1.0f, 1.0f, 1.0f), 0,
                     new MinecraftInstanceData.SampledTexture2DIndex(0), 0.0f).write(bytes));
             epoch = new Epoch(descriptors, materialTable, implementation, primitive, instance,
-                    firstDescriptor, images, initializationPending);
-            epoch.implementationGeneration = resourceFactory.create(epoch::retireImplementation);
-            epoch.bindingGeneration = resourceFactory.create(epoch::retireBinding);
-            epoch.instanceGeneration = resourceFactory.create(epoch::retireInstance);
+                    firstDescriptor, images);
+            epoch.owner = resourceFactory.create(epoch::destroy);
             return epoch;
         } catch (RuntimeException | Error failure) {
             Throwable cleanup = null;
-            if (epoch != null && epoch.implementationGeneration != null) {
-                cleanup = release(cleanup, epoch.implementationGeneration::drop);
+            if (epoch != null && epoch.owner != null) {
+                cleanup = release(cleanup, epoch.owner::close);
             } else {
                 if (implementation != null) cleanup = release(cleanup, implementation::close);
                 if (materialTable != null) cleanup = release(cleanup, materialTable::close);
+                if (primitive != null) cleanup = release(cleanup, primitive::close);
+                if (instance != null) cleanup = release(cleanup, instance::close);
                 if (descriptors != null) cleanup = release(cleanup, descriptors::destroy);
                 for (UploadedImage image : images) cleanup = release(cleanup, image::close);
-            }
-            if (epoch != null && epoch.bindingGeneration != null) {
-                cleanup = release(cleanup, epoch.bindingGeneration::drop);
-            } else if (primitive != null) {
-                cleanup = release(cleanup, primitive::close);
-            }
-            if (epoch != null && epoch.instanceGeneration != null) {
-                cleanup = release(cleanup, epoch.instanceGeneration::drop);
-            } else if (instance != null) {
-                cleanup = release(cleanup, instance::close);
+                if (epoch != null) cleanup = release(cleanup, epoch.samplerLease::close);
             }
             if (cleanup != null) failure.addSuppressed(cleanup);
             throw failure;
@@ -282,11 +268,8 @@ public final class MinecraftProgramResources implements AutoCloseable {
 
     @Override public synchronized void close() {
         if (closed) return;
-        if (liveEpochs != 0) {
-            throw new IllegalStateException("Minecraft program epochs must retire before the session sampler");
-        }
         closed = true;
-        sampler.destroy();
+        samplerOwner.close();
     }
 
     /** Uploader-owned image lease transferred into exactly one material epoch. */
@@ -322,17 +305,14 @@ public final class MinecraftProgramResources implements AutoCloseable {
         private final VmaMappedBuffer instance;
         private final int firstDescriptor;
         private final List<UploadedImage> images;
-        private ResourceGeneration implementationGeneration;
-        private ResourceGeneration bindingGeneration;
-        private ResourceGeneration instanceGeneration;
-        private int retiredParts;
-        private boolean initializationPending;
+        private final ResourceOwner samplerLease;
+        private ResourceOwner owner;
         private boolean sealed;
         private boolean closed;
         private Epoch(GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors,
                       VmaMappedBuffer materialTable, VmaMappedBuffer implementation,
                       VmaMappedBuffer primitive, VmaMappedBuffer instance,
-                      int firstDescriptor, List<UploadedImage> images, boolean initializationPending) {
+                      int firstDescriptor, List<UploadedImage> images) {
             this.descriptors = descriptors;
             this.materialTable = materialTable;
             this.implementation = implementation;
@@ -340,14 +320,12 @@ public final class MinecraftProgramResources implements AutoCloseable {
             this.instance = instance;
             this.firstDescriptor = firstDescriptor;
             this.images = images;
-            this.initializationPending = initializationPending;
+            this.samplerLease = samplerOwner.retain();
         }
         private synchronized void seal() {
             if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
             if (sealed) return;
-            implementationGeneration.seal();
-            bindingGeneration.seal();
-            instanceGeneration.seal();
+
             sealed = true;
         }
         private synchronized void requireWritable() {
@@ -357,68 +335,44 @@ public final class MinecraftProgramResources implements AutoCloseable {
         public synchronized ShaderData<MinecraftProgramTypes.ImplementationData> implementationData() {
             requirePublished();
             return MinecraftProgramTypes.IMPLEMENTATION_DATA.data(
-                    implementation.deviceRange().address().value(), implementationGeneration.reference());
+                    implementation.deviceRange().address().value(), owner.reference());
         }
         long materialTableBuffer() { return materialTable.buffer(); }
         public synchronized ShaderData<MinecraftProgramTypes.PrimitiveData> fallbackBindingData() {
             requirePublished();
             return MinecraftProgramTypes.PRIMITIVE_DATA.data(
-                    primitive.deviceRange().address().value(), bindingGeneration.reference());
+                    primitive.deviceRange().address().value(), owner.reference());
         }
         public synchronized ShaderData<MinecraftProgramTypes.InstanceData> fallbackInstanceData() {
             requirePublished();
             return MinecraftProgramTypes.INSTANCE_DATA.data(
-                    instance.deviceRange().address().value(), instanceGeneration.reference());
+                    instance.deviceRange().address().value(), owner.reference());
         }
+        /** Strong ownership transferred to an accepted upload or another asynchronous consumer. */
+        public ResourceOwner retain() { return owner.retain(); }
+
         @Override public synchronized void close() {
             if (closed) return;
             closed = true;
-            if (initializationPending) return;
-            drop();
-        }
-        synchronized void finishInitialization() {
-            if (!initializationPending) return;
-            initializationPending = false;
-            if (closed) drop();
-        }
-        private void drop() {
-            implementationGeneration.drop();
-            bindingGeneration.drop();
-            instanceGeneration.drop();
+            owner.close();
         }
         private void requirePublished() {
             if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
             if (!sealed) throw new IllegalStateException("Minecraft material epoch is not published");
         }
-        private void retireImplementation() {
+        private void destroy() {
             Throwable failure = MinecraftProgramResources.release(null, implementation::close);
             failure = MinecraftProgramResources.release(failure, materialTable::close);
+            failure = MinecraftProgramResources.release(failure, primitive::close);
+            failure = MinecraftProgramResources.release(failure, instance::close);
             if (descriptors != null) failure = MinecraftProgramResources.release(failure, descriptors::destroy);
             for (UploadedImage image : images) {
                 failure = MinecraftProgramResources.release(failure, image::close);
             }
-            retired("implementation", failure);
-        }
-        private void retireBinding() {
-            retired("binding", MinecraftProgramResources.release(null, primitive::close));
-        }
-        private void retireInstance() {
-            retired("instance", MinecraftProgramResources.release(null, instance::close));
-        }
-        private void retired(String resource, Throwable failure) {
-            if (failure != null) {
-                LOGGER.error("Minecraft material {} retirement cleanup failed", resource, failure);
-            }
-            boolean epochRetired;
-            synchronized (this) {
-                retiredParts++;
-                epochRetired = retiredParts == 3;
-            }
-            if (epochRetired) {
-                synchronized (MinecraftProgramResources.this) {
-                    liveEpochs--;
-                }
-            }
+            failure = MinecraftProgramResources.release(failure, samplerLease::close);
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+            if (failure != null) throw new IllegalStateException("Minecraft material destruction failed", failure);
         }
     }
 

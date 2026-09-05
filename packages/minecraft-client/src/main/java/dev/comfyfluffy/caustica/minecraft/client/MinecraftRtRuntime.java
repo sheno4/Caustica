@@ -299,8 +299,8 @@ public final class MinecraftRtRuntime {
         if (frameActive && session != null && session.renderer != null) session.renderer.beginFrame();
     }
 
-    public void recordUiPasses(org.lwjgl.vulkan.VkCommandBuffer commandBuffer, GpuImage uiLayer) {
-        if (session != null && session.renderer != null) session.renderer.recordUiPasses(commandBuffer, uiLayer);
+    public void recordUiPasses(GpuImage uiLayer) {
+        if (session != null && session.renderer != null) session.renderer.recordUiPasses(uiLayer);
     }
 
     public void finishGraphicsUse() {
@@ -719,7 +719,7 @@ public final class MinecraftRtRuntime {
                 world.close();
                 world = null;
             }
-            if (context != null) context.gpuExecutor().drainAndWaitIdle();
+            if (context != null) context.drainAndWaitIdle();
             if (renderer != null) {
                 renderer.destroy();
                 renderer = null;

@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
@@ -41,23 +42,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.function.Function;
-import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
 
 /**
- * Vulkan owner for the live retained scene and the immutable layouts frames read from it.
- *
- * <p>Mutations land on the live table immediately; acceleration-structure builds are asynchronous patches
- * against it. A mesh whose update is still building keeps rendering the generation it already has, so
- * publication never waits on the GPU and one slow build cannot delay unrelated instance, light, or content
- * changes. Builds that lose to a later update, or whose mesh was dropped, release instead of installing.
- *
- * <p>Frames read an immutable {@link SceneLayoutGeneration} rematerialized from the live table whenever it
- * has moved. A frame pins the layout it leased for as long as its {@link GraphicsUse} is outstanding, so
- * every resource a submitted frame can reach outlives it; nothing may reference scene geometry it did not
- * lease through that snapshot.
+ * Prepares GPU resources before atomically applying each scene edit. Independent edits may finish in
+ * any order; edits touching the same retained identities preserve their accepted order.
+ * Frames retain immutable revisions and all resource graphs reachable through their shader data.
  */
 public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final VulkanDeviceContext ctx;
@@ -67,21 +59,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final Map<GraphicsUse, FrameSnapshot> inFlightFrames = new IdentityHashMap<>();
     private final Map<SceneId, SharedResource<SceneMotionHistory>> motionHistoryByScene =
             new IdentityHashMap<>();
-    /**
-     * Live mesh table. An entry renders from its newest <em>coherent</em> generation - a logical mesh paired
-     * with the acceleration structure actually built for it - while a newer update is still building. Pairing
-     * a new logical mesh with an older structure would desynchronize geometry counts from hit records, so the
-     * pair moves together or not at all.
-     */
+    /** Every entry pairs geometry records with the BLAS built from that exact geometry revision. */
     private final Map<Long, MeshEntry> meshTable = new LinkedHashMap<>();
     private final RtRetainedInstanceState instanceState = new RtRetainedInstanceState();
-    /** Build inputs of failed batches. The GPU may still hold them, so they wait for the idle boundary. */
-    private final List<BlasBuildUse> unsettledBuildUses = new ArrayList<>();
     private Map<SceneId, SceneContent> liveContent = Map.of();
     private PublishedSceneRevision published;
     private long acceptedRevision = -1L;
-    private boolean layoutDirty;
-    private long nextBuildToken;
+    private long visibleRevision = -1L;
+    private final ScenePublicationQueue<EditKey, PendingEdit> pendingEdits = new ScenePublicationQueue<>();
+    private Map<SceneId, SceneContent> acceptedContent = Map.of();
+    private ResourceOwners liveResources = ResourceOwners.capture(List.of());
     private boolean closed;
     private boolean sessionClosing;
     private long nextPlacementOrdinal;
@@ -126,127 +113,131 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         neeAt.abandon(scene, lighting.delegate);
     }
 
-    /**
-     * Accepts a complete logical version. Mesh planning happens before any table mutation, so a throw leaves
-     * the live scene exactly as it was.
-     */
     @Override
     public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable onPublished) {
         requireOpen();
-        Objects.requireNonNull(snapshot, "snapshot");
-        Objects.requireNonNull(onPublished, "onPublished");
         requireIncreasingRevision(snapshot.revision());
-        java.util.Set<Long> live = new java.util.LinkedHashSet<>();
-        for (RetainedSceneSnapshot.Mesh mesh : snapshot.meshes()) live.add(mesh.identity());
         List<PlannedMesh> planned = planMeshes(snapshot.meshes());
-        RtLatestInstanceTransforms.Update transformUpdate;
-        try {
-            transformUpdate = latestTransforms.prepareSnapshot(snapshot.instances());
-        } catch (Throwable failure) {
-            releasePlanned(planned, failure);
-            throw failure;
-        }
-        List<Long> dropped = meshTable.keySet().stream()
-                .filter(identity -> !live.contains(identity)).toList();
-        dropped.forEach(this::dropMesh);
-        installPlanned(planned);
-        instanceState.replaceAll(snapshot.instances(), () -> ++nextPlacementOrdinal);
-        acceptContent(assembleContent(snapshot.scenes(), snapshot.lights()), snapshot.revision());
-        latestTransforms.apply(transformUpdate);
-        pruneLatestTransforms();
-        submitPlanned(planned, onPublished);
+        var content = assembleContent(snapshot.scenes(), snapshot.lights());
+        var resources = new ArrayList<ResourceRef>();
+        snapshot.instances().forEach(instance -> resources.add(instance.instanceData().resource()));
+        addEnvironmentResources(content, resources);
+        var keys = new java.util.HashSet<EditKey>();
+        keys.add(new EditKey("all", 0L));
+        acceptEdit(snapshot.revision(), planned, keys, resources, () -> {
+            var retained = snapshot.meshes().stream().map(RetainedSceneSnapshot.Mesh::identity)
+                    .collect(java.util.stream.Collectors.toSet());
+            new ArrayList<>(meshTable.keySet()).stream().filter(id -> !retained.contains(id)).forEach(this::dropMesh);
+            instanceState.replaceAll(snapshot.instances(), () -> ++nextPlacementOrdinal);
+            liveContent = content;
+        }, onPublished);
+        acceptedContent = content;
+        latestTransforms.acceptSnapshot(snapshot.instances());
     }
 
-    /** Accepts geometry without rematerializing or revalidating the unchanged logical world. */
     @Override
     public synchronized void publishGeometry(RetainedSceneGeometryDelta delta,
                                              Supplier<RetainedSceneSnapshot> fallbackSnapshot,
                                              Runnable onPublished) {
         requireOpen();
-        Objects.requireNonNull(delta, "delta");
-        Objects.requireNonNull(fallbackSnapshot, "fallbackSnapshot");
-        Objects.requireNonNull(onPublished, "onPublished");
         requireIncreasingRevision(delta.revision());
-        applyGeometryDelta(delta, null, onPublished);
+        acceptGeometry(delta, null, onPublished);
     }
 
-    /** Accepts geometry and content as one logical revision of the live scene. */
     @Override
-    public synchronized void publishGeometryAndContent(
-            RetainedSceneGeometryDelta geometry, RetainedSceneContentSnapshot content,
-            Supplier<RetainedSceneSnapshot> fallbackSnapshot, Runnable onPublished) {
+    public synchronized void publishGeometryAndContent(RetainedSceneGeometryDelta delta,
+            RetainedSceneContentSnapshot content, Supplier<RetainedSceneSnapshot> fallbackSnapshot,
+            Runnable onPublished) {
         requireOpen();
-        Objects.requireNonNull(geometry, "geometry");
-        Objects.requireNonNull(content, "content");
-        Objects.requireNonNull(fallbackSnapshot, "fallbackSnapshot");
-        Objects.requireNonNull(onPublished, "onPublished");
-        if (geometry.revision() != content.revision()) {
-            throw new IllegalArgumentException("geometry and content revisions must match");
-        }
-        requireIncreasingRevision(geometry.revision());
-        applyGeometryDelta(geometry, assembleContent(content.scenes(), content.lights()), onPublished);
+        requireIncreasingRevision(delta.revision());
+        acceptGeometry(delta, assembleContent(content.scenes(), content.lights()), onPublished);
     }
 
-    /** Accepts light and environment content. Geometry is untouched, so no build is submitted. */
     @Override
     public synchronized void publishContent(RetainedSceneContentSnapshot snapshot, Runnable onPublished) {
         requireOpen();
-        Objects.requireNonNull(snapshot, "snapshot");
-        Objects.requireNonNull(onPublished, "onPublished");
         requireIncreasingRevision(snapshot.revision());
-        acceptContent(assembleContent(snapshot.scenes(), snapshot.lights()), snapshot.revision());
-        submitPlanned(List.of(), onPublished);
+        Map<SceneId, SceneContent> content = assembleContent(snapshot.scenes(), snapshot.lights());
+        ContentPatch patch = ContentPatch.between(acceptedContent, content);
+        var resources = new ArrayList<ResourceRef>();
+        addEnvironmentResources(content, resources);
+        acceptEdit(snapshot.revision(), List.of(), patch.keys(), resources,
+                () -> liveContent = patch.apply(liveContent), onPublished);
+        acceptedContent = content;
     }
 
-    /**
-     * Applies one geometry delta to the live table. Every mesh needing GPU work is planned first, so a
-     * preparation failure throws before any mutation becomes visible.
-     */
-    private void applyGeometryDelta(RetainedSceneGeometryDelta delta,
-                                    Map<SceneId, SceneContent> content, Runnable onPublished) {
-        Map<Long, RetainedSceneSnapshot.Mesh> sets = new LinkedHashMap<>();
-        Map<Long, Boolean> drops = new LinkedHashMap<>();
-        for (RetainedSceneGeometryDelta.Mutation mutation : delta.mutations()) {
-            if (mutation instanceof RetainedSceneGeometryDelta.SetMesh set) {
-                long identity = set.mesh().identity();
-                drops.remove(identity);
-                sets.remove(identity);
-                sets.put(identity, set.mesh());
-            } else if (mutation instanceof RetainedSceneGeometryDelta.DropMesh drop) {
-                sets.remove(drop.identity());
-                drops.remove(drop.identity());
-                drops.put(drop.identity(), Boolean.TRUE);
+    private void acceptGeometry(RetainedSceneGeometryDelta delta,
+                                Map<SceneId, SceneContent> content, Runnable onPublished) {
+        var meshes = new LinkedHashMap<Long, RetainedSceneSnapshot.Mesh>();
+        var keys = new java.util.HashSet<EditKey>();
+        var resources = new ArrayList<ResourceRef>();
+        for (var mutation : delta.mutations()) {
+            switch (mutation) {
+                case RetainedSceneGeometryDelta.SetMesh set -> {
+                    meshes.put(set.mesh().identity(), set.mesh());
+                    keys.add(new EditKey("mesh", set.mesh().identity()));
+                }
+                case RetainedSceneGeometryDelta.DropMesh drop -> {
+                    meshes.remove(drop.identity());
+                    keys.add(new EditKey("mesh", drop.identity()));
+                }
+                case RetainedSceneGeometryDelta.SetInstance set -> {
+                    var instance = set.instance();
+                    keys.add(new EditKey("instance", instance.identity()));
+                    keys.add(new EditKey("mesh", instance.meshIdentity()));
+                    resources.add(instance.instanceData().resource());
+                }
+                case RetainedSceneGeometryDelta.DropInstance drop ->
+                        keys.add(new EditKey("instance", drop.identity()));
             }
         }
-        List<PlannedMesh> planned = planMeshes(sets.values());
-        RtLatestInstanceTransforms.Update transformUpdate;
+        ContentPatch patch = content == null ? ContentPatch.empty() : ContentPatch.between(acceptedContent, content);
+        keys.addAll(patch.keys());
+        if (content != null) addEnvironmentResources(content, resources);
+        List<PlannedMesh> planned = planMeshes(meshes.values());
+        acceptEdit(delta.revision(), planned, keys, resources, () -> {
+            for (var mutation : delta.mutations()) {
+                if (mutation instanceof RetainedSceneGeometryDelta.DropMesh drop && !meshes.containsKey(drop.identity())) {
+                    dropMesh(drop.identity());
+                }
+            }
+            instanceState.apply(delta.mutations(), () -> ++nextPlacementOrdinal);
+            liveContent = patch.apply(liveContent);
+        }, onPublished);
+        if (content != null) acceptedContent = content;
+        latestTransforms.acceptMutations(delta.mutations());
+    }
+
+    private void acceptEdit(long revision, List<PlannedMesh> planned, java.util.Set<EditKey> keys,
+                            List<ResourceRef> references, Runnable apply, Runnable onPublished) {
+        ResourceOwners owners;
         try {
-            transformUpdate = latestTransforms.prepareMutations(delta.mutations());
+            owners = ResourceOwners.capture(references);
         } catch (Throwable failure) {
             releasePlanned(planned, failure);
             throw failure;
         }
-        drops.keySet().forEach(this::dropMesh);
-        installPlanned(planned);
-        instanceState.apply(delta.mutations(), () -> ++nextPlacementOrdinal);
-        acceptContent(content == null ? liveContent : content, delta.revision());
-        latestTransforms.apply(transformUpdate);
-        pruneLatestTransforms();
-        submitPlanned(planned, onPublished);
+        PendingEdit edit = new PendingEdit(revision, planned, keys, owners, apply, onPublished);
+        var ticket = pendingEdits.add(keys, keys.contains(new EditKey("all", 0L)), edit);
+        try {
+            submitPlanned(ticket);
+        } catch (Throwable failure) {
+            pendingEdits.remove(ticket);
+            releasePlanned(planned, failure);
+            owners.close();
+            throw failure;
+        }
+        acceptedRevision = revision;
     }
 
     private void requireIncreasingRevision(long revision) {
-        if (revision <= acceptedRevision) {
-            throw new IllegalArgumentException("scene revisions must increase");
-        }
+        if (revision <= acceptedRevision) throw new IllegalArgumentException("scene revisions must increase");
     }
 
-    private void acceptContent(Map<SceneId, SceneContent> content, long revision) {
-        liveContent = Map.copyOf(content);
-        acceptedRevision = revision;
-        layoutDirty = true;
-        neeAt.retainScenes(liveContent.keySet());
-        retainRenderedScenes(liveContent.keySet());
+    private static void addEnvironmentResources(Map<SceneId, SceneContent> content, List<ResourceRef> references) {
+        content.values().forEach(value -> {
+            if (value.environment() != null) references.add(value.environment().bindingData().resource());
+        });
     }
 
     @Override
@@ -254,44 +245,70 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         completed.onProgressAvailable(wakeup);
     }
 
-    /** Applies finished builds to the live mesh table and reports their batches. */
+    /** Commits a ready edit only after earlier edits to its identities have committed. */
     @Override
     public synchronized void progress() {
         requireOpen();
-        Throwable failure = null;
-        CompletedBatch batch;
-        while ((batch = completed.poll()) != null) {
-            try {
-                applyCompletedBatch(batch);
-            } catch (Throwable batchFailure) {
-                if (failure == null) failure = batchFailure;
-                else failure.addSuppressed(batchFailure);
-            }
+        CompletedBatch completion;
+        while ((completion = completed.poll()) != null) {
+            completion.edit.ready = true;
+            completion.edit.value.failure = completion.failure;
         }
-        throwFailure(failure, "retained scene publication failed");
+        var callbacks = new ArrayList<Runnable>();
+        pendingEdits.commitReady(edit -> {
+            if (edit.failure != null) throwFailure(edit.failure, "retained scene preparation failed");
+            installPlanned(edit.planned);
+            edit.apply.run();
+            var references = new ArrayList<ResourceRef>();
+            instanceState.orderedInstances().forEach(instance -> references.add(instance.instanceData().resource()));
+            addEnvironmentResources(liveContent, references);
+            ResourceOwners next = ResourceOwners.capture(references);
+            liveResources.close();
+            liveResources = next;
+            if (published != null) {
+                published.release();
+                published = null;
+            }
+            visibleRevision = Math.max(visibleRevision, edit.revision);
+            neeAt.retainScenes(liveContent.keySet());
+            retainRenderedScenes(liveContent.keySet());
+
+            edit.resources.close();
+            callbacks.add(edit.published);
+        });
+        if (pendingEdits.values().isEmpty()) pruneLatestTransforms();
+        callbacks.forEach(Runnable::run);
     }
 
     @Override
-    public synchronized void prepareForSessionClose() {
-        requireOpen();
-        if (sessionClosing) return;
-        settleAndReleaseTerminalFrameRoots(ctx.gpuExecutor()::drainAndWaitIdle,
-                inFlightFrames, motionHistoryByScene);
-        sessionClosing = true;
+    public void prepareForSessionClose() {
+        synchronized (this) {
+            requireOpen();
+            if (sessionClosing) return;
+            sessionClosing = true;
+        }
+        ctx.drainAndWaitIdle();
+        synchronized (this) {
+            releaseTerminalFrameRoots();
+        }
     }
 
     @Override
-    public synchronized void settleFrameUses() {
-        requireOpen();
-        if (inFlightFrames.isEmpty() && motionHistoryByScene.isEmpty()) return;
-        settleAndReleaseTerminalFrameRoots(ctx.gpuExecutor()::drainAndWaitIdle,
-                inFlightFrames, motionHistoryByScene);
+    public void settleFrameUses() {
+        synchronized (this) {
+            requireOpen();
+            if (inFlightFrames.isEmpty() && motionHistoryByScene.isEmpty()) return;
+        }
+        ctx.drainAndWaitIdle();
+        synchronized (this) {
+            releaseTerminalFrameRoots();
+        }
     }
 
-    /** The newest accepted revision. Individual meshes may still be rendering an older generation. */
+    /** Highest committed edit revision; independent edits may complete out of acceptance order. */
     public synchronized long publishedRevision() {
         requireOpen();
-        return acceptedRevision;
+        return visibleRevision;
     }
 
     /** Immutable light/environment view for one target scene. */
@@ -508,9 +525,19 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             else failure.addSuppressed(releaseFailure);
         }
         List<AutoCloseable> terminal = new ArrayList<>(meshTable.values());
-        terminal.addAll(unsettledBuildUses);
+        terminal.add(liveResources);
+        for (PendingEdit edit : pendingEdits.values()) {
+            terminal.add(edit.resources);
+            for (PlannedMesh mesh : edit.planned) {
+                if (mesh.coherent() != null) terminal.add(mesh.coherent());
+                if (mesh.build() != null) {
+                    terminal.add(mesh.build().generation());
+                    terminal.add(mesh.build().buildUse());
+                }
+            }
+        }
+        pendingEdits.clear();
         meshTable.clear();
-        unsettledBuildUses.clear();
         try {
             closeAll(terminal, null);
         } catch (Throwable releaseFailure) {
@@ -525,13 +552,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     private void releaseTerminalFrameRoots() {
         releaseTerminalFrameRoots(inFlightFrames, motionHistoryByScene);
-    }
-
-    static void settleAndReleaseTerminalFrameRoots(
-            Runnable settleAcceptedWork, Map<?, ? extends AutoCloseable> frames,
-            Map<?, ? extends AutoCloseable> histories) {
-        settleAcceptedWork.run();
-        releaseTerminalFrameRoots(frames, histories);
     }
 
     static void releaseTerminalFrameRoots(Map<?, ? extends AutoCloseable> frames,
@@ -576,11 +596,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 // one: a build that has not landed has no coherent logical half to validate against.
                 PreparedMesh prepared = current != null && RtRetainedGeometryPlan.canRefitBlas(
                         current.logical.build(), mesh.build())
-                        ? prepareMeshRefit(mesh, current)
-                        : prepareMeshBuild(mesh);
+                        ? prepareMesh(mesh, current)
+                        : prepareMesh(mesh, null);
                 planned.add(new PlannedMesh(mesh.identity(), null,
-                        new PendingBuild(mesh.identity(), ++nextBuildToken,
-                                prepared.mesh(), prepared.buildUse())));
+                        new PendingBuild(prepared.mesh(), prepared.buildUse())));
             }
             return List.copyOf(planned);
         } catch (Throwable failure) {
@@ -601,238 +620,86 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         suppressCleanupFailure(failure, () -> closeAll(rejected, null));
     }
 
-    /** Installs planned updates. Reuse lands immediately; a build only claims the entry's newest token. */
     private void installPlanned(List<PlannedMesh> planned) {
         for (PlannedMesh mesh : planned) {
             MeshEntry entry = meshTable.computeIfAbsent(mesh.identity(), ignored -> new MeshEntry());
-            if (mesh.coherent() != null) {
-                MeshGeneration previous = entry.current;
-                entry.current = mesh.coherent();
-                entry.pendingToken = 0L;
-                if (previous != null) previous.close();
-            } else {
-                entry.pendingToken = mesh.build().token();
-            }
+            MeshGeneration previous = entry.current;
+            entry.current = mesh.coherent() != null ? mesh.coherent() : mesh.build().generation();
+            if (previous != null) previous.close();
         }
-        if (!planned.isEmpty()) layoutDirty = true;
     }
 
     private void dropMesh(long identity) {
         MeshEntry removed = meshTable.remove(identity);
-        if (removed == null) return;
-        layoutDirty = true;
-        removed.close();
+        if (removed != null) removed.close();
     }
 
-    private void submitPlanned(List<PlannedMesh> planned, Runnable onPublished) {
-        List<PendingBuild> builds = planned.stream()
-                .map(PlannedMesh::build).filter(Objects::nonNull).toList();
+    private void submitPlanned(ScenePublicationQueue.Edit<EditKey, PendingEdit> ticket) {
+        PendingEdit edit = ticket.value;
+        var builds = edit.planned.stream().map(PlannedMesh::build).filter(Objects::nonNull).toList();
         if (builds.isEmpty()) {
-            // Never call back inline from a publish; batches always surface through progress().
-            completed.add(new CompletedBatch(List.of(), onPublished, null));
+            completed.add(new CompletedBatch(ticket, null));
             return;
         }
-        List<RtAccel.PreparedBlas> operations = builds.stream()
-                .map(build -> build.buildUse().operation()).toList();
-        ctx.gpuExecutor().submit(cmd -> RtAccel.recordBlasBuilds(ctx, cmd, operations),
-                completion -> completeLater(builds, onPublished, completion));
-    }
-
-    /**
-     * Applies one finished batch. A result whose token no longer matches lost to a newer update, and one
-     * whose mesh is gone was dropped; both simply release. A failed batch leaves every mesh on the
-     * generation it already renders.
-     */
-    private void applyCompletedBatch(CompletedBatch batch) {
-        List<AutoCloseable> released = new ArrayList<>();
-        for (PendingBuild build : batch.builds()) {
-            MeshEntry entry = meshTable.get(build.meshIdentity());
-            boolean newest = claimsMeshEntry(entry != null,
-                    entry == null ? 0L : entry.pendingToken, build.token());
-            if (newest) entry.pendingToken = 0L;
-            if (newest && batch.failure() == null) {
-                MeshGeneration previous = entry.current;
-                entry.current = build.generation();
-                layoutDirty = true;
-                if (previous != null) released.add(previous);
-            } else {
-                released.add(build.generation());
+        var operations = builds.stream().map(build -> build.buildUse().operation()).toList();
+        ctx.gpuExecutor().submit(cmd -> RtAccel.recordBlasBuilds(ctx, cmd, operations), completion -> {
+            Throwable failure = switch (completion) {
+                case GpuComputeCompletion.Succeeded ignored -> null;
+                case GpuComputeCompletion.Cancelled ignored -> new CancellationException("scene build cancelled");
+                case GpuComputeCompletion.Failed failed -> failed.failure();
+            };
+            if (failure == null) {
+                try {
+                    closeAll(builds.stream().map(PendingBuild::buildUse).toList(), null);
+                } catch (Throwable cleanup) {
+                    failure = cleanup;
+                }
             }
-            if (batch.failure() != null) unsettledBuildUses.add(build.buildUse());
-        }
-        Throwable failure = null;
-        try {
-            closeAll(released, null);
-        } catch (Throwable releaseFailure) {
-            failure = releaseFailure;
-        }
-        try {
-            batch.published().run();
-        } catch (Throwable callbackFailure) {
-            if (failure == null) failure = callbackFailure;
-            else failure.addSuppressed(callbackFailure);
-        }
-        throwFailure(failure, "retained scene batch completion failed");
+            completed.add(new CompletedBatch(ticket, failure));
+        });
     }
 
-    /**
-     * Terminal callback for one batch, on the executor thread. Build inputs are released here rather than at
-     * table update: the batch has already retired on the device, and holding scratch until the render thread
-     * next makes progress would overlap it with the following batch.
-     */
-    private void completeLater(List<PendingBuild> builds, Runnable onPublished,
-                               GpuComputeCompletion completion) {
-        Throwable failure = switch (completion) {
-            case GpuComputeCompletion.Succeeded ignored -> null;
-            case GpuComputeCompletion.Cancelled ignored ->
-                    new CancellationException("retained scene build was cancelled");
-            case GpuComputeCompletion.Failed failed -> failed.failure();
-        };
-        if (failure == null) {
-            try {
-                closeAll(builds.stream().map(PendingBuild::buildUse).toList(), null);
-            } catch (Throwable releaseFailure) {
-                failure = releaseFailure;
-            }
-        }
-        completed.add(new CompletedBatch(builds, onPublished, failure));
-    }
-
-    private PreparedMesh prepareMeshBuild(RetainedSceneSnapshot.Mesh mesh) {
+    private PreparedMesh prepareMesh(RetainedSceneSnapshot.Mesh mesh, MeshGeneration source) {
         MeshBuild<?> build = mesh.build();
-        ResourceLeaseSet inputs = ResourceLeaseSet.acquireRequired(List.of(
-                build.positions().resource(), build.indices().resource()));
-        RtAccel.PreparedBlas unownedOperation = null;
+        var dependencies = new ArrayList<AutoCloseable>();
+        RtAccel.PersistentBuild nativeBuild = null;
+        SharedResource<BlasGeneration> blas = null;
+        MeshGeneration generation = null;
         try {
-            RtAccel.PersistentBuild nativeBuild = RtAccel.prepareUpdateablePersistentBlasBuild(ctx,
-                    build.positions().bytes().address(), build.positions().byteStride(), build.vertexCount(),
-                    build.indices().bytes().address(),
-                    RtRetainedGeometryPlan.blasRanges(build), "retained mesh " + mesh.identity());
-            unownedOperation = nativeBuild.op();
-            BlasGeneration blas = new BlasGeneration(nativeBuild.op(), nativeBuild.accel(), nativeBuild.backing());
-            SharedResource<BlasGeneration> ownedBlas = handoffResource(
-                    blas, BlasGeneration::destroy,
-                    value -> SharedResource.owned(value, BlasGeneration::destroy));
-            MeshGeneration generation = null;
-            BlasBuildUse buildUse = null;
-            try {
-                generation = new MeshGeneration(mesh, ownedBlas);
-                ownedBlas = null;
-                buildUse = new BlasBuildUse(nativeBuild.op(), List.of(inputs));
-                unownedOperation = null;
-                inputs = null;
-                PreparedMesh prepared = new PreparedMesh(generation, buildUse);
-                generation = null;
-                buildUse = null;
-                return prepared;
-            } catch (Throwable failure) {
-                if (buildUse != null) {
-                    BlasBuildUse rejectedUse = buildUse;
-                    suppressCleanupFailure(failure, rejectedUse::close);
-                } else if (unownedOperation != null) {
-                    RtAccel.PreparedBlas rejectedOperation = unownedOperation;
-                    unownedOperation = null;
-                    suppressCleanupFailure(failure,
-                            () -> RtAccel.freeBlasScratch(List.of(rejectedOperation)));
-                }
+            dependencies.add(ResourceOwners.capture(List.of(build.positions().resource(), build.indices().resource())));
+            if (source == null) {
+                nativeBuild = RtAccel.prepareUpdateablePersistentBlasBuild(ctx,
+                        build.positions().bytes().address(), build.positions().byteStride(), build.vertexCount(),
+                        build.indices().bytes().address(), RtRetainedGeometryPlan.blasRanges(build),
+                        "retained mesh " + mesh.identity());
+            } else {
+                var sourceBlas = source.blas.retain();
+                dependencies.add(sourceBlas);
+                nativeBuild = RtAccel.preparePersistentBlasUpdate(ctx, sourceBlas.get().buildOperation,
+                        build.positions().bytes().address(), build.indices().bytes().address(),
+                        "retained mesh " + mesh.identity());
+            }
+            var value = new BlasGeneration(nativeBuild.op(), nativeBuild.accel(), nativeBuild.backing());
+            blas = SharedResource.owned(value, BlasGeneration::destroy);
+            generation = new MeshGeneration(mesh, blas);
+            var use = new BlasBuildUse(nativeBuild.op(), dependencies);
+            return new PreparedMesh(generation, use);
+        } catch (Throwable failure) {
+            if (nativeBuild != null) {
+                RtAccel.PreparedBlas operation = nativeBuild.op();
+                suppressCleanupFailure(failure, () -> RtAccel.freeBlasScratch(List.of(operation)));
                 if (generation != null) {
-                    MeshGeneration rejectedGeneration = generation;
-                    suppressCleanupFailure(failure, rejectedGeneration::close);
+                    MeshGeneration rejected = generation;
+                    suppressCleanupFailure(failure, rejected::close);
+                } else if (blas != null) {
+                    SharedResource<BlasGeneration> rejected = blas;
+                    suppressCleanupFailure(failure, rejected::close);
+                } else {
+                    RtAccel.PersistentBuild rejected = nativeBuild;
+                    suppressCleanupFailure(failure, () -> RtAccel.destroyCallerOwnedAccel(rejected.accel(), rejected.backing()));
                 }
-                if (ownedBlas != null) {
-                    SharedResource<BlasGeneration> rejectedBlas = ownedBlas;
-                    suppressCleanupFailure(failure, rejectedBlas::close);
-                }
-                throw failure;
             }
-        } catch (Throwable failure) {
-            if (unownedOperation != null) {
-                RtAccel.PreparedBlas rejectedOperation = unownedOperation;
-                suppressCleanupFailure(failure,
-                        () -> RtAccel.freeBlasScratch(List.of(rejectedOperation)));
-            }
-            if (inputs != null) {
-                ResourceLeaseSet rejectedInputs = inputs;
-                suppressCleanupFailure(failure, rejectedInputs::close);
-            }
-            throw failure;
-        }
-    }
-
-    private PreparedMesh prepareMeshRefit(RetainedSceneSnapshot.Mesh mesh, MeshGeneration source) {
-        SharedResource<BlasGeneration> sourceBuild = source.blas.retain();
-        ResourceLeaseSet inputs = null;
-        RtAccel.PreparedBlas unownedOperation = null;
-        try {
-            inputs = ResourceLeaseSet.acquireRequired(List.of(
-                    mesh.build().positions().resource(), mesh.build().indices().resource()));
-            MeshBuild<?> build = mesh.build();
-            RtAccel.PersistentBuild nativeBuild = RtAccel.preparePersistentBlasUpdate(ctx,
-                    sourceBuild.get().buildOperation, build.positions().bytes().address(),
-                    build.indices().bytes().address(), "retained mesh " + mesh.identity());
-            unownedOperation = nativeBuild.op();
-            BlasGeneration blas = new BlasGeneration(
-                    nativeBuild.op(), nativeBuild.accel(), nativeBuild.backing());
-            SharedResource<BlasGeneration> ownedBlas = handoffResource(
-                    blas, BlasGeneration::destroy,
-                    value -> SharedResource.owned(value, BlasGeneration::destroy));
-            MeshGeneration generation = null;
-            BlasBuildUse buildUse = null;
-            try {
-                generation = new MeshGeneration(mesh, ownedBlas);
-                ownedBlas = null;
-                buildUse = new BlasBuildUse(nativeBuild.op(), List.of(sourceBuild, inputs));
-                unownedOperation = null;
-                sourceBuild = null;
-                inputs = null;
-                PreparedMesh prepared = new PreparedMesh(generation, buildUse);
-                generation = null;
-                buildUse = null;
-                return prepared;
-            } catch (Throwable failure) {
-                if (buildUse != null) {
-                    BlasBuildUse rejectedUse = buildUse;
-                    suppressCleanupFailure(failure, rejectedUse::close);
-                } else if (unownedOperation != null) {
-                    RtAccel.PreparedBlas rejectedOperation = unownedOperation;
-                    unownedOperation = null;
-                    suppressCleanupFailure(failure,
-                            () -> RtAccel.freeBlasScratch(List.of(rejectedOperation)));
-                }
-                if (generation != null) {
-                    MeshGeneration rejectedGeneration = generation;
-                    suppressCleanupFailure(failure, rejectedGeneration::close);
-                }
-                if (ownedBlas != null) {
-                    SharedResource<BlasGeneration> rejectedBlas = ownedBlas;
-                    suppressCleanupFailure(failure, rejectedBlas::close);
-                }
-                throw failure;
-            }
-        } catch (Throwable failure) {
-            if (unownedOperation != null) {
-                RtAccel.PreparedBlas rejectedOperation = unownedOperation;
-                suppressCleanupFailure(failure,
-                        () -> RtAccel.freeBlasScratch(List.of(rejectedOperation)));
-            }
-            if (sourceBuild != null) {
-                SharedResource<BlasGeneration> rejectedSource = sourceBuild;
-                suppressCleanupFailure(failure, rejectedSource::close);
-            }
-            if (inputs != null) {
-                ResourceLeaseSet rejectedInputs = inputs;
-                suppressCleanupFailure(failure, rejectedInputs::close);
-            }
-            throw failure;
-        }
-    }
-
-    static <T, R> R handoffResource(T resource, Consumer<? super T> disposer,
-                                    Function<? super T, ? extends R> owner) {
-        try {
-            return owner.apply(resource);
-        } catch (Throwable failure) {
-            suppressCleanupFailure(failure, () -> disposer.accept(resource));
+            closeAll(dependencies, failure);
             throw failure;
         }
     }
@@ -859,8 +726,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
      * layout they lease, so an in-flight frame keeps rendering the generation it started with.
      */
     private PublishedSceneRevision materializeCurrent() {
-        if (!layoutDirty && published != null) return published;
-        if (liveContent.isEmpty()) return published;
+        if (published != null) return published;
         Map<Long, MeshGeneration> meshes = new LinkedHashMap<>();
         SharedResource<SceneLayoutGeneration> layout;
         try {
@@ -876,9 +742,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             for (RetainedSceneSnapshot.Instance instance : instanceState.orderedInstances()) {
                 MeshGeneration mesh = meshes.get(instance.meshIdentity());
                 List<NativeInstance> target = instances.get(instance.scene());
-                // A mesh awaiting its first build has no structure to trace, and an instance can name a
-                // scene this content revision does not carry. Both simply do not render this layout.
-                if (mesh == null || target == null) continue;
                 int geometryBase = geometryBases.get(instance.scene());
                 target.add(new NativeInstance(instance, mesh,
                         instanceState.previousTransform(instance), geometryBase,
@@ -896,7 +759,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         PublishedSceneRevision next;
         try {
             SceneRevisionRoot root = new SceneRevisionRoot(layout, liveContent);
-            next = new PublishedSceneRevision(acceptedRevision,
+            next = new PublishedSceneRevision(visibleRevision,
                     SharedResource.owned(root, SceneRevisionRoot::destroy));
         } catch (Throwable failure) {
             suppressCleanupFailure(failure, layout::close);
@@ -904,19 +767,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         PublishedSceneRevision previous = published;
         published = next;
-        layoutDirty = false;
         instanceState.latchPreviousTransforms();
         if (previous != null) previous.release();
         return published;
-    }
-
-    /**
-     * Whether a finished build is still the newest update for its mesh. A token that no longer matches lost
-     * to a later update, and a missing entry means the mesh was dropped; neither may install its result.
-     * Kept device-independent so the supersession rule is testable without a GPU.
-     */
-    static boolean claimsMeshEntry(boolean present, long entryToken, long buildToken) {
-        return present && entryToken == buildToken;
     }
 
     private void pruneLatestTransforms() {
@@ -1006,64 +859,34 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         return List.copyOf(references);
     }
 
-    private static Map<SceneId, SceneContent> resolveFrameContent(
-            Map<SceneId, SceneContent> content, ResourceLeaseSet resources) {
-        Map<SceneId, SceneContent> resolved = new IdentityHashMap<>();
-        content.forEach((scene, value) -> {
-            EnvironmentBinding<?> environment = resolveFrameEnvironment(value.environment(), resources);
-            resolved.put(scene, new SceneContent(environment, value.lights()));
-        });
-        return Collections.unmodifiableMap(resolved);
-    }
-
-    static EnvironmentBinding<?> resolveFrameEnvironment(EnvironmentBinding<?> environment,
-                                                          ResourceLeaseSet resources) {
-        return environment == null || resources.available(environment.bindingData().resource())
-                ? environment : null;
-    }
-
-    static java.util.Optional<ResolvedFrameInput> resolveFrameInput(
-            RetainedSceneSnapshot.Mesh mesh, RetainedSceneSnapshot.Instance instance,
-            ResourceLeaseSet resources) {
+    static ResolvedFrameInput resolveFrameInput(RetainedSceneSnapshot.Mesh mesh,
+                                               RetainedSceneSnapshot.Instance instance) {
         MeshBuild<?> build = mesh.build();
-        if (!resources.available(build.positions().resource())
-                || !resources.available(build.indices().resource())) return java.util.Optional.empty();
-        boolean instanceAvailable = resources.available(instance.instanceData().resource());
-        List<RtRetainedGeometryPlan.ResolvedGeometry> geometries = new ArrayList<>();
+        var geometries = new ArrayList<RtRetainedGeometryPlan.ResolvedGeometry>();
         for (int index = 0; index < build.geometries().size(); index++) {
             MeshBuild.Geometry<?> geometry = build.geometries().get(index);
             RetainedSceneSnapshot.GeometryPrograms programs = mesh.geometryPrograms().get(index);
-            boolean surfaceAvailable = instanceAvailable && geometry.surface() != null
-                    && resources.available(geometry.surface().bindingData().resource());
-            boolean volumeAvailable = instanceAvailable && geometry.volume() != null
-                    && resources.available(geometry.volume().bindingData().resource());
             geometries.add(new RtRetainedGeometryPlan.ResolvedGeometry(geometry,
-                    surfaceAvailable ? programs.surfaceImplementation() : 0,
-                    volumeAvailable ? programs.volumeImplementation() : 0,
-                    surfaceAvailable ? geometry.surface().bindingData().bits() : 0L,
-                    volumeAvailable ? geometry.volume().bindingData().bits() : 0L));
+                    programs.surfaceImplementation(), programs.volumeImplementation(),
+                    geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
+                    geometry.volume() == null ? 0L : geometry.volume().bindingData().bits()));
         }
-        return java.util.Optional.of(new ResolvedFrameInput(
-                new RtRetainedGeometryPlan.ResolvedMesh(build, geometries),
-                new RtRetainedGeometryPlan.ResolvedPlacement(instance.transform(),
-                        instanceAvailable ? instance.instanceData().bits() : 0L)));
+        return new ResolvedFrameInput(new RtRetainedGeometryPlan.ResolvedMesh(build, geometries),
+                new RtRetainedGeometryPlan.ResolvedPlacement(instance.transform(), instance.instanceData().bits()));
     }
 
     private static Map<SceneId, List<LatchedInstance>> resolveFrameInstances(
-            Map<SceneId, List<LatchedInstance>> captured, ResourceLeaseSet resources) {
+            Map<SceneId, List<LatchedInstance>> captured) {
         Map<SceneId, List<LatchedInstance>> resolved = new IdentityHashMap<>();
         captured.forEach((scene, values) -> {
-            List<LatchedInstance> sceneInstances = new ArrayList<>();
+            List<LatchedInstance> instances = new ArrayList<>();
             int geometryBase = 0;
             for (LatchedInstance instance : values) {
-                RetainedSceneSnapshot.Mesh mesh = instance.nativeInstance.mesh.logical;
-                java.util.Optional<ResolvedFrameInput> input =
-                        resolveFrameInput(mesh, instance.current, resources);
-                if (input.isEmpty()) continue;
-                sceneInstances.add(instance.resolve(input.get().mesh(), input.get().placement(), geometryBase));
-                geometryBase = Math.addExact(geometryBase, mesh.build().geometries().size());
+                var input = resolveFrameInput(instance.nativeInstance.mesh.logical, instance.current);
+                instances.add(instance.resolve(input.mesh(), input.placement(), geometryBase));
+                geometryBase += instance.nativeInstance.mesh.logical.build().geometries().size();
             }
-            resolved.put(scene, List.copyOf(sceneInstances));
+            resolved.put(scene, List.copyOf(instances));
         });
         return Collections.unmodifiableMap(resolved);
     }
@@ -1114,21 +937,21 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         private SharedResource<SceneRevisionRoot> root;
         private final Map<SceneId, List<LatchedInstance>> currentInstances;
         private final Map<SceneId, SceneContent> currentContent;
-        private ResourceLeaseSet resources;
+        private ResourceOwners resources;
         private final Map<SceneId, FrameSceneSnapshot> scenes = new IdentityHashMap<>();
 
         FrameSnapshot(GraphicsUse graphicsUse, SharedResource<SceneRevisionRoot> root) {
             this.graphicsUse = graphicsUse;
             this.root = root;
-            ResourceLeaseSet acquired = null;
+            ResourceOwners acquired = null;
             try {
                 Map<SceneId, List<LatchedInstance>> captured = captureFrameValues(
                         root.get().geometry().instances,
                         instance -> new LatchedInstance(
                                 instance, latestTransforms.resolve(instance.logical)));
-                acquired = ResourceLeaseSet.capture(frameResourceReferences(root.get(), captured));
-                this.currentInstances = resolveFrameInstances(captured, acquired);
-                this.currentContent = resolveFrameContent(root.get().content, acquired);
+                acquired = ResourceOwners.capture(frameResourceReferences(root.get(), captured));
+                this.currentInstances = resolveFrameInstances(captured);
+                this.currentContent = root.get().content;
                 this.resources = acquired;
             } catch (Throwable failure) {
                 this.root = null;
@@ -1162,9 +985,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                             && prior.meshIdentity == instance.logical.meshIdentity()
                             && prior.placementOrdinal == instance.placementOrdinal) {
                         previousTransform = prior.transform;
-                        if (prior.topology.compatibleWith(instance.mesh.logical.build())
-                                && history.positionResources.available(
-                                prior.positions.resource())) {
+                        if (prior.topology.compatibleWith(instance.mesh.logical.build())) {
                             previousPositions = prior.positions;
                         }
                     }
@@ -1192,7 +1013,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     if (!entry.getValue().traced()) continue;
                     List<ResourceRef> positions = entry.getValue().instances.stream().map(instance ->
                             instance.nativeInstance.mesh.logical.build().positions().resource()).toList();
-                    ResourceLeaseSet positionResources = resources.retainOnly(positions);
+                    ResourceOwners positionResources = resources.retainOnly(positions);
                     SharedResource<SceneMotionHistory> replacement = null;
                     try {
                         Map<Long, MotionInstanceHistory> historyInstances = new LinkedHashMap<>();
@@ -1222,7 +1043,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         @Override
         public void close() {
             SharedResource<SceneRevisionRoot> released;
-            ResourceLeaseSet releasedResources;
+            ResourceOwners releasedResources;
             List<FrameSceneSnapshot> releasedScenes;
             synchronized (RtRetainedSceneBackend.this) {
                 if (root == null) return;
@@ -1328,10 +1149,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     private static final class SceneMotionHistory implements AutoCloseable {
         final Map<Long, MotionInstanceHistory> instances;
-        final ResourceLeaseSet positionResources;
+        final ResourceOwners positionResources;
 
         SceneMotionHistory(Map<Long, MotionInstanceHistory> instances,
-                           ResourceLeaseSet positionResources) {
+                           ResourceOwners positionResources) {
             this.instances = instances;
             this.positionResources = positionResources;
         }
@@ -1455,27 +1276,98 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         MutableSceneContent(EnvironmentBinding<?> environment) { this.environment = environment; }
     }
 
-    /** One mesh in the live table: its coherent generation plus the token of any newer build in flight. */
+    /** One published immutable mesh revision. */
     private static final class MeshEntry implements AutoCloseable {
         MeshGeneration current;
-        long pendingToken;
         @Override public void close() {
             MeshGeneration released = current;
             current = null;
-            pendingToken = 0L;
             if (released != null) released.close();
         }
     }
 
-    private record PendingBuild(long meshIdentity, long token, MeshGeneration generation,
-                                BlasBuildUse buildUse) { }
+    private record PendingBuild(MeshGeneration generation, BlasBuildUse buildUse) { }
 
     /** Either an immediately coherent generation or a build to submit, never both. */
     private record PlannedMesh(long identity, MeshGeneration coherent, PendingBuild build) { }
     private record NativeInstance(RetainedSceneSnapshot.Instance logical, MeshGeneration mesh,
                                   dev.comfyfluffy.caustica.api.geometry.GeometryTransform previousTransform,
                                   int geometryBase, int sbtRecordOffset, long placementOrdinal) { }
-    private record CompletedBatch(List<PendingBuild> builds, Runnable published, Throwable failure) { }
+    private record CompletedBatch(ScenePublicationQueue.Edit<EditKey, PendingEdit> edit, Throwable failure) { }
+
+    private record EditKey(String kind, Object identity) { }
+
+    private static final class PendingEdit {
+        final long revision;
+        final List<PlannedMesh> planned;
+        final java.util.Set<EditKey> keys;
+        final ResourceOwners resources;
+        final Runnable apply;
+        final Runnable published;
+        Throwable failure;
+        PendingEdit(long revision, List<PlannedMesh> planned, java.util.Set<EditKey> keys,
+                    ResourceOwners resources, Runnable apply, Runnable published) {
+            this.revision = revision;
+            this.planned = planned;
+            this.keys = java.util.Set.copyOf(keys);
+            this.resources = resources;
+            this.apply = apply;
+            this.published = published;
+        }
+    }
+
+    record ContentPatch(Map<SceneId, SceneContent> added, java.util.Set<SceneId> removed,
+                                Map<SceneId, EnvironmentBinding<?>> environments,
+                                Map<Long, RetainedSceneSnapshot.Light> lights, java.util.Set<Long> droppedLights) {
+        static ContentPatch empty() {
+            return new ContentPatch(Map.of(), java.util.Set.of(), Map.of(), Map.of(), java.util.Set.of());
+        }
+        static ContentPatch between(Map<SceneId, SceneContent> before, Map<SceneId, SceneContent> after) {
+            var added = new IdentityHashMap<SceneId, SceneContent>();
+            var removed = java.util.Collections.newSetFromMap(new IdentityHashMap<SceneId, Boolean>());
+            var environments = new IdentityHashMap<SceneId, EnvironmentBinding<?>>();
+            before.keySet().stream().filter(scene -> !after.containsKey(scene)).forEach(removed::add);
+            after.forEach((scene, value) -> {
+                SceneContent previous = before.get(scene);
+                if (previous == null) added.put(scene, new SceneContent(value.environment(), List.of()));
+                else if (!Objects.equals(previous.environment(), value.environment())) environments.put(scene, value.environment());
+            });
+            Map<Long, RetainedSceneSnapshot.Light> oldLights = flattenLights(before);
+            Map<Long, RetainedSceneSnapshot.Light> nextLights = flattenLights(after);
+            var droppedLights = new java.util.HashSet<>(oldLights.keySet());
+            droppedLights.removeAll(nextLights.keySet());
+            nextLights.entrySet().removeIf(entry -> Objects.equals(oldLights.get(entry.getKey()), entry.getValue()));
+            return new ContentPatch(added, removed, environments, nextLights, droppedLights);
+        }
+        java.util.Set<EditKey> keys() {
+            var keys = new java.util.HashSet<EditKey>();
+            if (!added.isEmpty() || !removed.isEmpty()) keys.add(new EditKey("all", 0L));
+            environments.keySet().forEach(scene -> keys.add(new EditKey("environment", scene)));
+            lights.keySet().forEach(id -> keys.add(new EditKey("light", id)));
+            droppedLights.forEach(id -> keys.add(new EditKey("light", id)));
+            return keys;
+        }
+        Map<SceneId, SceneContent> apply(Map<SceneId, SceneContent> current) {
+            var result = new IdentityHashMap<>(current);
+            removed.forEach(result::remove);
+            result.putAll(added);
+            environments.forEach((scene, environment) -> result.put(scene,
+                    new SceneContent(environment, result.get(scene).lights())));
+            var allLights = flattenLights(result);
+            droppedLights.forEach(allLights::remove);
+            allLights.putAll(lights);
+            result.replaceAll((scene, value) -> new SceneContent(value.environment(), allLights.values().stream()
+                    .filter(light -> light.scene() == scene)
+                    .map(light -> new SceneLight(light.identity(), light.descriptor())).toList()));
+            return Map.copyOf(result);
+        }
+        private static Map<Long, RetainedSceneSnapshot.Light> flattenLights(Map<SceneId, SceneContent> content) {
+            var lights = new LinkedHashMap<Long, RetainedSceneSnapshot.Light>();
+            content.forEach((scene, value) -> value.lights().forEach(light -> lights.put(light.identity(),
+                    new RetainedSceneSnapshot.Light(light.identity(), scene, light.descriptor()))));
+            return lights;
+        }
+    }
     private record PreparedMesh(MeshGeneration mesh, BlasBuildUse buildUse) { }
 
     private static final class PublishedSceneRevision {
@@ -1494,13 +1386,19 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private static final class SceneRevisionRoot {
         final SharedResource<SceneLayoutGeneration> geometry;
         final Map<SceneId, SceneContent> content;
+        final ResourceOwners resources;
         SceneRevisionRoot(SharedResource<SceneLayoutGeneration> geometry, Map<SceneId, SceneContent> content) {
             this.geometry = geometry;
             this.content = Map.copyOf(content);
+            var references = new ArrayList<ResourceRef>();
+            geometry.get().instances.values().forEach(instances -> instances.forEach(instance ->
+                    references.add(instance.logical.instanceData().resource())));
+            addEnvironmentResources(content, references);
+            resources = ResourceOwners.capture(references);
         }
         SceneLayoutGeneration geometry() { return geometry.get(); }
         void destroy() {
-            geometry.close();
+            closeAll(List.of(geometry, resources), null);
         }
     }
 
@@ -1518,15 +1416,30 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private static final class MeshGeneration implements AutoCloseable {
         final RetainedSceneSnapshot.Mesh logical;
         final SharedResource<BlasGeneration> blas;
+        final ResourceOwners resources;
         MeshGeneration(RetainedSceneSnapshot.Mesh logical, SharedResource<BlasGeneration> blas) {
             this.logical = logical;
             this.blas = blas;
+            var references = new ArrayList<ResourceRef>();
+            references.add(logical.build().positions().resource());
+            references.add(logical.build().indices().resource());
+            logical.build().geometries().forEach(geometry -> {
+                if (geometry.surface() != null) references.add(geometry.surface().bindingData().resource());
+                if (geometry.volume() != null) references.add(geometry.volume().bindingData().resource());
+            });
+            resources = ResourceOwners.capture(references);
         }
         BlasGeneration blas() { return blas.get(); }
         MeshGeneration withLogical(RetainedSceneSnapshot.Mesh next) {
-            return new MeshGeneration(next, blas.retain());
+            var retained = blas.retain();
+            try {
+                return new MeshGeneration(next, retained);
+            } catch (Throwable failure) {
+                retained.close();
+                throw failure;
+            }
         }
-        @Override public void close() { blas.close(); }
+        @Override public void close() { closeAll(List.of(blas, resources), null); }
     }
 
     /** Scratch plus every source, position, and index generation read by one BUILD or UPDATE. */

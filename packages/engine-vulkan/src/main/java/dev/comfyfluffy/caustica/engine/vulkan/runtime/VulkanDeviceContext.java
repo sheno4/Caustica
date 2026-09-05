@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
+import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 import org.lwjgl.PointerBuffer;
@@ -66,12 +67,16 @@ public final class VulkanDeviceContext implements GpuDevice {
     /** Serializes device-wide host waits against submissions from the Caustica compute thread. */
     private final Object deviceQueueHostLock = new Object();
     private final RtGpuExecutor gpuExecutor;
+    private final GraphicsQueue graphics;
+    private volatile long completedComputeValue;
+    private long importedComputeValue;
     private final int shaderGroupHandleSize;
     private final int shaderGroupBaseAlignment;
     private final int shaderGroupHandleAlignment;
     private final int maxShaderGroupStride;
     private final int accelerationStructureScratchAlignment;
     private long commandPool;
+    private ConventionalDescriptorBindings conventionalBindings;
 
     private VulkanDeviceContext(VulkanRendererBackend host, long vma, VulkanDescriptorHeap descriptorHeap,
                       int handleSize, int baseAlign, int handleAlign,
@@ -88,6 +93,7 @@ public final class VulkanDeviceContext implements GpuDevice {
         this.maxShaderGroupStride = maxSbtStride;
         this.accelerationStructureScratchAlignment = scratchAlign;
         this.gpuExecutor = new RtGpuExecutor(this);
+        this.graphics = new GraphicsQueue(this);
     }
 
     /** Create the resources owned by one installed renderer Vulkan device. */
@@ -166,14 +172,20 @@ public final class VulkanDeviceContext implements GpuDevice {
         return descriptorHeap;
     }
 
+    void bindConventionalDescriptors(VkCommandBuffer commandBuffer) {
+        if (conventionalBindings == null) conventionalBindings = new ConventionalDescriptorBindings(this);
+        conventionalBindings.bind(commandBuffer);
+    }
+
     /** Bind the renderer-owned resource and sampler heaps before heap-native commands are recorded. */
     public void bindDescriptorHeaps(VkCommandBuffer commandBuffer) {
         descriptorHeap.bind(commandBuffer);
     }
 
-    /** Binds empty conventional descriptor state so external middleware does not inherit descriptor heaps. */
-    public void invalidateDescriptorHeapsForExternalCommand(VkCommandBuffer commandBuffer) {
-        descriptorHeap.invalidateForExternalCommand(commandBuffer);
+    /** Begin an independently owned graphics command buffer with its own descriptor binding state. */
+    public OwnedCommandBuffer beginGraphicsCommands(String label, boolean descriptorHeaps) {
+        host.assertRenderThread();
+        return new OwnedCommandBuffer(this, label, descriptorHeaps);
     }
 
     /** Populate descriptor-heap push-data storage without introducing pipeline-layout state. */
@@ -183,7 +195,7 @@ public final class VulkanDeviceContext implements GpuDevice {
 
     @Override
     public void retireAfterUse(Runnable cleanup) {
-        gpuExecutor.retireAfterLatestSubmittedGraphics(cleanup);
+        graphics.retireAfterLatestSubmittedGraphics(cleanup);
     }
 
     @Override
@@ -199,6 +211,32 @@ public final class VulkanDeviceContext implements GpuDevice {
 
     public RtGpuExecutor gpuExecutor() {
         return gpuExecutor;
+    }
+
+    public GraphicsQueue graphics() { return graphics; }
+
+    long completedComputeValue() { return completedComputeValue; }
+
+    void publishCompletedCompute(long value) { completedComputeValue = value; }
+
+    /** Import available compute writes without depending on unfinished background work. */
+    void importCompletedComputeWrites(GraphicsSubmission submission) {
+        long completed = completedComputeValue;
+        if (completed > importedComputeValue) {
+            enqueueCompletedComputeWait(submission, gpuExecutor.completionSemaphore(), completed);
+            importedComputeValue = completed;
+        }
+    }
+
+    static void enqueueCompletedComputeWait(GraphicsSubmission submission, long semaphore, long value) {
+        if (value != 0L) submission.waitSemaphore(semaphore, value, VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    }
+
+    public void drainAndWaitIdle() {
+        gpuExecutor.drain();
+        waitIdle();
+        graphics.drainAfterDeviceIdle();
+        gpuExecutor.throwIfFailed();
     }
 
     VulkanQueueRef computeQueue() {
@@ -485,11 +523,15 @@ public final class VulkanDeviceContext implements GpuDevice {
     }
 
     public void destroy() {
-        gpuExecutor.shutdown();
+        gpuExecutor.stop();
+        waitIdle();
+        graphics.shutdownAfterDeviceIdle();
+        gpuExecutor.destroyAfterDeviceIdle();
         if (commandPool != 0L) {
             VK10.vkDestroyCommandPool(vk, commandPool, null);
             commandPool = 0L;
         }
+        if (conventionalBindings != null) conventionalBindings.close();
         descriptorHeap.close();
         if (vma != 0L) {
             VulkanDiagnostics.registerAllocator(0L);

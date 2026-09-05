@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.example.gltfcontent;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
@@ -74,7 +74,7 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
             buffer.close();
             throw failure;
         }
-        ResourceGeneration generation;
+        ResourceOwner generation;
         try {
             generation = resources.create(buffer::close);
         } catch (RuntimeException | Error failure) {
@@ -82,10 +82,10 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
             throw failure;
         }
         try {
-            generation.seal();
+
             return new OwnedBuffer(buffer, generation);
         } catch (RuntimeException | Error failure) {
-            generation.drop();
+            generation.close();
             throw failure;
         }
     }
@@ -114,8 +114,8 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
         }
     }
 
-    private record OwnedBuffer(VmaMappedBuffer buffer, ResourceGeneration generation) {
-        void drop() { generation.drop(); }
+    private record OwnedBuffer(VmaMappedBuffer buffer, ResourceOwner generation) {
+        void drop() { generation.close(); }
     }
 
     @FunctionalInterface private interface Writer { void write(ByteBuffer bytes); }

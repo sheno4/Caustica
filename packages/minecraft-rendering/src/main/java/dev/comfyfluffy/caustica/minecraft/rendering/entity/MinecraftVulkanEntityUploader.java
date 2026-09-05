@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
@@ -92,10 +92,10 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     private UploadedEntity uploaded(MinecraftEntityMesh source, VmaMappedBuffer positions,
                                     VmaMappedBuffer indices, VmaMappedBuffer primitive,
                                     VmaMappedBuffer instance, TextureSet textureSet) {
-        ResourceGeneration positionGeneration = null;
-        ResourceGeneration indexGeneration = null;
-        ResourceGeneration bindingGeneration = null;
-        ResourceGeneration instanceGeneration = null;
+        ResourceOwner positionGeneration = null;
+        ResourceOwner indexGeneration = null;
+        ResourceOwner bindingGeneration = null;
+        ResourceOwner instanceGeneration = null;
         try {
             positionGeneration = resources.create(positions::close);
             indexGeneration = resources.create(indices::close);
@@ -120,19 +120,16 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                     new MeshBuild.IndexRevision(source.indexRevision()), geometries);
             ShaderData<MinecraftProgramTypes.InstanceData> instanceData = MinecraftProgramTypes.INSTANCE_DATA.data(
                     instance.deviceRange().address().value(), instanceGeneration.reference());
-            positionGeneration.seal();
-            indexGeneration.seal();
-            bindingGeneration.seal();
-            instanceGeneration.seal();
+
             return new Uploaded(build, instanceData, positionGeneration, indexGeneration,
                     bindingGeneration, instanceGeneration);
         } catch (RuntimeException | Error failure) {
             Throwable cleanup = closeAll(
-                    positionGeneration == null ? positions : positionGeneration::drop,
-                    indexGeneration == null ? indices : indexGeneration::drop,
+                    positionGeneration == null ? positions : positionGeneration::close,
+                    indexGeneration == null ? indices : indexGeneration::close,
                     bindingGeneration == null ? () -> throwIfFailed(closeAll(textureSet, primitive))
-                            : bindingGeneration::drop,
-                    instanceGeneration == null ? instance : instanceGeneration::drop);
+                            : bindingGeneration::close,
+                    instanceGeneration == null ? instance : instanceGeneration::close);
             if (cleanup != null) failure.addSuppressed(cleanup);
             throw failure;
         }
@@ -358,15 +355,15 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
     private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
                             ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                            ResourceGeneration positionGeneration,
-                            ResourceGeneration indexGeneration,
-                            ResourceGeneration bindingGeneration,
-                            ResourceGeneration instanceGeneration) implements UploadedEntity {
+                            ResourceOwner positionGeneration,
+                            ResourceOwner indexGeneration,
+                            ResourceOwner bindingGeneration,
+                            ResourceOwner instanceGeneration) implements UploadedEntity {
         @Override public void close() {
-            positionGeneration.drop();
-            indexGeneration.drop();
-            bindingGeneration.drop();
-            instanceGeneration.drop();
+            positionGeneration.close();
+            indexGeneration.close();
+            bindingGeneration.close();
+            instanceGeneration.close();
         }
     }
     record GeometryRange(int firstTriangle, int endTriangle) { }

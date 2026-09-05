@@ -1,188 +1,207 @@
 package dev.comfyfluffy.caustica.engine.resource;
 
-import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
+@Timeout(10)
 final class ResourceDirectoryTest {
-    @Test
-    void droppedUnusedGenerationRetiresOnlyThroughProgress() {
-        AtomicInteger retired = new AtomicInteger();
-        ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        ContributionOwner owner = new ContributionOwner(1);
-        ResourceFactory factory = directory.openFactory(owner);
-        var generation = factory.create(retired::incrementAndGet);
+    private final ContributionOwner producer = new ContributionOwner(1);
 
-        generation.drop();
-        generation.drop();
-        assertEquals(0, retired.get());
-
-        directory.progress();
-        assertEquals(1, retired.get());
-        assertDoesNotThrow(generation::drop);
-        directory.drain(owner);
-        directory.close();
+    @Test void producerDrainDoesNotWaitForAnotherContributionsOwnership() {
+        AtomicInteger destroyed = new AtomicInteger();
+        try (var directory = new ResourceDirectory(failure -> fail(failure))) {
+            var owner = directory.openFactory(producer).create(destroyed::incrementAndGet);
+            try (var consumer = directory.acquire(new ContributionOwner(2), owner.reference())) {
+                directory.invalidate(producer);
+                directory.drain(producer, () -> {});
+                assertEquals(0, destroyed.get());
+                try (var retained = consumer.retain()) {
+                    assertSame(owner.reference(), retained.reference());
+                }
+            }
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
     }
 
-    @Test
-    void sealedGenerationWaitsForEveryEngineLease() {
-        AtomicInteger retired = new AtomicInteger();
-        ContributionOwner owner = new ContributionOwner(1);
-        ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        ResourceFactory factory = directory.openFactory(owner);
-        var generation = factory.create(retired::incrementAndGet);
-
-        assertThrows(IllegalStateException.class,
-                () -> directory.acquire(owner, generation.reference()));
-        generation.seal();
-        generation.seal();
-        directory.validate(owner, generation.reference());
-        ResourceLease first = directory.acquire(owner, generation.reference());
-        ResourceLease second = first.retain();
-        generation.drop();
-        assertTrue(directory.tryAcquire(generation.reference()).isEmpty());
-        assertThrows(IllegalStateException.class,
-                () -> directory.acquire(owner, generation.reference()));
-
-        first.close();
-        assertThrows(IllegalStateException.class, first::retain);
-        directory.progress();
-        assertEquals(0, retired.get());
-        second.close();
-        second.close();
-        assertEquals(0, retired.get());
-        directory.progress();
-        assertEquals(1, retired.get());
-    }
-
-    @Test
-    void identityIsIndependentAndAcquisitionIsOwnerAndSessionScoped() {
-        ContributionOwner firstOwner = new ContributionOwner(1);
-        ContributionOwner secondOwner = new ContributionOwner(2);
-        ResourceDirectory firstDirectory = new ResourceDirectory(failure -> { });
-        ResourceDirectory secondDirectory = new ResourceDirectory(failure -> { });
-        var first = firstDirectory.openFactory(firstOwner).create();
-        var second = firstDirectory.openFactory(firstOwner).create();
-        first.seal();
-        second.seal();
-
-        assertNotSame(first.reference(), second.reference());
-        assertThrows(IllegalArgumentException.class,
-                () -> firstDirectory.acquire(secondOwner, first.reference()));
-        assertThrows(IllegalArgumentException.class,
-                () -> secondDirectory.acquire(firstOwner, first.reference()));
-
-        first.drop();
-        second.drop();
-        firstDirectory.progress();
-    }
-
-    @Test
-    void canonicalNoResourceReferenceNeedsNoOwnerOrBorrow() {
-        ContributionOwner owner = new ContributionOwner(1);
-        ResourceDirectory directory = new ResourceDirectory(failure -> { });
-
-        directory.validate(owner, ResourceRef.none());
-        ResourceLease lease = directory.tryAcquire(ResourceRef.none()).orElseThrow();
-        ResourceLease staticLease = ResourceLease.tryAcquire(ResourceRef.none()).orElseThrow();
-        ResourceLease retained = lease.retain();
-        lease.close();
-        retained.close();
-        staticLease.close();
-
-        assertDoesNotThrow(directory::close);
-    }
-
-    @Test
-    void trustedStaticAcquisitionRoutesThroughTheIssuingDirectory() {
-        ContributionOwner owner = new ContributionOwner(1);
-        ResourceDirectory directory = new ResourceDirectory(failure -> { });
-        var generation = directory.openFactory(owner).create();
-        assertThrows(IllegalStateException.class,
-                () -> ResourceLease.tryAcquire(generation.reference()));
-        assertThrows(IllegalArgumentException.class,
-                () -> ResourceLease.tryAcquire(new ResourceRef() { }));
-
-        generation.seal();
-        ResourceLease lease = ResourceLease.tryAcquire(generation.reference()).orElseThrow();
-        generation.drop();
-        assertTrue(ResourceLease.tryAcquire(generation.reference()).isEmpty());
-        lease.close();
-        directory.progress();
-    }
-
-    @Test
-    void invalidationDropsAllOwnerGenerationsAndDrainRunsCallbacksInOrder() {
-        List<Integer> retired = new ArrayList<>();
-        ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        ContributionOwner owner = new ContributionOwner(1);
-        ResourceFactory factory = directory.openFactory(owner);
-        ResourceFactory secondFactory = directory.openFactory(owner);
-        var created = factory.create(() -> retired.add(1));
-        var sealed = secondFactory.create(() -> retired.add(2));
-        sealed.seal();
-
-        directory.quiesce(owner);
-        assertThrows(IllegalStateException.class, () -> factory.create(() -> { }));
-        assertThrows(IllegalStateException.class, () -> secondFactory.create(() -> { }));
-        created.seal();
-        directory.invalidate(owner);
-        assertThrows(IllegalStateException.class, created::seal);
-        assertEquals(List.of(), retired);
-
-        directory.drain(owner);
-        assertEquals(List.of(1, 2), retired);
-        directory.close();
-    }
-
-    @Test
-    void callbackFailureDoesNotPreventRemainingRetirements() {
-        RuntimeException expected = new RuntimeException("expected");
-        List<Throwable> failures = new ArrayList<>();
-        AtomicInteger retired = new AtomicInteger();
-        ResourceDirectory directory = new ResourceDirectory(failures::add);
-        ContributionOwner owner = new ContributionOwner(1);
-        ResourceFactory factory = directory.openFactory(owner);
-        var failing = factory.create(() -> { throw expected; });
-        var succeeding = factory.create(retired::incrementAndGet);
-        failing.drop();
-        succeeding.drop();
-
-        directory.progress();
-
-        assertEquals(List.of(expected), failures);
-        assertEquals(1, retired.get());
-        directory.drain(owner);
-    }
-
-    @Test
-    void drainSettlesFrameHeldLeaseBeforeWaiting() {
-        AtomicInteger retired = new AtomicInteger();
-        AtomicInteger settlements = new AtomicInteger();
-        ContributionOwner owner = new ContributionOwner(1);
-        ResourceDirectory directory = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
-        var generation = directory.openFactory(owner).create(retired::incrementAndGet);
-        generation.seal();
-        ResourceLease frameLease = directory.acquire(owner, generation.reference());
-        directory.invalidate(owner);
-
-        directory.drain(owner, () -> {
-            settlements.incrementAndGet();
-            frameLease.close();
+    @Test void closeDrainsParentCallbacksBeforeCheckingDependencyOwners() throws InterruptedException {
+        var directory = new ResourceDirectory(failure -> fail(failure));
+        var factory = directory.openFactory(producer);
+        var child = factory.create();
+        var childUse = child.retain();
+        CountDownLatch parentStarted = new CountDownLatch(1);
+        CountDownLatch releaseParent = new CountDownLatch(1);
+        var parent = factory.create(() -> {
+            parentStarted.countDown();
+            try { releaseParent.await(); }
+            catch (InterruptedException e) { throw new AssertionError(e); }
+            childUse.close();
         });
+        child.close();
+        parent.close();
+        parentStarted.await();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread close = Thread.startVirtualThread(() -> {
+            try { directory.close(); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        while (close.isAlive() && close.getState() != Thread.State.WAITING) Thread.yield();
+        releaseParent.countDown();
+        close.join();
+        assertNull(failure.get());
+    }
 
-        assertEquals(1, settlements.get());
-        assertEquals(1, retired.get());
+    @Test void finalReleaseRunsExactlyOnceOffTheCallingThread() {
+        AtomicInteger destroyed = new AtomicInteger();
+        AtomicReference<Thread> destructionThread = new AtomicReference<>();
+        Thread caller = Thread.currentThread();
+        try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure))) {
+            var owner = directory.openFactory(producer).create(() -> {
+                destructionThread.set(Thread.currentThread());
+                destroyed.incrementAndGet();
+            });
+            owner.close();
+            owner.close();
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+            assertNotSame(caller, destructionThread.get());
+            assertThrows(IllegalStateException.class, owner::retain);
+            assertThrows(IllegalStateException.class, () -> owner.reference().retain());
+        }
+    }
+
+    @Test void sceneAndFramesRetainAfterProducerReleases() {
+        AtomicInteger destroyed = new AtomicInteger();
+        try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure))) {
+            var owner = directory.openFactory(producer).create(destroyed::incrementAndGet);
+            ResourceRef reference = owner.reference();
+            var scene = reference.retain();
+            owner.close();
+            var firstFrame = scene.retain();
+            var secondFrame = reference.retain();
+            scene.close();
+            firstFrame.close();
+            directory.awaitRetirements();
+            assertEquals(0, destroyed.get());
+            secondFrame.close();
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
+
+    @Test void dependenciesRemainAliveThroughTheirLastParent() {
+        AtomicInteger destroyed = new AtomicInteger();
+        try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure))) {
+            var factory = directory.openFactory(producer);
+            var texture = factory.create(destroyed::incrementAndGet);
+            var firstTextureUse = texture.retain();
+            var secondTextureUse = texture.retain();
+            var firstData = factory.create(firstTextureUse::close);
+            var secondData = factory.create(secondTextureUse::close);
+            texture.close();
+            firstData.close();
+            directory.awaitRetirements();
+            assertEquals(0, destroyed.get());
+            secondData.close();
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
+
+    @Test void ownershipMayCrossContributionsButNotDevices() {
+        try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure));
+             ResourceDirectory otherDevice = new ResourceDirectory(failure -> fail(failure))) {
+            var owner = directory.openFactory(producer).create();
+            var consumer = new ContributionOwner(2);
+            try (var shared = directory.acquire(consumer, owner.reference())) {
+                directory.invalidate(producer);
+                try (var another = shared.retain()) {
+                    assertSame(owner.reference(), another.reference());
+                }
+                assertThrows(IllegalArgumentException.class,
+                        () -> otherDevice.acquire(consumer, shared.reference()));
+            }
+        }
+    }
+
+    @Test void captureDeduplicatesAndRollsBackOnReleasedDependency() {
+        AtomicInteger destroyed = new AtomicInteger();
+        try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure))) {
+            var factory = directory.openFactory(producer);
+            var live = factory.create(destroyed::incrementAndGet);
+            var released = factory.create();
+            released.close();
+            assertThrows(IllegalStateException.class,
+                    () -> ResourceOwners.capture(List.of(live.reference(), released.reference())));
+            var scene = ResourceOwners.capture(List.of(live.reference(), live.reference()));
+            var history = scene.retainOnly(List.of(live.reference()));
+            live.close();
+            scene.close();
+            directory.awaitRetirements();
+            assertEquals(0, destroyed.get());
+            history.close();
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
+
+    @Test void releasingClaimsConcurrentlyDisposesOnce() throws InterruptedException {
+        AtomicInteger destroyed = new AtomicInteger();
+        try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure))) {
+            var owner = directory.openFactory(producer).create(destroyed::incrementAndGet);
+            var first = owner.retain();
+            var second = owner.retain();
+            CountDownLatch start = new CountDownLatch(1);
+            Thread a = Thread.startVirtualThread(() -> {
+                try { start.await(); } catch (InterruptedException e) { throw new AssertionError(e); }
+                first.close();
+            });
+            Thread b = Thread.startVirtualThread(() -> {
+                try { start.await(); } catch (InterruptedException e) { throw new AssertionError(e); }
+                second.close();
+            });
+            owner.close();
+            start.countDown();
+            a.join();
+            b.join();
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
+
+    @Test void shutdownWaitsForOutstandingFrameAndCallback() {
+        AtomicInteger destroyed = new AtomicInteger();
+        try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure))) {
+            var factory = directory.openFactory(producer);
+            var owner = factory.create(destroyed::incrementAndGet);
+            var frame = owner.retain();
+            directory.invalidate(producer);
+            assertThrows(IllegalStateException.class, factory::create);
+            directory.drain(producer, frame::close);
+            assertEquals(1, destroyed.get());
+        }
+    }
+
+    @Test void callbackFailureDoesNotLoseOtherDestructionWork() {
+        AtomicReference<Throwable> reported = new AtomicReference<>();
+        RuntimeException expected = new RuntimeException("destruction failure");
+        AtomicInteger destroyed = new AtomicInteger();
+        try (ResourceDirectory directory = new ResourceDirectory(reported::set)) {
+            var factory = directory.openFactory(producer);
+            factory.create(() -> { throw expected; }).close();
+            factory.create(destroyed::incrementAndGet).close();
+            directory.awaitRetirements();
+            assertSame(expected, reported.get());
+            assertEquals(1, destroyed.get());
+        }
     }
 }

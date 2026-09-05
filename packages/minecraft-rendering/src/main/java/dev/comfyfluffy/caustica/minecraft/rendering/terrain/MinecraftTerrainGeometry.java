@@ -68,7 +68,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         }
         sections.clear();
         sections.putAll(committedSections);
-        publication.whenVisible(() -> retireAll(displacedUploads));
+        retireAll(displacedUploads);
         return publication;
     }
 
@@ -149,20 +149,14 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         if (lightOperations.isEmpty()) publication = channel.submit(RetainedBatch.of(operations));
         else publication = channel.submitWithLights(List.of(RetainedBatch.of(operations)), lights,
                 RetainedBatch.of(lightOperations));
-        publication.whenVisible(() -> retireAll(uploads));
+        retireAll(uploads);
         sections.clear();
         closed = true;
         uploader.close();
     }
 
     private static void retireAll(List<? extends MinecraftTerrainUploader.UploadedSection> resources) {
-        for (var resource : resources) {
-            try {
-                resource.close();
-            } catch (Throwable ignored) {
-                // Visibility cleanup must attempt every resource release.
-            }
-        }
+        resources.forEach(MinecraftTerrainUploader.UploadedSection::close);
     }
 
     private static void releaseRejected(List<? extends MinecraftTerrainUploader.UploadedSection> resources,

@@ -82,7 +82,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             accepted = publication != null;
             if (prior != null && pendingGroup != null) submitLatest(target, transform, mask);
             target.uploaded = uploaded;
-            if (publication != null && displacedUpload != null) publication.whenVisible(displacedUpload::close);
+            if (publication != null && displacedUpload != null) displacedUpload.close();
         } catch (RuntimeException | Error failure) {
             if (!accepted) {
                 try { uploaded.close(); } catch (Throwable closeFailure) { failure.addSuppressed(closeFailure); }
@@ -126,7 +126,8 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             pendingGroup.batches.add(RetainedBatch.of(operations));
             pendingGroup.displaced.add(resident.uploaded);
         } else {
-            channel.submit(RetainedBatch.of(operations)).whenVisible(resident.uploaded::close);
+            channel.submit(RetainedBatch.of(operations));
+            resident.uploaded.close();
         }
         residents.remove(key);
     }
@@ -142,8 +143,8 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             }
             List<MinecraftEntityUploader.UploadedEntity> uploads = residents.values().stream()
                     .map(resident -> resident.uploaded).toList();
-            channel.submit(RetainedBatch.of(operations)).whenVisible(
-                    () -> uploads.forEach(MinecraftEntityUploader.UploadedEntity::close));
+            channel.submit(RetainedBatch.of(operations));
+            uploads.forEach(MinecraftEntityUploader.UploadedEntity::close);
         }
         residents.clear();
         stopped = true;
@@ -183,8 +184,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                     RetainedPublication publication = batches.isEmpty() && latestInstances.isEmpty()
                             ? RetainedPublication.alreadyVisible()
                             : channel.submitGroupWithLatest(batches, List.copyOf(latestInstances.values()));
-                    publication.whenVisible(() -> displaced.forEach(
-                            MinecraftEntityUploader.UploadedEntity::close));
+                    displaced.forEach(MinecraftEntityUploader.UploadedEntity::close);
                     finished = true;
                     pendingGroup = null;
                     return publication;

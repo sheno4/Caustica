@@ -21,7 +21,7 @@ import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
@@ -67,94 +67,83 @@ final class SceneDirectoryTest {
             ShaderDataType.create("environment binding");
 
     @Test
-    void geometrySubmissionValidatesEveryAttachedResourceGeneration() {
+    void sceneRetainsEveryDependencyAfterProducerRelease() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
         VolumeId<Binding, Instance> volume = programs.volume(new ContributionOwner(1));
-        ResourceDirectory resources = new ResourceDirectory(
-                failure -> { throw new AssertionError(failure); });
-        SceneBackend backend = new SceneBackend();
-        SceneDirectory directory = directory(programs, resources, backend);
+        ResourceDirectory resources = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
+        SceneDirectory directory = directory(programs, resources, new SceneBackend());
         SceneId scene = directory.createScene();
         ContributionOwner owner = new ContributionOwner(2);
         GeometryContributionChannel geometry = directory.openGeometry(owner);
-        var resourceChannel = resources.openFactory(owner);
-        ResourceGeneration positions = resourceChannel.create();
-        ResourceGeneration indices = resourceChannel.create();
-        ResourceGeneration surfaceData = resourceChannel.create();
-        ResourceGeneration volumeData = resourceChannel.create();
-        ResourceGeneration instanceData = resourceChannel.create();
+        var factory = resources.openFactory(owner);
+        AtomicInteger retired = new AtomicInteger();
+        var positions = factory.create(retired::incrementAndGet);
+        var indices = factory.create(retired::incrementAndGet);
+        var surfaceData = factory.create(retired::incrementAndGet);
+        var volumeData = factory.create(retired::incrementAndGet);
+        var instanceData = factory.create(retired::incrementAndGet);
         MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
         var instance = geometry.newInstance();
         MeshBuild<Instance> build = mesh(surface, volume, positions.reference(), indices.reference(),
                 surfaceData.reference(), volumeData.reference());
-
-        assertThrows(IllegalStateException.class, () -> geometry.submit(RetainedBatch.of(
-                List.of(new GeometryChannel.SetMesh<>(mesh, build)))));
-        positions.seal();
-        assertThrows(IllegalStateException.class, () -> geometry.submit(RetainedBatch.of(
-                List.of(new GeometryChannel.SetMesh<>(mesh, build)))));
-        indices.seal();
-        assertThrows(IllegalStateException.class, () -> geometry.submit(RetainedBatch.of(
-                List.of(new GeometryChannel.SetMesh<>(mesh, build)))));
-        surfaceData.seal();
-        assertThrows(IllegalStateException.class, () -> geometry.submit(RetainedBatch.of(
-                List.of(new GeometryChannel.SetMesh<>(mesh, build)))));
-        volumeData.seal();
-        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, build))));
-
-        GeometryChannel.SetInstance<Instance> placement = new GeometryChannel.SetInstance<>(
-                instance, scene, mesh, GeometryTransform.translation(0, 0, 0), 0xff,
-                INSTANCE.data(17, instanceData.reference()));
-        assertThrows(IllegalStateException.class, () -> geometry.submit(
-                RetainedBatch.of(List.of(placement))));
-        instanceData.seal();
-        geometry.submit(RetainedBatch.of(List.of(placement)));
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, build),
+                new GeometryChannel.SetInstance<>(instance, scene, mesh, GeometryTransform.translation(0,0,0),
+                        0xff, INSTANCE.data(17, instanceData.reference())))));
+        List.of(positions, indices, surfaceData, volumeData, instanceData).forEach(ResourceOwner::close);
+        resources.awaitRetirements();
+        assertEquals(0, retired.get());
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+        resources.awaitRetirements();
+        assertEquals(5, retired.get());
+        resources.close();
     }
 
     @Test
-    void geometrySubmissionRejectsAnotherOwnersResourceGeneration() {
+    void sceneCanRetainAnotherContributionsResource() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
-        ResourceDirectory resources = new ResourceDirectory(
-                failure -> { throw new AssertionError(failure); });
+        ResourceDirectory resources = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
         SceneDirectory directory = directory(programs, resources, new SceneBackend());
-        ContributionOwner geometryOwner = new ContributionOwner(2);
-        GeometryContributionChannel geometry = directory.openGeometry(geometryOwner);
-        ResourceGeneration foreign = resources.openFactory(new ContributionOwner(3)).create();
-        foreign.seal();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        AtomicInteger retired = new AtomicInteger();
+        ResourceOwner shared = resources.openFactory(new ContributionOwner(3)).create(retired::incrementAndGet);
         MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
-        MeshBuild<Instance> build = mesh(surface, null, foreign.reference(), ResourceRef.none(),
-                ResourceRef.none(), ResourceRef.none());
-
-        assertThrows(IllegalArgumentException.class, () -> geometry.submit(RetainedBatch.of(
-                List.of(new GeometryChannel.SetMesh<>(mesh, build)))));
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
+                mesh(surface, null, shared.reference(), ResourceRef.none(), ResourceRef.none(), ResourceRef.none())))));
+        shared.close();
+        resources.awaitRetirements();
+        assertEquals(0, retired.get());
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+        resources.awaitRetirements();
+        assertEquals(1, retired.get());
+        resources.close();
     }
 
     @Test
-    void environmentSelectionValidatesItsAttachedResourceGeneration() {
+    void environmentSelectionOwnsItsOpaqueDataThroughSceneRemoval() {
         ProgramFixture programs = new ProgramFixture();
-        EnvironmentId<EnvironmentBindingData> environment =
-                programs.environment(new ContributionOwner(1)).exports();
-        ResourceDirectory resources = new ResourceDirectory(
-                failure -> { throw new AssertionError(failure); });
+        EnvironmentId<EnvironmentBindingData> environment = programs.environment(new ContributionOwner(1)).exports();
+        ResourceDirectory resources = new ResourceDirectory(failure -> { throw new AssertionError(failure); });
         SceneDirectory directory = directory(programs, resources, new SceneBackend());
         SceneId scene = directory.createScene();
         ContributionOwner owner = new ContributionOwner(2);
         SceneEnvironmentContributionChannel environments = directory.openEnvironment(owner, scene);
-        ResourceGeneration data = resources.openFactory(owner).create();
-        EnvironmentBinding<EnvironmentBindingData> binding = EnvironmentBinding.of(
-                environment, ENVIRONMENT_BINDING.data(5, data.reference()));
-
-        assertThrows(IllegalStateException.class, () -> environments.select(binding));
-        data.seal();
-        environments.select(binding);
-        assertSame(data.reference(), directory.snapshot().scenes().getFirst()
-                .environment().bindingData().resource());
+        AtomicInteger retired = new AtomicInteger();
+        ResourceOwner data = resources.openFactory(owner).create(retired::incrementAndGet);
+        environments.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(5, data.reference())));
+        data.close();
+        resources.awaitRetirements();
+        assertEquals(0, retired.get());
+        assertSame(data.reference(), directory.snapshot().scenes().getFirst().environment().bindingData().resource());
+        directory.dropScene(scene);
+        resources.awaitRetirements();
+        assertEquals(1, retired.get());
+        resources.close();
     }
 
     @Test
-    void droppingResourceGenerationDoesNotRepublishOrRemoveLogicalGeometry() {
+    void droppingResourceOwnerDoesNotRepublishOrRemoveLogicalGeometry() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
         ResourceDirectory resources = new ResourceDirectory(
@@ -164,8 +153,8 @@ final class SceneDirectoryTest {
         SceneId scene = directory.createScene();
         ContributionOwner owner = new ContributionOwner(2);
         GeometryContributionChannel geometry = directory.openGeometry(owner);
-        ResourceGeneration data = resources.openFactory(owner).create();
-        data.seal();
+        ResourceOwner data = resources.openFactory(owner).create();
+
         MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
         var instance = geometry.newInstance();
         MeshBuild<Instance> build = mesh(surface, null, data.reference(), data.reference(),
@@ -178,7 +167,7 @@ final class SceneDirectoryTest {
         int publications = backend.snapshots.size();
         long revision = directory.snapshot().revision();
 
-        data.drop();
+        data.close();
 
         assertEquals(publications, backend.snapshots.size());
         assertEquals(revision, directory.snapshot().revision());

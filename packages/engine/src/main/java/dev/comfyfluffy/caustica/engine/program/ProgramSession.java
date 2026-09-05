@@ -14,7 +14,7 @@ import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
-import dev.comfyfluffy.caustica.engine.resource.ResourceLease;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.ArrayDeque;
@@ -181,7 +181,7 @@ public final class ProgramSession {
         }
         requireNoTypeConflicts(builder.declarations);
 
-        List<ResourceLease> resourceLeases = acquireImplementationResources(channel, builder.declarations);
+        List<ResourceOwner> resourceLeases = acquireImplementationResources(channel, builder.declarations);
         try {
             Registration<E> registration = new Registration<>(
                     this, channel, exports, builder.declarations, resourceLeases);
@@ -190,7 +190,7 @@ public final class ProgramSession {
             accepted.add(registration);
             return registration;
         } catch (Throwable failure) {
-            resourceLeases.forEach(ResourceLease::close);
+            resourceLeases.forEach(ResourceOwner::close);
             throw failure;
         }
     }
@@ -348,13 +348,13 @@ public final class ProgramSession {
             registration.retired = true;
             accepted.remove(registration);
         }
-        registration.resourceLeases.forEach(ResourceLease::close);
+        registration.resourceLeases.forEach(ResourceOwner::close);
     }
 
-    private List<ResourceLease> acquireImplementationResources(
+    private List<ResourceOwner> acquireImplementationResources(
             ProgramContributionChannel channel, List<Declaration> declarations) {
         Map<ResourceRef, Boolean> acquired = new IdentityHashMap<>();
-        List<ResourceLease> leases = new ArrayList<>();
+        List<ResourceOwner> leases = new ArrayList<>();
         try {
             for (Declaration declaration : declarations) {
                 ResourceRef reference = declaration.implementationDataResource();
@@ -363,7 +363,7 @@ public final class ProgramSession {
             }
             return List.copyOf(leases);
         } catch (Throwable failure) {
-            leases.forEach(ResourceLease::close);
+            leases.forEach(ResourceOwner::close);
             throw failure;
         }
     }
@@ -532,7 +532,7 @@ public final class ProgramSession {
         private final ProgramContributionChannel channel;
         private final E exports;
         private final List<Declaration> declarations;
-        private final List<ResourceLease> resourceLeases;
+        private final List<ResourceOwner> resourceLeases;
         private final List<Consumer<? super Completion>> observers = new ArrayList<>();
         private RegistrationStatus status = RegistrationStatus.PENDING;
         private Completion completion;
@@ -542,7 +542,7 @@ public final class ProgramSession {
 
         private Registration(ProgramSession session, ProgramContributionChannel channel,
                              E exports, List<Declaration> declarations,
-                             List<ResourceLease> resourceLeases) {
+                             List<ResourceOwner> resourceLeases) {
             this.session = session;
             this.channel = channel;
             this.exports = exports;

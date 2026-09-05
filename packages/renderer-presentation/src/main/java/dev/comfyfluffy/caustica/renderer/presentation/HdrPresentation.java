@@ -1,6 +1,9 @@
 package dev.comfyfluffy.caustica.renderer.presentation;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.OwnedCommandBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
@@ -38,35 +41,28 @@ final class HdrPresentation {
         GpuImage source = frame.hdrDisplayImage();
         int copyWidth = Math.min(target.width(), source.width());
         int copyHeight = Math.min(target.height(), source.height());
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
-            context.bindDescriptorHeaps(commandBuffer);
+        GraphicsUse use = context.graphics().beginGraphicsUse();
+        try (OwnedCommandBuffer commands = context.beginGraphicsCommands("HDR UI and presentation", true);
+             MemoryStack stack = MemoryStack.stackPush()) {
+            VkCommandBuffer commandBuffer = commands.commandBuffer();
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
             if (generation.enabled()) {
                 generation.captureHdrHudless(commandBuffer, stack, source);
             }
             GpuImage overlay = ui.populated() ? ui.color() : null;
             if (overlay != null) {
                 ensurePipeline();
-                if (pipeline != null) {
-                    VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-                    barrier.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                            .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                            .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-                                    | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                    VK14.vkCmdPipelineBarrier2(commandBuffer,
-                            VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
-                    pipeline.dispatch(commandBuffer, source,
-                            overlay.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
-                            settings.get().uiNits());
-                }
+                VulkanBarriers.memoryBarrier(commandBuffer, stack);
+                pipeline.dispatch(commandBuffer, source,
+                        overlay.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
+                        settings.get().uiNits());
             }
             recordSwapchainBlit(commandBuffer, stack, source.image(), target.image(), copyWidth, copyHeight);
-            if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
-                throw new IllegalStateException("vkEndCommandBuffer(hdr present) failed");
-            }
-            GeneratedFrameQueue.enqueuePresent(
-                    submission, commandBuffer, target.acquireSemaphore(), target.presentSemaphore());
+            submission.waitSemaphore(target.acquireSemaphore(), 0L, VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            commands.submit(submission, use);
+            submission.signalSemaphore(target.presentSemaphore(), 0L, VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+        } finally {
+            context.graphics().resolveGraphicsUse(submission, use);
         }
     }
 
@@ -90,7 +86,7 @@ final class HdrPresentation {
                 .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
         VkMemoryBarrier2.Buffer sourceVisibility = VkMemoryBarrier2.calloc(1, stack).sType$Default();
         sourceVisibility.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                .srcAccessMask(VK13.VK_ACCESS_2_MEMORY_WRITE_BIT)
                 .dstStageMask(VK13.VK_PIPELINE_STAGE_2_BLIT_BIT)
                 .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT);
         VK14.vkCmdPipelineBarrier2(commandBuffer,

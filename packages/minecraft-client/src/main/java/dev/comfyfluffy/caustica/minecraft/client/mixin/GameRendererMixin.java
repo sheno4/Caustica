@@ -180,11 +180,11 @@ public abstract class GameRendererMixin {
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
 		// add their own layers. MinecraftUiOverlay then performs the single final blend to SDR/HDR.
 		try {
-			MinecraftUiOverlay.UiPassTarget target = CausticaClientComposition.current().uiOverlay()
+			var target = CausticaClientComposition.current().uiOverlay()
 					.uiPassTarget(this.mainRenderTarget);
-			if (target != null) CausticaClientComposition.current().runtime().recordUiPasses(target.commandBuffer(), target.image());
+			if (target != null) CausticaClientComposition.current().runtime().recordUiPasses(target);
 		} finally {
-			// The UI pass is recorded in Minecraft's deferred graphics command buffer before this token is finished.
+			// Completion follows the world and owned UI command buffers in the host submission.
 			CausticaClientComposition.current().runtime().finishGraphicsUse();
 		}
 	}

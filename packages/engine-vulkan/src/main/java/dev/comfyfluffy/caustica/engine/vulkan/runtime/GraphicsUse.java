@@ -7,21 +7,22 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-/** Completion reservation for one graphics frame on an {@link RtGpuExecutor} timeline. */
+/** Completion reservation for one graphics frame on an {@link GraphicsQueue} timeline. */
 public final class GraphicsUse implements GpuFrameUse {
-    private final RtGpuExecutor owner;
+    private final GraphicsQueue owner;
     private final long value;
     private final ArrayList<Runnable> submittedCallbacks = new ArrayList<>();
+    private final ArrayList<Runnable> resolvedCallbacks = new ArrayList<>();
     private final ArrayList<AutoCloseable> keepAlives = new ArrayList<>();
     private boolean commandsAccepted;
     private boolean submittedResolved;
 
-    GraphicsUse(RtGpuExecutor owner, long value) {
+    GraphicsUse(GraphicsQueue owner, long value) {
         this.owner = owner;
         this.value = value;
     }
 
-    RtGpuExecutor owner() {
+    GraphicsQueue owner() {
         return owner;
     }
 
@@ -45,10 +46,13 @@ public final class GraphicsUse implements GpuFrameUse {
         keepAlives.add(Objects.requireNonNull(lease, "lease"));
     }
 
+    void whenResolved(Runnable callback) {
+        if (submittedResolved) throw new IllegalStateException("graphics use is resolved");
+        resolvedCallbacks.add(callback);
+    }
+
     public void commandsAccepted() {
-        if (commandsAccepted || submittedResolved) {
-            throw new IllegalStateException("graphics commands are already resolved");
-        }
+        if (submittedResolved) throw new IllegalStateException("graphics commands are already resolved");
         commandsAccepted = true;
     }
 
@@ -77,10 +81,19 @@ public final class GraphicsUse implements GpuFrameUse {
         } catch (Throwable callbackFailure) {
             failure = callbackFailure;
         }
+        for (Runnable callback : resolvedCallbacks) {
+            try { callback.run(); }
+            catch (Throwable callbackFailure) {
+                if (failure == null) failure = callbackFailure;
+                else failure.addSuppressed(callbackFailure);
+            }
+        }
+        resolvedCallbacks.clear();
         Runnable releaseKeepAlives = takeKeepAliveRelease();
         if (releaseKeepAlives != null) {
             try {
                 if (signal) retireAcceptedKeepAlive.accept(releaseKeepAlives);
+                else if (owner != null) owner.releaseAbandoned(releaseKeepAlives);
                 else releaseKeepAlives.run();
             } catch (Throwable releaseFailure) {
                 if (failure == null) failure = releaseFailure;

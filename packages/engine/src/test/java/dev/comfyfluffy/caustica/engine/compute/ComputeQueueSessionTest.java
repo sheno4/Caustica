@@ -22,6 +22,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ComputeQueueSessionTest {
     @Test
+    void ownedDependenciesSurviveUntilPublicCompletionReturns() {
+        Backend backend = new Backend();
+        ComputeQueueSession session = new ComputeQueueSession(backend, failure -> { throw new AssertionError(failure); });
+        var queue = session.openChannel();
+        List<String> events = new ArrayList<>();
+        queue.submit(command -> {}, List.of(() -> events.add("release")), result -> events.add("callback"));
+        backend.succeed(0);
+        assertEquals(List.of(), events);
+        session.progress();
+        assertEquals(List.of("callback", "release"), events);
+        queue.drain();
+        queue.closeChannel();
+        session.close();
+    }
+
+    @Test
     void acceptedCompletionBecomesVisibleOnlyThroughSessionProgress() {
         Backend backend = new Backend();
         List<Throwable> failures = new ArrayList<>();

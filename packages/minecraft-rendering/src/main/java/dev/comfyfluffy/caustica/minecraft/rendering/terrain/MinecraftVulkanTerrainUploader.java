@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
@@ -130,10 +130,10 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                                      VmaMappedBuffer positions, VmaMappedBuffer indices,
                                      VmaMappedBuffer primitive, VmaMappedBuffer instance,
                                      SharedResource<SharedAtlas> atlasLease) {
-        ResourceGeneration positionGeneration = null;
-        ResourceGeneration indexGeneration = null;
-        ResourceGeneration bindingGeneration = null;
-        ResourceGeneration instanceGeneration = null;
+        ResourceOwner positionGeneration = null;
+        ResourceOwner indexGeneration = null;
+        ResourceOwner bindingGeneration = null;
+        ResourceOwner instanceGeneration = null;
         try {
             positionGeneration = resources.create(positions::close);
             indexGeneration = resources.create(indices::close);
@@ -148,19 +148,16 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             ShaderData<MinecraftProgramTypes.InstanceData> instanceData =
                     MinecraftProgramTypes.INSTANCE_DATA.data(instance.deviceRange().address().value(),
                             instanceGeneration.reference());
-            positionGeneration.seal();
-            indexGeneration.seal();
-            bindingGeneration.seal();
-            instanceGeneration.seal();
+
             return new Uploaded(build, instanceData, positionGeneration, indexGeneration,
                     bindingGeneration, instanceGeneration);
         } catch (RuntimeException | Error failure) {
             Throwable cleanup = closeAll(
-                    positionGeneration == null ? positions : positionGeneration::drop,
-                    indexGeneration == null ? indices : indexGeneration::drop,
+                    positionGeneration == null ? positions : positionGeneration::close,
+                    indexGeneration == null ? indices : indexGeneration::close,
                     bindingGeneration == null ? () -> throwIfFailed(closeAll(primitive, atlasLease))
-                            : bindingGeneration::drop,
-                    instanceGeneration == null ? instance : instanceGeneration::drop);
+                            : bindingGeneration::close,
+                    instanceGeneration == null ? instance : instanceGeneration::close);
             if (cleanup != null) failure.addSuppressed(cleanup);
             throw failure;
         }
@@ -264,16 +261,16 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
 
     private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
                             ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                            ResourceGeneration positionGeneration,
-                            ResourceGeneration indexGeneration,
-                            ResourceGeneration bindingGeneration,
-                            ResourceGeneration instanceGeneration)
+                            ResourceOwner positionGeneration,
+                            ResourceOwner indexGeneration,
+                            ResourceOwner bindingGeneration,
+                            ResourceOwner instanceGeneration)
             implements UploadedSection {
         @Override public void close() {
-            positionGeneration.drop();
-            indexGeneration.drop();
-            bindingGeneration.drop();
-            instanceGeneration.drop();
+            positionGeneration.close();
+            indexGeneration.close();
+            bindingGeneration.close();
+            instanceGeneration.close();
         }
     }
 

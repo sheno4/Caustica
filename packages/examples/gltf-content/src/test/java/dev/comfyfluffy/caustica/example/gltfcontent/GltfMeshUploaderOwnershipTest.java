@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.example.gltfcontent;
 
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.junit.jupiter.api.Test;
 
@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class GltfMeshUploaderOwnershipTest {
     @Test
-    void uploadedPrimitiveRetainsIndependentResourceGenerations() {
+    void uploadedPrimitiveRetainsIndependentResourceOwners() {
         Class<?> uploadedPrimitive = Arrays.stream(GltfMeshUploader.class.getDeclaredClasses())
                 .filter(type -> type.getSimpleName().equals("UploadedPrimitive"))
                 .findFirst().orElseThrow();
@@ -26,6 +26,6 @@ final class GltfMeshUploaderOwnershipTest {
         assertSame(ownedBuffer, componentTypes[1]);
         assertSame(ownedBuffer, componentTypes[2]);
         assertEquals(VmaMappedBuffer.class, ownedBuffer.getRecordComponents()[0].getType());
-        assertEquals(ResourceGeneration.class, ownedBuffer.getRecordComponents()[1].getType());
+        assertEquals(ResourceOwner.class, ownedBuffer.getRecordComponents()[1].getType());
     }
 }

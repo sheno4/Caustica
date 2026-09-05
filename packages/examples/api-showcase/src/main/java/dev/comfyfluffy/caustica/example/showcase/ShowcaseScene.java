@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
@@ -27,7 +27,7 @@ final class ShowcaseScene {
     private final MeshId<ShowcasePrograms.InstanceData> mesh;
     private final InstanceId instance;
     private final List<LightId> lightIds;
-    private ResourceGeneration meshResource;
+    private ResourceOwner meshResource;
 
     ShowcaseScene(ShowcasePrograms.Exports programs, List<LightId> lightIds,
                   SceneId scene, GeometryChannel geometry) {
@@ -41,7 +41,7 @@ final class ShowcaseScene {
 
     /** Publishes one immutable generation containing the combined position and index upload buffer. */
     RetainedPublication publishMesh(VulkanDeviceAddressRange currentPositions,
-                                     VulkanDeviceAddressRange indices, ResourceGeneration resource) {
+                                     VulkanDeviceAddressRange indices, ResourceOwner resource) {
         return publish(resource, reference -> geometry.submitGroup(List.of(
                 RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
                         meshBuild(currentPositions, indices, 1L, reference)))),
@@ -51,7 +51,7 @@ final class ShowcaseScene {
     /** Replaces the retained mesh streams while every existing placement remains resident. */
     RetainedPublication replaceMesh(VulkanDeviceAddressRange currentPositions,
                                      VulkanDeviceAddressRange indices, long indexRevision,
-                                     ResourceGeneration resource) {
+                                     ResourceOwner resource) {
         return publish(resource, reference -> geometry.submit(
                 RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh,
                         meshBuild(currentPositions, indices, indexRevision, reference))))));
@@ -96,27 +96,26 @@ final class ShowcaseScene {
     }
 
     void stop() {
-        ResourceGeneration previous = meshResource;
-        RetainedPublication publication = geometry.submit(RetainedBatch.of(List.of(
+        ResourceOwner previous = meshResource;
+        geometry.submit(RetainedBatch.of(List.of(
                 new GeometryChannel.DropInstance(instance),
                 new GeometryChannel.DropMesh<>(mesh))));
         meshResource = null;
-        if (previous != null) publication.whenVisible(previous::drop);
+        if (previous != null) previous.close();
     }
 
-    private RetainedPublication publish(ResourceGeneration next,
+    private RetainedPublication publish(ResourceOwner next,
                                         java.util.function.Function<ResourceRef, RetainedPublication> submit) {
         boolean accepted = false;
         try {
-            next.seal();
             RetainedPublication publication = submit.apply(next.reference());
             accepted = true;
-            ResourceGeneration previous = meshResource;
+            ResourceOwner previous = meshResource;
             meshResource = next;
-            if (previous != null) publication.whenVisible(previous::drop);
+            if (previous != null) previous.close();
             return publication;
         } catch (RuntimeException | Error failure) {
-            if (!accepted) next.drop();
+            if (!accepted) next.close();
             throw failure;
         }
     }

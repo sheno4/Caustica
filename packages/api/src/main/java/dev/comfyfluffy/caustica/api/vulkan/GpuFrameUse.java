@@ -15,7 +15,7 @@ public interface GpuFrameUse {
     void whenSubmitted(Runnable callback);
 
     /**
-     * Run a callback on the renderer thread after this frame reservation completes. Use it to retire
+     * Run a callback off the renderer thread after this frame reservation completes. Use it to retire
      * resources referenced by this frame.
      * Eligible callbacks run in registration order and must not block or throw. Later frames and unrelated
      * GPU work may still be executing. An accepted callback runs exactly once and never inline. If recording

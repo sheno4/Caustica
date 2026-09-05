@@ -88,7 +88,7 @@ public interface GpuDevice {
      * drained then. This does not cover unrelated device work. Everywhere else, replacing or dropping a
      * resource requires retirement.
      *
-     * <p>Eligible callbacks run on the renderer thread in registration order and must not block or throw.
+     * <p>Eligible callbacks run off the renderer thread in registration order and must not block or throw.
      * This covers work already submitted, not the frame currently being recorded — for that,
      * {@link GpuFrameUse#whenComplete} is the tighter reservation. It does not imply that later device work or
      * unrelated passes are idle.

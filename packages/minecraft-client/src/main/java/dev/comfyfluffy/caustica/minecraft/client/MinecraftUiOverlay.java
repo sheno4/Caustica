@@ -15,16 +15,12 @@ import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.minecraft.client.mixin.CommandEncoderAccessor;
-import dev.comfyfluffy.caustica.minecraft.client.mixin.VulkanCommandEncoderAccessor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VkCommandBuffer;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
@@ -33,10 +29,8 @@ import net.minecraft.client.renderer.RenderPipelines;
 /**
  * Transparent final-UI overlay. World-space overlay features and the vanilla GUI/HUD
  * are routed into one transparent {@code RGBA8} target, then that single image is composited back over the
- * world (from {@code GameRendererMixin}, right after {@code GuiRenderer.render} returns). In SDR this
- * reproduces vanilla; the point is to keep SDR-authored UI out of the world's HDR tonemap once HDR
- * presentation lands (the compositor will then blend this same overlay over the HDR world at paper white
- * rather than over the SDR main target).
+ * world after GUI rendering. SDR presentation composites over the main target; HDR presentation
+ * blends the overlay at paper white after the world's display transform.
  *
  * <p>Composite blend: vanilla GUI pipelines use {@code BlendFunction.TRANSLUCENT} (colour {@code SRC_ALPHA,
  * ONE_MINUS_SRC_ALPHA}; alpha {@code ONE, ONE_MINUS_SRC_ALPHA}), so drawing onto a cleared target
@@ -156,10 +150,8 @@ public final class MinecraftUiOverlay {
         return prepare(main);
     }
 
-    /** The overlay image and Minecraft's current deferred graphics command buffer for the raw UI pass. */
-    public record UiPassTarget(VkCommandBuffer commandBuffer, GpuImage image) {}
-
-    public UiPassTarget uiPassTarget(RenderTarget main) {
+    /** The sampled overlay image consumed by renderer-owned UI commands. */
+    public GpuImage uiPassTarget(RenderTarget main) {
         TextureTarget target = prepare(main);
         VulkanDeviceContext gpu = runtime.vulkanContextOrNull();
         if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
@@ -170,10 +162,7 @@ public final class MinecraftUiOverlay {
             borrowedImage = replacement;
             if (old != null) gpu.retireAfterUse(old::destroy);
         }
-        CommandEncoder wrapper = RenderSystem.getDevice().createCommandEncoder();
-        VulkanCommandEncoder backend = (VulkanCommandEncoder) ((CommandEncoderAccessor) wrapper).caustica$getBackend();
-        VkCommandBuffer commandBuffer = ((VulkanCommandEncoderAccessor) backend).caustica$commandBuffer();
-        return new UiPassTarget(commandBuffer, borrowedImage);
+        return borrowedImage;
     }
 
     /** Reset the per-frame clear latch. Called at the start of {@code GameRenderer.render} (every frame). */

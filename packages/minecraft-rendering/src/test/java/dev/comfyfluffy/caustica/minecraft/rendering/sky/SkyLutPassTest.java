@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.sky;
 
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
-import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.minecraft.rendering.TestResource;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
@@ -84,82 +84,71 @@ final class SkyLutPassTest {
         assertEquals(1, closes.get());
     }
 
-    @Test void publishedBindingsCarryExactDistinctSealedGenerationReferences() {
-        var factory = new TestResourceFactory();
+    @Test void publishedBindingsCarryDistinctRetainableResourceIdentities() {
         var environment = new EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData>() { };
         List<EnvironmentBinding<?>> selected = new ArrayList<>();
-        var first = factory.create();
-        var second = factory.create();
+        List<ResourceOwner> readers = new ArrayList<>();
+        AtomicInteger releases = new AtomicInteger();
+        try (var first = TestResource.create(releases::incrementAndGet);
+             var second = TestResource.create(releases::incrementAndGet)) {
+            SkyLutPass.publishBinding(first, environment, binding -> {
+                readers.add(binding.bindingData().resource().retain());
+                selected.add(binding);
+                return RetainedPublication.alreadyVisible();
+            }, 0x1000L);
+            SkyLutPass.publishBinding(second, environment, binding -> {
+                readers.add(binding.bindingData().resource().retain());
+                selected.add(binding);
+                return RetainedPublication.alreadyVisible();
+            }, 0x1000L);
 
-        SkyLutPass.publishBinding(first, environment, binding -> {
-            assertTrue(((TestGeneration) first).sealed);
-            selected.add(binding);
-            return RetainedPublication.alreadyVisible();
-        }, 0x1000L);
-        SkyLutPass.publishBinding(second, environment, binding -> {
-            assertTrue(((TestGeneration) second).sealed);
-            selected.add(binding);
-            return RetainedPublication.alreadyVisible();
-        }, 0x1000L);
-
-        assertNotSame(ResourceRef.none(), first.reference());
-        assertNotSame(first.reference(), second.reference());
-        assertSame(first.reference(), selected.get(0).bindingData().resource());
-        assertSame(second.reference(), selected.get(1).bindingData().resource());
+            assertNotSame(ResourceRef.none(), first.reference());
+            assertNotSame(first.reference(), second.reference());
+            assertSame(first.reference(), selected.get(0).bindingData().resource());
+            assertSame(second.reference(), selected.get(1).bindingData().resource());
+        }
+        assertEquals(0, releases.get());
+        readers.forEach(ResourceOwner::close);
+        assertEquals(2, releases.get());
     }
 
-    @Test void producerHandlesWaitForScopeDropAndFrameReleaseBeforeRetiringResources() {
+    @Test void producerAndFrameOwnersKeepSharedLutsAliveIndependently() {
         AtomicInteger closes = new AtomicInteger();
         var lifetime = SharedResource.owned(new Object(), ignored -> closes.incrementAndGet());
-        var factory = new TestResourceFactory();
-        var first = (TestGeneration) factory.create(lifetime.retain()::close);
-        var second = (TestGeneration) factory.create(lifetime.retain()::close);
-        first.borrow();
-        second.borrow();
-        List<ResourceGeneration> handles = new ArrayList<>(List.of(first, second));
-
-        SkyLutPass.dropAll(handles);
-        SkyLutPass.dropAll(handles);
+        var first = TestResource.create(lifetime.retain()::close);
+        var second = TestResource.create(lifetime.retain()::close);
+        var firstFrame = first.retain();
+        var secondFrame = second.reference().retain();
+        first.close();
+        second.close();
         lifetime.close();
-
-        assertTrue(first.dropped);
-        assertTrue(second.dropped);
         assertEquals(0, closes.get());
-        first.releaseBorrow();
+        firstFrame.close();
         assertEquals(0, closes.get());
-        second.releaseBorrow();
+        secondFrame.close();
         assertEquals(1, closes.get());
     }
 
-    @Test void displacedGenerationsDropOnlyWhenReplacementBecomesVisible() {
-        var factory = new TestResourceFactory();
-        var first = (TestGeneration) factory.create();
-        var second = (TestGeneration) factory.create();
-        var third = (TestGeneration) factory.create();
-        var firstVisible = new TestPublication();
-        var secondVisible = new TestPublication();
-        var thirdVisible = new TestPublication();
-        List<ResourceGeneration> owned = new ArrayList<>();
+    @Test void acceptedBindingRetainsResourcesBeforeProducerRelease() {
+        AtomicInteger releases = new AtomicInteger();
+        var producer = TestResource.create(releases::incrementAndGet);
+        var environment = new EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData>() { };
+        List<ResourceOwner> scene = new ArrayList<>();
 
-        SkyLutPass.trackReplacementPublication(owned, first, firstVisible);
-        SkyLutPass.trackReplacementPublication(owned, second, secondVisible);
-        assertFalse(first.dropped);
-        secondVisible.makeVisible();
-        assertTrue(first.dropped);
-        assertFalse(second.dropped);
-
-        SkyLutPass.trackReplacementPublication(owned, third, thirdVisible);
-        assertFalse(second.dropped);
-        thirdVisible.makeVisible();
-        assertTrue(second.dropped);
-        assertFalse(third.dropped);
-
-        SkyLutPass.dropAll(owned);
-        SkyLutPass.dropAll(owned);
-        assertTrue(third.dropped);
-        firstVisible.makeVisible();
+        SkyLutPass.publishBinding(producer, environment, binding -> {
+            scene.add(binding.bindingData().resource().retain());
+            return new RetainedPublication() {
+                @Override public boolean isVisible() { return false; }
+                @Override public void whenVisible(Runnable callback) {
+                    throw new AssertionError("ownership must not depend on visibility callbacks");
+                }
+            };
+        }, 0x1000L);
+        producer.close();
+        assertEquals(0, releases.get());
+        scene.getFirst().close();
+        assertEquals(1, releases.get());
     }
-
 
     @Test void lutDimensionsMatchAtmosphereConstants() {
         assertEquals(256, SkyLutPass.TRANSMITTANCE_WIDTH);
@@ -196,47 +185,4 @@ final class SkyLutPassTest {
         assertEquals(6f, state.moonPhaseIndex());
     }
 
-    private static final class TestResourceFactory implements ResourceFactory {
-        @Override public ResourceGeneration create(Runnable retired) {
-            return new TestGeneration(retired);
-        }
-    }
-
-    private static final class TestGeneration implements ResourceGeneration {
-        private final ResourceRef reference = new ResourceRef() { };
-        private final Runnable retired;
-        private int borrows;
-        private boolean sealed, dropped, callbackRun;
-        TestGeneration(Runnable retired) { this.retired = retired; }
-        @Override public ResourceRef reference() { return reference; }
-        @Override public void seal() { sealed = true; }
-        @Override public void drop() {
-            if (dropped) throw new AssertionError("generation dropped more than once");
-            dropped = true;
-            retireIfReady();
-        }
-        void borrow() { borrows++; }
-        void releaseBorrow() { borrows--; retireIfReady(); }
-        private void retireIfReady() {
-            if (dropped && borrows == 0 && !callbackRun) {
-                callbackRun = true;
-                retired.run();
-            }
-        }
-    }
-
-    private static final class TestPublication implements RetainedPublication {
-        private final List<Runnable> callbacks = new ArrayList<>();
-        private boolean visible;
-        @Override public boolean isVisible() { return visible; }
-        @Override public void whenVisible(Runnable callback) {
-            if (visible) callback.run();
-            else callbacks.add(callback);
-        }
-        void makeVisible() {
-            visible = true;
-            List.copyOf(callbacks).forEach(Runnable::run);
-            callbacks.clear();
-        }
-    }
 }

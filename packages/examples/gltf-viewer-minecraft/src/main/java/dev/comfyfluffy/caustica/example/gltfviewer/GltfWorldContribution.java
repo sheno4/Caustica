@@ -138,10 +138,10 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
             }
 
             Live next = new Live(List.copyOf(meshes), List.copyOf(instances), List.copyOf(uploads));
-            var publication = geometry.submit(RetainedBatch.of(operations));
+            geometry.submit(RetainedBatch.of(operations));
             accepted = true;
             live = next;
-            publication.whenVisible(previous::dropResources);
+            previous.dropResources();
         } catch (RuntimeException | Error failure) {
             if (!accepted) uploads.forEach(GltfPrimitiveUploader.Uploaded::drop);
             throw failure;
@@ -155,10 +155,10 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
         try {
             if (live != Live.EMPTY) {
                 Live previous = live;
-                var publication = context.renderSession().geometry().submit(
+                context.renderSession().geometry().submit(
                         RetainedBatch.of(dropOperations(previous)));
                 live = Live.EMPTY;
-                publication.whenVisible(previous::dropResources);
+                previous.dropResources();
             }
         } finally {
             programRegistration.close();

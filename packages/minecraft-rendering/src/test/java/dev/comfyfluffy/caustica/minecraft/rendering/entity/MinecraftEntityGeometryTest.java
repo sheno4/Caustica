@@ -195,7 +195,7 @@ final class MinecraftEntityGeometryTest {
     }
 
     @Test
-    void overlappingCompatibleReplacementsRetireTheirUploadsIndependently() {
+    void acceptedReplacementReleasesDisplacedUploadBeforeVisibility() {
         RecordingChannel channel = new RecordingChannel();
         Uploaded first = new Uploaded(0x4c10L);
         Uploaded second = new Uploaded(0x4c20L);
@@ -206,7 +206,7 @@ final class MinecraftEntityGeometryTest {
         geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
         geometry.put(key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
 
-        channel.publication.makeVisible();
+        assertFalse(channel.publication.isVisible());
         assertTrue(first.closed);
         assertFalse(second.closed);
     }

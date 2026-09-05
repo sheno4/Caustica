@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
@@ -59,21 +60,6 @@ final class RtRetainedSceneLifetimeTest {
         assertEquals(firstGeometryRead.geometryRevision(), firstContentRead.contentRevision());
         assertEquals(2, secondFrame.geometryRevision());
         assertEquals(2, secondFrame.contentRevision());
-    }
-
-    @Test
-    void sessionCloseSettlesGpuThenReleasesRootsBeforeContributionDrain() {
-        List<String> events = new ArrayList<>();
-        Map<Object, AutoCloseable> frames = new LinkedHashMap<>();
-        Map<Object, AutoCloseable> histories = new LinkedHashMap<>();
-        frames.put(new Object(), () -> events.add("frame"));
-        histories.put(new Object(), () -> events.add("history"));
-
-        RtRetainedSceneBackend.settleAndReleaseTerminalFrameRoots(
-                () -> events.add("idle"), frames, histories);
-        events.add("contribution drain");
-
-        assertEquals(List.of("idle", "frame", "history", "contribution drain"), events);
     }
 
     @Test
@@ -158,25 +144,24 @@ final class RtRetainedSceneLifetimeTest {
         var resources = directory.openFactory(new ContributionOwner(1));
         AtomicInteger positionRetirements = new AtomicInteger();
         var position = resources.create(positionRetirements::incrementAndGet);
-        position.seal();
-        ResourceLeaseSet frameResources = ResourceLeaseSet.capture(List.of(
+        ResourceOwners frameResources = ResourceOwners.capture(List.of(
                 position.reference(), ResourceRef.none()));
-        ResourceLeaseSet historyResources = frameResources.retainOnly(List.of(
+        ResourceOwners historyResources = frameResources.retainOnly(List.of(
                 position.reference(), ResourceRef.none()));
         AtomicInteger rootRetirements = new AtomicInteger();
         SharedResource<String> sceneRoot = SharedResource.owned(
                 "revision with explicit NONE positions", ignored -> rootRetirements.incrementAndGet());
 
-        position.drop();
+        position.close();
         sceneRoot.close();
         frameResources.close();
-        directory.progress();
+        directory.awaitRetirements();
 
         assertEquals(1, rootRetirements.get(), "motion history must not retain the scene root");
         assertEquals(0, positionRetirements.get(), "motion history still owns the position generation");
 
         historyResources.close();
-        directory.progress();
+        directory.awaitRetirements();
         assertEquals(1, positionRetirements.get());
     }
 
@@ -259,31 +244,4 @@ final class RtRetainedSceneLifetimeTest {
         assertEquals(0, rejection.getSuppressed().length);
     }
 
-    @Test
-    void failedOwnershipWrapperDisposesTheUnhandedResource() {
-        AtomicInteger disposals = new AtomicInteger();
-        RuntimeException allocationFailure = new RuntimeException("wrapper allocation");
-
-        RuntimeException thrown = assertThrows(RuntimeException.class, () ->
-                RtRetainedSceneBackend.handoffResource("native allocation",
-                        ignored -> disposals.incrementAndGet(), ignored -> { throw allocationFailure; }));
-
-        assertSame(allocationFailure, thrown);
-        assertEquals(1, disposals.get());
-    }
-
-    @Test
-    void afinishedBuildInstallsOnlyWhileItIsStillTheNewestUpdateForItsMesh() {
-        assertTrue(RtRetainedSceneBackend.claimsMeshEntry(true, 7L, 7L));
-    }
-
-    @Test
-    void aSupersededBuildDoesNotInstallOverTheUpdateThatReplacedIt() {
-        assertFalse(RtRetainedSceneBackend.claimsMeshEntry(true, 9L, 7L));
-    }
-
-    @Test
-    void aBuildForADroppedMeshDoesNotResurrectIt() {
-        assertFalse(RtRetainedSceneBackend.claimsMeshEntry(false, 0L, 7L));
-    }
 }

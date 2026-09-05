@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.TestResource;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -33,16 +34,26 @@ final class MeshBuildTest {
 
     @Test
     void streamCarriesResourceIdentityIndependentlyOfItsAddress() {
-        ResourceRef firstResource = new ResourceRef() { };
-        ResourceRef secondResource = new ResourceRef() { };
-        VulkanDeviceAddressRange bytes = range(0x1000L, 64L);
+        var releases = new java.util.concurrent.atomic.AtomicInteger();
+        try (var firstOwner = TestResource.create(releases::incrementAndGet);
+             var secondOwner = TestResource.create(releases::incrementAndGet)) {
+            ResourceRef firstResource = firstOwner.reference();
+            ResourceRef secondResource = secondOwner.reference();
+            VulkanDeviceAddressRange bytes = range(0x1000L, 64L);
 
-        MeshBuild.Stream first = new MeshBuild.Stream(bytes, 16, firstResource);
-        MeshBuild.Stream second = new MeshBuild.Stream(bytes, 16, secondResource);
+            MeshBuild.Stream first = new MeshBuild.Stream(bytes, 16, firstResource);
+            MeshBuild.Stream second = new MeshBuild.Stream(bytes, 16, secondResource);
 
-        assertSame(firstResource, first.resource());
-        assertSame(secondResource, second.resource());
-        assertNotEquals(first, second);
+            assertSame(firstResource, first.resource());
+            assertSame(secondResource, second.resource());
+            assertNotEquals(first, second);
+            try (var reader = firstResource.retain()) {
+                firstOwner.close();
+                assertEquals(0, releases.get());
+            }
+            assertEquals(1, releases.get());
+        }
+        assertEquals(2, releases.get());
     }
 
     @Test

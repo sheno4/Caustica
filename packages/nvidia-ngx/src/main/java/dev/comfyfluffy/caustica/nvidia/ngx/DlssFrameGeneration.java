@@ -90,7 +90,8 @@ public final class DlssFrameGeneration {
 
     /**
      * Ensure a DLSSG feature exists for the given backbuffer/render size + native backbuffer format, creating
-     * it into the supplied recording command buffer. Returns false (and disables itself) on failure.
+     * it into the supplied recording command buffer. The caller must complete prior uses before changing
+     * the feature. Returns false (and disables itself) on failure.
      */
     public boolean ensureFeature(VkCommandBuffer commandBuffer, int width, int height,
                                  int renderWidth, int renderHeight, int backbufferFormat) {

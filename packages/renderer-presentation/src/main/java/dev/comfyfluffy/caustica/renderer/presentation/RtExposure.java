@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.renderer.presentation;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsQueue;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
@@ -49,7 +49,7 @@ public final class RtExposure {
     private ExposureCurve cachedCurve;
     private boolean resetRequested = true;
     private int resetSequence;
-    /** This frame's latched pre-exposure; see {@link #beginFrame(RtGpuExecutor.GraphicsUseWaiter)}. */
+    /** This frame's latched pre-exposure; see {@link #beginFrame(GraphicsQueue.GraphicsUseWaiter)}. */
     private float framePreExposure = 1.0f;
 
     private static final long DIAG_LOG_INTERVAL_NANOS = 1_000_000_000L;
@@ -73,7 +73,7 @@ public final class RtExposure {
 
     private static final class ReadbackSlot {
         final GpuBuffer buffer;
-        final RtGpuExecutor.TrackedGraphicsUse graphicsUse = new RtGpuExecutor.TrackedGraphicsUse();
+        final GraphicsQueue.TrackedGraphicsUse graphicsUse = new GraphicsQueue.TrackedGraphicsUse();
         boolean valid;
         int resetSequence;
 
@@ -449,7 +449,7 @@ public final class RtExposure {
      * different points in CPU time. The completed readback can be several frames old, so latching once
      * ensures both consumers use one prediction; the residual absorbs whatever it failed to predict.
      */
-    public void beginFrame(RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter) {
+    public void beginFrame(GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter) {
         Mode currentMode = mode();
         boolean reset = currentMode == Mode.AUTO && resetRequested;
         if (reset) {

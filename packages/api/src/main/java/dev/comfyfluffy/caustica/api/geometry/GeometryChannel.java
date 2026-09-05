@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.retained.RetainedPublication;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
-import dev.comfyfluffy.caustica.api.resource.ResourceGeneration;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -46,7 +46,7 @@ public interface GeometryChannel {
      * <p>Validation is synchronous. Invalid input includes an unknown or stale id, a
      * placement naming a mesh that neither exists nor is created earlier in the same batch, a placement
      * naming a stale scene, a shader-data token which does not match the schema carried by its program or
-     * mesh id, an unsealed, dropped, foreign-session, or foreign-owner resource reference, cutout geometry
+     * mesh id, a released or foreign-session resource reference, cutout geometry
      * naming a surface with no coverage implementation, or a malformed build.
      * Validation completes before this method returns. Surface and volume ids may be explicitly handed off
      * across contributions in this render session; they remain non-owning references to implementations
@@ -72,7 +72,7 @@ public interface GeometryChannel {
      * Applies several ordered batches as one atomic publication.
      *
      * <p>Operations apply in list order and become visible together. Validation and native acceptance cover
-     * the entire group: if anything throws, no batch is applied. Resource generations referenced by the
+     * the entire group: if anything throws, no batch is applied. Resource owners referenced by the
      * operations may be shared across batches in the group.
      *
      * <p>A group must contain at least one batch.
@@ -96,7 +96,7 @@ public interface GeometryChannel {
      * Publishes geometry and its retained lights as one scene revision.
      *
      * <p>Both channels must come from the same contribution in the same render session. Geometry batches
-     * and light operations retain their referenced resource generations. The complete mutation is rejected if
+     * and light operations retain their referenced resource owners. The complete mutation is rejected if
      * either side is invalid; no intermediate geometry-only or light-only revision is observable.
      */
     RetainedPublication submitWithLights(List<RetainedBatch<Operation>> geometryBatches,
@@ -118,7 +118,7 @@ public interface GeometryChannel {
 
     /**
      * Retain or replace a mesh. A non-NONE stream or geometry-binding reference follows its
-     * {@link ResourceGeneration} lifetime and may be shared with other operations or batches. A NONE
+     * {@link ResourceOwner} lifetime and may be shared with other operations or batches. A NONE
      * reference does not provide resource-lifetime tracking. Closing a scene removes placements in that
      * scene, never this scene-independent mesh. A rejected submission changes nothing.
      */
@@ -152,7 +152,7 @@ public interface GeometryChannel {
      * the one carried by the mesh ID and every shader slot in that mesh; the renderer checks token identity
      * synchronously even when raw Java types bypass compile-time checking. With
      * {@link ResourceRef#none()}, the word provides no tracked resource lifetime. A non-NONE resource
-     * generation may be shared across placements and batches.
+     * owner may be shared across placements and batches.
      *
      * <p>Shading only. The renderer derives motion vectors from this placement's current and previous
      * transforms, so rigid per-instance motion is handled, but a word that moves geometry — vertex

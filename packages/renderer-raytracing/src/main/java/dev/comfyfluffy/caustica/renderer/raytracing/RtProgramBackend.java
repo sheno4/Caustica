@@ -93,7 +93,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
 
     @Override
     public void drainPublishedUses() {
-        context.gpuExecutor().drainAndWaitIdle();
+        context.drainAndWaitIdle();
     }
 
     /** Currently published renderer program, or {@code null} before first publication. */
