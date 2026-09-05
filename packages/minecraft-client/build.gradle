@@ -77,6 +77,9 @@ if (quickPlayWorld) {
 // JAVA_TOOL_OPTIONS, which every forked JVM inherits — including NeoForge's JDK 21 tooling JVM, which
 // rejects newer flags and fails the run before the game starts.
 def CLIENT_JVM_ARGUMENTS = ["-Xmx8G", "-XX:+UseStringDeduplication", "-XX:+UseZGC"]
+if (findProperty("debugAgent")?.toString()?.toBoolean()) {
+	CLIENT_JVM_ARGUMENTS.add("-Dcaustica.debug.enabled=true")
+}
 
 if (loader == "fabric") {
 	loom {

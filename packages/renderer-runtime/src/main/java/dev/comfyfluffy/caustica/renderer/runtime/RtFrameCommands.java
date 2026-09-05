@@ -14,9 +14,16 @@ import java.util.ArrayList;
 final class RtFrameCommands implements AutoCloseable {
     private final VulkanDeviceContext context;
     private final ArrayList<OwnedCommandBuffer> stages = new ArrayList<>();
+    private final ArrayList<RtGpuTiming.Stage> timings = new ArrayList<>();
+    private final RtGpuTiming gpuTiming;
+    private final GraphicsUse graphicsUse;
+    private final long frameId;
 
-    RtFrameCommands(VulkanDeviceContext context) {
+    RtFrameCommands(VulkanDeviceContext context, RtGpuTiming gpuTiming, GraphicsUse graphicsUse, long frameId) {
         this.context = context;
+        this.gpuTiming = gpuTiming;
+        this.graphicsUse = graphicsUse;
+        this.frameId = frameId;
     }
 
     VkCommandBuffer heap(String label) {
@@ -28,19 +35,32 @@ final class RtFrameCommands implements AutoCloseable {
     }
 
     private VkCommandBuffer begin(String label, boolean heaps) {
-        if (!stages.isEmpty()) stages.getLast().end();
+        if (!stages.isEmpty()) endLastStage();
         OwnedCommandBuffer stage = context.beginGraphicsCommands(label, heaps);
         stages.add(stage);
         // Queue order alone does not make writes visible across command buffers.
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VulkanBarriers.memoryBarrier(stage.commandBuffer(), stack);
         }
+        RtGpuTiming.Stage timing = gpuTiming.begin(stage.commandBuffer(), frameId, label);
+        timings.add(timing);
+        if (timing != null) graphicsUse.whenComplete(timing::complete);
         return stage.commandBuffer();
     }
 
-    void submit(GraphicsSubmission submission, GraphicsUse use) {
+    private void endLastStage() {
+        RtGpuTiming.Stage timing = timings.getLast();
+        if (timing != null) timing.end();
         stages.getLast().end();
-        for (OwnedCommandBuffer stage : stages) stage.submit(submission, use);
+    }
+
+    void submit(GraphicsSubmission submission, GraphicsUse use) {
+        endLastStage();
+        for (int i = 0; i < stages.size(); i++) {
+            stages.get(i).submit(submission, use);
+            RtGpuTiming.Stage timing = timings.get(i);
+            if (timing != null) timing.submitted();
+        }
     }
 
     @Override

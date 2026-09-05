@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.renderer.runtime;
 
 import dev.comfyfluffy.caustica.renderer.runtime.geometry.RtGeometryProfiling;
 
-import java.nio.file.Path;
 import java.util.function.LongConsumer;
 
 /** Renderer-owned telemetry implementation. */
@@ -14,6 +13,9 @@ public final class RtTelemetryImpl implements RtTelemetry {
         frameStats = new RtFrameStats();
         geometryProfiling = new RtGeometryProfiling(frameStats);
     }
+
+    @Override
+    public FrameSnapshot latestFrame() { return frameStats.latestFrame(); }
 
     @Override
     public boolean enabled() {
@@ -42,12 +44,11 @@ public final class RtTelemetryImpl implements RtTelemetry {
 
     @Override
     public void endFrame() {
-        frameStats.frame().end();
+        frameStats.endFrame();
     }
 
     @Override
-    public void configure(Path outputDirectory, MetricSchema minecraftMetrics) {
-        frameStats.configureOutputDirectory(outputDirectory);
+    public void configure(MetricSchema minecraftMetrics) {
         frameStats.configureFrameMetrics(minecraftMetrics);
     }
 
@@ -71,5 +72,20 @@ public final class RtTelemetryImpl implements RtTelemetry {
     @Override
     public void afterPublicationVisible(LongConsumer action) {
         geometryProfiling.afterPublicationVisible(action);
+    }
+
+    @Override
+    public long publicationCutoff() {
+        return geometryProfiling.publicationCutoff();
+    }
+
+    @Override
+    public void frameAssembled(long publicationCutoff) {
+        geometryProfiling.frameVisible(publicationCutoff);
+    }
+
+    @Override
+    public void resetPublications() {
+        geometryProfiling.resetPublications();
     }
 }

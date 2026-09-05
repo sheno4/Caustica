@@ -58,7 +58,7 @@ StablePlaneEndpoint primaryStablePlaneEndpoint(WorldPayload primary, WorldPush f
         float3 cameraDirection) {
     StablePlaneEndpoint result = {};
     result.terminal = primary;
-    result.imageTransform = float3x3(1.0);
+    result.imageTransform = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
     result.terminalRayDirection = cameraDirection;
     result.available = true;
     result.branchId = 0u;
@@ -89,7 +89,7 @@ float3x3 stablePlaneRotationFromTo(float3 fromDirection, float3 toDirection) {
     float3 crossValue = cross(from, to);
     float sine = length(crossValue);
     if (sine < 1.0e-5) {
-        if (cosine > 0.0) return float3x3(1.0);
+        if (cosine > 0.0) return float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
         float3 axis = normalize(abs(from.z) < 0.9
                 ? cross(from, float3(0.0, 0.0, 1.0))
                 : cross(from, float3(0.0, 1.0, 0.0)));
@@ -119,7 +119,7 @@ StablePlaneEndpoint stablePlaneEndpoint(WorldPayload primary, WorldPush frame,
             ? primary.guideAlternateEvent : primary.guideContinuationEvent;
     if (initialEvent == WORLD_GUIDE_EVENT_NONE) return result;
     result.available = true;
-    result.imageTransform = float3x3(1.0);
+    result.imageTransform = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
     result.terminalRayDirection = cameraDirection;
     result.firstEvent = initialEvent;
     result.branchWeight = alternateFirst

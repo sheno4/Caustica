@@ -103,8 +103,6 @@
 	"caustica.setting.overlay.block-outline.enabled.tooltip": "Draw the selection outline around the block you are looking at.",
 	"caustica.setting.composite.debug-view": "Debug View",
 	"caustica.setting.composite.debug-view.tooltip": "Inspect ray-tracing buffers and exposure diagnostics after the normal frame has rendered.",
-	"caustica.setting.frame-stats.enabled": "Frame Timing Log",
-	"caustica.setting.frame-stats.enabled.tooltip": "Log render-frame timings and hitches to the game log.",
 	"caustica.setting.screenshots.exr-enabled": "EXR Screenshots",
 	"caustica.setting.screenshots.exr-enabled.tooltip": "Save a scene-linear ACEScg EXR alongside the normal PNG when you take a screenshot.",
 

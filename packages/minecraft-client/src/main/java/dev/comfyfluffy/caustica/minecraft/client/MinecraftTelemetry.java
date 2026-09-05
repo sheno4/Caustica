@@ -24,7 +24,6 @@ public final class MinecraftTelemetry {
 
         void set(String name, long value);
 
-        void max(String name, long value);
 
         Object extraction(GeometrySource source, int geometryCount);
 
@@ -53,7 +52,6 @@ public final class MinecraftTelemetry {
         }
         @Override public void count(String name, long delta) { telemetry.frame().count(name, delta); }
         @Override public void set(String name, long value) { telemetry.frame().set(name, value); }
-        @Override public void max(String name, long value) { telemetry.frame().max(name, value); }
         @Override public Object extraction(GeometrySource source, int geometryCount) {
             return telemetry.extraction(switch (source) {
                 case TERRAIN -> RtTelemetry.GeometrySource.TERRAIN;
@@ -81,7 +79,6 @@ public final class MinecraftTelemetry {
         @Override public void endStage(String name, long startedNanos) { }
         @Override public void count(String name, long delta) { }
         @Override public void set(String name, long value) { }
-        @Override public void max(String name, long value) { }
         @Override public Object extraction(GeometrySource source, int geometryCount) { return null; }
         @Override public void published(Object stamp) { }
         @Override public void afterPublicationVisible(LongConsumer action) { }

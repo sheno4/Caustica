@@ -16,6 +16,8 @@ import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 
+import jdk.jfr.*;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -31,6 +33,8 @@ import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.
  * World capture and publication run on the render thread; workers read immutable region snapshots.
  */
 public final class RtTerrain {
+    private static final EventType TERRAIN_STATE_EVENT = EventType.getEventType(TerrainStateEvent.class);
+    private static final EventType TERRAIN_JOB_EVENT = EventType.getEventType(TerrainJobEvent.class);
     private static final int PUBLICATION_BUDGET = 8;
     private static final long FRAME_FALLBACK_NANOS = 200_000_000L;
 
@@ -112,10 +116,134 @@ public final class RtTerrain {
             reset();
             world = nextWorld;
         }
-        if (world == null || materials == null) return;
+        if (world == null || materials == null) {
+            recordState(mc);
+            return;
+        }
         synchronizeWindow(mc);
         drainDirty();
         if (System.nanoTime() - lastFrame > FRAME_FALLBACK_NANOS) stream(mc);
+        recordState(mc);
+    }
+
+    private void recordState(Minecraft mc) {
+        if (!TERRAIN_STATE_EVENT.isEnabled()) return;
+        TerrainStateEvent event = new TerrainStateEvent();
+        event.observedFrameId = instrumentation.frameSerial();
+        event.worldPresent = world != null;
+        event.materialsPresent = materials != null;
+        event.geometryBound = geometry != null;
+        event.epoch = epoch;
+        event.lastDispatchedRevision = revision;
+        if (mc.player != null) {
+            event.playerBlockX = mc.player.getBlockX();
+            event.playerBlockY = mc.player.getBlockY();
+            event.playerBlockZ = mc.player.getBlockZ();
+        }
+        event.windowCenterChunkX = event.playerBlockX >> 4;
+        event.windowCenterChunkZ = event.playerBlockZ >> 4;
+        event.renderDistanceChunks = mc.options.getEffectiveRenderDistance();
+        event.minSectionY = lowY;
+        event.maxSectionY = highY;
+        event.originBlockX = blockX;
+        event.originBlockY = blockY;
+        event.originBlockZ = blockZ;
+        event.loadedWindowColumns = columns.size();
+        event.trackedSections = updates.sections.size();
+        event.residentGeometrySections = geometry == null ? 0 : geometry.sectionKeys().size();
+        var groups = java.util.Collections.newSetFromMap(
+                new java.util.IdentityHashMap<TerrainUpdates.Group<Build>, Boolean>());
+        var blockedColumns = new LongOpenHashSet();
+        var checkedColumns = new LongOpenHashSet();
+        for (var section : updates.sections.values()) {
+            if (section.wanted) event.wantedSections++;
+            else event.removingSections++;
+            if (section.ready) event.publishedSections++;
+            var request = section.request;
+            if (request == null) continue;
+            event.requests++;
+            groups.add(request.group);
+            if (request.complete) event.completedRequests++;
+            else if (request.dispatched) event.dispatchedRequests++;
+            else {
+                event.undispatchedRequests++;
+                long column = columnKey(sectionX(section.key), sectionZ(section.key));
+                if (world != null && checkedColumns.add(column)
+                        && !neighborsLoaded(world.getChunkSource(), sectionX(section.key), sectionZ(section.key))) {
+                    blockedColumns.add(column);
+                }
+                if (blockedColumns.contains(column)) event.neighborBlockedRequests++;
+            }
+        }
+        event.pendingGroups = groups.size();
+        for (var group : groups) {
+            if (group.requests.stream().allMatch(request -> request.complete)) event.readyGroups++;
+        }
+        event.neighborBlockedColumns = blockedColumns.size();
+        var workerState = workers.state();
+        event.workerThreads = workerState.threads();
+        event.activeWorkers = workerState.active();
+        event.queuedWorkerTasks = workerState.queued();
+        event.outstandingBuilds = outstandingBuilds.get();
+        event.cpuCompletedQueue = completed.size();
+        event.preparedQueue = prepared.size();
+        event.dirtyGroupsQueue = dirty.size();
+        event.commit();
+    }
+
+    private void recordJob(Build build, String action) {
+        recordJob(build.request, build.epoch, build.revision, action, build.failure != null);
+    }
+
+    private void recordJob(TerrainUpdates.Request<Build> request, long jobEpoch, long jobRevision,
+                           String action, boolean failed) {
+        if (!TERRAIN_JOB_EVENT.isEnabled()) return;
+        TerrainJobEvent event = new TerrainJobEvent();
+        event.observedFrameId = instrumentation.frameSerial();
+        event.epoch = jobEpoch;
+        event.revision = jobRevision;
+        event.sectionX = sectionX(request.section.key);
+        event.sectionY = sectionY(request.section.key);
+        event.sectionZ = sectionZ(request.section.key);
+        event.action = action;
+        event.failed = failed;
+        event.commit();
+    }
+
+    @Name("dev.comfyfluffy.caustica.TerrainJob")
+    @Label("Terrain section job observation") @Category({"Caustica", "Terrain"}) @StackTrace(false) @Enabled(false)
+    static final class TerrainJobEvent extends Event {
+        @Description("Most recently observed telemetry frame serial on the emitting thread")
+        public long observedFrameId;
+        public long epoch, revision;
+        public int sectionX, sectionY, sectionZ;
+        public String action;
+        public boolean failed;
+    }
+
+    @Name("dev.comfyfluffy.caustica.TerrainState")
+    @Label("Terrain state at client tick") @Category({"Caustica", "Terrain"}) @StackTrace(false) @Enabled(false)
+    static final class TerrainStateEvent extends Event {
+        @Description("Most recently observed telemetry frame serial; tick snapshot is not a rendered frame")
+        public long observedFrameId;
+        public boolean worldPresent, materialsPresent, geometryBound;
+        public long epoch, lastDispatchedRevision;
+        public int playerBlockX, playerBlockY, playerBlockZ;
+        public int windowCenterChunkX, windowCenterChunkZ, renderDistanceChunks;
+        public int minSectionY, maxSectionY;
+        public int originBlockX, originBlockY, originBlockZ;
+        public int loadedWindowColumns, trackedSections, wantedSections, removingSections;
+        @Description("Published section state, including sections with empty geometry")
+        public int publishedSections;
+        public int residentGeometrySections;
+        public int requests, undispatchedRequests, dispatchedRequests, completedRequests;
+        public int pendingGroups, readyGroups, neighborBlockedRequests, neighborBlockedColumns;
+        @Description("Outstanding CPU work, undrained CPU results, and GPU preparations across epochs")
+        public int outstandingBuilds;
+        @Description("Concurrent queue sizes are individually sampled, not an atomic worker snapshot")
+        public int cpuCompletedQueue;
+        public int preparedQueue, dirtyGroupsQueue;
+        public int workerThreads, activeWorkers, queuedWorkerTasks;
     }
 
     public void frame() {
@@ -185,8 +313,14 @@ public final class RtTerrain {
             Build build = completed.poll();
             if (build == null) break;
             outstandingBuilds.decrementAndGet();
-            if (build.epoch != epoch || !build.materialEpoch.equals(lookup.epoch())) continue;
-            if (build.request.section.request != build.request) continue;
+            if (build.epoch != epoch || !build.materialEpoch.equals(lookup.epoch())) {
+                recordJob(build, "cpu-result-stale-epoch");
+                continue;
+            }
+            if (build.request.section.request != build.request) {
+                recordJob(build, "cpu-result-superseded");
+                continue;
+            }
             if (build.failure != null) throw new IllegalStateException("Terrain extraction failed", build.failure);
             if (build.cpu.mesh() == null) {
                 updates.complete(build.request, build);
@@ -195,12 +329,14 @@ public final class RtTerrain {
                 int x = sectionX(key) << 4, y = sectionY(key) << 4, z = sectionZ(key) << 4;
                 var put = new MinecraftTerrainGeometry.Put(key, x, y, z, build.cpu.mesh(),
                         MinecraftTerrainLightAdapter.describe(key, build.revision, x, y, z, build.cpu.lights()));
+                recordJob(build, "gpu-prepare-start");
                 var preparation = geometry.prepare(put);
                 outstandingBuilds.incrementAndGet();
                 preparation.whenComplete((mesh, failure) -> {
                     outstandingBuilds.decrementAndGet();
                     var result = new Build(build.request, build.epoch, build.materialEpoch, build.revision,
                             build.cpu, failure, build.extraction, build.ready, mesh);
+                    recordJob(result, "gpu-prepare-ready");
                     synchronized (preparationLock) {
                         if (result.epoch != epoch) result.close();
                         else prepared.add(result);
@@ -212,6 +348,7 @@ public final class RtTerrain {
             Build build = prepared.poll();
             if (build == null) break;
             if (build.epoch != epoch || build.request.section.request != build.request) {
+                recordJob(build, "prepared-result-stale");
                 build.close();
                 continue;
             }
@@ -271,10 +408,13 @@ public final class RtTerrain {
         request.dispatched = true;
         outstandingBuilds.incrementAndGet();
         instrumentation.count("sectionsSnapshotted", 1);
+        recordJob(request, taskEpoch, taskRevision, "dispatch", false);
         try {
             workers.submit(() -> {
                 try {
+                    recordJob(request, taskEpoch, taskRevision, "cpu-start", false);
                     if (taskEpoch != epoch) {
+                        recordJob(request, taskEpoch, taskRevision, "cpu-cancelled-epoch", false);
                         completed.add(new Build(request, taskEpoch, lookup.epoch(), taskRevision, null, null, extraction, null));
                         return;
                     }
@@ -282,9 +422,11 @@ public final class RtTerrain {
                     state.reset(colors);
                     var cpu = buildCpuSection(region, models, state.blockRandom, state.modelParts,
                             state.capture, fluids, state.fluidCapture, state.mesh, state.pos, lookup, x, y, z);
+                    recordJob(request, taskEpoch, taskRevision, "cpu-ready", false);
                     completed.add(new Build(request, taskEpoch, lookup.epoch(), taskRevision, cpu, null,
                             extraction, instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN_READY, 1)));
                 } catch (Throwable failure) {
+                    recordJob(request, taskEpoch, taskRevision, "cpu-failed", true);
                     completed.add(new Build(request, taskEpoch, lookup.epoch(), taskRevision, null, failure,
                             extraction, null));
                 }
@@ -314,6 +456,7 @@ public final class RtTerrain {
         for (var group : groups) {
             for (var request : group.requests) {
                 if (request.result != null) {
+                    recordJob(request.result, "published");
                     instrumentation.published(request.result.extraction);
                     instrumentation.published(request.result.ready);
                 }

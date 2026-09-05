@@ -69,6 +69,8 @@ public abstract class GameRendererMixin {
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("TAIL"))
 	private void caustica$endRtFrameStats(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
+		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.frameRendered(
+				CausticaClientComposition.current().runtime().frameActive());
 		MinecraftDebugCapture.poll(Minecraft.getInstance(),
 				CausticaClientComposition.current().runtime().frameActive());
 		CausticaClientComposition.current().runtime().endFrame();

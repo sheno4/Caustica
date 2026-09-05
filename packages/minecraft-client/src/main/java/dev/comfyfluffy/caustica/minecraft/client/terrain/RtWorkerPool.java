@@ -63,6 +63,13 @@ public final class RtWorkerPool {
     }
 
     /** Submit worker-owned RT preparation; completion is delivered by the task itself. */
+    synchronized State state() {
+        return exec == null ? new State(threads, 0, 0) : new State(threads,
+                exec.getActiveCount(), exec.getQueue().size());
+    }
+
+    record State(int threads, int active, int queued) { }
+
     public void submit(Runnable job) {
         executor().execute(job);
     }

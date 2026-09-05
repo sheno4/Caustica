@@ -1,150 +1,75 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
-import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
-
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.StageMetric;
-
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.config.CausticaOptions;
-import dev.comfyfluffy.caustica.settings.SettingsRegistry;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterEach;
+import jdk.jfr.Recording;
+import jdk.jfr.consumer.RecordedEvent;
+import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 final class RtFrameStatsBoundaryTest {
-    @TempDir Path configDirectory;
-    private CausticaOptions previousStore;
-
-    @BeforeEach
-    void installRendererSettings() {
-        previousStore = CausticaConfig.store();
-        SettingsRegistry registry = new SettingsRegistry();
-        RendererOptions.register(registry);
-        CausticaConfig.install(CausticaOptions.load(configDirectory.resolve("caustica.toml"), registry));
-    }
-
-    @AfterEach
-    void restoreProcessSettings() {
-        CausticaConfig.install(previousStore);
-    }
-
     @Test
-    void outputLocationIsAbsoluteLazyAndFixedAfterWriterInitialization(@TempDir Path temporary) {
-        Path requested = temporary.resolve("nested").resolve("..").resolve("stats");
-        RtFrameStats.OutputLocation output = new RtFrameStats.OutputLocation(Path.of("default-stats"));
-
-        output.configure(requested);
-
-        Path expected = requested.toAbsolutePath().normalize();
-        assertEquals(expected, output.directory());
-        assertFalse(Files.exists(expected), "configuration must not create the output directory");
-        assertEquals(expected, output.beginWriterInitialization());
-        assertThrows(IllegalStateException.class, () -> output.configure(temporary.resolve("other")));
-    }
-
-    @Test
-    void processWorkingDirectoryDefaultIsNormalizedAndAbsolute() {
-        Path output = RtFrameStats.defaultOutputDirectory();
-        assertTrue(output.isAbsolute());
-        assertEquals(output.normalize(), output);
-        assertEquals("rt-frame-stats", output.getFileName().toString());
-    }
-
-    @Test
-    void rendererSchemaOwnsGenericGeometryAndFrameStages() {
-        MetricSchema schema = RtFrameStats.rendererFrameMetrics();
-        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.packMaterial")));
-        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.schedulerValidate")));
-        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("frame.nrd")));
-        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("frame.rawCopy")));
-        assertTrue(schema.stages().stream().filter(stage -> stage.name().startsWith("frame."))
-                .allMatch(StageMetric::contributesToAccountedTime));
-        assertTrue(schema.counters().contains("geometryTrianglesSubmitted"));
-        assertTrue(schema.counters().contains("geometryInstancesVisible"));
-        assertTrue(schema.counters().contains("geometryPlacementFreshnessApplied"));
-        assertTrue(schema.counters().contains("geometryGroupsAccepted"));
-        assertTrue(schema.counters().contains("geometryPutsAccepted"));
-        assertTrue(schema.counters().contains("geometryGroupRevisionsCoalesced"));
-        assertTrue(schema.counters().contains("geometryPutRevisionsCoalesced"));
-        assertTrue(schema.counters().contains("geometryPutsStarted"));
+    void recordingEnablesRawSamplesWithoutConfigAndKeepsEveryStage(@TempDir Path temporary) throws Exception {
+        Path file = temporary.resolve("frames.jfr");
+        try (Recording recording = new Recording()) {
+            recording.enable("dev.comfyfluffy.caustica.Frame");
+            recording.enable("dev.comfyfluffy.caustica.CpuStage");
+            recording.enable("dev.comfyfluffy.caustica.FrameCounter");
+            recording.start();
+            RtFrameStats stats = new RtFrameStats();
+            stats.configureFrameMetrics(new MetricSchema(List.of(), List.of("testCounter")));
+            assertTrue(RtFrameStats.enabled());
+            stats.frame().beginIfInactive();
+            stats.frame().endStage("frame.nrd", stats.frame().startStage());
+            stats.beginRenderFrame();
+            stats.frame().endStage("frame.nrd", stats.frame().startStage());
+            stats.frame().set("testCounter", 3);
+            stats.frame().count("testCounter", 2);
+            stats.endFrame();
+            stats.beginRenderFrame();
+            stats.frame().beginIfInactive();
+            stats.endFrame();
+            recording.stop();
+            recording.dump(file);
+        }
+        List<RecordedEvent> events = RecordingFile.readAllEvents(file);
+        List<RecordedEvent> frames = events.stream().filter(e -> e.getEventType().getName().equals("dev.comfyfluffy.caustica.Frame")).toList();
+        assertEquals(List.of(1L, 2L), frames.stream().map(e -> e.getLong("frameId")).toList());
+        assertTrue(frames.stream().allMatch(e -> e.getLong("elapsedNanos") >= 0));
+        List<RecordedEvent> stages = events.stream().filter(e -> e.getEventType().getName().equals("dev.comfyfluffy.caustica.CpuStage")).toList();
+        assertEquals(2, stages.size());
+        assertTrue(stages.stream().allMatch(e -> e.getLong("frameId") == 1L));
+        assertEquals(List.of(5L, 0L), events.stream()
+                .filter(e -> e.getEventType().getName().equals("dev.comfyfluffy.caustica.FrameCounter"))
+                .filter(e -> e.getString("counter").equals("testCounter"))
+                .map(e -> e.getLong("value")).toList());
     }
 
     @Test
     void metricSchemasRejectDuplicatesAndProfilesRejectLateOrRepeatedConfiguration() {
         assertThrows(IllegalArgumentException.class, () -> new MetricSchema(List.of(
-                new StageMetric("duplicate", true),
-                new StageMetric("duplicate", false)), List.of()));
-        assertThrows(IllegalArgumentException.class, () -> new MetricSchema(
-                List.of(new StageMetric("duplicate", true)), List.of("duplicate")));
-
-        MetricSchema base = new MetricSchema(
-                List.of(new StageMetric("base", true)), List.of());
-        RtFrameStats.Profile collision = new RtFrameStats.Profile("collision", base, false);
-        assertThrows(IllegalArgumentException.class, () -> collision.configureMetrics(
-                new MetricSchema(List.of(new StageMetric("base", true)), List.of())));
-
-        RtFrameStats.Profile repeated = new RtFrameStats.Profile("repeated", base, false);
+                new StageMetric("duplicate"), new StageMetric("duplicate")), List.of()));
+        MetricSchema base = new MetricSchema(List.of(new StageMetric("base")), List.of());
+        RtFrameStats.Profile repeated = new RtFrameStats.Profile("repeated", base, () -> 1L);
         repeated.configureMetrics(new MetricSchema(List.of(), List.of("host")));
-        assertThrows(IllegalStateException.class, () -> repeated.configureMetrics(
-                new MetricSchema(List.of(), List.of("other"))));
-
-        RtFrameStats.Profile used = new RtFrameStats.Profile("used", base, false);
+        assertThrows(IllegalStateException.class, () -> repeated.configureMetrics(new MetricSchema(List.of(), List.of("other"))));
+        RtFrameStats.Profile used = new RtFrameStats.Profile("used", base, () -> 1L);
         used.begin();
-        assertThrows(IllegalStateException.class, () -> used.configureMetrics(
-                new MetricSchema(List.of(), List.of("late"))));
-    }
-
-    @Test
-    void explicitAccountingExcludesNestedDetailStages() {
-        MetricSchema schema = new MetricSchema(List.of(
-                new StageMetric("outer", true),
-                new StageMetric("outer.detail", false),
-                new StageMetric("next", true)), List.of());
-
-        assertEquals(17L, schema.accountedNanos(new long[]{10L, 6L, 7L}));
-    }
-
-    @Test
-    void counterSetAndMaxRetainTheExpectedFrameValue() {
-        boolean previous = CausticaConfig.get(RendererOptions.Rt.FrameStats.ENABLED);
-        CausticaConfig.store().apply(CausticaConfig.FEATURE, RendererOptions.Rt.FrameStats.ENABLED, true);
-        try {
-            RtFrameStats.Profile profile = new RtFrameStats.Profile("counter-semantics",
-                    new MetricSchema(List.of(), List.of("depth")), false);
-            profile.begin();
-            profile.set("depth", 3);
-            profile.max("depth", 7);
-            profile.max("depth", 5);
-            assertEquals(7L, profile.counterValue("depth"));
-            profile.set("depth", 2);
-            assertEquals(2L, profile.counterValue("depth"));
-        } finally {
-            CausticaConfig.store().apply(CausticaConfig.FEATURE, RendererOptions.Rt.FrameStats.ENABLED, previous);
-        }
+        assertThrows(IllegalStateException.class, () -> used.configureMetrics(new MetricSchema(List.of(), List.of("late"))));
     }
 
     @Test
     void renderFrameSerialAdvancesOnlyAtTheExplicitBoundaryAndIsInstanceOwned() {
         RtTelemetryImpl telemetry = new RtTelemetryImpl();
         RtTelemetryImpl other = new RtTelemetryImpl();
-        long before = telemetry.frameSerial();
-        RtFrameStats.Profile profile = new RtFrameStats.Profile("serial-boundary",
-                new MetricSchema(List.of(), List.of()), false);
-        profile.begin();
-        assertEquals(before, telemetry.frameSerial());
+        telemetry.beginFrameIfInactive();
+        assertEquals(0L, telemetry.frameSerial());
         telemetry.beginRenderFrame();
-        assertEquals(before + 1L, telemetry.frameSerial());
+        assertEquals(1L, telemetry.frameSerial());
         assertEquals(0L, other.frameSerial());
     }
 }

@@ -79,7 +79,6 @@ final class RtEntitiesPublicationStateTest {
         assertEquals(1L, state.visibleMeshVersion);
         assertEquals(1L, state.meshVisibilityCount);
         assertEquals(sourceFrame, state.visibleMeshSourceFrame);
-        assertEquals(1L, state.initialUnavailableFrames);
         telemetry.reset();
     }
 
@@ -166,7 +165,7 @@ final class RtEntitiesPublicationStateTest {
     }
 
     @Test
-    void successfulFrameVisibilityTracksSkippedRevisionsIntervalAndPriorRevisionLongevity() {
+    void successfulFrameVisibilityRetainsSourceRevisionAndFrame() {
         RtEntities.EntityState state = state();
         state.visibleMeshVersion = 1L;
         state.meshVisibilityCount = 1L;
@@ -178,16 +177,13 @@ final class RtEntitiesPublicationStateTest {
         state.meshVisibilityQueued = true;
 
         state.meshFrameVisible(104L, state.meshVisibilityToken, telemetry);
+        assertEquals(104L, state.lastMeshVisibilityFrame);
+        assertEquals(state.pendingVisibleMeshSourceFrame, state.visibleMeshSourceFrame);
 
-        assertEquals(2L, state.meshRevisionsSkippedBetweenVisibility);
-        assertEquals(4L, state.meshVisibilityIntervalFramesTotal);
-        assertEquals(4L, state.meshVisibilityIntervalFramesMax);
-        assertEquals(5L, state.priorRevisionInterveningFramesAtReplacementTotal);
-        assertEquals(5L, state.priorRevisionInterveningFramesAtReplacementMax);
     }
 
     @Test
-    void adjacentOneFramePublicationsHaveOneInterveningFrameFromThePriorSourceRevision() {
+    void adjacentPublicationsRetainTheirSourceFrame() {
         RtEntities.EntityState state = state();
         state.visibleMeshVersion = 1L;
         state.meshVisibilityCount = 1L;
@@ -199,9 +195,9 @@ final class RtEntitiesPublicationStateTest {
         state.meshVisibilityQueued = true;
 
         state.meshFrameVisible(102L, state.meshVisibilityToken, telemetry);
+        assertEquals(102L, state.lastMeshVisibilityFrame);
+        assertEquals(state.pendingVisibleMeshVersion, state.visibleMeshVersion);
 
-        assertEquals(1L, state.priorRevisionInterveningFramesAtReplacementTotal);
-        assertEquals(1L, state.priorRevisionInterveningFramesAtReplacementMax);
     }
 
     private static RtEntities.EntityState state() {
@@ -218,7 +214,6 @@ final class RtEntitiesPublicationStateTest {
         @Override public void endStage(String name, long startedNanos) { }
         @Override public void count(String name, long delta) { }
         @Override public void set(String name, long value) { }
-        @Override public void max(String name, long value) { }
         @Override public Object extraction(MinecraftTelemetry.GeometrySource source, int geometryCount) { return null; }
         @Override public void published(Object stamp) { }
         @Override public void afterPublicationVisible(LongConsumer action) { visibilityActions.add(action); }

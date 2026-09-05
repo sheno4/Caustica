@@ -171,25 +171,6 @@ final class RtNeeAtPropertiesTest {
         assertEquals(3, telemetry.lightCount());
     }
 
-    @Test
-    void telemetryReportsStateChangesResetsAndPeriodicStableState() {
-        var stable = new RtNeeAtBackend.Telemetry(RtNeeAtBackend.CANDIDATES, true, 1, 1, 1);
-        var countChanged = new RtNeeAtBackend.Telemetry(RtNeeAtBackend.CANDIDATES, true, 20, 3, 2);
-        var spotRemoved = new RtNeeAtBackend.Telemetry(RtNeeAtBackend.CANDIDATES, true, 20, 0, 2);
-        var resetHistory = new RtNeeAtBackend.Telemetry(RtNeeAtBackend.CANDIDATES, false, 1, 1, 1);
-
-        assertTrue(RtNeeAtBackend.shouldLogTelemetry(stable, null, 10, Long.MIN_VALUE));
-        assertFalse(RtNeeAtBackend.shouldLogTelemetry(stable, stable, 11, 10));
-        assertFalse(RtNeeAtBackend.shouldLogTelemetry(countChanged, stable, 11, 10));
-        assertTrue(RtNeeAtBackend.shouldLogTelemetry(spotRemoved, countChanged, 11, 10));
-        assertTrue(RtNeeAtBackend.shouldLogTelemetry(resetHistory, stable, 11, 10));
-        assertTrue(RtNeeAtBackend.shouldLogTelemetry(stable, stable, 9, 10));
-        assertFalse(RtNeeAtBackend.shouldLogTelemetry(stable, stable,
-                10 + RtNeeAtBackend.TELEMETRY_INTERVAL_FRAMES - 1, 10));
-        assertTrue(RtNeeAtBackend.shouldLogTelemetry(stable, stable,
-                10 + RtNeeAtBackend.TELEMETRY_INTERVAL_FRAMES, 10));
-    }
-
     private static GlobalDistribution bakeGlobal(float[] power, int[] feedback,
                                                  int contributingPixels) {
         int lightCount = power.length;

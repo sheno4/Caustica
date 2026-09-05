@@ -90,12 +90,16 @@ public final class RtFrameRenderer {
     private final RtFramePresenter presenter;
     private final RtReconstruction reconstruction;
     private final RtTelemetry telemetry;
+    private final RtGpuTiming gpuTiming;
     private final RtFrameResources frameResources;
     private RtRenderSettings settings;
     private final RtFrameHistory history = new RtFrameHistory();
     private FrameSnapshot frameSnapshot;
     private RtFrameInput currentFrame;
     private boolean loggedActive;
+    private long debugCaptureFrameSerial = -1;
+    private float debugCapturePreExposure;
+    private RtDenoisingSettings debugCaptureDenoising;
 
     private GraphicsUse pendingGraphicsUse;
     private RtRetainedSceneBackend.PreparedTrace currentTrace;
@@ -116,6 +120,7 @@ public final class RtFrameRenderer {
         this.reconstruction = new RtReconstruction(context, rayReconstruction, upscaler,
                 denoiserFactory, denoisingSettings, telemetry);
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
+        this.gpuTiming = new RtGpuTiming(context);
         this.frameResources = new RtFrameResources(presenter, rayReconstruction, upscaler, LOOK, settings.exposure());
     }
 
@@ -174,6 +179,68 @@ public final class RtFrameRenderer {
         return true;
     }
 
+    public record DebugImageCapture(String name, long frameSerial, int width, int height,
+                                    int vulkanFormat, String encoding, float preExposure,
+                                    String denoiserRoute, String signalEncoding) { }
+
+    public static List<String> debugImageNames() {
+        return List.of("reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
+                "specular-albedo", "depth", "motion", "specular-motion", "nrd-view-z",
+                "nrd-diffuse", "nrd-specular", "nrd-stable-radiance");
+    }
+
+    /** Synchronous render-thread capture of a submitted frame, with no display or exposure transform. */
+    public DebugImageCapture exportLatestDebugImage(String name, Path output) throws IOException {
+        context.backend().assertRenderThread();
+        if (!debugImageNames().contains(name)) throw new IllegalArgumentException("Unknown debug image: " + name);
+        if (debugCaptureFrameSerial < 0 || pendingGraphicsUse != null) return null;
+        TraceImages images = traceImages();
+        GpuImage image = switch (name) {
+            case "reconstructed-color" -> images.reconstructedColor();
+            case "trace-color" -> images.traceColor();
+            case "normal-roughness" -> images.normalRoughness();
+            case "diffuse-albedo" -> images.diffuseAlbedo();
+            case "specular-albedo" -> images.specularAlbedo();
+            case "depth" -> images.depth();
+            case "motion" -> images.motion();
+            case "specular-motion" -> images.specularMotion();
+            case "nrd-view-z" -> images.nrdViewZ();
+            case "nrd-diffuse" -> images.diffuseRadianceHitDistance();
+            case "nrd-specular" -> images.specularRadianceHitDistance();
+            case "nrd-stable-radiance" -> images.nrdStableRadiance();
+            default -> throw new IllegalArgumentException(name);
+        };
+        String encoding = switch (name) {
+            case "reconstructed-color", "trace-color" -> "RGB: ACEScg scene radiance * preExposure";
+            case "nrd-stable-radiance" -> "RGB: ACEScg scene-linear radiance (unexposed)";
+            case "normal-roughness" -> "RGB: world-space unit normal; A: roughness";
+            case "diffuse-albedo", "specular-albedo" -> "RGB: dimensionless ACEScg BSDF estimate; A: 1";
+            case "depth" -> "R: reverse-Z device depth (dimensionless)";
+            case "motion", "specular-motion" -> "RG: previous minus current position in render pixels";
+            case "nrd-view-z" -> "R: absolute view Z in scene distance units; invalid: 65504";
+            case "nrd-diffuse", "nrd-specular" -> "RGB: demodulated scene-linear radiance; A: hit distance; scale: "
+                    + (debugCaptureDenoising.route() == DenoiserRoute.TEMPORAL_DENOISER ? "1/4096 (peak limited to 250)" : "1")
+                    + "; packing: "
+                    + debugCaptureDenoising.signalEncoding().name();
+            default -> throw new IllegalArgumentException(name);
+        };
+        if (debugCaptureDenoising.route() == DenoiserRoute.TEMPORAL_DENOISER
+                && List.of("normal-roughness", "nrd-view-z", "nrd-diffuse", "nrd-specular").contains(name)) {
+            encoding += "; NRD plane 0 input (last evaluated plane)";
+        }
+        DebugImageCapture result = new DebugImageCapture(name, debugCaptureFrameSerial,
+                image.width(), image.height(), image.format(), encoding, debugCapturePreExposure,
+                debugCaptureDenoising.route().name(), debugCaptureDenoising.signalEncoding().name());
+        RtFrameCapture.exportRaw(context, image, output, java.util.Map.of(
+                "causticaBuffer", name, "causticaFrame", Long.toString(result.frameSerial()),
+                "causticaEncoding", encoding, "causticaVulkanFormat", Integer.toString(image.format()),
+                "causticaPreExposure", Float.toString(result.preExposure()),
+                "causticaDenoiserRoute", result.denoiserRoute(), "causticaSignalEncoding", result.signalEncoding(),
+                "causticaChannels", "Native components in RGBA; absent G/B = 0, absent A = 1",
+                "causticaOrientation", "Top row first; vertically flipped from Vulkan image rows"));
+        return result;
+    }
+
     public boolean requiresSourceWorldFallback() {
         return programs.active() == null;
     }
@@ -207,6 +274,7 @@ public final class RtFrameRenderer {
         if (pendingGraphicsUse != null) {
             throw new IllegalStateException("Previous RT graphics use was never completed");
         }
+        debugCaptureFrameSerial = -1;
         frameCounter++;
         telemetry.beginRenderFrame();
         telemetry.beginFrameIfInactive();
@@ -221,7 +289,7 @@ public final class RtFrameRenderer {
         if (pendingGraphicsUse == null || currentTrace == null || frameSnapshot == null) {
             throw new IllegalStateException("no retained frame is available for UI recording");
         }
-        try (RtFrameCommands commands = new RtFrameCommands(context)) {
+        try (RtFrameCommands commands = new RtFrameCommands(context, gpuTiming, pendingGraphicsUse, telemetry.frameSerial())) {
             VkCommandBuffer commandBuffer = commands.heap("UI extensions");
             passes.beginFrame(passFrame(commandBuffer, pendingGraphicsUse,
                     new RtPassSchedulerBackend.UiState(uiLayer, currentFrame.projectionView().get(new float[16]),
@@ -343,12 +411,12 @@ public final class RtFrameRenderer {
         pendingGraphicsUse = graphicsUse;
         retainViewResources(snapshot.view().medium(), graphicsUse);
         GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter = graphics.graphicsUseWaiter();
-        presentationResources().exposure().beginFrame(graphicsUseWaiter);
+        presentationResources().exposure().beginFrame(graphicsUseWaiter, telemetry.frameSerial());
         currentFrame = history.capture(snapshot, frameCounter, System.nanoTime(), traceExtent(),
                 reconstruction.settings().route(), exposure().preExposure(), settings.jitterSignX(), settings.jitterSignY());
         if (!currentFrame.historyContinuous()) reconstruction.resetHistory();
         int debugView = settings.debugView();
-        try (RtFrameCommands commands = new RtFrameCommands(ctx);
+        try (RtFrameCommands commands = new RtFrameCommands(ctx, gpuTiming, graphicsUse, telemetry.frameSerial());
              MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer cmd = commands.heap("world resources and trace");
             recordTrace(ctx, cmd, stack, graphicsUse, program, currentFrame);
@@ -357,6 +425,9 @@ public final class RtFrameRenderer {
             recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
                     graphicsUse, output, nativeColorImage, debugView);
             commands.submit(submission, graphicsUse);
+            debugCaptureFrameSerial = telemetry.frameSerial();
+            debugCapturePreExposure = currentFrame.preExposure();
+            debugCaptureDenoising = reconstruction.settings();
             history.submitted(currentFrame);
             reconstruction.submitted(currentFrame);
         }
@@ -401,7 +472,9 @@ public final class RtFrameRenderer {
         double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
         Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                 sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
+        long publicationCutoff = telemetry.publicationCutoff();
         EnvironmentBinding<?> environment = scenes.content(entryScene, graphicsUse).environment();
+        telemetry.frameAssembled(publicationCutoff);
         EnvironmentPush environmentState = environmentPush(environment,
                 environment == null ? 0 : services.programs().resolve(environment.implementation()));
 
@@ -651,6 +724,7 @@ public final class RtFrameRenderer {
     }
 
     public void destroy() {
+        gpuTiming.close();
         reconstruction.close();
         presenter.invalidateRenderedFrame();
         frameResources.destroy();

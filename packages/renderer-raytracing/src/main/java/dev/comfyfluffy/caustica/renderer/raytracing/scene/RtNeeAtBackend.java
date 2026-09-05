@@ -18,8 +18,7 @@ import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import jdk.jfr.*;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,7 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Persistent per-scene adaptive light distributions and visible-contribution feedback. */
 final class RtNeeAtBackend {
-    private static final Logger LOGGER = LoggerFactory.getLogger(RtNeeAtBackend.class);
+    private static final EventType NEE_FRAME_EVENT = EventType.getEventType(NeeFrameEvent.class);
     static final int TILE_SIZE = 8;
     static final int LOCAL_SLOTS = 128;
     static final int CANDIDATES = 8;
@@ -44,7 +43,6 @@ final class RtNeeAtBackend {
     /** Share of NEE candidates drawn from the screen-space tile distribution. */
     static final float LOCAL_TO_GLOBAL_RATIO = 0.65f;
     static final int SCAN_BLOCK = 64;
-    static final long TELEMETRY_INTERVAL_FRAMES = 600;
     static final int ENVIRONMENT_EMITTERS_SAMPLED = 2;
     static final int LOCAL_HISTORY_VALID = 1;
     private static final int GLOBAL_ENTRY_BYTES = 2 * Integer.BYTES;
@@ -77,15 +75,21 @@ final class RtNeeAtBackend {
         boolean continuous = historyValid(input, state.hasHistory, state.lastFrameIndex,
                 state.width, state.height);
         boolean localContinuous = continuous && input.localHistoryContinuous();
-        Telemetry telemetry = telemetry(lights, continuous);
-        if (shouldLogTelemetry(telemetry, state.lastLoggedTelemetry,
-                input.frameIndex(), state.lastTelemetryFrameIndex)) {
-            LOGGER.info("NEE-AT runtime: scene={}, frame={}, candidates={}, historyValid={}, "
-                            + "retainedLights={} [Parallelogram={}, Spot={}, Distant={}]",
-                    scene, input.frameIndex(), telemetry.candidates(), telemetry.historyValid(),
-                    telemetry.lightCount(), telemetry.parallelograms(), telemetry.spots(), telemetry.distants());
-            state.lastLoggedTelemetry = telemetry;
-            state.lastTelemetryFrameIndex = input.frameIndex();
+        if (NEE_FRAME_EVENT.isEnabled()) {
+            Telemetry telemetry = telemetry(lights, continuous);
+            NeeFrameEvent event = new NeeFrameEvent();
+            event.rendererFrameId = input.frameIndex();
+            event.scene = scene.toString();
+            event.width = input.width();
+            event.height = input.height();
+            event.candidates = telemetry.candidates();
+            event.historyValid = continuous;
+            event.localHistoryValid = localContinuous;
+            event.retainedLights = telemetry.lightCount();
+            event.parallelograms = telemetry.parallelograms();
+            event.spots = telemetry.spots();
+            event.distants = telemetry.distants();
+            event.commit();
         }
         int targetIndex = state.cursor ^ 1;
         Frame target = state.frames[targetIndex];
@@ -261,15 +265,21 @@ final class RtNeeAtBackend {
         return new Telemetry(CANDIDATES, historyValid, parallelograms, spots, distants);
     }
 
-    static boolean shouldLogTelemetry(Telemetry current, Telemetry previous,
-                                      long frameIndex, long previousFrameIndex) {
-        return previous == null || current.candidates() != previous.candidates()
-                || current.historyValid() != previous.historyValid()
-                || current.parallelogramsPresent() != previous.parallelogramsPresent()
-                || current.spotsPresent() != previous.spotsPresent()
-                || current.distantsPresent() != previous.distantsPresent()
-                || frameIndex < previousFrameIndex
-                || frameIndex - previousFrameIndex >= TELEMETRY_INTERVAL_FRAMES;
+    @Name("dev.comfyfluffy.caustica.NeeFrame")
+    @Label("NEE frame inputs") @Category({"Caustica", "Frame"}) @StackTrace(false) @Enabled(false)
+    static final class NeeFrameEvent extends Event {
+        @Description("RtFrameRenderer host-frame counter; independent of telemetry frameId")
+        public long rendererFrameId;
+        public String scene;
+        public int width;
+        public int height;
+        public int candidates;
+        public boolean historyValid;
+        public boolean localHistoryValid;
+        public int retainedLights;
+        public int parallelograms;
+        public int spots;
+        public int distants;
     }
 
     record Telemetry(int candidates, boolean historyValid, int parallelograms, int spots, int distants) {
@@ -277,9 +287,6 @@ final class RtNeeAtBackend {
             return Math.addExact(Math.addExact(parallelograms, spots), distants);
         }
 
-        boolean parallelogramsPresent() { return parallelograms != 0; }
-        boolean spotsPresent() { return spots != 0; }
-        boolean distantsPresent() { return distants != 0; }
     }
 
     private static void computeBarrier(VkCommandBuffer commandBuffer) {
@@ -366,9 +373,7 @@ final class RtNeeAtBackend {
         int height;
         int lightCapacity;
         long lastFrameIndex = Long.MIN_VALUE;
-        long lastTelemetryFrameIndex = Long.MIN_VALUE;
         boolean hasHistory;
-        Telemetry lastLoggedTelemetry;
         List<RtRetainedSceneBackend.SceneLight> previousLights = List.of();
         Prepared active;
 

@@ -220,6 +220,21 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         long lastSeen;                           // last frame this BE was in the scan window — for eviction
     }
 
+    @jdk.jfr.Name("dev.comfyfluffy.caustica.EntityMeshFrame")
+    @jdk.jfr.Label("Entity mesh included in assembled frame")
+    @jdk.jfr.Category({"Caustica", "Minecraft"})
+    @jdk.jfr.StackTrace(false)
+    @jdk.jfr.Enabled(false)
+    static final class EntityMeshFrameEvent extends jdk.jfr.Event {
+        String entityId;
+        long version;
+        long sourceFrameId;
+        long frameId;
+        long previousVersion;
+        long previousSourceFrameId;
+        long previousFrameId;
+    }
+
     /** CPU-only capture state for one entity; MinecraftEntityGeometry owns its resident. */
     static final class EntityState {
         final UUID identity;
@@ -229,12 +244,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         long profiledMeshVersion;
         long visibleMeshVersion;
         long meshVisibilityCount;
-        long meshRevisionsSkippedBetweenVisibility;
-        long meshVisibilityIntervalFramesTotal;
-        long meshVisibilityIntervalFramesMax;
-        long initialUnavailableFrames;
-        long priorRevisionInterveningFramesAtReplacementTotal;
-        long priorRevisionInterveningFramesAtReplacementMax;
         long lastMeshVisibilityFrame = -1L;
         long visibleMeshSourceFrame = -1L;
         long pendingVisibleMeshVersion;
@@ -287,32 +296,16 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             meshVisibilityQueued = false;
             long version = pendingVisibleMeshVersion;
             long sourceFrame = pendingVisibleMeshSourceFrame;
-            telemetry.count("entityMeshVisibilitySamples", 1);
-            if (meshVisibilityCount == 0L) {
-                long unavailable = Math.max(0L, frame - sourceFrame);
-                initialUnavailableFrames = unavailable;
-                telemetry.count("entityMeshInitialUnavailableFramesTotal", unavailable);
-                telemetry.count("entityMeshInitialUnavailableFramesSamples", 1);
-                telemetry.max("entityMeshInitialUnavailableFramesMax", unavailable);
-            } else {
-                long skipped = Math.max(0L, version - visibleMeshVersion - 1L);
-                long interval = Math.max(0L, frame - lastMeshVisibilityFrame);
-                long interveningFrames = Math.max(0L, frame - visibleMeshSourceFrame - 1L);
-                meshRevisionsSkippedBetweenVisibility += skipped;
-                meshVisibilityIntervalFramesTotal += interval;
-                meshVisibilityIntervalFramesMax = Math.max(meshVisibilityIntervalFramesMax, interval);
-                priorRevisionInterveningFramesAtReplacementTotal += interveningFrames;
-                priorRevisionInterveningFramesAtReplacementMax = Math.max(
-                        priorRevisionInterveningFramesAtReplacementMax, interveningFrames);
-                telemetry.count("entityMeshRevisionsSkippedBetweenVisibility", skipped);
-                telemetry.count("entityMeshVisibilityIntervalFramesTotal", interval);
-                telemetry.count("entityMeshVisibilityIntervalFramesSamples", 1);
-                telemetry.max("entityMeshVisibilityIntervalFramesMax", interval);
-                telemetry.count("entityMeshPriorRevisionInterveningFramesAtReplacementTotal",
-                        interveningFrames);
-                telemetry.count("entityMeshPriorRevisionInterveningFramesAtReplacementSamples", 1);
-                telemetry.max("entityMeshPriorRevisionInterveningFramesAtReplacementMax",
-                        interveningFrames);
+            EntityMeshFrameEvent event = new EntityMeshFrameEvent();
+            if (event.isEnabled()) {
+                event.entityId = identity.toString();
+                event.version = version;
+                event.sourceFrameId = sourceFrame;
+                event.frameId = frame;
+                event.previousVersion = visibleMeshVersion;
+                event.previousSourceFrameId = visibleMeshSourceFrame;
+                event.previousFrameId = lastMeshVisibilityFrame;
+                event.commit();
             }
             visibleMeshVersion = version;
             visibleMeshSourceFrame = sourceFrame;

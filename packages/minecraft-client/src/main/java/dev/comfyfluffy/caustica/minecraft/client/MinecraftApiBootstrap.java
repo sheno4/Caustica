@@ -55,7 +55,7 @@ public final class MinecraftApiBootstrap {
                 gameDirectory.resolve("caustica-slang"), slangOverride));
         var shaderCache = gameDirectory.resolve("caustica-shaders");
         Path shaderCacheRoot = shaderCache.resolve("sources").toAbsolutePath().normalize();
-        telemetry.configure(gameDirectory.resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());
+        telemetry.configure(MinecraftFrameMetrics.schema());
         options.register(settingsRegistry);
         options.importLegacy(platform.configDir().resolve("caustica-options.toml"));
         options.save();

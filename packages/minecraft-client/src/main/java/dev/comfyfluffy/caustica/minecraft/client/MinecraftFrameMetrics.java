@@ -8,24 +8,24 @@ import java.util.List;
 /** Frame metrics authored by the Minecraft terrain and entity scene sources. */
 public final class MinecraftFrameMetrics {
     private static final MetricSchema SCHEMA = new MetricSchema(List.of(
-            accounted("terrain.windowSync"),
-            accounted("terrain.dirtyDrain"),
-            accounted("terrain.drainCompletion"),
-            accounted("terrain.publish"),
-            accounted("terrain.lightScenePublish"),
-            accounted("terrain.snapshotDispatch"),
-            accounted("entity.capture"),
-            detail("entity.capture.extract"),
-            detail("entity.capture.submit"),
-            detail("entity.capture.submit.material"),
-            detail("entity.capture.submit.setupAnim"),
-            detail("entity.capture.submit.modelDraw"),
-            detail("entity.capture.submit.modelDraw.direct"),
-            detail("entity.capture.submit.modelDraw.fallback"),
-            detail("entity.capture.submit.bakedQuads"),
-            detail("entity.capture.submit.metrics"),
-            accounted("entity.blockEntities"),
-            accounted("entity.particles")), List.of(
+            new StageMetric("terrain.windowSync"),
+            new StageMetric("terrain.dirtyDrain"),
+            new StageMetric("terrain.drainCompletion"),
+            new StageMetric("terrain.publish"),
+            new StageMetric("terrain.lightScenePublish"),
+            new StageMetric("terrain.snapshotDispatch"),
+            new StageMetric("entity.capture"),
+            new StageMetric("entity.capture.extract"),
+            new StageMetric("entity.capture.submit"),
+            new StageMetric("entity.capture.submit.material"),
+            new StageMetric("entity.capture.submit.setupAnim"),
+            new StageMetric("entity.capture.submit.modelDraw"),
+            new StageMetric("entity.capture.submit.modelDraw.direct"),
+            new StageMetric("entity.capture.submit.modelDraw.fallback"),
+            new StageMetric("entity.capture.submit.bakedQuads"),
+            new StageMetric("entity.capture.submit.metrics"),
+            new StageMetric("entity.blockEntities"),
+            new StageMetric("entity.particles")), List.of(
             "sectionsSnapshotted", "sectionCopies",
             "terrainMaterialEpochRejects", "entitiesCaptured", "blockEntitiesCaptured",
             "blockEntityGeometrySubmissions", "blockEntityGeometryDeferred",
@@ -33,37 +33,7 @@ public final class MinecraftFrameMetrics {
             "entityModelQuads", "entityModelVertices", "entityBakedQuads", "entityBakedVertices",
             "entityDirectSubmissions", "entityDirectFallbacks", "entityDirectQuads", "entityDirectVertices",
             "entitySpecializedCuboids", "entityGenericCuboids",
-            "terrainDispatchVisibilitySamples", "terrainDispatchExtractionToVisibleFramesTotal",
-            "terrainDispatchExtractionToVisibleFramesMax", "terrainDispatchExtractionToVisibleMicrosTotal",
-            "terrainDispatchExtractionToVisibleMicrosMax", "terrainReadyVisibilitySamples",
-            "terrainReadyExtractionToVisibleFramesTotal", "terrainReadyExtractionToVisibleFramesMax",
-            "terrainReadyExtractionToVisibleMicrosTotal", "terrainReadyExtractionToVisibleMicrosMax",
-            "terrainWorkerToPendingSamples",
-            "terrainWorkerToPendingMicrosTotal", "terrainWorkerToPendingMicrosMax",
-            "terrainPendingToSubmitSamples", "terrainPendingToSubmitMicrosTotal",
-            "terrainPendingToSubmitMicrosMax", "terrainSubmitAcceptanceSamples",
-            "terrainSubmitAcceptanceMicrosTotal", "terrainSubmitAcceptanceMicrosMax",
-            "terrainSubmitToPublicationSamples",
-            "terrainSubmitToPublicationMicrosTotal", "terrainSubmitToPublicationMicrosMax",
-            "terrainPendingGeometryGroups", "terrainPendingGeometryGroupsHighWater", "entityVisibilitySamples",
-            "entityExtractionToVisibleFramesTotal", "entityExtractionToVisibleFramesMax",
-            "entityExtractionToVisibleMicrosTotal", "entityExtractionToVisibleMicrosMax",
-            "entityPlacementVisibilitySamples", "entityPlacementExtractionToVisibleFramesTotal",
-            "entityPlacementExtractionToVisibleFramesMax", "entityPlacementExtractionToVisibleMicrosTotal",
-            "entityPlacementExtractionToVisibleMicrosMax",
-            "entityPlacementFreshnessEligible", "entityPlacementInitialSubmissions", "entityMeshOnlyUpdates",
-            "entityMeshVisibilitySamples", "entityMeshRevisionsSkippedBetweenVisibility",
-            "entityMeshVisibilityIntervalFramesTotal", "entityMeshVisibilityIntervalFramesSamples",
-            "entityMeshVisibilityIntervalFramesMax", "entityMeshInitialUnavailableFramesTotal",
-            "entityMeshInitialUnavailableFramesSamples", "entityMeshInitialUnavailableFramesMax",
-            "entityMeshPriorRevisionInterveningFramesAtReplacementTotal",
-            "entityMeshPriorRevisionInterveningFramesAtReplacementSamples",
-            "entityMeshPriorRevisionInterveningFramesAtReplacementMax",
-            "blockEntityVisibilitySamples", "blockEntityExtractionToVisibleFramesTotal",
-            "blockEntityExtractionToVisibleFramesMax", "blockEntityExtractionToVisibleMicrosTotal",
-            "blockEntityExtractionToVisibleMicrosMax", "particleVisibilitySamples",
-            "particleExtractionToVisibleFramesTotal", "particleExtractionToVisibleFramesMax",
-            "particleExtractionToVisibleMicrosTotal", "particleExtractionToVisibleMicrosMax"));
+            "entityPlacementFreshnessEligible", "entityPlacementInitialSubmissions", "entityMeshOnlyUpdates"));
 
     private MinecraftFrameMetrics() {
     }
@@ -72,11 +42,4 @@ public final class MinecraftFrameMetrics {
         return SCHEMA;
     }
 
-    private static StageMetric accounted(String name) {
-        return new StageMetric(name, true);
-    }
-
-    private static StageMetric detail(String name) {
-        return new StageMetric(name, false);
-    }
 }

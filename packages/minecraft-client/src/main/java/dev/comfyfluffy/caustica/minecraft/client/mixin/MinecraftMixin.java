@@ -31,6 +31,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MinecraftMixin {
 	@Inject(method = "close", at = @At("HEAD"))
 	private void caustica$destroyUiOverlayBeforeRendererShutdown(CallbackInfo ci) {
+		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.stop();
 		CausticaClientComposition.current().uiOverlay().destroy();
 		CausticaClientComposition.current().runtime().shutdown();
 	}
@@ -40,6 +41,11 @@ public abstract class MinecraftMixin {
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void caustica$tickRuntime(CallbackInfo ci) {
 		CausticaClientComposition.current().tickRuntime((Minecraft) (Object) this);
+	}
+
+	@Inject(method = "tick", at = @At("TAIL"))
+	private void caustica$debugTick(CallbackInfo ci) {
+		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.tick();
 	}
 
 	@Inject(method = "runTick", at = @At("HEAD"))

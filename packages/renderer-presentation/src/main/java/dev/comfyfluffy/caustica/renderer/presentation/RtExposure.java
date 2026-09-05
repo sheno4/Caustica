@@ -44,22 +44,21 @@ public final class RtExposure {
     private RtExposurePipeline pipeline;
     private boolean logged;
     private long lastFrameNanos;
-    private long lastDiagLogNanos;
     private String cachedCurveSpec;
     private ExposureCurve cachedCurve;
     private boolean resetRequested = true;
     private int resetSequence;
-    /** This frame's latched pre-exposure; see {@link #beginFrame(GraphicsQueue.GraphicsUseWaiter)}. */
+    /** This frame's latched pre-exposure; see {@link #beginFrame(GraphicsQueue.GraphicsUseWaiter, long)}. */
     private float framePreExposure = 1.0f;
+    private long frameId;
 
-    private static final long DIAG_LOG_INTERVAL_NANOS = 1_000_000_000L;
     private static final int STATE_READBACK_RING = 6;
 
     public record Settings(String mode, float manualEv, float key,
             float adaptDarken, float adaptBrighten, float lowPercentile, float highPercentile,
             int stride, float centerWeightSigma, float centerWeightFloor,
             float skyWeightCap, float emissiveWeightCap,
-            boolean preExposure, boolean frameStats, float gamma) {
+            boolean preExposure, float gamma) {
     }
 
     public RtExposure(RtLookPackage look, Settings settings) {
@@ -76,6 +75,8 @@ public final class RtExposure {
         final GraphicsQueue.TrackedGraphicsUse graphicsUse = new GraphicsQueue.TrackedGraphicsUse();
         boolean valid;
         int resetSequence;
+        long frameId;
+        float preExposure;
 
         ReadbackSlot(GpuBuffer buffer) {
             this.buffer = buffer;
@@ -246,7 +247,6 @@ public final class RtExposure {
         pipeline.dispatchHistogram(cmd, traceColor, guideDepth, guideAlbedo, histogram, config);
         VulkanBarriers.memoryBarrier(cmd, stack);
         pipeline.dispatchResolve(cmd, histogram, image, state, config, frameTimeSeconds());
-        logDiagnosticsIfDue();
     }
 
     /**
@@ -283,65 +283,18 @@ public final class RtExposure {
             return;
         }
         pendingStateReadback.resetSequence = resetSequence;
+        pendingStateReadback.frameId = frameId;
+        pendingStateReadback.preExposure = framePreExposure;
         pendingStateReadback.valid = true;
         pendingStateReadback.graphicsUse.mark(graphicsUse);
         pendingStateReadback = null;
-    }
-
-    /**
-     * Throttled log of the controller's internal EVs, gated
-     * behind the frame-stats toggle since that's the existing "I want renderer internals" switch.
-     * Uses the latest completed timeline-guarded readback. It can be a few frames stale without racing
-     * the GPU, which is sufficient for diagnostics.
-     */
-    private void logDiagnosticsIfDue() {
-        if (!settings.frameStats() || completedState == null) {
-            return;
-        }
-        long now = System.nanoTime();
-        if (lastDiagLogNanos != 0L && now - lastDiagLogNanos < DIAG_LOG_INTERVAL_NANOS) {
-            return;
-        }
-        lastDiagLogNanos = now;
-        ExposureStateData snapshot = completedState;
-        float evScene = snapshot.evScene();
-        float evTarget = snapshot.evTarget();
-        float evApplied = snapshot.evApplied();
-        float clipLowFrac = snapshot.clipLowFrac();
-        float clipHighFrac = snapshot.clipHighFrac();
-        float skyScale = snapshot.meteringSkyScale();
-        float skyFrac = snapshot.meteringSkyFrac();
-        float curveCompensation = snapshot.curveCompensation();
-        float effectiveSlope = snapshot.effectiveSlope();
-        float emissiveScale = snapshot.meteringEmissiveScale();
-        float emissiveFrac = snapshot.meteringEmissiveFrac();
-        AutoConfig cfg = autoConfig();
-        boolean pinnedLow = evTarget <= cfg.minEv() + 0.01f;
-        boolean pinnedHigh = evTarget >= cfg.maxEv() - 0.01f;
-        // evScene is EV100; evTarget/evApplied are log2 of the absolute
-        // exposure multiplier, i.e. pre-exposure already divided back out, so they stay comparable
-        // across frames regardless of what preExposure happened to be.
-        LOGGER.info(
-                "RT exposure diag: evScene(EV100)={} evTarget={}{} evApplied={} preExposure={} "
-                        + "clipLow={}% clipHigh={}% skyScale={} skyWeight={}% emissiveScale={} "
-                        + "emissiveWeight={}% curveComp={} effectiveSlope={}",
-                fmt(evScene), fmt(evTarget), pinnedLow ? " (at minEv clamp)" : pinnedHigh ? " (at maxEv clamp)" : "",
-                fmt(evApplied), fmt(preExposure()), fmt(clipLowFrac * 100.0f), fmt(clipHighFrac * 100.0f),
-                fmt(skyScale), fmt(skyFrac * 100.0f), fmt(emissiveScale),
-                fmt(emissiveFrac * 100.0f), fmt(curveCompensation), fmt(effectiveSlope));
     }
 
     private static String fmt(float v) {
         return String.format(java.util.Locale.ROOT, "%.2f", v);
     }
 
-    /**
-     * One-line summary for the F3 debug screen ({@code RtExposureDebugEntry}). Unlike
-     * {@link #logDiagnosticsIfDue()} this is not throttled and not gated on
-     * the frame-stat logging setting -- F3 only calls it once the player has enabled
-     * that entry, and the game's own render cadence is throttle enough. Returns {@code null} when
-     * there is nothing meaningful to show yet (state buffer not created).
-     */
+    /** Latest completed controller values for the optional F3 exposure entry. */
     public String debugSummaryLine() {
         if (state == null) {
             return null;
@@ -387,7 +340,6 @@ public final class RtExposure {
         ).write(stateDataBuffer());
         state.flush(0L, ExposureStateData.BYTE_SIZE);
         lastFrameNanos = 0L;
-        lastDiagLogNanos = 0L;
     }
 
     private void logOnce() {
@@ -449,7 +401,8 @@ public final class RtExposure {
      * different points in CPU time. The completed readback can be several frames old, so latching once
      * ensures both consumers use one prediction; the residual absorbs whatever it failed to predict.
      */
-    public void beginFrame(GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter) {
+    public void beginFrame(GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter, long frameId) {
+        this.frameId = frameId;
         Mode currentMode = mode();
         boolean reset = currentMode == Mode.AUTO && resetRequested;
         if (reset) {
@@ -468,6 +421,7 @@ public final class RtExposure {
                 slot.buffer.invalidate();
                 completedState = ExposureStateData.read(MemoryUtil.memByteBuffer(
                         slot.buffer.mapped(), ExposureStateData.BYTE_SIZE).order(ByteOrder.nativeOrder()));
+                ExposureEvent.record(slot.frameId, frameId, slot.preExposure, slot.resetSequence, completedState);
             }
             pendingStateReadback = slot;
         }
@@ -475,6 +429,9 @@ public final class RtExposure {
         // On a reset frame the previous scene's exposure is a poor storage-scale prediction. Unity is
         // neutral and the resolve removes it exactly; subsequent frames resume last-frame prediction.
         framePreExposure = reset ? 1.0f : computePreExposure();
+        if (currentMode == Mode.MANUAL) {
+            ExposureEvent.recordManual(frameId, framePreExposure, manualExposureScale());
+        }
     }
 
     /** Request a GPU-side history reset on the next auto-exposure frame. */

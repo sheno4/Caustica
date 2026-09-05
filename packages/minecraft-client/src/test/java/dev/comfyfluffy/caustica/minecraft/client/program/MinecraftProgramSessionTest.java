@@ -197,7 +197,6 @@ final class MinecraftProgramSessionTest {
         }
         @Override public void count(String name, long delta) { }
         @Override public void set(String name, long value) { }
-        @Override public void max(String name, long value) { }
         @Override public Object extraction(MinecraftTelemetry.GeometrySource source, int geometryCount) {
             return null;
         }

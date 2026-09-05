@@ -30,7 +30,6 @@ public record RtRenderSettings(int debugView, int maxBounces, float jitterSignX,
                 options.get(RendererOptions.Rt.Exposure.SKY_WEIGHT_CAP),
                 options.get(RendererOptions.Rt.Exposure.EMISSIVE_WEIGHT_CAP),
                 options.get(RendererOptions.Rt.Exposure.PRE_EXPOSURE),
-                options.get(RendererOptions.Rt.FrameStats.ENABLED),
                 options.get(RendererOptions.Rt.Tonemap.GAMMA));
     }
 }

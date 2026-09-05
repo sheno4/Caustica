@@ -1,441 +1,202 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
-import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
-
-import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.Frame;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.StageMetric;
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.lang.management.GarbageCollectorMXBean;
-import java.lang.management.ManagementFactory;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.function.LongSupplier;
+import jdk.jfr.*;
 
-/**
- * Opt-in render-frame timing and hitch detection. Gated by {@code -Dcaustica.rt.frameStats}; every method
- * is a cheap branch when disabled. The profile begins when RT client-tick work starts (or at
- * {@code GameRenderer.render} HEAD when there was no RT tick work) and ends at render TAIL, so the hitch
- * decision uses one frame envelope rather than one action/pass at a time. Every completed frame is appended
- * as one row to {@code <outputDirectory>/frame.csv} (fresh file per session), and a log line is
- * emitted only when the frame exceeds {@value #HITCH_MULTIPLIER}x its rolling median. That hitch line
- * includes all detailed stage timings and counters recorded during the frame.
- */
+/** Raw CPU frame observations. Recording and analysis belong to consumers of the JFR events. */
 public final class RtFrameStats {
-    private static final Logger LOGGER = LoggerFactory.getLogger(RtFrameStats.class);
-    private static final int MEDIAN_WINDOW = 64;
-    private static final double HITCH_MULTIPLIER = 1.5;
+    private static final EventType FRAME_EVENT = EventType.getEventType(FrameEvent.class);
+    private static final EventType STAGE_EVENT = EventType.getEventType(CpuStageEvent.class);
+    private static final EventType COUNTER_EVENT = EventType.getEventType(FrameCounterEvent.class);
     private static final MetricSchema RENDERER_FRAME_METRICS = new MetricSchema(List.of(
-            new StageMetric("geometry.providerCollect", false),
-            new StageMetric("geometry.providerConvert", true),
-            new StageMetric("geometry.schedulerSubmit", true),
-            new StageMetric("geometry.schedulerValidate", false),
-            new StageMetric("geometry.publishTerminal", true),
-            new StageMetric("geometry.prepareCandidates", true),
-            new StageMetric("geometry.packMaterial", false),
-            new StageMetric("geometry.snapshotAppend", true),
-            new StageMetric("frame.prepareTlas", true),
-            new StageMetric("frame.recordTlas", true),
-            new StageMetric("frame.prepareLighting", true),
-            new StageMetric("frame.prepareTrace", true),
-            new StageMetric("frame.skyLut", true),
-            new StageMetric("frame.tracePrimary", true),
-            new StageMetric("frame.traceIndirect", true),
-            new StageMetric("frame.exposure", true),
-            new StageMetric("frame.dlssRr", true),
-            new StageMetric("frame.nrd", true),
-            new StageMetric("frame.rawCopy", true),
-            new StageMetric("frame.upscale", true),
-            new StageMetric("frame.postChain", true),
-            new StageMetric("frame.displayMap", true),
-            new StageMetric("frame.debugPresent", true),
-            new StageMetric("frame.copyOutput", true)), List.of(
-            "geometryGroupsSubmitted", "geometryPutsSubmitted", "geometryTrianglesSubmitted",
-            "geometryGroupsAccepted", "geometryPutsAccepted",
-            "geometryGroupRevisionsCoalesced", "geometryPutRevisionsCoalesced", "geometryPutsStarted",
-            "geometryBlasCandidates", "geometryGroupsPublished", "geometryPutsPublished",
-            "geometryInstancesVisible", "geometryPendingGroups", "geometryRunningGroups",
-            "geometryTerminalGroups", "geometryPublishedResidents", "geometryPublishedPlacements",
-            "geometryPlacementFreshnessApplied"));
+            new StageMetric("geometry.providerCollect"),
+            new StageMetric("geometry.providerConvert"),
+            new StageMetric("geometry.schedulerSubmit"),
+            new StageMetric("geometry.schedulerValidate"),
+            new StageMetric("geometry.publishTerminal"),
+            new StageMetric("geometry.prepareCandidates"),
+            new StageMetric("geometry.packMaterial"),
+            new StageMetric("geometry.snapshotAppend"),
+            new StageMetric("frame.prepareTlas"),
+            new StageMetric("frame.recordTlas"),
+            new StageMetric("frame.prepareLighting"),
+            new StageMetric("frame.prepareTrace"),
+            new StageMetric("frame.skyLut"),
+            new StageMetric("frame.tracePrimary"),
+            new StageMetric("frame.traceIndirect"),
+            new StageMetric("frame.exposure"),
+            new StageMetric("frame.dlssRr"),
+            new StageMetric("frame.nrd"),
+            new StageMetric("frame.rawCopy"),
+            new StageMetric("frame.upscale"),
+            new StageMetric("frame.postChain"),
+            new StageMetric("frame.displayMap"),
+            new StageMetric("frame.debugPresent"),
+            new StageMetric("frame.copyOutput")), List.of());
 
-    // Per-frame GC deltas help distinguish JVM pauses from uninstrumented render work when a hitch's
-    // unaccounted time is large. Minecraft appends its producer metrics during bootstrap.
-    private final OutputLocation output = new OutputLocation(defaultOutputDirectory());
-    private final Profile frame = new Profile("frame", RENDERER_FRAME_METRICS, true, output);
     private volatile long frameSerial;
+    private boolean renderFrameStarted;
+    private final Profile frame = new Profile("frame", RENDERER_FRAME_METRICS,
+            () -> renderFrameStarted ? frameSerial : frameSerial + 1L);
 
-    /** Monotonic identifier for the frame envelope currently collecting producer and renderer work. */
-    public long frameSerial() {
-        return frameSerial;
-    }
-
-    /** Advance the serial once at the Minecraft render-frame boundary. */
-    public void beginRenderFrame() {
-        frameSerial++;
-    }
-
-    private static final List<GarbageCollectorMXBean> GC_BEANS = ManagementFactory.getGarbageCollectorMXBeans();
-
-    private static long gcCollections() {
-        long total = 0;
-        for (GarbageCollectorMXBean bean : GC_BEANS) {
-            long count = bean.getCollectionCount();
-            if (count > 0) {
-                total += count;
-            }
-        }
-        return total;
-    }
-
-    private static long gcMillis() {
-        long total = 0;
-        for (GarbageCollectorMXBean bean : GC_BEANS) {
-            long time = bean.getCollectionTime();
-            if (time > 0) {
-                total += time;
-            }
-        }
-        return total;
-    }
-
-    RtFrameStats() {
-    }
-
-    /** Append Minecraft frame metrics before the frame profile is first used. */
-    public void configureFrameMetrics(MetricSchema metrics) {
-        frame.configureMetrics(metrics);
-    }
-
-    public Profile frame() {
-        return frame;
-    }
-
-    static MetricSchema rendererFrameMetrics() {
-        return RENDERER_FRAME_METRICS;
-    }
-
-    /**
-     * Select the directory profiles lazily create their CSV files in. Bootstrap must call this before any
-     * profile attempts to open its writer; changing the directory after that point is an error.
-     */
-    public void configureOutputDirectory(Path directory) {
-        output.configure(directory);
-    }
-
-    static Path defaultOutputDirectory() {
-        return Path.of(System.getProperty("user.dir", "."), "rt-frame-stats")
-                .toAbsolutePath().normalize();
-    }
-
-    static final class OutputLocation {
-        private Path directory;
-        private boolean writerInitializationAttempted;
-
-        OutputLocation(Path directory) {
-            this.directory = normalize(directory);
-        }
-
-        synchronized void configure(Path directory) {
-            if (writerInitializationAttempted) {
-                throw new IllegalStateException("RtFrameStats output directory is fixed after writer initialization");
-            }
-            this.directory = normalize(directory);
-        }
-
-        synchronized Path beginWriterInitialization() {
-            writerInitializationAttempted = true;
-            return directory;
-        }
-
-        synchronized Path directory() {
-            return directory;
-        }
-
-        private static Path normalize(Path directory) {
-            return Objects.requireNonNull(directory, "directory").toAbsolutePath().normalize();
-        }
-    }
+    public long frameSerial() { return frameSerial; }
+    public void beginRenderFrame() { frameSerial++; renderFrameStarted = true; }
+    public void endFrame() { frame.end(); renderFrameStarted = false; }
+    RtFrameStats() { }
+    public void configureFrameMetrics(MetricSchema metrics) { frame.configureMetrics(metrics); }
+    public Profile frame() { return frame; }
+    public RtTelemetry.FrameSnapshot latestFrame() { return frame.latest; }
+    static MetricSchema rendererFrameMetrics() { return RENDERER_FRAME_METRICS; }
 
     public static boolean enabled() {
-        return CausticaConfig.get(RendererOptions.Rt.FrameStats.ENABLED);
+        return FRAME_EVENT.isEnabled() || STAGE_EVENT.isEnabled() || COUNTER_EVENT.isEnabled();
     }
 
-    /** Renderer-internal scope alias used by instrumentation inside the RT implementation. */
     public interface Scope extends RtTelemetry.Scope {
         Scope NOOP = () -> { };
     }
 
-    /** A timed render frame: per-stage nanos + named counters, plus a rolling-median hitch log. */
+    /** Frame counters are accumulated on the host render thread; stages retain every invocation. */
     public static final class Profile implements Frame {
         private final String name;
         private final MetricSchema baseMetrics;
-        private final boolean trackGc;
-        private final OutputLocation output;
-        private MetricSchema metrics;
-        private String[] stageNames;
+        private final LongSupplier frameSerial;
         private String[] counterNames;
         private Map<String, Integer> stageIndices;
         private Map<String, Integer> counterIndices;
-        private long[] stageNanos;
         private long[] counters;
-        private final long[] history = new long[MEDIAN_WINDOW];
-        private int historyCount;
-        private int historyPos;
         private long frameStart;
-        private long frameIndex;
-        private long gcCountStart;
-        private long gcMsStart;
-        private PrintWriter csv;
-        private boolean csvOpenAttempted;
+        private volatile RtTelemetry.FrameSnapshot latest;
         private boolean active;
         private boolean metricsConfigured;
-        private volatile boolean metricsUsed;
+        private boolean metricsUsed;
 
-        Profile(String name, MetricSchema metrics, boolean trackGc) {
-            this(name, metrics, trackGc, new OutputLocation(defaultOutputDirectory()));
-        }
-
-        private Profile(String name, MetricSchema metrics, boolean trackGc, OutputLocation output) {
+        Profile(String name, MetricSchema metrics, LongSupplier frameSerial) {
             this.name = name;
-            this.baseMetrics = Objects.requireNonNull(metrics, "metrics");
-            this.trackGc = trackGc;
-            this.output = Objects.requireNonNull(output, "output");
+            this.baseMetrics = Objects.requireNonNull(metrics);
+            this.frameSerial = frameSerial;
             applyMetrics(metrics);
         }
 
         synchronized void configureMetrics(MetricSchema extension) {
-            if (metricsUsed) {
-                throw new IllegalStateException("RtFrameStats metrics are fixed after first profile use");
-            }
-            if (metricsConfigured) {
-                throw new IllegalStateException("RtFrameStats metrics are already configured");
-            }
+            if (metricsUsed) throw new IllegalStateException("Metrics are fixed after first profile use");
+            if (metricsConfigured) throw new IllegalStateException("Metrics are already configured");
             applyMetrics(baseMetrics.append(extension));
             metricsConfigured = true;
         }
 
-        private void applyMetrics(MetricSchema configured) {
-            this.metrics = configured;
-            this.stageNames = configured.stages().stream().map(StageMetric::name).toArray(String[]::new);
-            this.counterNames = configured.counters().toArray(String[]::new);
-            this.stageNanos = new long[stageNames.length];
-            this.counters = new long[counterNames.length];
-            this.stageIndices = index(stageNames);
-            this.counterIndices = index(counterNames);
+        private void applyMetrics(MetricSchema metrics) {
+            stageIndices = index(metrics.stages().stream().map(StageMetric::name).toArray(String[]::new));
+            counterNames = metrics.counters().toArray(String[]::new);
+            counterIndices = index(counterNames);
+            counters = new long[counterNames.length];
         }
 
-        /** Start timing a new frame; clears this frame's stage/counter accumulators. */
         public void begin() {
             metricsUsed = true;
-            active = false;
-            if (!enabled()) {
-                return;
-            }
-            active = true;
+            active = enabled();
+            if (!active) return;
             frameStart = System.nanoTime();
-            Arrays.fill(stageNanos, 0L);
             Arrays.fill(counters, 0L);
-            if (trackGc) {
-                gcCountStart = gcCollections();
-                gcMsStart = gcMillis();
-            }
         }
 
-        /** Start a frame only when one is not already collecting RT tick details for this render. */
-        public void beginIfInactive() {
-            if (!active) {
-                begin();
-            }
-        }
+        public void beginIfInactive() { if (!active) begin(); }
 
-        /** Time one named stage of the current frame; close the returned scope when the stage completes. */
         public Scope stage(String stageName) {
-            if (!enabled() || !active) {
-                return Scope.NOOP;
-            }
-            int idx = indexOf(stageIndices, stageName);
-            long start = System.nanoTime();
-            return () -> stageNanos[idx] += System.nanoTime() - start;
+            long started = startStage();
+            return started == 0L ? Scope.NOOP : () -> endStage(stageName, started);
         }
 
-        /**
-         * Start a hot-path stage without allocating a {@link Scope}. Returns zero while profiling is inactive;
-         * pass the value unchanged to {@link #endStage(String, long)}.
-         */
         public long startStage() {
-            return enabled() && active ? System.nanoTime() : 0L;
+            return active && STAGE_EVENT.isEnabled() ? System.nanoTime() : 0L;
         }
 
-        /** Finish a stage started by {@link #startStage()}. */
-        public void endStage(String stageName, long startNanos) {
-            if (startNanos == 0L) {
-                return;
-            }
-            stageNanos[indexOf(stageIndices, stageName)] += System.nanoTime() - startNanos;
+        public void endStage(String stageName, long startedNanos) {
+            if (startedNanos == 0L) return;
+            indexOf(stageIndices, stageName);
+            CpuStageEvent event = new CpuStageEvent();
+            event.frameId = frameSerial.getAsLong();
+            event.stage = stageName;
+            event.startedNanos = startedNanos;
+            event.elapsedNanos = System.nanoTime() - startedNanos;
+            event.commit();
         }
 
-        /** Add to a named counter for the current frame. */
         public void count(String counterName, long delta) {
-            if (!enabled() || !active || delta == 0) {
-                return;
-            }
-            counters[indexOf(counterIndices, counterName)] += delta;
+            if (active) counters[indexOf(counterIndices, counterName)] += delta;
         }
-
-        /** Replace a current-frame counter, typically for an instantaneous queue depth. */
         public void set(String counterName, long value) {
-            if (!enabled() || !active) {
-                return;
-            }
-            counters[indexOf(counterIndices, counterName)] = value;
+            if (active) counters[indexOf(counterIndices, counterName)] = value;
         }
+        public long counterValue(String counterName) { return counters[indexOf(counterIndices, counterName)]; }
 
-        /** Retain the largest value observed for a current-frame counter. */
-        public void max(String counterName, long value) {
-            if (!enabled() || !active) {
-                return;
-            }
-            int index = indexOf(counterIndices, counterName);
-            counters[index] = Math.max(counters[index], value);
-        }
-
-        /** Returns the current frame's accumulated value for a configured counter. */
-        public long counterValue(String counterName) {
-            return counters[indexOf(counterIndices, counterName)];
-        }
-
-        /** Finish the current frame: record it into the rolling median and log a hitch line if it's slow. */
         public void end() {
-            if (!active) {
-                return;
-            }
+            if (!active) return;
             active = false;
-            if (!enabled()) {
-                return;
-            }
-            long total = System.nanoTime() - frameStart;
-            long gcCount = trackGc ? gcCollections() - gcCountStart : 0;
-            long gcMs = trackGc ? gcMillis() - gcMsStart : 0;
-            long median = median();
-            history[historyPos] = total;
-            historyPos = (historyPos + 1) % MEDIAN_WINDOW;
-            if (historyCount < MEDIAN_WINDOW) {
-                historyCount++;
-            }
-            boolean hitch = median > 0 && total > (long) (median * HITCH_MULTIPLIER);
-            writeCsvRow(total, median, hitch, gcCount, gcMs);
-            if (hitch) {
-                logHitch(total, median, gcCount, gcMs);
-            }
-        }
-
-        private long median() {
-            if (historyCount == 0) {
-                return 0L;
-            }
-            long[] sorted = Arrays.copyOf(history, historyCount);
-            Arrays.sort(sorted);
-            return sorted[historyCount / 2];
-        }
-
-        private void writeCsvRow(long total, long median, boolean hitch, long gcCount, long gcMs) {
-            ensureCsv();
-            if (csv == null) {
-                return;
-            }
-            StringBuilder row = new StringBuilder();
-            row.append(frameIndex++).append(',').append(ms(total)).append(',').append(ms(median)).append(',').append(hitch ? 1 : 0);
-            for (long stageNano : stageNanos) {
-                row.append(',').append(ms(stageNano));
-            }
-            for (long counter : counters) {
-                row.append(',').append(counter);
-            }
-            if (trackGc) {
-                row.append(',').append(gcCount).append(',').append(gcMs);
-            }
-            csv.println(row);
-            csv.flush();
-        }
-
-        /** Opens (or gives up on) this profile's CSV file at most once per session. */
-        private void ensureCsv() {
-            if (csvOpenAttempted) {
-                return;
-            }
-            csvOpenAttempted = true;
-            Path dir = output.beginWriterInitialization();
-            Path file = dir.resolve(name + ".csv");
-            try {
-                Files.createDirectories(dir);
-                csv = new PrintWriter(new BufferedWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8)));
-                StringBuilder header = new StringBuilder("frame,totalMs,medianMs,hitch");
-                for (String stageName : stageNames) {
-                    header.append(',').append(stageName).append("Ms");
+            long frameId = frameSerial.getAsLong();
+            FrameEvent event = new FrameEvent();
+            event.frameId = frameId;
+            event.profile = name;
+            event.startedNanos = frameStart;
+            event.elapsedNanos = System.nanoTime() - frameStart;
+            event.commit();
+            Map<String, Long> values = new HashMap<>();
+            for (int i = 0; i < counterNames.length; i++) values.put(counterNames[i], counters[i]);
+            latest = new RtTelemetry.FrameSnapshot(frameId, frameStart, event.elapsedNanos, Map.copyOf(values));
+            if (COUNTER_EVENT.isEnabled()) {
+                for (int i = 0; i < counterNames.length; i++) {
+                    FrameCounterEvent counter = new FrameCounterEvent();
+                    counter.frameId = frameId;
+                    counter.counter = counterNames[i];
+                    counter.value = counters[i];
+                    counter.commit();
                 }
-                for (String counterName : counterNames) {
-                    header.append(',').append(counterName);
-                }
-                if (trackGc) {
-                    header.append(",gcCount,gcPauseMs");
-                }
-                csv.println(header);
-                csv.flush();
-            } catch (IOException e) {
-                LOGGER.warn("RtFrameStats: failed to open CSV {} for profile {}: {}", file, name, e.toString());
-                csv = null;
             }
-        }
-
-        private void logHitch(long total, long median, long gcCount, long gcMs) {
-            StringBuilder sb = new StringBuilder("RT hitch [").append(name).append("] ")
-                    .append(ms(total)).append("ms (median ").append(ms(median)).append("ms):");
-            for (int i = 0; i < stageNames.length; i++) {
-                sb.append(' ').append(stageNames[i]).append('=').append(ms(stageNanos[i])).append("ms");
-            }
-            // Time inside this frame not covered by any stage timer — a big value here with gcPause>0 means
-            // a GC pause landed mid-frame; with gcPause=0 it points at an uninstrumented stage.
-            sb.append(" unaccounted=")
-                    .append(ms(Math.max(0, total - metrics.accountedNanos(stageNanos)))).append("ms");
-            for (int i = 0; i < counterNames.length; i++) {
-                sb.append(' ').append(counterNames[i]).append('=').append(counters[i]);
-            }
-            if (trackGc) {
-                sb.append(" gcCount=").append(gcCount).append(" gcPauseMs=").append(gcMs);
-            }
-            LOGGER.info(sb.toString());
-        }
-
-        private static double ms(long nanos) {
-            return Math.round(nanos / 1000.0) / 1000.0;
         }
 
         private static Map<String, Integer> index(String[] names) {
-            Map<String, Integer> result = new HashMap<>(names.length * 2);
-            for (int i = 0; i < names.length; i++) {
-                if (result.put(names[i], i) != null) {
-                    throw new IllegalArgumentException("Duplicate RtFrameStats name: " + names[i]);
-                }
-            }
+            Map<String, Integer> result = new HashMap<>();
+            for (int i = 0; i < names.length; i++) result.put(names[i], i);
             return result;
         }
-
         private static int indexOf(Map<String, Integer> indices, String name) {
             Integer index = indices.get(name);
-            if (index == null) {
-                throw new IllegalArgumentException("Unknown RtFrameStats name: " + name);
-            }
+            if (index == null) throw new IllegalArgumentException("Unknown telemetry metric: " + name);
             return index;
         }
+    }
+
+    @Name("dev.comfyfluffy.caustica.Frame")
+    @Label("CPU frame envelope") @Category({"Caustica", "Frame"}) @StackTrace(false) @Enabled(false)
+    static final class FrameEvent extends Event {
+        long frameId;
+        String profile;
+        @Label("System.nanoTime start") long startedNanos;
+        @Timespan(Timespan.NANOSECONDS) long elapsedNanos;
+    }
+
+    @Name("dev.comfyfluffy.caustica.CpuStage")
+    @Label("CPU stage elapsed time") @Category({"Caustica", "Frame"}) @StackTrace(false) @Enabled(false)
+    static final class CpuStageEvent extends Event {
+        long frameId;
+        String stage;
+        @Label("System.nanoTime start") long startedNanos;
+        @Timespan(Timespan.NANOSECONDS) long elapsedNanos;
+    }
+
+    @Name("dev.comfyfluffy.caustica.FrameCounter")
+    @Label("Frame counter") @Category({"Caustica", "Frame"}) @StackTrace(false) @Enabled(false)
+    static final class FrameCounterEvent extends Event {
+        long frameId;
+        String counter;
+        long value;
     }
 }

@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.LongConsumer;
@@ -35,12 +35,10 @@ public interface RtTelemetry {
         void count(String name, long delta);
 
         void set(String name, long value);
-
-        void max(String name, long value);
     }
 
-    /** One timed stage and whether its duration belongs in the frame's accounted-time sum. */
-    record StageMetric(String name, boolean contributesToAccountedTime) {
+    /** One timed stage recorded under its stable name. */
+    record StageMetric(String name) {
         public StageMetric {
             requireMetricName(name);
         }
@@ -76,20 +74,12 @@ public interface RtTelemetry {
             combinedCounters.addAll(extension.counters);
             return new MetricSchema(combinedStages, combinedCounters);
         }
-
-        public long accountedNanos(long[] stageNanos) {
-            if (stageNanos.length != stages.size()) {
-                throw new IllegalArgumentException("stage duration count does not match metric schema");
-            }
-            long total = 0L;
-            for (int i = 0; i < stages.size(); i++) {
-                if (stages.get(i).contributesToAccountedTime()) {
-                    total += stageNanos[i];
-                }
-            }
-            return total;
-        }
     }
+
+    /** Last completed recorded frame; timestamps use System.nanoTime and durations are nanoseconds. */
+    record FrameSnapshot(long frameId, long startedNanos, long elapsedNanos, Map<String, Long> counters) { }
+
+    default FrameSnapshot latestFrame() { return null; }
 
     boolean enabled();
 
@@ -103,13 +93,19 @@ public interface RtTelemetry {
 
     void endFrame();
 
-    void configure(Path outputDirectory, MetricSchema minecraftMetrics);
+    void configure(MetricSchema minecraftMetrics);
 
     ExtractionStamp extraction(GeometrySource source, int geometryCount);
 
     void published(ExtractionStamp stamp);
 
     void afterPublicationVisible(LongConsumer action);
+
+    long publicationCutoff();
+
+    void frameAssembled(long publicationCutoff);
+
+    void resetPublications();
 
     private static void requireMetricName(String name) {
         Objects.requireNonNull(name, "metric name");

@@ -82,6 +82,62 @@ final class RtFrameCapture {
         }
     }
 
+    static void exportRaw(VulkanDeviceContext context, GpuImage image, Path output,
+                          java.util.Map<String, String> metadata) throws IOException {
+        int channels = switch (image.format()) {
+            case VK10.VK_FORMAT_R16G16B16A16_SFLOAT -> 4;
+            case VK10.VK_FORMAT_R16G16_SFLOAT -> 2;
+            case VK10.VK_FORMAT_R16_SFLOAT, VK10.VK_FORMAT_R32_SFLOAT -> 1;
+            default -> throw new IllegalArgumentException("Unsupported diagnostic image format: " + image.format());
+        };
+        boolean fullFloat = image.format() == VK10.VK_FORMAT_R32_SFLOAT;
+        int sampleBytes = fullFloat ? Float.BYTES : Short.BYTES;
+        int pixels = Math.multiplyExact(image.width(), image.height());
+        context.waitIdle();
+        GpuBuffer readback = context.createReadbackBuffer((long) pixels * channels * sampleBytes,
+                "diagnostic image readback");
+        try {
+            context.submitSync(cmd -> {
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack);
+                    barrier.get(0).sType$Default()
+                            .srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                            .srcAccessMask(VK13.VK_ACCESS_2_MEMORY_WRITE_BIT)
+                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
+                            .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT);
+                    VK14.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack).sType$Default()
+                            .pMemoryBarriers(barrier));
+                    VkBufferImageCopy2.Buffer copy = VkBufferImageCopy2.calloc(1, stack);
+                    copy.get(0).sType$Default();
+                    copy.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+                    copy.get(0).imageExtent().set(image.width(), image.height(), 1);
+                    VK13.vkCmdCopyImageToBuffer2(cmd, VkCopyImageToBufferInfo2.calloc(stack).sType$Default()
+                            .srcImage(image.image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                            .dstBuffer(readback.handle()).pRegions(copy));
+                    barrier.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
+                            .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_HOST_BIT)
+                            .dstAccessMask(VK13.VK_ACCESS_2_HOST_READ_BIT);
+                    VK14.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack).sType$Default()
+                            .pMemoryBarriers(barrier));
+                }
+            });
+            readback.invalidate();
+            float[] rgba = new float[Math.multiplyExact(pixels, 4)];
+            for (int pixel = 0; pixel < pixels; pixel++) {
+                rgba[pixel * 4 + 3] = 1;
+                for (int channel = 0; channel < channels; channel++) {
+                    long address = readback.mapped() + ((long) pixel * channels + channel) * sampleBytes;
+                    rgba[pixel * 4 + channel] = fullFloat ? MemoryUtil.memGetFloat(address)
+                            : Float.float16ToFloat(MemoryUtil.memGetShort(address));
+                }
+            }
+            RtOpenExrWriter.writeRaw(output, image.width(), image.height(), rgba, metadata);
+        } finally {
+            readback.destroy();
+        }
+    }
+
     private static void recordExrReadback(VulkanDeviceContext ctx, VkCommandBuffer cmd,
             GpuImage reconstructedColor, TraceExtent extent, GpuImage exposureImage,
             GpuBuffer readback, long exposureOffset) {

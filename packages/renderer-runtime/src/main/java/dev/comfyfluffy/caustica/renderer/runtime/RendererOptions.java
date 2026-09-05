@@ -31,7 +31,7 @@ public final class RendererOptions {
                 Rt.Exposure.LOW_PERCENTILE, Rt.Exposure.HIGH_PERCENTILE, Rt.Exposure.STRIDE,
                 Rt.Exposure.CENTER_WEIGHT_SIGMA, Rt.Exposure.CENTER_WEIGHT_FLOOR,
                 Rt.Exposure.SKY_WEIGHT_CAP, Rt.Exposure.EMISSIVE_WEIGHT_CAP, Rt.Exposure.PRE_EXPOSURE,
-                Rt.Tonemap.GAMMA, Rt.FrameStats.ENABLED, Rt.Screenshots.EXR_ENABLED,
+                Rt.Tonemap.GAMMA, Rt.Screenshots.EXR_ENABLED,
                 Rt.Hdr.ENABLED, Rt.Hdr.UI_NITS, Rt.Hdr.PEAK_NITS);
     }
 
@@ -101,10 +101,7 @@ public final class RendererOptions {
             public static final Option<Float> GAMMA = clampedFloat("caustica.rt.tonemap.gamma", "tonemap.gamma", 1.0f, 0.1f, 5.0f) .inGroup("look").sliderRange(0.5f, 1.5f);
         }
 
-        public static final class FrameStats {
-            private FrameStats() { }
-            public static final Option<Boolean> ENABLED = bool("caustica.rt.frameStats", "frame-stats.enabled", false).inGroup("debug");
-        }
+
 
         public static final class Screenshots {
             private Screenshots() { }

@@ -304,6 +304,11 @@ public final class MinecraftRtRuntime {
                 && session.renderer.exportLatestResidualExposureExr(outputPath);
     }
 
+    public RtFrameRenderer.DebugImageCapture exportLatestDebugImage(String name, Path outputPath) throws IOException {
+        return frameActive && session != null && session.renderer != null
+                ? session.renderer.exportLatestDebugImage(name, outputPath) : null;
+    }
+
     public boolean requiresSourceWorldFallback() {
         return session == null || session.requiresSourceFallback();
     }
@@ -753,6 +758,7 @@ public final class MinecraftRtRuntime {
                 world.close();
                 world = null;
             }
+            telemetry.resetPublications();
             if (context != null) context.drainAndWaitIdle();
             if (renderer != null) {
                 renderer.destroy();

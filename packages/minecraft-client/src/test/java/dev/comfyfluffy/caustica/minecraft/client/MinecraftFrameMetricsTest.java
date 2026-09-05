@@ -11,31 +11,11 @@ final class MinecraftFrameMetricsTest {
         MetricSchema schema = MinecraftFrameMetrics.schema();
         assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("terrain.lightScenePublish")));
         assertTrue(schema.counters().contains("terrainMaterialEpochRejects"));
-        assertTrue(schema.counters().contains("terrainReadyExtractionToVisibleFramesMax"));
-        assertTrue(schema.counters().contains("terrainPendingToSubmitMicrosMax"));
-        assertTrue(schema.counters().contains("terrainSubmitToPublicationMicrosMax"));
-        assertTrue(schema.counters().contains("entityExtractionToVisibleFramesMax"));
-        assertTrue(schema.counters().contains("entityPlacementExtractionToVisibleFramesMax"));
         assertTrue(schema.counters().contains("entityPlacementFreshnessEligible"));
         assertTrue(schema.counters().contains("entityPlacementInitialSubmissions"));
         assertTrue(schema.counters().contains("blockEntityGeometrySubmissions"));
         assertTrue(schema.counters().contains("blockEntityGeometryDeferred"));
-        assertTrue(schema.counters().contains("entityMeshRevisionsSkippedBetweenVisibility"));
-        assertTrue(schema.counters().contains("entityMeshVisibilityIntervalFramesMax"));
-        assertTrue(schema.counters().contains("entityMeshInitialUnavailableFramesMax"));
-        assertTrue(schema.counters().contains("entityMeshPriorRevisionInterveningFramesAtReplacementMax"));
         assertTrue(schema.counters().contains("entitiesCaptured"));
-    }
-
-    @Test
-    void nestedEntityCaptureDetailsDoNotContributeToAccountedTime() {
-        MetricSchema schema = MinecraftFrameMetrics.schema();
-        assertTrue(schema.stages().stream()
-                .filter(stage -> stage.name().equals("entity.capture"))
-                .allMatch(stage -> stage.contributesToAccountedTime()));
-        assertTrue(schema.stages().stream()
-                .filter(stage -> stage.name().startsWith("entity.capture."))
-                .noneMatch(stage -> stage.contributesToAccountedTime()));
     }
 
 }

@@ -99,7 +99,38 @@ final class RtOpenExrWriter {
         }
     }
 
+    /** Writes unmodified diagnostic samples as FLOAT channels; missing channels are supplied by the caller. */
+    static void writeRaw(Path output, int width, int height, float[] rgba,
+                         java.util.Map<String, String> metadata) throws IOException {
+        if (rgba.length != Math.multiplyExact(Math.multiplyExact(width, height), 4)) {
+            throw new IllegalArgumentException("Invalid diagnostic image sample count");
+        }
+        byte[] header = header(width, height, null, metadata);
+        long rowBytes = Math.multiplyExact((long) width, 16L);
+        long first = header.length + (long) height * 8L;
+        Files.createDirectories(output.toAbsolutePath().getParent());
+        try (OutputStream stream = new BufferedOutputStream(Files.newOutputStream(output), 1 << 20)) {
+            stream.write(header);
+            for (int y = 0; y < height; y++) writeLongLe(stream, first + y * (rowBytes + 8));
+            for (int y = 0; y < height; y++) {
+                writeIntLe(stream, y);
+                writeIntLe(stream, Math.toIntExact(rowBytes));
+                for (int component : CHANNEL_COMPONENT) {
+                    int source = ((height - 1 - y) * width * 4) + component;
+                    for (int x = 0; x < width; x++, source += 4) {
+                        writeIntLe(stream, Float.floatToRawIntBits(rgba[source]));
+                    }
+                }
+            }
+        }
+    }
+
     private static byte[] header(int width, int height, Metadata metadata) throws IOException {
+        return header(width, height, metadata, null);
+    }
+
+    private static byte[] header(int width, int height, Metadata metadata,
+                                 java.util.Map<String, String> rawMetadata) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(1024);
         writeIntLe(bytes, EXR_MAGIC);
         writeIntLe(bytes, EXR_VERSION);
@@ -107,7 +138,7 @@ final class RtOpenExrWriter {
         ByteArrayOutputStream channels = new ByteArrayOutputStream();
         for (String name : CHANNEL_NAMES) {
             writeCString(channels, name);
-            writeIntLe(channels, HALF);
+            writeIntLe(channels, rawMetadata == null ? HALF : 2);
             channels.write(0); // pLinear
             channels.write(0);
             channels.write(0);
@@ -124,6 +155,13 @@ final class RtOpenExrWriter {
         attribute(bytes, "pixelAspectRatio", "float", floats(1.0f));
         attribute(bytes, "screenWindowCenter", "v2f", floats(0.0f, 0.0f));
         attribute(bytes, "screenWindowWidth", "float", floats(1.0f));
+
+        if (rawMetadata != null) {
+            stringAttribute(bytes, "software", "Caustica");
+            for (var entry : rawMetadata.entrySet()) stringAttribute(bytes, entry.getKey(), entry.getValue());
+            bytes.write(0);
+            return bytes.toByteArray();
+        }
 
         // ACEScg/AP1 primaries and ACES white (D60). This is the standard EXR chromaticities attribute,
         // so color-managed applications do not have to infer the working space from the filename.
