@@ -119,7 +119,8 @@ uint neeAtSampleGlobal(NeeAtState state, float randomValue) {
     return proxies[min(uint(randomValue * float(total)), total - 1u)];
 }
 
-uint neeAtSampleLocal(NeeAtState state, uint2 pixel, float randomValue) {
+uint neeAtSampleLocal(NeeAtState state, uint2 pixel, float randomValue, out float pdf) {
+    pdf = 0.0;
     ConstPtr<uint2> entries = (ConstPtr<uint2>)state.localDistributionAddress;
     uint base = neeAtTileIndex(state, pixel) * state.localSlotCount;
     uint total = entries[base + state.localSlotCount - 1u].y;
@@ -132,7 +133,12 @@ uint neeAtSampleLocal(NeeAtState state, uint2 pixel, float randomValue) {
         if (float(entries[base + middle].y) > target) high = middle;
         else low = middle + 1u;
     }
-    return low < state.localSlotCount ? entries[base + low].x : NEE_AT_NO_LIGHT;
+    if (low >= state.localSlotCount) return NEE_AT_NO_LIGHT;
+    uint2 entry = entries[base + low];
+    uint previous = low == 0u ? 0u : entries[base + low - 1u].y;
+    // Each light occupies one slot, so this CDF interval is also its local PDF numerator.
+    pdf = float(entry.y - previous) / float(total);
+    return entry.x;
 }
 
 DirectLightSample sampleRetainedLightIndex(NeeAtState state, uint lightIndex,
@@ -262,13 +268,22 @@ public DirectLightSample sampleRetainedLight(WorldBindingRoots roots, float3 pos
     uint globalDrawCount = candidateCount
             - (localAvailable ? neeAtLocalCandidateCount(state, candidateCount) : 0u);
     bool drawLocal = candidate >= globalDrawCount;
+    float sampledLocalPdf = 0.0;
     uint lightIndex = drawLocal
-            ? neeAtSampleLocal(state, pixel, retainedLightRandom(seed))
+            ? neeAtSampleLocal(state, pixel, retainedLightRandom(seed), sampledLocalPdf)
             : neeAtSampleGlobal(state, retainedLightRandom(seed));
     DirectLightSample sample = sampleRetainedLightIndex(state, lightIndex, position,
             retainedLightRandom(seed), retainedLightRandom(seed));
     if (!sample.valid) return sample;
-    sample.proposalPdf = neeAtProposalPdf(state, pixel, lightIndex, candidateCount, allowLocal);
+    if (drawLocal) {
+        uint localDrawCount = candidateCount - globalDrawCount;
+        float localFraction = float(localDrawCount) / float(candidateCount);
+        float globalFraction = float(candidateCount - localDrawCount) / float(candidateCount);
+        sample.proposalPdf = globalFraction * neeAtGlobalPdf(state, lightIndex)
+                + localFraction * sampledLocalPdf;
+    } else {
+        sample.proposalPdf = neeAtProposalPdf(state, pixel, lightIndex, candidateCount, allowLocal);
+    }
     if (sample.proposalPdf <= 0.0) return invalidDirectLight();
     return sample;
 }
