@@ -12,11 +12,11 @@ final class RtTerrainPublicationBackpressureTest {
         var terrain = published(1, 2);
         terrain.rebuild(List.of(1L, 2L));
         terrain.complete(terrain.sections.get(1L).request, "new A");
-        assertTrue(terrain.ready(8, section -> section.key).isEmpty());
+        assertTrue(terrain.ready(8, section -> section.key, request -> true).isEmpty());
         assertTrue(terrain.sections.get(1L).ready);
         assertTrue(terrain.sections.get(2L).ready);
         terrain.complete(terrain.sections.get(2L).request, "new B");
-        var ready = terrain.ready(8, section -> section.key);
+        var ready = terrain.ready(8, section -> section.key, request -> true);
         assertEquals(1, ready.size());
         assertEquals(2, ready.getFirst().requests.size());
         terrain.published(ready);
@@ -32,9 +32,9 @@ final class RtTerrainPublicationBackpressureTest {
         terrain.complete(oldA, "obsolete A");
         terrain.rebuild(List.of(2L, 3L));
         assertFalse(terrain.complete(oldA, "late A"));
-        assertTrue(terrain.ready(8, section -> section.key).isEmpty());
+        assertTrue(terrain.ready(8, section -> section.key, request -> true).isEmpty());
         for (long key : new long[] {1, 2, 3}) terrain.complete(terrain.sections.get(key).request, "latest");
-        assertEquals(3, terrain.ready(8, section -> section.key).getFirst().requests.size());
+        assertEquals(3, terrain.ready(8, section -> section.key, request -> true).getFirst().requests.size());
     }
 
     @Test
@@ -43,7 +43,7 @@ final class RtTerrainPublicationBackpressureTest {
         terrain.rebuild(List.of(1L, 2L));
         terrain.rebuild(List.of(3L));
         terrain.complete(terrain.sections.get(3L).request, "unrelated");
-        assertEquals(3L, terrain.ready(8, section -> section.key).getFirst().requests.getFirst().section.key);
+        assertEquals(3L, terrain.ready(8, section -> section.key, request -> true).getFirst().requests.getFirst().section.key);
     }
 
     @Test
@@ -53,9 +53,9 @@ final class RtTerrainPublicationBackpressureTest {
         var removedBuild = terrain.sections.get(1L).request;
         terrain.remove(1L);
         assertFalse(terrain.complete(removedBuild, "late"));
-        assertTrue(terrain.ready(8, section -> section.key).isEmpty());
+        assertTrue(terrain.ready(8, section -> section.key, request -> true).isEmpty());
         terrain.complete(terrain.sections.get(2L).request, "remaining");
-        var ready = terrain.ready(8, section -> section.key);
+        var ready = terrain.ready(8, section -> section.key, request -> true);
         assertEquals(2, ready.getFirst().requests.size());
         terrain.published(ready);
         assertFalse(terrain.sections.containsKey(1L));
@@ -67,7 +67,7 @@ final class RtTerrainPublicationBackpressureTest {
         var terrain = published(1, 2, 3);
         terrain.rebuild(List.of(1L, 2L, 3L));
         for (long key : new long[] {1, 2, 3}) terrain.complete(terrain.sections.get(key).request, "new");
-        assertEquals(3, terrain.ready(1, section -> section.key).getFirst().requests.size());
+        assertEquals(3, terrain.ready(1, section -> section.key, request -> true).getFirst().requests.size());
     }
 
     @Test
@@ -76,7 +76,7 @@ final class RtTerrainPublicationBackpressureTest {
         terrain.want(1L);
         terrain.complete(terrain.sections.get(1L).request, null);
         assertFalse(terrain.sections.get(1L).ready);
-        terrain.published(terrain.ready(8, section -> section.key));
+        terrain.published(terrain.ready(8, section -> section.key, request -> true));
         assertTrue(terrain.sections.get(1L).ready);
     }
 
@@ -88,7 +88,7 @@ final class RtTerrainPublicationBackpressureTest {
         terrain.clear();
         terrain.want(1L);
         assertFalse(terrain.complete(old, "previous world"));
-        assertTrue(terrain.ready(8, section -> section.key).isEmpty());
+        assertTrue(terrain.ready(8, section -> section.key, request -> true).isEmpty());
     }
 
     @Test
@@ -100,7 +100,7 @@ final class RtTerrainPublicationBackpressureTest {
         terrain.dirty(List.of(1L, 2L));
         terrain.dirty(List.of(2L, 3L));
         terrain.complete(terrain.sections.get(1L).request, "player section");
-        var ready = terrain.ready(8, section -> section.key);
+        var ready = terrain.ready(8, section -> section.key, request -> true);
         assertEquals(1, ready.size());
         assertEquals(1, ready.getFirst().requests.size());
         terrain.published(ready);
@@ -114,9 +114,9 @@ final class RtTerrainPublicationBackpressureTest {
         terrain.want(3L);
         terrain.dirty(List.of(1L, 2L, 3L));
         terrain.complete(terrain.sections.get(1L).request, "new A");
-        assertTrue(terrain.ready(8, section -> section.key).isEmpty());
+        assertTrue(terrain.ready(8, section -> section.key, request -> true).isEmpty());
         terrain.complete(terrain.sections.get(2L).request, "new B");
-        assertEquals(2, terrain.ready(8, section -> section.key).getFirst().requests.size());
+        assertEquals(2, terrain.ready(8, section -> section.key, request -> true).getFirst().requests.size());
     }
 
     @Test
@@ -128,7 +128,7 @@ final class RtTerrainPublicationBackpressureTest {
         }
         terrain.want(1L);
         terrain.complete(terrain.sections.get(1L).request, "player terrain");
-        var admitted = terrain.ready(8, section -> section.key);
+        var admitted = terrain.ready(8, section -> section.key, request -> true);
         assertEquals(1L, admitted.getFirst().requests.getFirst().section.key);
         terrain.published(admitted);
         assertTrue(terrain.sections.get(1L).ready);
@@ -158,9 +158,57 @@ final class RtTerrainPublicationBackpressureTest {
         var terrain = new TerrainUpdates<String>(discarded::add);
         terrain.want(1L);
         terrain.complete(terrain.sections.get(1L).request, "prepared A");
-        terrain.published(terrain.ready(8, section -> section.key));
+        terrain.published(terrain.ready(8, section -> section.key, request -> true));
         terrain.clear();
         assertTrue(discarded.isEmpty());
+    }
+
+    @Test
+    void emptyBacklogDrainsWithoutUsingTheMeshPublicationBudget() {
+        var terrain = new TerrainUpdates<String>();
+        for (long key = 0; key < 10_000; key++) {
+            terrain.want(key);
+            terrain.complete(terrain.sections.get(key).request, null);
+        }
+        for (long key = 10_000; key < 10_010; key++) {
+            terrain.want(key);
+            terrain.complete(terrain.sections.get(key).request, "mesh");
+        }
+        var admitted = terrain.ready(8, section -> section.key, request -> request.result != null);
+        assertEquals(10_008, admitted.size());
+        terrain.published(admitted);
+        assertNull(terrain.sections.get(0L).request);
+        assertNull(terrain.sections.get(10_007L).request);
+        assertNotNull(terrain.sections.get(10_008L).request);
+    }
+
+    @Test
+    void emptyMemberWaitsForItsRealNeighborAndDoesNotConsumeBudget() {
+        var terrain = published(1, 2, 3);
+        terrain.rebuild(List.of(1L, 2L, 3L));
+        terrain.complete(terrain.sections.get(1L).request, null);
+        terrain.complete(terrain.sections.get(2L).request, "mesh A");
+        assertTrue(terrain.ready(1, section -> section.key, request -> request.result != null).isEmpty());
+        terrain.complete(terrain.sections.get(3L).request, "mesh B");
+        var admitted = terrain.ready(1, section -> section.key, request -> request.result != null);
+        assertEquals(1, admitted.size());
+        assertEquals(3, admitted.getFirst().requests.size());
+    }
+
+    @Test
+    void removingAResidentStillCostsBudgetButAbsentSectionsDoNot() {
+        var terrain = published(1, 2, 3);
+        terrain.remove(1L);
+        terrain.remove(2L);
+        terrain.remove(3L);
+        var residents = java.util.Set.of(2L, 3L);
+        var admitted = terrain.ready(1, section -> section.key,
+                request -> residents.contains(request.section.key));
+        assertEquals(2, admitted.size());
+        terrain.published(admitted);
+        assertFalse(terrain.sections.containsKey(1L));
+        assertFalse(terrain.sections.containsKey(2L));
+        assertTrue(terrain.sections.containsKey(3L));
     }
 
     private static TerrainUpdates<String> published(long... keys) {
@@ -169,7 +217,7 @@ final class RtTerrainPublicationBackpressureTest {
             terrain.want(key);
             terrain.complete(terrain.sections.get(key).request, "old");
         }
-        terrain.published(terrain.ready(Integer.MAX_VALUE, section -> section.key));
+        terrain.published(terrain.ready(Integer.MAX_VALUE, section -> section.key, request -> true));
         return terrain;
     }
 }

@@ -442,17 +442,20 @@ public final class RtTerrain {
         if (geometry == null) return;
         int cx = mc.player.getBlockX() >> 4, cy = mc.player.getBlockY() >> 4, cz = mc.player.getBlockZ() >> 4;
         var groups = updates.ready(PUBLICATION_BUDGET, section ->
-                (section.ready ? 0L : 1L << 60) + distance(section.key, cx, cy, cz));
+                (section.ready ? 0L : 1L << 60) + distance(section.key, cx, cy, cz),
+                request -> (request.result != null && request.result.prepared != null)
+                        || geometry.hasSection(request.section.key));
         if (groups.isEmpty()) return;
         var changes = new ArrayList<MinecraftTerrainGeometry.ReadyChange>();
         for (var group : groups) {
             for (var request : group.requests) {
                 Build build = request.result;
-                changes.add(build == null || build.prepared == null
-                        ? new MinecraftTerrainGeometry.Drop(request.section.key) : build.prepared);
+                if (build != null && build.prepared != null) changes.add(build.prepared);
+                else if (geometry.hasSection(request.section.key))
+                    changes.add(new MinecraftTerrainGeometry.Drop(request.section.key));
             }
         }
-        geometry.edit(changes);
+        if (!changes.isEmpty()) geometry.edit(changes);
         for (var group : groups) {
             for (var request : group.requests) {
                 if (request.result != null) {

@@ -8,6 +8,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.util.function.ToLongFunction;
+import java.util.function.Predicate;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -85,41 +86,48 @@ final class TerrainUpdates<T> {
         return true;
     }
 
-    /** Select nearby ready groups without letting a backlog of empty distant sections delay them. */
-    List<Group<T>> ready(int budget, ToLongFunction<Section<T>> priority) {
+    /** Empty no-op groups cost nothing; actual scene changes are budgeted without splitting groups. */
+    List<Group<T>> ready(int budget, ToLongFunction<Section<T>> priority,
+                         Predicate<Request<T>> changesGeometry) {
+        var ready = new ArrayList<Group<T>>();
         var candidates = new PriorityQueue<RankedGroup<T>>(
                 Comparator.comparingLong((RankedGroup<T> candidate) -> candidate.rank).reversed());
         for (Group<T> group : groups) {
             boolean complete = true;
             long rank = Long.MAX_VALUE;
+            int cost = 0;
             for (Request<T> request : group.requests) {
                 if (!request.complete) {
                     complete = false;
                     break;
                 }
                 rank = Math.min(rank, priority.applyAsLong(request.section));
+                if (changesGeometry.test(request)) cost++;
             }
             if (!complete) continue;
-            if (candidates.size() < budget) candidates.add(new RankedGroup<>(group, rank));
+            if (cost == 0) {
+                ready.add(group);
+                continue;
+            }
+            if (candidates.size() < budget) candidates.add(new RankedGroup<>(group, rank, cost));
             else if (rank < candidates.peek().rank) {
                 candidates.poll();
-                candidates.add(new RankedGroup<>(group, rank));
+                candidates.add(new RankedGroup<>(group, rank, cost));
             }
         }
         var nearest = new ArrayList<>(candidates);
         nearest.sort(Comparator.comparingLong(candidate -> candidate.rank));
-        var ready = new ArrayList<Group<T>>();
         int count = 0;
         for (var candidate : nearest) {
-            if (!ready.isEmpty() && count + candidate.group.requests.size() > budget) break;
+            if (count > 0 && count + candidate.cost > budget) break;
             ready.add(candidate.group);
-            count += candidate.group.requests.size();
+            count += candidate.cost;
             if (count >= budget) break;
         }
         return ready;
     }
 
-    private record RankedGroup<T>(Group<T> group, long rank) { }
+    private record RankedGroup<T>(Group<T> group, long rank, int cost) { }
 
     void published(List<Group<T>> published) {
         for (Group<T> group : published) {

@@ -50,8 +50,8 @@ public final class MinecraftProgramResources implements AutoCloseable {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 gpu.descriptorHeap().writer().writeSampler(sampler, 0,
                         VkSamplerCreateInfo.calloc(stack).sType$Default()
-                                .magFilter(VK_FILTER_LINEAR).minFilter(VK_FILTER_LINEAR)
-                                .mipmapMode(VK_SAMPLER_MIPMAP_MODE_LINEAR)
+                                .magFilter(VK_FILTER_NEAREST).minFilter(VK_FILTER_NEAREST)
+                                .mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
                                 .addressModeU(VK_SAMPLER_ADDRESS_MODE_REPEAT)
                                 .addressModeV(VK_SAMPLER_ADDRESS_MODE_REPEAT)
                                 .addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
