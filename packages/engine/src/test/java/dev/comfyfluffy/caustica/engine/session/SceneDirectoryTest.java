@@ -97,6 +97,49 @@ final class SceneDirectoryTest {
         assertEquals(1,snapshot.instances().size());assertEquals(1,snapshot.lights().size());
         assertEquals(10,snapshot.scenes().getLast().environment().bindingData().bits());
     }
+    @Test void unchangedCapturesShareRootsAndTransformEditsShareUnchangedLists() {
+        var f = new Fixture();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var id = f.channel.newInstance();
+        f.channel.edit(List.of(set(id, f.scene, ready)));
+        try (var first = f.capture.get(); var repeated = f.capture.get()) {
+            assertSame(first.get(), repeated.get());
+            f.channel.edit(List.of(new SceneEdit.SetTransform(id, GeometryTransform.translation(5, 0, 0), 7)));
+            try (var next = f.capture.get()) {
+                assertNotSame(first.get().instances(), next.get().instances());
+                assertSame(first.get().meshes(), next.get().meshes());
+                assertSame(first.get().lights(), next.get().lights());
+                assertSame(first.get().scenes(), next.get().scenes());
+                assertEquals(255, first.get().instances().getFirst().mask());
+                assertEquals(7, next.get().instances().getFirst().mask());
+            }
+        }
+    }
+
+    @Test void sharedMeshCaptureOutlivesTheInstanceThatFirstPublishedIt() {
+        var f = new Fixture();
+        var nativeDestroyed = new AtomicInteger();
+        f.preparing = CompletableFuture.completedFuture(nativeOwner(nativeDestroyed));
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var first = f.channel.newInstance();
+        var second = f.channel.newInstance();
+        f.channel.edit(List.of(set(first, f.scene, ready), set(second, f.scene, ready)));
+        ready.close();
+        try (var original = f.capture.get()) {
+            f.channel.edit(List.of(new SceneEdit.DropInstance(first)));
+            try (var remaining = f.capture.get()) {
+                assertSame(original.get().meshes(), remaining.get().meshes());
+                assertEquals(1, remaining.get().meshes().size());
+                try (var claim = remaining.get().meshes().getFirst().ready().retain()) {
+                    assertSame(INSTANCE, claim.instanceDataType());
+                }
+                f.channel.edit(List.of(new SceneEdit.DropInstance(second)));
+                assertEquals(0, nativeDestroyed.get());
+            }
+        }
+        assertEquals(1, nativeDestroyed.get());
+    }
+
     @Test void capturedLightsKeepTheirDescriptorsAcrossReplacementAndRemoval() {
         var f = new Fixture();
         var id = f.channel.newLight();

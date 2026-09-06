@@ -101,6 +101,87 @@ abstract class GenerateShaderRecords extends DefaultTask {
         base == "0" ? "${offset}" : (offset == 0 ? base : "${base} + ${offset}")
     }
 
+    private static int scalarByteSize(Map type) {
+        switch (type.scalarType) {
+            case "float32":
+            case "int32":
+            case "uint32": return 4
+            case "int64":
+            case "uint64": return 8
+            default: throw new GradleException("unsupported reflected scalar type: ${type.scalarType}")
+        }
+    }
+
+    private static void collectOccupiedRanges(Map type, Map binding, int base,
+                                              List<List<Integer>> ranges) {
+        int address = base + ((binding.offset ?: 0) as int)
+        switch (type.kind) {
+            case "scalar":
+                ranges.add([address, address + scalarByteSize(type)])
+                return
+            case "vector":
+                int size = scalarByteSize(type.elementType as Map)
+                int stride = (binding.elementStride ?: size) as int
+                for (int index = 0; index < (type.elementCount as int); index++) {
+                    ranges.add([address + index * stride, address + index * stride + size])
+                }
+                return
+            case "matrix":
+                if (type.rowCount != 4 || type.columnCount != 4 || type.elementType.scalarType != "float32") {
+                    throw new GradleException("unsupported matrix writer: ${type}")
+                }
+                ranges.add([address, address + 16 * Float.BYTES])
+                return
+            case "struct":
+                type.fields.each { field ->
+                    collectOccupiedRanges(field.type as Map, field.binding as Map, address, ranges)
+                }
+                return
+            case "array":
+                int stride = (type.uniformStride ?: binding.elementStride) as int
+                for (int index = 0; index < (type.elementCount as int); index++) {
+                    collectOccupiedRanges(type.elementType as Map, [offset: 0], address + index * stride, ranges)
+                }
+                return
+            default:
+                throw new GradleException("unsupported writer type: ${type.kind}")
+        }
+    }
+
+    /** Byte ranges not written by reflected fields, represented as [start, end). */
+    static List<List<Integer>> paddingRanges(Map rootType, int byteSize) {
+        List<List<Integer>> occupied = []
+        rootType.fields.each { field ->
+            collectOccupiedRanges(field.type as Map, field.binding as Map, 0, occupied)
+        }
+        occupied.sort { first, second -> first[0] <=> second[0] }
+        List<List<Integer>> padding = []
+        int cursor = 0
+        for (List<Integer> range : occupied) {
+            if (range[0] > cursor) padding.add([cursor, range[0]])
+            cursor = Math.max(cursor, range[1])
+        }
+        if (cursor < byteSize) padding.add([cursor, byteSize])
+        padding
+    }
+
+    private static void emitZeroRange(StringBuilder sb, int start, int end, String indent) {
+        int cursor = start
+        while (end - cursor >= Long.BYTES) {
+            sb << "${indent}dst.putLong(${cursor}, 0L);\n"
+            cursor += Long.BYTES
+        }
+        if (end - cursor >= Integer.BYTES) {
+            sb << "${indent}dst.putInt(${cursor}, 0);\n"
+            cursor += Integer.BYTES
+        }
+        if (end - cursor >= Short.BYTES) {
+            sb << "${indent}dst.putShort(${cursor}, (short) 0);\n"
+            cursor += Short.BYTES
+        }
+        if (cursor < end) sb << "${indent}dst.put(${cursor}, (byte) 0);\n"
+    }
+
     private static void emitWrite(StringBuilder sb, Map type, Map binding, String expr, String base,
                                   String indent, int depth) {
         def address = at(base, (binding.offset ?: 0) as int)
@@ -202,7 +283,15 @@ abstract class GenerateShaderRecords extends DefaultTask {
         sb << "\n    public void write(ByteBuffer dst) {\n"
         sb << "        Objects.requireNonNull(dst, \"dst\");\n"
         sb << "        if (dst.capacity() < BYTE_SIZE) throw new IllegalArgumentException(\"${className} buffer is too small: \" + dst.capacity());\n"
-        sb << "        for (int i = 0; i < BYTE_SIZE; i++) dst.put(i, (byte) 0);\n"
+        paddingRanges(rootType, byteSize).each { range ->
+            emitZeroRange(sb, range[0], range[1], "        ")
+        }
+        arrays.each { field ->
+            int offset = (field.binding.offset ?: 0) as int
+            int stride = (field.type.uniformStride ?: field.binding.elementStride) as int
+            int byteSizeForCapacity = (field.type.elementCount as int) * stride
+            sb << "        for (int i = ${field.name}().length * ${stride}; i < ${byteSizeForCapacity}; i++) dst.put(${offset} + i, (byte) 0);\n"
+        }
         fields.each { field ->
             emitWrite(sb, field.type as Map, field.binding as Map, "${field.name}()", "0", "        ", 0)
         }

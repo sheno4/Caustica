@@ -34,6 +34,13 @@ public final class SceneDirectory {
     private final Map<InstanceRef, RetainedInstance> instances = new LinkedHashMap<>();
     private final Map<LightRef, RetainedSceneSnapshot.Light> lights = new LinkedHashMap<>();
     private final Map<SceneRef, LinkedHashMap<Object, RetainedEnvironment>> selections = new LinkedHashMap<>();
+    private final SnapshotPages<RetainedSceneSnapshot.Instance> instancePages = new SnapshotPages<>();
+    private final SnapshotPages<RetainedSceneSnapshot.Mesh> meshPages = new SnapshotPages<>();
+    private final Map<Long, MeshUse> meshUses = new LinkedHashMap<>();
+    private SharedResource<RetainedSceneSnapshot> captured;
+    private List<RetainedSceneSnapshot.Scene> sceneValues;
+    private List<RetainedSceneSnapshot.Light> lightValues;
+    private long snapshotProgramRevision = -1;
     private long identity;
     private long revision;
 
@@ -51,18 +58,20 @@ public final class SceneDirectory {
     public synchronized SceneId createScene() {
         SceneRef scene = new SceneRef(this, ++identity);
         scenes.add(scene);
-        revision++;
+        sceneValues = null;
+        changed();
         return scene;
     }
 
     public synchronized void dropScene(SceneId id) {
         SceneRef scene = requireScene(id);
         removeInstances(entry -> entry.getValue().value.scene() == scene);
-        lights.values().removeIf(value -> value.scene() == scene);
+        if (lights.values().removeIf(value -> value.scene() == scene)) lightValues = null;
         var removed = selections.remove(scene);
         if (removed != null) removed.values().forEach(RetainedEnvironment::close);
         scenes.remove(scene);
-        revision++;
+        sceneValues = null;
+        changed();
     }
 
     public synchronized SceneContributionChannel openChannel(ContributionOwner owner) {
@@ -229,14 +238,23 @@ public final class SceneDirectory {
         var retired = new ArrayList<SharedResource<ResourceOwners>>();
         changedInstances.forEach((id, entry) -> {
             RetainedInstance previous = entry == null ? instances.remove(id) : instances.put(id, entry);
+            if (previous != null && (entry == null || previous.placementOrdinal != entry.placementOrdinal)) {
+                instancePages.remove(previous.placementOrdinal);
+            }
+            if (entry != null) instancePages.put(entry.placementOrdinal, entry.snapshot, entry.resources);
+            if (previous == null || entry == null || previous.snapshot.meshIdentity() != entry.snapshot.meshIdentity()) {
+                if (entry != null) addMesh(entry);
+                if (previous != null) removeMesh(previous);
+            }
             if (previous != null && (entry == null || previous.resources != entry.resources)) retired.add(previous.resources);
         });
+        if (!changedLights.isEmpty()) lightValues = null;
         changedLights.forEach((id, value) -> {
             if (value == null) lights.remove(id);
             else lights.put(id, new RetainedSceneSnapshot.Light(id.identity, value.scene(), value.descriptor()));
         });
         environments.forEach((scene, entry) -> replaceEnvironment(scene, channel, entry));
-        revision++;
+        changed();
         retired.forEach(SharedResource::close);
     }
 
@@ -287,7 +305,7 @@ public final class SceneDirectory {
         SceneRef scene = validateEnvironment(channel.owner, channel.scene, binding);
         replaceEnvironment(scene, channel,
                 ownEnvironment(binding));
-        revision++;
+        changed();
     }
 
     private SceneRef validateEnvironment(ContributionOwner owner, SceneId id, EnvironmentBinding<?> binding) {
@@ -298,6 +316,7 @@ public final class SceneDirectory {
     }
 
     private void replaceEnvironment(SceneRef scene, Object slot, RetainedEnvironment entry) {
+        sceneValues = null;
         var values = selections.computeIfAbsent(scene, key -> new LinkedHashMap<>());
         RetainedEnvironment previous = values.remove(slot);
         values.put(slot, entry);
@@ -307,6 +326,8 @@ public final class SceneDirectory {
     private void removeInstances(java.util.function.Predicate<Map.Entry<InstanceRef, RetainedInstance>> predicate) {
         instances.entrySet().removeIf(entry -> {
             if (!predicate.test(entry)) return false;
+            instancePages.remove(entry.getValue().placementOrdinal);
+            removeMesh(entry.getValue());
             entry.getValue().resources.close();
             return true;
         });
@@ -315,7 +336,10 @@ public final class SceneDirectory {
     private void removeEnvironments(Object slot) {
         selections.values().forEach(values -> {
             RetainedEnvironment previous = values.remove(slot);
-            if (previous != null) previous.close();
+            if (previous != null) {
+                sceneValues = null;
+                previous.close();
+            }
         });
     }
 
@@ -327,9 +351,9 @@ public final class SceneDirectory {
         if (!channel.acceptingEdits) return;
         quiesce(channel);
         removeInstances(entry -> entry.getKey().owner == channel);
-        lights.keySet().removeIf(id -> id.owner == channel);
+        if (lights.keySet().removeIf(id -> id.owner == channel)) lightValues = null;
         removeEnvironments(channel);
-        revision++;
+        changed();
         channel.acceptingEdits = false;
         var claims = List.copyOf(channel.meshes);
         channel.meshes.clear();
@@ -339,7 +363,7 @@ public final class SceneDirectory {
     synchronized void invalidate(SceneEnvironmentContributionChannel channel) {
         if (!channel.accepting) return;
         removeEnvironments(channel);
-        revision++;
+        changed();
         channel.accepting = false;
     }
 
@@ -362,48 +386,83 @@ public final class SceneDirectory {
 
     public void prepareForSessionClose() { backend.prepareForSessionClose(); }
 
+    private void changed() {
+        revision++;
+        if (captured != null) captured.close();
+        captured = null;
+    }
+
+    private void addMesh(RetainedInstance instance) {
+        long id = instance.snapshot.meshIdentity();
+        var use = meshUses.get(id);
+        if (use != null) { use.instances++; return; }
+        var ready = (ReadyClaim<?>) instance.value.mesh().retain();
+        use = new MeshUse(ready);
+        meshUses.put(id, use);
+        synchronized (programs) {
+            meshPages.put(id, ready.snapshot(programs.resolutionRevision()), use.owner);
+        }
+    }
+
+    private void removeMesh(RetainedInstance instance) {
+        long id = instance.snapshot.meshIdentity();
+        var use = meshUses.get(id);
+        if (--use.instances != 0) return;
+        meshUses.remove(id);
+        meshPages.remove(id);
+        use.owner.close();
+    }
+
+    private static final class MeshUse {
+        final ReadyClaim<?> ready;
+        final SharedResource<ReadyMesh<?>> owner;
+        int instances = 1;
+        MeshUse(ReadyClaim<?> ready) {
+            this.ready = ready;
+            owner = SharedResource.owned(ready, ReadyMesh::close);
+        }
+    }
+
     /** Borrowed diagnostic values; callers needing stable resource lifetime use capture(). */
     public synchronized RetainedSceneSnapshot snapshot() {
-        synchronized (programs) {
-            return snapshotValues();
-        }
+        try (var claim = capture()) { return claim.get(); }
     }
 
-    /** Captures all scenes while retaining their immutable dependency groups at one atomic edit boundary. */
+    /** Captures immutable pages at one atomic edit boundary; unchanged captures retain only the root. */
     public synchronized SharedResource<RetainedSceneSnapshot> capture() {
-        var owners = new ArrayList<SharedResource<ResourceOwners>>(instances.size() + scenes.size());
-        try {
-            instances.values().forEach(entry -> owners.add(entry.resources.retain()));
-            selections.values().forEach(values -> {
-                if (!values.isEmpty()) owners.add(values.lastEntry().getValue().owner.retain());
-            });
-            synchronized (programs) {
-                return SharedResource.owned(snapshotValues(), ignored -> owners.forEach(SharedResource::close));
+        synchronized (programs) {
+            long programRevision = programs.resolutionRevision();
+            if (snapshotProgramRevision != programRevision) {
+                if (captured != null) captured.close();
+                captured = null;
+                meshUses.forEach((id, use) -> meshPages.put(id, use.ready.snapshot(programRevision), use.owner));
+                snapshotProgramRevision = programRevision;
             }
-        } catch (Throwable failure) {
-            owners.forEach(SharedResource::close);
-            throw failure;
-        }
-    }
-
-    private RetainedSceneSnapshot snapshotValues() {
-        long programRevision = programs.resolutionRevision();
-        var meshSnapshots = new LinkedHashMap<Long, RetainedSceneSnapshot.Mesh>();
-        for (var entry : instances.values()) {
-            var ready = (ReadyClaim<?>) entry.value.mesh();
-            long identity = ready.state.mesh.identity();
-            if (!meshSnapshots.containsKey(identity)) {
-                meshSnapshots.put(identity, ready.snapshot(programRevision));
+            if (captured == null) {
+                var instanceClaim = instancePages.capture();
+                var meshClaim = meshPages.capture();
+                var owners = new ArrayList<SharedResource<ResourceOwners>>(scenes.size());
+                selections.values().forEach(values -> {
+                    if (!values.isEmpty()) owners.add(values.lastEntry().getValue().owner.retain());
+                });
+                if (sceneValues == null) {
+                    var values = new ArrayList<RetainedSceneSnapshot.Scene>(scenes.size());
+                    for (var scene : scenes) {
+                        values.add(new RetainedSceneSnapshot.Scene(scene, selectedEnvironment(selections.get(scene))));
+                    }
+                    sceneValues = List.copyOf(values);
+                }
+                if (lightValues == null) lightValues = List.copyOf(lights.values());
+                var value = new RetainedSceneSnapshot(revision, sceneValues, meshClaim.get(),
+                        instanceClaim.get(), lightValues);
+                captured = SharedResource.owned(value, ignored -> {
+                    instanceClaim.close();
+                    meshClaim.close();
+                    owners.forEach(SharedResource::close);
+                });
             }
+            return captured.retain();
         }
-        var sceneSnapshots = new ArrayList<RetainedSceneSnapshot.Scene>(scenes.size());
-        for (var scene : scenes) {
-            sceneSnapshots.add(new RetainedSceneSnapshot.Scene(scene, selectedEnvironment(selections.get(scene))));
-        }
-        var instanceSnapshots = new ArrayList<RetainedSceneSnapshot.Instance>(instances.size());
-        for (var entry : instances.values()) instanceSnapshots.add(entry.snapshot);
-        return new RetainedSceneSnapshot(revision, sceneSnapshots, List.copyOf(meshSnapshots.values()),
-                instanceSnapshots, List.copyOf(lights.values()));
     }
 
     private static EnvironmentBinding<?> selectedEnvironment(LinkedHashMap<Object, RetainedEnvironment> selections) {

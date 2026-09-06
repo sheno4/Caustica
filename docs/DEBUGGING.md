@@ -59,6 +59,8 @@ This external Python analysis computes descriptive statistics and exposure chang
 `measure.py` selects frame, CPU/GPU stage, counter and exposure events by default. Terrain state snapshots traverse section state and can substantially perturb a large-world CPU profile; enable them for streaming diagnosis with `--events` or a full `jfr.start`. All enabled events are retained. Query pools warm up when GPU recording first starts; account for initial samples in comparisons.
 
 - `Frame`: CPU envelope, including RT tick preparation when present; not display cadence or generated-frame FPS.
+- `Frame.threadCpuNanos` and `allocatedBytes`: render-thread CPU and allocated-byte deltas over the envelope. CPU-clock resolution is platform-dependent; these exclude other threads. `FramePreparation` also reports task CPU/allocation deltas and its monotonic start time.
+- `GpuWait`: explicit graphics timeline wait intervals. These do not include every host presentation or driver wait.
 - `CpuStage`: each elapsed CPU scope, with stage and frame ID. Nested scopes overlap; do not sum everything.
 - `GpuStage`: command-stage timestamps on the graphics queue; query pools are reused after existing completion. No telemetry wait is added. Named build/local-bake/fill intervals sit inside `world resources and trace`; do not add them to that parent interval. These intervals are not utilization counters or a total display frame time. Recording GPU timestamps still perturbs execution; compare runs with the same instrumentation.
 - `FrameCounter`: raw per-frame count or gauge. A latest snapshot is only updated while frame collection is enabled by a recording.

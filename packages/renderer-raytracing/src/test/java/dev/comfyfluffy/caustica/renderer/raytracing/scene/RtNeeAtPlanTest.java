@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 
 final class RtNeeAtPlanTest {
     @Test
@@ -74,6 +76,64 @@ final class RtNeeAtPlanTest {
     void descriptorRejectsRadiometryThatCannotRemainFiniteOnGpu() {
         assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Spot(0, 0, 0, 0, 0, 1,
                 1, 0.2, Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE));
+    }
+
+    @Test
+    void unchangedRevisionReusesStablePlanAndPackedStorageAcrossHistoryResets() {
+        var descriptor = new LightDescriptor.Distant(0, 1, 0, 1, 2, 3, 0.4, false);
+        var lights = List.of(light(10, descriptor), light(20, descriptor));
+        var cache = new RtNeeAtPlan.Cache();
+        var reset = cache.prepare(lights, false, 1.0);
+        var stable = cache.prepare(lights, true, 1.0);
+
+        assertArrayEquals(new int[0], reset.previousToCurrent());
+        assertArrayEquals(new int[]{0, 1}, stable.previousToCurrent());
+        assertSame(stable, cache.prepare(lights, true, 1.0));
+        assertSame(stable.pack(), cache.prepare(lights, true, 1.0).pack());
+        assertSame(reset, cache.prepare(lights, false, 1.0));
+        assertSame(stable, cache.prepare(lights, true, 1.0));
+        assertEquals(RtNeeAtPlan.powerTotal(stable.power()), stable.powerTotal());
+    }
+
+    @Test
+    void membershipTransitionRemapsOnlyTheFirstFrameAndPreservesOldPlans() {
+        var descriptor = new LightDescriptor.Distant(0, 1, 0, 1, 2, 3, 0.4, false);
+        var previous = List.of(light(10, descriptor), light(20, descriptor), light(30, descriptor));
+        var current = List.of(light(30, descriptor), light(10, descriptor));
+        var cache = new RtNeeAtPlan.Cache();
+        cache.prepare(previous, false, 1.0);
+        var oldStable = cache.prepare(previous, true, 1.0);
+        var transition = cache.prepare(current, true, 1.0);
+        var stable = cache.prepare(current, true, 1.0);
+
+        assertArrayEquals(new int[]{1, RtNeeAtPlan.NO_LIGHT, 0}, transition.previousToCurrent());
+        assertArrayEquals(new int[]{0, 1}, stable.previousToCurrent());
+        assertArrayEquals(new int[]{0, 1, 2}, oldStable.previousToCurrent());
+        assertSame(stable, cache.prepare(current, true, 1.0));
+        assertNotSame(transition, stable);
+        assertArrayEquals(new int[0], cache.prepare(List.of(), false, 1.0).previousToCurrent());
+        assertArrayEquals(new float[0], cache.prepare(List.of(), true, 1.0).power());
+    }
+
+    @Test
+    void descriptorAndScaleChangesRefreshPowerWithoutChangingMembershipRemap() {
+        var descriptor = new LightDescriptor.Parallelogram(0, 0, 0, 2, 0, 0, 0, 3, 0, 4, 5, 6);
+        var brighter = new LightDescriptor.Parallelogram(0, 0, 0, 2, 0, 0, 0, 3, 0, 8, 10, 12);
+        var cache = new RtNeeAtPlan.Cache();
+        var initial = List.of(light(10, descriptor), light(20, descriptor));
+        cache.prepare(initial, false, 1.0);
+        var oldStable = cache.prepare(initial, true, 1.0);
+        var updated = List.of(light(10, descriptor), light(20, brighter));
+        var changed = cache.prepare(updated, true, 1.0);
+        var scaled = cache.prepare(updated, true, 2.0);
+
+        assertSame(oldStable.previousToCurrent(), changed.previousToCurrent());
+        assertSame(changed.previousToCurrent(), scaled.previousToCurrent());
+        assertEquals(oldStable.power()[0], changed.power()[0]);
+        assertEquals(oldStable.power()[1] * 2.0f, changed.power()[1]);
+        assertEquals(changed.power()[0] * 4.0f, scaled.power()[0]);
+        assertEquals(changed.power()[1] * 4.0f, scaled.power()[1]);
+        assertEquals(oldStable.power()[0], oldStable.power()[1]);
     }
 
     private static RtRetainedSceneBackend.SceneLight light(long identity, LightDescriptor descriptor) {

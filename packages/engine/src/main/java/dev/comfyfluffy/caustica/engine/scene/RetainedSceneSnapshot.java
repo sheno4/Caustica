@@ -14,9 +14,13 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
                                     List<Instance> instances, List<Light> lights) {
     public RetainedSceneSnapshot {
         scenes = List.copyOf(scenes);
-        meshes = List.copyOf(meshes);
-        instances = List.copyOf(instances);
+        meshes = immutable(meshes);
+        instances = immutable(instances);
         lights = List.copyOf(lights);
+    }
+
+    private static <T> List<T> immutable(List<T> values) {
+        return values instanceof SnapshotPages.Values<?> ? values : List.copyOf(values);
     }
 
     public record Scene(SceneId id, EnvironmentBinding<?> environment) { }

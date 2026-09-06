@@ -151,11 +151,28 @@ public final class GraphicsQueue {
     }
 
     private void waitTimeline(long semaphore, long value) {
+        GpuWaitEvent event = new GpuWaitEvent();
+        boolean measured = event.isEnabled();
+        if (measured) event.startedNanos = System.nanoTime();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var wait = VkSemaphoreWaitInfo.calloc(stack).sType$Default().semaphoreCount(1)
                     .pSemaphores(stack.longs(semaphore)).pValues(stack.longs(value));
             ctx.checkDeviceResult(VK12.vkWaitSemaphores(ctx.vk(), wait, Long.MAX_VALUE), "vkWaitSemaphores");
+        } finally {
+            if (measured) {
+                event.elapsedNanos = System.nanoTime() - event.startedNanos;
+                event.commit();
+            }
         }
+    }
+
+    @jdk.jfr.Name("dev.comfyfluffy.caustica.GpuWait")
+    @jdk.jfr.Label("Graphics timeline wait") @jdk.jfr.Category({"Caustica", "Frame"})
+    @jdk.jfr.StackTrace(false) @jdk.jfr.Enabled(false)
+    static final class GpuWaitEvent extends jdk.jfr.Event {
+        public long startedNanos;
+        @jdk.jfr.Timespan(jdk.jfr.Timespan.NANOSECONDS)
+        public long elapsedNanos;
     }
 
     /** Mutable last-use owner embedded in reusable or asynchronously retired GPU resource slots. */

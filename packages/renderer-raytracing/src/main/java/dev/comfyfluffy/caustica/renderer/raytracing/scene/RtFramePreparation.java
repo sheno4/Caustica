@@ -18,6 +18,8 @@ import java.util.function.ToIntFunction;
 
 /** Bounded CPU phases whose borrowed frame inputs remain owned until every accepted task finishes. */
 final class RtFramePreparation implements AutoCloseable {
+    private static final com.sun.management.ThreadMXBean THREADS =
+            java.lang.management.ManagementFactory.getPlatformMXBean(com.sun.management.ThreadMXBean.class);
     private static final int WORKERS = 4;
     private static final int ITEMS_PER_CHUNK = 256;
     private final ExecutorService executor = Executors.newFixedThreadPool(WORKERS,
@@ -76,10 +78,15 @@ final class RtFramePreparation implements AutoCloseable {
             event.lightCount = lightCount;
             event.begin();
             long started = System.nanoTime();
+            event.startedNanos = started;
+            long cpuStarted = THREADS.getCurrentThreadCpuTime();
+            long allocatedStarted = THREADS.getCurrentThreadAllocatedBytes();
             try {
                 operation.run();
             } finally {
                 event.elapsedNanos = System.nanoTime() - started;
+                event.threadCpuNanos = THREADS.getCurrentThreadCpuTime() - cpuStarted;
+                event.allocatedBytes = THREADS.getCurrentThreadAllocatedBytes() - allocatedStarted;
                 event.end();
                 event.commit();
             }
@@ -92,8 +99,13 @@ final class RtFramePreparation implements AutoCloseable {
         public String phase;
         public int instanceCount;
         public int lightCount;
+        public long startedNanos;
         @Timespan(Timespan.NANOSECONDS)
         public long elapsedNanos;
+        @Timespan(Timespan.NANOSECONDS)
+        public long threadCpuNanos;
+        @jdk.jfr.DataAmount(jdk.jfr.DataAmount.BYTES)
+        public long allocatedBytes;
     }
 
     @Override public void close() {

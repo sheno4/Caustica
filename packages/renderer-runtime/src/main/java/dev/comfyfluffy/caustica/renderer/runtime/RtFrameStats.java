@@ -13,6 +13,8 @@ import jdk.jfr.*;
 
 /** Raw CPU frame observations. Recording and analysis belong to consumers of the JFR events. */
 public final class RtFrameStats {
+    private static final com.sun.management.ThreadMXBean THREADS =
+            java.lang.management.ManagementFactory.getPlatformMXBean(com.sun.management.ThreadMXBean.class);
     private static final EventType FRAME_EVENT = EventType.getEventType(FrameEvent.class);
     private static final EventType STAGE_EVENT = EventType.getEventType(CpuStageEvent.class);
     private static final EventType COUNTER_EVENT = EventType.getEventType(FrameCounterEvent.class);
@@ -77,6 +79,8 @@ public final class RtFrameStats {
         private Map<String, Integer> counterIndices;
         private long[] counters;
         private long frameStart;
+        private long frameCpuStart;
+        private long frameAllocationStart;
         private volatile RtTelemetry.FrameSnapshot latest;
         private boolean active;
         private boolean metricsConfigured;
@@ -108,6 +112,8 @@ public final class RtFrameStats {
             active = enabled();
             if (!active) return;
             frameStart = System.nanoTime();
+            frameCpuStart = THREADS.getCurrentThreadCpuTime();
+            frameAllocationStart = THREADS.getCurrentThreadAllocatedBytes();
             Arrays.fill(counters, 0L);
         }
 
@@ -150,6 +156,8 @@ public final class RtFrameStats {
             event.profile = name;
             event.startedNanos = frameStart;
             event.elapsedNanos = System.nanoTime() - frameStart;
+            event.threadCpuNanos = THREADS.getCurrentThreadCpuTime() - frameCpuStart;
+            event.allocatedBytes = THREADS.getCurrentThreadAllocatedBytes() - frameAllocationStart;
             event.commit();
             Map<String, Long> values = new HashMap<>();
             for (int i = 0; i < counterNames.length; i++) values.put(counterNames[i], counters[i]);
@@ -184,6 +192,8 @@ public final class RtFrameStats {
         String profile;
         @Label("System.nanoTime start") long startedNanos;
         @Timespan(Timespan.NANOSECONDS) long elapsedNanos;
+        @Label("Render thread CPU time") @Timespan(Timespan.NANOSECONDS) long threadCpuNanos;
+        @Label("Render thread allocated bytes") @DataAmount(DataAmount.BYTES) long allocatedBytes;
     }
 
     @Name("dev.comfyfluffy.caustica.CpuStage")

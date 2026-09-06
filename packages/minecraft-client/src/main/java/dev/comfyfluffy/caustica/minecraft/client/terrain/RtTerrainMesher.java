@@ -61,6 +61,7 @@ import java.util.List;
 import java.util.Map;
 
 final class RtTerrainMesher {
+    private static final Direction[] DIRECTIONS = Direction.values();
     /**
      * Reusable per-worker-thread meshing state. The mesh + captures are reset between tasks so their
      * backing arrays amortize across sections instead of re-growing per task. Each completed mesh is copied
@@ -271,7 +272,7 @@ final class RtTerrainMesher {
                         for (BakedQuad quad : part.getQuads(null)) {
                             capture.putVanilla(quad);
                         }
-                        for (Direction direction : Direction.values()) {
+                        for (Direction direction : DIRECTIONS) {
                             if (!capture.isCulled(direction)) {
                                 for (BakedQuad quad : part.getQuads(direction)) {
                                     capture.putVanilla(quad);

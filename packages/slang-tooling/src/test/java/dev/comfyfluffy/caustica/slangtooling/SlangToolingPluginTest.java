@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 
@@ -17,6 +18,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class SlangToolingPluginTest {
+    @Test
+    void findsOnlyBytesOutsideReflectedFieldStorage() {
+        var floatType = Map.<String, Object>of("kind", "scalar", "scalarType", "float32");
+        var intType = Map.<String, Object>of("kind", "scalar", "scalarType", "int32");
+        var vectorType = Map.<String, Object>of(
+                "kind", "vector", "elementType", floatType, "elementCount", 3);
+        var arrayType = Map.<String, Object>of(
+                "kind", "array", "elementType", floatType, "elementCount", 2, "uniformStride", 8);
+        var root = Map.<String, Object>of("fields", List.of(
+                Map.of("name", "first", "type", intType, "binding", Map.of("offset", 0)),
+                Map.of("name", "vector", "type", vectorType,
+                        "binding", Map.of("offset", 8, "elementStride", 4)),
+                Map.of("name", "array", "type", arrayType, "binding", Map.of("offset", 24))));
+
+        assertEquals(List.of(List.of(4, 8), List.of(20, 24), List.of(28, 32), List.of(36, 40)),
+                GenerateShaderRecords.paddingRanges(root, 40));
+    }
+
     @Test
     void appliesOutsideTheRootBuildAndExposesTypedTaskConventions(@TempDir Path project) throws Exception {
         Files.writeString(project.resolve("settings.gradle"), "rootProject.name = 'fixture'\n");

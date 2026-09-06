@@ -74,8 +74,14 @@ final class RtNeeAtBackend {
                 Math.max(lights.size(), state.previousLights.size()));
         boolean continuous = historyValid(input, state.hasHistory, state.lastFrameIndex,
                 state.width, state.height);
+        if (state.metadataLights != lights) {
+            state.metadataLights = lights;
+            state.telemetry = telemetry(lights, false);
+            state.environmentEmitters = lights.stream().anyMatch(light ->
+                    light.descriptor() instanceof LightDescriptor.Distant distant && distant.environmentEmitter());
+        }
         if (NEE_FRAME_EVENT.isEnabled()) {
-            Telemetry telemetry = telemetry(lights, continuous);
+            Telemetry telemetry = state.telemetry;
             NeeFrameEvent event = new NeeFrameEvent();
             event.rendererFrameId = input.frameIndex();
             event.scene = scene.toString();
@@ -95,15 +101,15 @@ final class RtNeeAtBackend {
         Frame previous = state.frames[state.cursor];
         context.graphics().graphicsUseWaiter().await(target.use);
 
-        RtNeeAtPlan.Plan plan = RtNeeAtPlan.build(lights,
-                continuous ? state.previousLights : List.of(), input.metersPerSceneUnit());
-        write(target.plan, plan.pack());
+        RtNeeAtPlan.Plan plan = state.plans.prepare(lights, continuous, input.metersPerSceneUnit());
+        if (target.uploadedPlan != plan) {
+            write(target.plan, plan.pack());
+            target.uploadedPlan = plan;
+        }
         int tileCountX = divideRoundUp(input.width(), TILE_SIZE);
         int tileCountY = divideRoundUp(input.height(), TILE_SIZE);
         int flags = (continuous ? LOCAL_HISTORY_VALID : 0)
-                | (lights.stream().anyMatch(light -> light.descriptor() instanceof LightDescriptor.Distant distant
-                        && distant.environmentEmitter())
-                ? ENVIRONMENT_EMITTERS_SAMPLED : 0);
+                | (state.environmentEmitters ? ENVIRONMENT_EMITTERS_SAMPLED : 0);
         NeeAtStateData control = new NeeAtStateData(0L, target.global.deviceAddress().value(),
                 target.local.deviceAddress().value(), target.lightFeedback.deviceAddress().value(),
                 target.pixelFeedback.deviceAddress().value(),
@@ -111,7 +117,7 @@ final class RtNeeAtBackend {
                 continuous ? state.previousLights.size() : 0,
                 input.width(), input.height(), tileCountX, tileCountY, TILE_SIZE, LOCAL_SLOTS,
                 CANDIDATES, flags, input.metersPerSceneUnit(),
-                (int) input.frameIndex(), RtNeeAtPlan.powerTotal(plan.power()),
+                (int) input.frameIndex(), plan.powerTotal(),
                 LOCAL_TO_GLOBAL_RATIO);
         writeState(target.state, control);
 
@@ -153,7 +159,7 @@ final class RtNeeAtBackend {
         state.width = input.width();
         state.height = input.height();
         state.lastFrameIndex = input.frameIndex();
-        state.previousLights = List.copyOf(lights);
+        state.previousLights = lights;
         Prepared prepared = new Prepared(scene, target, control, continuous, use);
         state.active = prepared;
         return prepared;
@@ -240,8 +246,8 @@ final class RtNeeAtBackend {
     private void dispatch(VkCommandBuffer commandBuffer, Frame target, Frame previous,
                           boolean continuous, int phase, int groups, int currentLinearDepthIndex,
                           int currentMotionIndex) {
-        ByteBuffer push = MemoryUtil.memAlloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
-        try {
+        try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
             push.putLong(target.state.deviceAddress().value()).putLong(target.plan.deviceAddress().value())
                     .putLong(previous.pixelFeedback.deviceAddress().value())
                     .putLong(target.blockSums.deviceAddress().value())
@@ -250,8 +256,6 @@ final class RtNeeAtBackend {
                     .putInt(phase).putInt(continuous ? 1 : 0)
                     .putInt(currentLinearDepthIndex).putInt(currentMotionIndex).flip();
             bake.dispatch(commandBuffer, push, groups, 1, 1);
-        } finally {
-            MemoryUtil.memFree(push);
         }
     }
 
@@ -406,7 +410,11 @@ final class RtNeeAtBackend {
         int lightCapacity;
         long lastFrameIndex = Long.MIN_VALUE;
         boolean hasHistory;
+        final RtNeeAtPlan.Cache plans = new RtNeeAtPlan.Cache();
         List<RtRetainedSceneBackend.SceneLight> previousLights = List.of();
+        List<RtRetainedSceneBackend.SceneLight> metadataLights;
+        Telemetry telemetry;
+        boolean environmentEmitters;
         Prepared active;
 
         void ensure(int wantedWidth, int wantedHeight, int lights) {
@@ -449,6 +457,7 @@ final class RtNeeAtBackend {
         GpuBuffer pixelFeedback;
         GpuBuffer depth;
         GpuBuffer plan;
+        RtNeeAtPlan.Plan uploadedPlan;
         final TrackedGraphicsUse use = new TrackedGraphicsUse();
 
         void allocate(int lightCapacity, int width, int height, int tiles) {
@@ -481,6 +490,7 @@ final class RtNeeAtBackend {
             if (state == null) return;
             state.destroy(); global.destroy(); proxyIndices.destroy(); blockSums.destroy();
             local.destroy(); lightFeedback.destroy(); pixelFeedback.destroy(); depth.destroy(); plan.destroy();
+            uploadedPlan = null;
             state = global = proxyIndices = blockSums = local = lightFeedback = pixelFeedback
                     = depth = plan = null;
         }
