@@ -14,6 +14,7 @@ import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.DisplayText;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.settings.SettingsAccess;
 
 /** Installs Caustica's core Minecraft world-session contribution and settings feature. */
 public final class MinecraftProvidersExtension implements MinecraftExtension, CausticaSettingsExtension {
@@ -47,10 +48,17 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
         this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
     }
 
+    private SettingsAccess options;
+
+    @Override
+    public void settingsReady(SettingsAccess settings) {
+        options = settings;
+    }
+
     @Override public void registerMinecraft(MinecraftApi api) {
         api.sessions().add(context -> MinecraftProgramSession.open(
                 context, frameSelections, frameCaptures, materialEpochs, calibration,
-                entityCapture, entityTextures, entities, terrain, api.options(), instrumentation));
+                entityCapture, entityTextures, entities, terrain, options, instrumentation));
     }
 
     @Override public void registerSettings(SettingsRegistry registry) {

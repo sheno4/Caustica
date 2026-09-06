@@ -33,12 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftEngineWorldSessionTest {
-    private static final dev.comfyfluffy.caustica.settings.SettingsAccess OPTIONS = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
     @Test
     void composesBothProcessHostsOverSharedServicesAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();
-        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(OPTIONS);
+        RenderSessionHost renderHost = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         List<Object> programs = new ArrayList<>();
         renderHost.api().sessions().add(context -> {
             programs.add(context.program());
@@ -74,8 +73,8 @@ final class MinecraftEngineWorldSessionTest {
     @Test
     void creationFailureInvalidatesMinecraftBeforeSceneSettlementAndAggregatesCleanup() {
         List<String> events = new ArrayList<>();
-        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(OPTIONS);
+        RenderSessionHost renderHost = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         renderHost.api().sessions().add(context -> contribution("core", events));
         minecraftHost.api().sessions().add(context -> minecraftContribution("minecraft", events));
         minecraftHost.api().sessions().add(context -> { throw new IllegalStateException("minecraft-open"); });

@@ -41,8 +41,8 @@ final class MinecraftApiBootstrapTest {
     void registersMinecraftOnlyDiscoveryAndDeduplicatesDualCapabilityInstances() {
         SettingsRegistry settings = new SettingsRegistry();
         SettingsAccess options = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
-        RenderSessionHost renderHost = new RenderSessionHost(options);
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
+        RenderSessionHost renderHost = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         class MinecraftOnly implements MinecraftExtension {
             @Override public void registerMinecraft(MinecraftApi api) {
                 api.sessions().add(context -> MinecraftWorldSessionContribution.EMPTY);
@@ -80,8 +80,8 @@ final class MinecraftApiBootstrapTest {
     void sessionAndSettingsFailuresAreIsolatedForEachDiscoveredExtension() {
         SettingsRegistry settings = new SettingsRegistry();
         SettingsAccess options = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
-        RenderSessionHost host = new RenderSessionHost(options);
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
+        RenderSessionHost host = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         ResourceId settingsSurvived = ResourceId.of("test", "settings-survived");
 
         class SessionFails implements CausticaExtension, CausticaSettingsExtension {
@@ -135,15 +135,21 @@ final class MinecraftApiBootstrapTest {
         Option<Boolean> enabled = Option.bool("enabled", true);
         boolean[] genericSawOptions = {false};
         boolean[] minecraftSawOptions = {false};
+        int[] deliveries = {0};
         class Ordered implements CausticaExtension, MinecraftExtension, CausticaSettingsExtension {
+            private SettingsAccess options;
+            @Override public void settingsReady(SettingsAccess settings) {
+                options = settings;
+                deliveries[0]++;
+            }
             @Override public void registerSettings(SettingsRegistry registry) {
                 registry.feature(feature).option(enabled).register();
             }
             @Override public void register(CausticaApi api) {
-                genericSawOptions[0] = api.options().options(feature).get(enabled);
+                genericSawOptions[0] = options.options(feature).get(enabled);
             }
             @Override public void registerMinecraft(MinecraftApi api) {
-                minecraftSawOptions[0] = api.options().options(feature).get(enabled);
+                minecraftSawOptions[0] = options.options(feature).get(enabled);
             }
         }
         Ordered extension = new Ordered();
@@ -151,14 +157,37 @@ final class MinecraftApiBootstrapTest {
         List<MinecraftExtension> minecraft = List.of(extension);
         MinecraftApiBootstrap.registerSettings(settings, generic, minecraft);
         SettingsAccess options = CausticaOptions.load(temporaryDirectory.resolve("options.toml"), settings);
-        RenderSessionHost host = new RenderSessionHost(options);
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
+        MinecraftApiBootstrap.supplySettings(options, generic, minecraft);
+        RenderSessionHost host = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
 
         MinecraftApiBootstrap.registerExtensions(host, minecraftHost, generic);
         MinecraftApiBootstrap.registerMinecraftExtensions(minecraftHost, minecraft, generic);
 
+        assertEquals(1, deliveries[0]);
         assertTrue(genericSawOptions[0]);
         assertTrue(minecraftSawOptions[0]);
+    }
+
+    @Test
+    void settingsDeliveryIncludesMinecraftOnlyExtensionsAndIsolatesFailures() {
+        SettingsAccess options = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
+        int[] received = {0};
+        class Failing implements CausticaExtension, CausticaSettingsExtension {
+            @Override public void registerSettings(SettingsRegistry registry) { }
+            @Override public void settingsReady(SettingsAccess settings) { throw new IllegalStateException("settings"); }
+            @Override public void register(CausticaApi api) { }
+        }
+        class MinecraftOnly implements MinecraftExtension, CausticaSettingsExtension {
+            @Override public void registerSettings(SettingsRegistry registry) { }
+            @Override public void settingsReady(SettingsAccess settings) {
+                org.junit.jupiter.api.Assertions.assertSame(options, settings);
+                received[0]++;
+            }
+            @Override public void registerMinecraft(MinecraftApi api) { }
+        }
+        MinecraftApiBootstrap.supplySettings(options, List.of(new Failing()), List.of(new MinecraftOnly()));
+        assertEquals(1, received[0]);
     }
 
     private static final class EmptyScope implements ContributionScope {

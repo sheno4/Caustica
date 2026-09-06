@@ -5,6 +5,15 @@ minimum capabilities needed to add scene content, shader implementations, synchr
 effects, and UI. The contract is explicitly Vulkan-native. Minecraft lifecycle, dimension keys, resource
 packs, presentation, upscaling, and native queue ownership remain outside the main API.
 
+## Settings
+
+Settings declarations and access belong to the independent `packages/settings-api` artifact.
+Rendering entry points expose session registration only. Extensions that need settings implement
+`CausticaSettingsExtension`: the host first calls `registerSettings`, loads persisted values, then
+calls `settingsReady(SettingsAccess)` once per extension instance before rendering registration.
+Extensions capture that access and read snapshots for their sessions and passes. Persistence and
+settings UI remain host responsibilities; the rendering API has no settings dependency.
+
 ## Process registration and render sessions
 
 Extension discovery is process-scoped:

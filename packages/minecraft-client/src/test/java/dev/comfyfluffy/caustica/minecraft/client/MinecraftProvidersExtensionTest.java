@@ -57,12 +57,13 @@ final class MinecraftProvidersExtensionTest {
         MinecraftApi api = new MinecraftApi(factory -> {
             factories.add(factory);
             return () -> { };
-        }, options);
+        });
 
-        extension().registerMinecraft(api);
+        var extension = extension();
+        extension.settingsReady(options);
+        extension.registerMinecraft(api);
 
         assertEquals(1, factories.size());
-        org.junit.jupiter.api.Assertions.assertSame(options, api.options());
     }
 
     private static MinecraftProvidersExtension extension() {

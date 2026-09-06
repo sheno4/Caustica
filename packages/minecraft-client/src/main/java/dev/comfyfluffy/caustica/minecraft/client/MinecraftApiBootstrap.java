@@ -18,6 +18,7 @@ import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry;
 import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.settings.SettingsAccess;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import dev.comfyfluffy.caustica.slang.SlangRuntimeConfig;
 
@@ -59,8 +60,9 @@ public final class MinecraftApiBootstrap {
         options.register(settingsRegistry);
         options.importLegacy(platform.configDir().resolve("caustica-options.toml"));
         options.save();
-        RenderSessionHost host = new RenderSessionHost(options);
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
+        supplySettings(options, extensions, minecraftExtensions);
+        RenderSessionHost host = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         registerExtensions(host, minecraftHost, extensions);
         registerMinecraftExtensions(minecraftHost, minecraftExtensions, extensions);
 
@@ -104,6 +106,23 @@ public final class MinecraftApiBootstrap {
         }
         for (Object extension : minecraftExtensions) {
             registerSettings(settingsRegistry, extension, seen);
+        }
+    }
+
+    static void supplySettings(SettingsAccess settings,
+                               List<? extends CausticaExtension> genericExtensions,
+                               List<? extends MinecraftExtension> minecraftExtensions) {
+        var seen = Collections.newSetFromMap(new IdentityHashMap<Object, Boolean>());
+        var extensions = new ArrayList<Object>(genericExtensions);
+        extensions.addAll(minecraftExtensions);
+        for (Object extension : extensions) {
+            if (!seen.add(extension) || !(extension instanceof CausticaSettingsExtension settingsExtension)) continue;
+            try {
+                settingsExtension.settingsReady(settings);
+            } catch (RuntimeException failure) {
+                CausticaMod.LOGGER.error("Caustica settings initialization failed: {}",
+                        extension.getClass().getName(), failure);
+            }
         }
     }
 

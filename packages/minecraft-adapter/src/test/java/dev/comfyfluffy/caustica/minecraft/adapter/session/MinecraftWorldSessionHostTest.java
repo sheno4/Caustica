@@ -26,7 +26,6 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftWorldSessionHostTest {
-    private static final dev.comfyfluffy.caustica.settings.SettingsAccess OPTIONS = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
     @Test
     void borrowsOneWorldEpochAndOwnsDistinctCoreScopesThroughFullLifecycle() {
         List<String> events = new ArrayList<>();
@@ -36,8 +35,7 @@ final class MinecraftWorldSessionHostTest {
         List<ContributionOwner> environmentOwners = new ArrayList<>();
         SceneId scene = new SceneId() { };
         MinecraftDimensionKey dimension = MinecraftDimensionKey.of("minecraft", "overworld");
-        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost(OPTIONS);
-        assertSame(OPTIONS, host.api().options());
+        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost();
 
         host.api().sessions().add(context -> {
             assertSame(scene, context.scene());
@@ -92,7 +90,7 @@ final class MinecraftWorldSessionHostTest {
     void registrationRemovalAndFailedOpenDrainOnlyTheirOwnedScope() {
         List<String> events = new ArrayList<>();
         List<MinecraftSessionFailure.Stage> failures = new ArrayList<>();
-        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost(OPTIONS);
+        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost();
         var registration = host.api().sessions().add(context -> contribution("live", events, false));
         host.api().sessions().add(context -> {
             throw new IllegalStateException("open failed");
@@ -119,7 +117,7 @@ final class MinecraftWorldSessionHostTest {
     @Test
     void compositeCloseCanSettleSceneWorkBetweenInvalidationAndOwnerDrain() {
         List<String> events = new ArrayList<>();
-        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost(OPTIONS);
+        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost();
         host.api().sessions().add(context -> contribution("live", events, false));
         MinecraftWorldSession session = host.openSession(
                 owner -> new TestScope(Long.toString(owner.sequence()), events),

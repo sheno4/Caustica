@@ -16,6 +16,7 @@ import dev.comfyfluffy.caustica.settings.DisplayText;
 import dev.comfyfluffy.caustica.settings.FeatureCategory;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.settings.SettingsAccess;
 
 /** Registers the renderer's diagnostic program implementations and settings. */
 public final class BuiltinExtension implements CausticaExtension, CausticaSettingsExtension {
@@ -38,9 +39,15 @@ public final class BuiltinExtension implements CausticaExtension, CausticaSettin
     private static final ShaderSource SHADERS = ShaderSource.classpath(
             BuiltinExtension.class, "/caustica/shaders/builtin", "surface", "sky");
 
+    private SettingsAccess options;
+
+    @Override
+    public void settingsReady(SettingsAccess settings) {
+        options = settings;
+    }
+
     @Override
     public void register(CausticaApi api) {
-        var options = api.options();
         api.sessions().add(context -> {
             ProgramRegistration<Programs> registration = context.program().register(builder -> new Programs(
                     builder.surface(SurfaceDefinition.of(

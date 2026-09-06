@@ -36,12 +36,11 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineSessionServicesTest {
-    private static final dev.comfyfluffy.caustica.settings.SettingsAccess OPTIONS = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
     @Test
     void twoContributionsShareTheRendererServicesButRetireTheirPassesIndependently() {
         ImmediatePassBackend passBackend = new ImmediatePassBackend();
         EngineSessionServices services = services(passBackend);
-        RenderSessionHost host = new RenderSessionHost(OPTIONS);
+        RenderSessionHost host = new RenderSessionHost();
         List<String> events = new ArrayList<>();
         List<Object> programChannels = new ArrayList<>();
 

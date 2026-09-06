@@ -46,8 +46,8 @@ final class CausticaClientCompositionTest {
         MinecraftOptions.register(settings);
         CausticaOptions options = CausticaOptions.load(temporaryDirectory.resolve("options.toml"), settings);
         CausticaConfig.install(options);
-        RenderSessionHost renderHost = new RenderSessionHost(options);
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
+        RenderSessionHost renderHost = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         SlangRuntime slang = new SlangRuntime(new SlangRuntimeConfig(
                 temporaryDirectory.resolve("slang"), Optional.empty()));
         Path shaderCache = temporaryDirectory.resolve("shaders");

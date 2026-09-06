@@ -28,11 +28,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineWorldSessionTest {
-    private static final dev.comfyfluffy.caustica.settings.SettingsAccess OPTIONS = new dev.comfyfluffy.caustica.settings.testing.InMemorySettings();
     @Test
     void ownsGenericRenderContributionsAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();
-        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        RenderSessionHost renderHost = new RenderSessionHost();
         renderHost.api().sessions().add(context -> contribution("core", events));
 
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
@@ -53,7 +52,7 @@ final class EngineWorldSessionTest {
 
     @Test
     void closeSettlesAcceptedSceneWorkWithoutAnotherFrame() {
-        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        RenderSessionHost renderHost = new RenderSessionHost();
         AsyncSceneBackend scenes = new AsyncSceneBackend();
         EngineWorldSession session = new EngineWorldSession(renderHost, GPU, COMPUTE, PROGRAMS, scenes, (mesh, source) -> { throw new AssertionError(); }, PASSES,
                 failure -> { throw new AssertionError(failure); });
@@ -66,7 +65,7 @@ final class EngineWorldSessionTest {
     @Test
     void closeContinuesAfterSceneSettlementFailureAndSuppressesLaterFailures() {
         List<String> events = new ArrayList<>();
-        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        RenderSessionHost renderHost = new RenderSessionHost();
         renderHost.api().sessions().add(context -> contribution("core", events));
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
             @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
@@ -89,7 +88,7 @@ final class EngineWorldSessionTest {
 
     @Test
     void creationFailureStillCrossesSceneSettlementBoundary() {
-        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        RenderSessionHost renderHost = new RenderSessionHost();
         renderHost.api().sessions().add(context -> { throw new IllegalStateException("open"); });
         AsyncSceneBackend scenes = new AsyncSceneBackend();
 
@@ -103,7 +102,7 @@ final class EngineWorldSessionTest {
 
     @Test
     void creationFailureRemainsPrimaryWhenSettlementAlsoFails() {
-        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        RenderSessionHost renderHost = new RenderSessionHost();
         renderHost.api().sessions().add(context -> { throw new IllegalStateException("open"); });
         RetainedSceneBackend scenes = new RetainedSceneBackend() {
             @Override public void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {

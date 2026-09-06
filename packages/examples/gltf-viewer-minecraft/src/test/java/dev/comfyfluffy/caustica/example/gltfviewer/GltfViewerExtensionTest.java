@@ -34,7 +34,7 @@ final class GltfViewerExtensionTest {
         extension.registerMinecraft(new MinecraftApi(factory -> {
             minecraftFactory.set(factory);
             return () -> { };
-        }, new dev.comfyfluffy.caustica.settings.testing.InMemorySettings()));
+        }));
         CaptureProgram programs = new CaptureProgram();
 
         ProgramRegistration<GltfProgramExports> registration = GltfProgramContent.register(programs);

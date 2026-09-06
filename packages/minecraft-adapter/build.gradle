@@ -8,7 +8,6 @@ base { archivesName = "caustica-minecraft-adapter" }
 repositories { mavenCentral() }
 
 dependencies {
-    testImplementation testFixtures(project(":packages:settings-api"))
     api project(":packages:engine")
     api project(":packages:minecraft-api")
     testImplementation platform("org.junit:junit-bom:5.12.2")

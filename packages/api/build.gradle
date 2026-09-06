@@ -16,9 +16,7 @@ repositories {
 }
 
 dependencies {
-    testImplementation testFixtures(project(":packages:settings-api"))
     api project(":packages:shader-api")
-    api project(":packages:settings-api")
     api "org.joml:joml:${project.joml_version}"
     api "org.lwjgl:lwjgl:${project.lwjgl_version}"
     api "org.lwjgl:lwjgl-vulkan:${project.lwjgl_version}"

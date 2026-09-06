@@ -108,7 +108,7 @@ final class MinecraftRtRuntimeStatusTest {
     }
 
     private MinecraftRtRuntime runtime() {
-        return new MinecraftRtRuntime(new RenderSessionHost(options), new MinecraftWorldSessionHost(options),
+        return new MinecraftRtRuntime(new RenderSessionHost(), new MinecraftWorldSessionHost(),
                 new SlangRuntime(new SlangRuntimeConfig(temporaryDirectory.resolve("slang"), Optional.empty())),
                 temporaryDirectory.resolve("shaders"), new RtTelemetryImpl(),
                 new NgxRuntime.Settings(temporaryDirectory.resolve("ngx"), Optional.empty()));
