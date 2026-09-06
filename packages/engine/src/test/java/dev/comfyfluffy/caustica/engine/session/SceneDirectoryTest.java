@@ -21,6 +21,66 @@ final class SceneDirectoryTest {
     private static final ShaderDataType<Instance> INSTANCE=ShaderDataType.create("instance");
     private static final ShaderDataType<EnvironmentBindingData> ENVIRONMENT_BINDING=ShaderDataType.create("environment");
 
+    @Test void unrelatedLightIdentitiesDoNotSpreadInstancesAndMeshesAcrossPages() {
+        var f = new Fixture();
+        for (int index = 0; index < 257; index++) {
+            for (int light = 0; light < 128; light++) f.channel.newLight();
+            var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+            f.channel.edit(List.of(set(f.channel.newInstance(), f.scene, ready)));
+            ready.close();
+        }
+        try (var frame = f.capture.get()) {
+            var snapshot = frame.get();
+            assertEquals(257, snapshot.instances().size());
+            assertEquals(257, snapshot.meshes().size());
+            assertEquals(257, snapshot.meshes().stream().map(value -> value.identity() / 128).distinct().count());
+            assertEquals(3, SnapshotList.pagesOf(snapshot.instances()).size());
+            assertEquals(3, SnapshotList.pagesOf(snapshot.meshes()).size());
+            assertEquals(List.of(128, 128, 1), SnapshotList.pagesOf(snapshot.instances()).stream().map(List::size).toList());
+            assertEquals(List.of(128, 128, 1), SnapshotList.pagesOf(snapshot.meshes()).stream().map(List::size).toList());
+            assertEquals(java.util.stream.LongStream.range(0, 257).boxed().toList(),
+                    snapshot.instances().stream().map(RetainedSceneSnapshot.Instance::placementOrdinal).toList());
+        }
+        f.channel.invalidate();
+    }
+
+    @Test void lightEditsReplaceOnlyTheirPageAndPreserveInsertionOrder() {
+        var f = new Fixture();
+        var lights = new ArrayList<LightId>();
+        var edits = new ArrayList<SceneEdit>();
+        var descriptor = new LightDescriptor.Distant(0, 1, 0, 1, 1, 1, 0, false);
+        for (int index = 0; index < 260; index++) {
+            for (int instance = 0; instance < 128; instance++) f.channel.newInstance();
+            var id = f.channel.newLight();
+            lights.add(id);
+            edits.add(new SceneEdit.SetLight(id, f.scene, descriptor));
+        }
+        f.channel.edit(edits);
+        try (var first = f.capture.get()) {
+            var original = SnapshotList.pagesOf(first.get().lights());
+            assertEquals(List.of(128, 128, 4), original.stream().map(List::size).toList());
+            var replacement = new LightDescriptor.Distant(0, 1, 0, 2, 3, 4, 0, false);
+            f.channel.edit(List.of(new SceneEdit.SetLight(lights.get(129), f.scene, replacement)));
+            try (var changed = f.capture.get()) {
+                var pages = SnapshotList.pagesOf(changed.get().lights());
+                assertSame(original.get(0), pages.get(0));
+                assertNotSame(original.get(1), pages.get(1));
+                assertSame(original.get(2), pages.get(2));
+                assertEquals(first.get().lights().get(129).identity(), changed.get().lights().get(129).identity());
+                assertEquals(replacement, changed.get().lights().get(129).descriptor());
+                assertEquals(descriptor, first.get().lights().get(129).descriptor());
+                f.channel.edit(lights.subList(0, 128).stream().map(SceneEdit.DropLight::new).toList());
+                try (var removed = f.capture.get()) {
+                    assertEquals(132, removed.get().lights().size());
+                    assertSame(pages.get(1), SnapshotList.pagesOf(removed.get().lights()).getFirst());
+                    assertEquals(changed.get().lights().get(128), removed.get().lights().getFirst());
+                }
+            }
+        }
+        f.channel.invalidate();
+        try (var empty = f.capture.get()) { assertTrue(empty.get().lights().isEmpty()); }
+    }
+
     @Test void preparationDoesNotPublishAndEditPublishesWholeGroupImmediately() {
         var f=new Fixture();var pending=new CompletableFuture<ResourceOwner>();f.preparing=pending;
         var first=f.channel.prepare(INSTANCE,mesh(f.surface));

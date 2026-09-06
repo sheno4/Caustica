@@ -27,6 +27,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -166,8 +167,15 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     private void writePrimitives(ByteBuffer bytes, MinecraftEntityMesh source, float[] positions,
                                  int[] indices, float[] uvs, float[] colors,
                                  TextureSet textureSet) {
+        var materialIndices = new HashMap<MinecraftEntityMesh.Material, Integer>();
         for (int t = 0; t < source.triangleCount(); t++) {
             var triangle = source.triangles().get(t);
+            var material = triangle.material();
+            Integer materialIndex = materialIndices.get(material);
+            if (materialIndex == null) {
+                materialIndex = materials.resolveEntityOrFallback(materialKey(material)).materialIndex();
+                materialIndices.put(material, materialIndex);
+            }
             MinecraftPrimitiveData.Float2[] uv = new MinecraftPrimitiveData.Float2[3];
             for (int corner = 0; corner < 3; corner++) {
                 int vertex = indices[t * 3 + corner];
@@ -185,7 +193,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                     ? null : textureSet.samplerIndices.get(triangle.material().texture());
             TangentBasis basis = tangentBasis(positions, indices, uvs, t);
             var record = primitiveRecord(triangle, uv, vertexColors,
-                    materials.resolveEntityOrFallback(materialKey(triangle.material())).materialIndex(),
+                    materialIndex,
                     descriptor, samplerDescriptor, basis);
             record.write(bytes.slice(t * MinecraftPrimitiveData.BYTE_SIZE, MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
         }

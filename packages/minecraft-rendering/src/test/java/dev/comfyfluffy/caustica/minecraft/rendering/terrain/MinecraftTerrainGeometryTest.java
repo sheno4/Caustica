@@ -84,6 +84,62 @@ final class MinecraftTerrainGeometryTest {
         terrain.close();
     }
 
+    @Test void repeatedReplacementsCommitInLastOccurrenceOrderAndRejectionKeepsEveryOwner() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        var first = prepared(terrain, scene, 1);
+        var second = prepared(terrain, scene, 2);
+        var untouched = prepared(terrain, scene, 3);
+        terrain.edit(List.of(first, second, untouched));
+        var intermediate = prepared(terrain, scene, 1);
+        var replacementSecond = prepared(terrain, scene, 2);
+        var replacementFirst = prepared(terrain, scene, 1);
+        var changes = List.of(intermediate, replacementSecond, replacementFirst);
+
+        scene.reject = true;
+        assertThrows(IllegalStateException.class, () -> terrain.edit(changes));
+        assertEquals(List.of(1L, 2L, 3L), terrain.sectionKeys());
+        assertEquals(1, scene.edits.size());
+        scene.jobs.forEach(job -> assertEquals(0, job.releases));
+
+        terrain.edit(changes);
+        assertEquals(List.of(3L, 2L, 1L), terrain.sectionKeys());
+        assertEquals(2, scene.edits.size());
+        var originalInstance = ((SceneEdit.SetInstance<?>) scene.edits.getFirst().getFirst()).instance();
+        var updates = scene.edits.getLast();
+        assertSame(originalInstance, ((SceneEdit.SetInstance<?>) updates.getFirst()).instance());
+        assertSame(originalInstance, ((SceneEdit.SetInstance<?>) updates.getLast()).instance());
+        assertEquals(List.of(1, 1, 0, 1, 0, 0), scene.jobs.stream().map(job -> job.releases).toList());
+        terrain.close();
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+    }
+
+    @Test void repeatedDropDoesNotRestoreResidentEntryBeforeReinsertion() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        terrain.edit(List.of(prepared(terrain, scene, 1), prepared(terrain, scene, 2)));
+        var originalInstance = ((SceneEdit.SetInstance<?>) scene.edits.getFirst().getFirst()).instance();
+        var replacement = prepared(terrain, scene, 1);
+        terrain.edit(List.of(new MinecraftTerrainGeometry.Drop(1), new MinecraftTerrainGeometry.Drop(1), replacement));
+        assertEquals(List.of(2L, 1L), terrain.sectionKeys());
+        assertEquals(2, scene.edits.size());
+        var updates = scene.edits.getLast();
+        assertEquals(2, updates.size());
+        assertSame(originalInstance, ((SceneEdit.DropInstance) updates.getFirst()).instance());
+        assertNotSame(originalInstance, ((SceneEdit.SetInstance<?>) updates.getLast()).instance());
+        assertEquals(1, scene.jobs.getFirst().releases);
+        assertEquals(0, scene.jobs.getLast().releases);
+        terrain.close();
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+    }
+
+    private static MinecraftTerrainGeometry.Prepared prepared(MinecraftTerrainGeometry terrain,
+                                                               PreparedScene scene, long key) {
+        var future = terrain.prepare(new MinecraftTerrainGeometry.Put(key, 0, 0, 0, mesh()));
+        scene.jobs.getLast().complete();
+        return future.join();
+    }
+
     @Test
     void primitiveUploadCarriesUvTintEmissionAndAnOutwardTangentBasis() {
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);

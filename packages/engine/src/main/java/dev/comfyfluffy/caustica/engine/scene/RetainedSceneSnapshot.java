@@ -16,7 +16,7 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
         scenes = List.copyOf(scenes);
         meshes = immutable(meshes);
         instances = immutable(instances);
-        lights = List.copyOf(lights);
+        lights = immutable(lights);
     }
 
     private static <T> List<T> immutable(List<T> values) {

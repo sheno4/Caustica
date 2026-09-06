@@ -43,11 +43,13 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
 
     /** Consumes prepared resources only after the entire direct scene edit succeeds. */
     public void edit(List<? extends ReadyChange> changes) {
-        var next = new LinkedHashMap<>(sections);
+        // Null stages removal; removing a staged key places its final replacement last.
+        var next = new LinkedHashMap<Long, Section>();
         var edits = new ArrayList<SceneEdit>();
         var displaced = new ArrayList<Prepared>();
         for (var change : changes) {
-            var previous = next.remove(change.sectionKey());
+            long key = change.sectionKey();
+            var previous = next.containsKey(key) ? next.remove(key) : sections.get(key);
             if (previous != null) {
                 previous.lights.forEach(light -> edits.add(new SceneEdit.DropLight(light)));
                 displaced.add(previous.prepared);
@@ -67,13 +69,16 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                         GeometryTransform.translation(put.originX(), put.originY(), put.originZ()),
                         0xff, prepared.uploaded.instanceData(), new PrimitiveLightMap(ranges)));
                 next.put(put.sectionKey(), new Section(instance, List.copyOf(lightIds), prepared));
-            } else if (previous != null) {
-                edits.add(new SceneEdit.DropInstance(previous.instance));
+            } else {
+                next.put(key, null);
+                if (previous != null) edits.add(new SceneEdit.DropInstance(previous.instance));
             }
         }
         if (!edits.isEmpty()) channel.edit(edits);
-        sections.clear();
-        sections.putAll(next);
+        next.forEach((key, section) -> {
+            sections.remove(key);
+            if (section != null) sections.put(key, section);
+        });
         displaced.forEach(Prepared::close);
     }
 

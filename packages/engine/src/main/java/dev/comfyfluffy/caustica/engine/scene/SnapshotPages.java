@@ -17,6 +17,8 @@ final class SnapshotPages<T> {
     private final TreeMap<Long, Bucket<T>> buckets = new TreeMap<>();
     private SharedResource<List<T>> captured;
 
+    void put(long identity, T value) { put(identity, value, null); }
+
     void put(long identity, T value, SharedResource<?> owner) {
         invalidate();
         var bucket = buckets.computeIfAbsent(identity / PAGE_SIZE, ignored -> new Bucket<>());
@@ -64,11 +66,11 @@ final class SnapshotPages<T> {
 
         SharedResource<List<T>> capture() {
             if (captured == null) {
-                var owners = new ArrayList<SharedResource<?>>(entries.size());
+                var owners = new ArrayList<SharedResource<?>>(entries.firstEntry().getValue().owner == null ? 0 : entries.size());
                 var values = new ArrayList<T>(entries.size());
                 for (var entry : entries.values()) {
                     values.add(entry.value);
-                    owners.add(entry.owner.retain());
+                    if (entry.owner != null) owners.add(entry.owner.retain());
                 }
                 captured = SharedResource.owned(List.copyOf(values), ignored -> owners.forEach(SharedResource::close));
             }

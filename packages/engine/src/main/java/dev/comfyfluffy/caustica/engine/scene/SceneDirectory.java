@@ -32,16 +32,20 @@ public final class SceneDirectory {
     private final MeshPreparationBackend preparation;
     private final Set<SceneRef> scenes = new LinkedHashSet<>();
     private final Map<InstanceRef, RetainedInstance> instances = new LinkedHashMap<>();
-    private final Map<LightRef, RetainedSceneSnapshot.Light> lights = new LinkedHashMap<>();
+    private final Map<LightRef, RetainedLight> lights = new LinkedHashMap<>();
     private final Map<SceneRef, LinkedHashMap<Object, RetainedEnvironment>> selections = new LinkedHashMap<>();
     private final SnapshotPages<RetainedSceneSnapshot.Instance> instancePages = new SnapshotPages<>();
     private final SnapshotPages<RetainedSceneSnapshot.Mesh> meshPages = new SnapshotPages<>();
+    private final SnapshotPages<RetainedSceneSnapshot.Light> lightPages = new SnapshotPages<>();
     private final Map<Long, MeshUse> meshUses = new LinkedHashMap<>();
     private SharedResource<RetainedSceneSnapshot> captured;
     private List<RetainedSceneSnapshot.Scene> sceneValues;
-    private List<RetainedSceneSnapshot.Light> lightValues;
     private long snapshotProgramRevision = -1;
     private long identity;
+    // Per-kind ordering keeps unrelated identities from leaving nearly empty snapshot pages.
+    private long instanceOrdinal;
+    private long meshOrdinal;
+    private long lightOrdinal;
     private long revision;
 
     public SceneDirectory(ProgramSession programs,
@@ -66,7 +70,7 @@ public final class SceneDirectory {
     public synchronized void dropScene(SceneId id) {
         SceneRef scene = requireScene(id);
         removeInstances(entry -> entry.getValue().value.scene() == scene);
-        if (lights.values().removeIf(value -> value.scene() == scene)) lightValues = null;
+        removeLights(entry -> entry.getValue().value.scene() == scene);
         var removed = selections.remove(scene);
         if (removed != null) removed.values().forEach(RetainedEnvironment::close);
         scenes.remove(scene);
@@ -102,6 +106,7 @@ public final class SceneDirectory {
         ResourceOwners inputs;
         ReadyMesh<N> sourceClaim;
         RetainedSceneSnapshot.Mesh mesh;
+        long ordinal;
         synchronized (this) {
             requireCreation(channel);
             Objects.requireNonNull(type);
@@ -126,6 +131,7 @@ public final class SceneDirectory {
                 if (sourceClaim != null) sourceClaim.close();
                 throw failure;
             }
+            ordinal = meshOrdinal++;
             channel.preparations.add(terminal);
         }
         try {
@@ -136,7 +142,7 @@ public final class SceneDirectory {
                         inputs.close();
                         result.completeExceptionally(error);
                     } else {
-                        ReadyState<N> state = new ReadyState<>(this, mesh, type, nativeOwner, inputs);
+                        ReadyState<N> state = new ReadyState<>(this, mesh, ordinal, type, nativeOwner, inputs);
                         ReadyClaim<N> claim = new ReadyClaim<>(state);
                         claim.producer = channel;
                         synchronized (this) {
@@ -192,7 +198,7 @@ public final class SceneDirectory {
                 validateInstance(channel, set);
                 RetainedInstance current = changedInstances.containsKey(id) ? changedInstances.get(id) : instances.get(id);
                 changedInstances.put(id, new RetainedInstance(set,
-                        current == null ? ++identity : current.placementOrdinal, null, primitiveEmitters(set)));
+                        current == null ? instanceOrdinal++ : current.placementOrdinal, null, primitiveEmitters(set)));
             } else if (edit instanceof SceneEdit.DropInstance drop) {
                 changedInstances.put(requireInstance(channel, drop.instance()), null);
             } else if (edit instanceof SceneEdit.SetTransform set) {
@@ -248,10 +254,19 @@ public final class SceneDirectory {
             }
             if (previous != null && (entry == null || previous.resources != entry.resources)) retired.add(previous.resources);
         });
-        if (!changedLights.isEmpty()) lightValues = null;
         changedLights.forEach((id, value) -> {
-            if (value == null) lights.remove(id);
-            else lights.put(id, new RetainedSceneSnapshot.Light(id.identity, value.scene(), value.descriptor()));
+            var previous = lights.get(id);
+            if (value == null) {
+                if (previous != null) {
+                    lights.remove(id);
+                    lightPages.remove(previous.ordinal);
+                }
+            } else {
+                long ordinal = previous == null ? lightOrdinal++ : previous.ordinal;
+                var light = new RetainedSceneSnapshot.Light(id.identity, value.scene(), value.descriptor());
+                lights.put(id, new RetainedLight(ordinal, light));
+                lightPages.put(ordinal, light);
+            }
         });
         environments.forEach((scene, entry) -> replaceEnvironment(scene, channel, entry));
         changed();
@@ -333,6 +348,14 @@ public final class SceneDirectory {
         });
     }
 
+    private void removeLights(java.util.function.Predicate<Map.Entry<LightRef, RetainedLight>> predicate) {
+        lights.entrySet().removeIf(entry -> {
+            if (!predicate.test(entry)) return false;
+            lightPages.remove(entry.getValue().ordinal);
+            return true;
+        });
+    }
+
     private void removeEnvironments(Object slot) {
         selections.values().forEach(values -> {
             RetainedEnvironment previous = values.remove(slot);
@@ -351,7 +374,7 @@ public final class SceneDirectory {
         if (!channel.acceptingEdits) return;
         quiesce(channel);
         removeInstances(entry -> entry.getKey().owner == channel);
-        if (lights.keySet().removeIf(id -> id.owner == channel)) lightValues = null;
+        removeLights(entry -> entry.getKey().owner == channel);
         removeEnvironments(channel);
         changed();
         channel.acceptingEdits = false;
@@ -400,7 +423,7 @@ public final class SceneDirectory {
         use = new MeshUse(ready);
         meshUses.put(id, use);
         synchronized (programs) {
-            meshPages.put(id, ready.snapshot(programs.resolutionRevision()), use.owner);
+            meshPages.put(ready.state.ordinal, ready.snapshot(programs.resolutionRevision()), use.owner);
         }
     }
 
@@ -409,7 +432,7 @@ public final class SceneDirectory {
         var use = meshUses.get(id);
         if (--use.instances != 0) return;
         meshUses.remove(id);
-        meshPages.remove(id);
+        meshPages.remove(use.ready.state.ordinal);
         use.owner.close();
     }
 
@@ -435,12 +458,13 @@ public final class SceneDirectory {
             if (snapshotProgramRevision != programRevision) {
                 if (captured != null) captured.close();
                 captured = null;
-                meshUses.forEach((id, use) -> meshPages.put(id, use.ready.snapshot(programRevision), use.owner));
+                meshUses.forEach((id, use) -> meshPages.put(use.ready.state.ordinal, use.ready.snapshot(programRevision), use.owner));
                 snapshotProgramRevision = programRevision;
             }
             if (captured == null) {
                 var instanceClaim = instancePages.capture();
                 var meshClaim = meshPages.capture();
+                var lightClaim = lightPages.capture();
                 var owners = new ArrayList<SharedResource<ResourceOwners>>(scenes.size());
                 selections.values().forEach(values -> {
                     if (!values.isEmpty()) owners.add(values.lastEntry().getValue().owner.retain());
@@ -452,12 +476,12 @@ public final class SceneDirectory {
                     }
                     sceneValues = List.copyOf(values);
                 }
-                if (lightValues == null) lightValues = List.copyOf(lights.values());
                 var value = new RetainedSceneSnapshot(revision, sceneValues, meshClaim.get(),
-                        instanceClaim.get(), lightValues);
+                        instanceClaim.get(), lightClaim.get());
                 captured = SharedResource.owned(value, ignored -> {
                     instanceClaim.close();
                     meshClaim.close();
+                    lightClaim.close();
                     owners.forEach(SharedResource::close);
                 });
             }
@@ -468,6 +492,8 @@ public final class SceneDirectory {
     private static EnvironmentBinding<?> selectedEnvironment(LinkedHashMap<Object, RetainedEnvironment> selections) {
         return selections == null || selections.isEmpty() ? null : selections.lastEntry().getValue().binding;
     }
+
+    private record RetainedLight(long ordinal, RetainedSceneSnapshot.Light value) { }
 
     private static final class RetainedInstance {
         final SceneEdit.SetInstance<?> value;
@@ -599,17 +625,20 @@ public final class SceneDirectory {
     private static final class ReadyState<N> {
         final SceneDirectory directory;
         final RetainedSceneSnapshot.Mesh mesh;
+        final long ordinal;
         final ShaderDataType<N> type;
         final ResourceOwner nativeOwner;
         final SharedResource<ReadyState<N>> initial;
 
         ReadyState(SceneDirectory directory,
                 RetainedSceneSnapshot.Mesh mesh,
+                long ordinal,
                 ShaderDataType<N> type,
                 ResourceOwner nativeOwner,
                 ResourceOwners inputs) {
             this.directory = directory;
             this.mesh = mesh;
+            this.ordinal = ordinal;
             this.type = type;
             this.nativeOwner = nativeOwner;
             initial = SharedResource.owned(this, ignored -> {

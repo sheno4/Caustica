@@ -32,7 +32,7 @@ public final class RtEntityCapture implements VertexConsumer {
     final IntArrayList idx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY)); // 3 indices/triangle
     final FloatArrayList uvList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 2);  // 2 floats/vertex (entity-texture UV)
     final FloatArrayList colorList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 4); // scene-linear float4/vertex
-    final List<MinecraftEntityMesh.Triangle> surfaces = new ArrayList<>();
+    final ArrayList<MinecraftEntityMesh.Triangle> surfaces = new ArrayList<>(indexCapacity(DEFAULT_VERTEX_CAPACITY) / 3);
     // Reset to the diagnostic material so a producer path that omits material selection fails visibly.
     MinecraftEntityMesh.Material currentMaterial = fallbackMaterial();
     MinecraftEntityMesh.Coverage currentCoverage = MinecraftEntityMesh.Coverage.CUTOUT;
@@ -75,6 +75,7 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.ensureCapacity(indexCapacity(vertexCount));
         uvList.ensureCapacity(vertexCount * 2);
         colorList.ensureCapacity(vertexCount * 4);
+        surfaces.ensureCapacity(indexCapacity(vertexCount) / 3);
     }
 
     /** Reserve room for an upcoming direct-model submission without changing any logical sizes. */
