@@ -136,7 +136,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames(),
                     "operations", List.of("schema", "status",
-                    "settings.get", "settings.set", "view.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
+                    "settings.get", "settings.set", "view.set", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
             case "status" -> future.complete(status());
             case "settings.get" -> future.complete(settings());
             case "settings.set" -> {
@@ -169,6 +169,14 @@ public final class MinecraftDebugService implements AutoCloseable {
                     throw new IllegalArgumentException("Specify positive frames or ticks");
                 requireWorld();
                 waits.add(new FrameWait(Math.addExact(frames, frameCount), Math.addExact(ticks, tickCount), future));
+            }
+            case "input.set" -> {
+                requireWorld();
+                client.setScreenAndShow(null);
+                client.options.keyUp.setDown(request.has("forward") && request.get("forward").getAsBoolean());
+                client.options.keySprint.setDown(request.has("sprint") && request.get("sprint").getAsBoolean());
+                future.complete(Map.of("forward", client.options.keyUp.isDown(),
+                        "sprint", client.options.keySprint.isDown()));
             }
             case "command" -> command(request, future);
             case "screenshot", "image.capture" -> {
@@ -261,6 +269,8 @@ public final class MinecraftDebugService implements AutoCloseable {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ready", client.level != null && client.player != null);
         result.put("paused", client.isPaused());
+        result.put("window", Map.of("width", client.getWindow().getWidth(),
+                "height", client.getWindow().getHeight()));
         result.put("frames", frames);
         result.put("ticks", ticks);
         result.put("frameActive", CausticaClientComposition.current().runtime().frameActive());

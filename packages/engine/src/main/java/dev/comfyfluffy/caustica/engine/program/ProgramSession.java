@@ -44,6 +44,7 @@ public final class ProgramSession {
     private final Queue<CallbackTask> callbacks = new ArrayDeque<>();
     private List<Registration<?>> published = List.of();
     private ProgramBackend.CompiledProgram activeProgram;
+    private long resolutionRevision;
     private BuildRequest inFlight;
     private final int[] nextDeclarationSequences = new int[ProgramKey.Kind.values().length];
     private boolean declarationActive;
@@ -99,6 +100,9 @@ public final class ProgramSession {
             }
         }
     }
+
+    /** Changes whenever published implementation resolution can change. */
+    public synchronized long resolutionRevision() { return resolutionRevision; }
 
     /** Returns the published implementation index, or zero for a stale/foreign surface. */
     public synchronized int resolve(SurfaceId<?, ?> id) {
@@ -293,6 +297,7 @@ public final class ProgramSession {
             event.request.target.forEach(registration -> registration.published = true);
             activeProgram = candidate;
             published = event.request.target;
+            resolutionRevision++;
             if (event.request.introduced != null) event.request.introduced.ready();
         }
     }

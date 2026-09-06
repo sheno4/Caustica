@@ -262,8 +262,11 @@ public final class RtFrameRenderer {
     /** Capture the immutable host frame for the next composite. Called from the host render adapter. */
     public void captureFrame(FrameSnapshot snapshot) {
         services.progress();
-        var captured = RtCapturedFrame.capture(Objects.requireNonNull(snapshot, "snapshot"),
-                programs::acquire, scenes::captureSnapshot);
+        RtCapturedFrame captured;
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.captureScenes")) {
+            captured = RtCapturedFrame.capture(Objects.requireNonNull(snapshot, "snapshot"),
+                    programs::acquire, scenes::captureSnapshot, telemetry::publicationCutoff);
+        }
         releaseCapturedFrame();
         frameSnapshot = SharedResource.owned(captured, RtCapturedFrame::close);
     }
@@ -418,7 +421,9 @@ public final class RtFrameRenderer {
         execution = new FrameExecution(graphicsUse);
         graphicsUse.keepAlive(captured.retain());
         RtProgramBackend.Published program = captured.get().program().get();
-        scenes.beginFrame(captured.get().scenes(), graphicsUse);
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.assembleScenes")) {
+            scenes.beginFrame(captured.get().scenes(), graphicsUse);
+        }
         GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter = graphics.graphicsUseWaiter();
         presentationResources().exposure().beginFrame(graphicsUseWaiter, telemetry.frameSerial());
         execution.frame = history.capture(snapshot, frameCounter, System.nanoTime(), traceExtent(),
@@ -428,7 +433,8 @@ public final class RtFrameRenderer {
         try (RtFrameCommands commands = new RtFrameCommands(ctx, gpuTiming, graphicsUse, telemetry.frameSerial());
              MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer cmd = commands.heap("world resources and trace");
-            recordTrace(ctx, cmd, stack, graphicsUse, program, execution.frame, commands);
+            recordTrace(ctx, cmd, stack, graphicsUse, program, execution.frame, commands,
+                    captured.get().publicationCutoff());
             var output = reconstruction.record(commands, stack, graphicsUse, execution.frame,
                     traceResources(), presentationResources());
             recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
@@ -457,7 +463,7 @@ public final class RtFrameRenderer {
 
     private void recordTrace(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
             GraphicsUse graphicsUse, RtProgramBackend.Published program, RtFrameInput frame,
-            RtFrameCommands commands) {
+            RtFrameCommands commands, long publicationCutoff) {
         FrameSnapshot snapshot = frame.snapshot();
         SceneOrigin sceneOrigin = snapshot.sceneOrigin();
         SceneId entryScene = snapshot.view().entryScene();
@@ -475,7 +481,6 @@ public final class RtFrameRenderer {
         double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
         Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                 sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
-        long publicationCutoff = telemetry.publicationCutoff();
         EnvironmentBinding<?> environment = scenes.content(entryScene, graphicsUse).environment();
         telemetry.frameAssembled(publicationCutoff);
         EnvironmentPush environmentState = environmentPush(environment,

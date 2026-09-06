@@ -62,8 +62,8 @@ public final class MinecraftTerrainSession {
     public void stop() {
         terrain.clearMaterialLookup();
         if (geometry == null) return;
-        geometry.close();
         terrain.unbindGeometry(geometry);
+        geometry.close();
         geometry = null;
     }
 

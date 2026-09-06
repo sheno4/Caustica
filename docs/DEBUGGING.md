@@ -33,6 +33,7 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | `settings.get` | Setting IDs, values and whether JVM overrides apply |
 | `settings.set` | `values` mapping setting IDs to primitive values; JVM overrides cannot be changed |
 | `view.set` | `name` from schema; `off` restores normal presentation |
+| `input.set` | `forward` and `sprint` booleans (default false); closes the current screen and holds the corresponding game keys for continuous flight. Use spectator mode and a level camera for repeatable routes; call with no arguments to release both keys. |
 | `wait` | `frames` and/or `ticks`; world required, counts must advance |
 | `command` | `command` without slash; default `target:server` executes on the integrated server with player permissions and returns a result; `target:client` sends through the normal network connection and confirms dispatch only |
 | `screenshot` | PNG path after completion |

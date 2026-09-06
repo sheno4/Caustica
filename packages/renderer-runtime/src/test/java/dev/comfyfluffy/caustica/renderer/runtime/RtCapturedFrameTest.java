@@ -24,7 +24,7 @@ final class RtCapturedFrameTest {
         var scene = SharedResource.owned(new RetainedSceneSnapshot(7, List.of(), List.of(), List.of(), List.of()),
                 ignored -> destroyed.incrementAndGet());
         var inputs = inputs();
-        var captured = SharedResource.owned(RtCapturedFrame.capture(inputs, program::retain, scene::retain),
+        var captured = SharedResource.owned(RtCapturedFrame.capture(inputs, program::retain, scene::retain, () -> 0L),
                 RtCapturedFrame::close);
         program.close();
         scene.close();
@@ -43,7 +43,7 @@ final class RtCapturedFrameTest {
         var destroyed = new AtomicInteger();
         var program = program(destroyed);
         assertThrows(IllegalStateException.class, () -> RtCapturedFrame.capture(inputs(), program::retain,
-                () -> { throw new IllegalStateException("scene capture failed"); }));
+                () -> { throw new IllegalStateException("scene capture failed"); }, () -> 0L));
         program.close();
         assertEquals(1, destroyed.get());
     }
@@ -62,7 +62,7 @@ final class RtCapturedFrameTest {
                     new SceneOrigin(0, 0, 0), false, 0, 1);
             var scene = SharedResource.owned(new RetainedSceneSnapshot(1, List.of(), List.of(), List.of(), List.of()),
                     ignored -> { });
-            var captured = RtCapturedFrame.capture(inputs, () -> null, scene::retain);
+            var captured = RtCapturedFrame.capture(inputs, () -> null, scene::retain, () -> 0L);
             binding.close();
             instance.close();
             dependency.close();
@@ -77,6 +77,29 @@ final class RtCapturedFrameTest {
             reader.close();
             resources.awaitRetirements();
             assertEquals(1, destroyed.get());
+        }
+    }
+
+    @Test void publicationsAfterSceneCaptureWaitForTheNextFrame() {
+        var telemetry = new RtTelemetryImpl();
+        var visible = new java.util.ArrayList<String>();
+        try (var scene = SharedResource.owned(
+                new RetainedSceneSnapshot(1, List.of(), List.of(), List.of(), List.of()), ignored -> { })) {
+            telemetry.beginRenderFrame();
+            telemetry.afterPublicationVisible(frame -> visible.add("before:" + frame));
+            try (var captured = RtCapturedFrame.capture(inputs(), () -> null, scene::retain,
+                    telemetry::publicationCutoff)) {
+                telemetry.afterPublicationVisible(frame -> visible.add("after:" + frame));
+                telemetry.frameAssembled(captured.publicationCutoff());
+                assertEquals(List.of("before:1"), visible);
+            }
+            telemetry.endFrame();
+            telemetry.beginRenderFrame();
+            try (var captured = RtCapturedFrame.capture(inputs(), () -> null, scene::retain,
+                    telemetry::publicationCutoff)) {
+                telemetry.frameAssembled(captured.publicationCutoff());
+                assertEquals(List.of("before:1", "after:2"), visible);
+            }
         }
     }
 

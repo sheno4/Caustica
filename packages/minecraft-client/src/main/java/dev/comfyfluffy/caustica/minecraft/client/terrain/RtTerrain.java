@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.WORKER_TESS;
 import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.buildCpuSection;
@@ -35,13 +36,12 @@ import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.
 public final class RtTerrain {
     private static final EventType TERRAIN_STATE_EVENT = EventType.getEventType(TerrainStateEvent.class);
     private static final EventType TERRAIN_JOB_EVENT = EventType.getEventType(TerrainJobEvent.class);
-    private static final int PUBLICATION_BUDGET = 8;
     private static final long FRAME_FALLBACK_NANOS = 200_000_000L;
 
     private final RtWorkerPool workers;
     private final MinecraftTelemetry.Instrumentation instrumentation;
     private final RtSectionSnapshots snapshots;
-    private final TerrainUpdates<Build> updates = new TerrainUpdates<>(Build::close);
+    private final TerrainUpdates<Build> updates = new TerrainUpdates<>(this::discardBuild);
     private final LongOpenHashSet columns = new LongOpenHashSet();
     private final ConcurrentLinkedQueue<List<Long>> dirty = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<Build> completed = new ConcurrentLinkedQueue<>();
@@ -51,7 +51,6 @@ public final class RtTerrain {
     private volatile boolean clearRequested;
     private volatile long epoch;
     private ClientLevel world;
-    private final ConcurrentLinkedQueue<Build> prepared = new ConcurrentLinkedQueue<>();
     private final Object preparationLock = new Object();
     private int lowY;
     private int highY;
@@ -83,6 +82,7 @@ public final class RtTerrain {
         if (this.geometry == geometry) {
             this.geometry = null;
             reset();
+            workers.shutdown();
         }
     }
 
@@ -177,7 +177,7 @@ public final class RtTerrain {
         }
         event.pendingGroups = groups.size();
         for (var group : groups) {
-            if (group.requests.stream().allMatch(request -> request.complete)) event.readyGroups++;
+            if (group.remaining == 0) event.readyGroups++;
         }
         event.neighborBlockedColumns = blockedColumns.size();
         var workerState = workers.state();
@@ -185,14 +185,19 @@ public final class RtTerrain {
         event.activeWorkers = workerState.active();
         event.queuedWorkerTasks = workerState.queued();
         event.outstandingBuilds = outstandingBuilds.get();
-        event.cpuCompletedQueue = completed.size();
-        event.preparedQueue = prepared.size();
+        event.cpuCompletedQueue = 0;
+        event.preparedQueue = completed.size();
         event.dirtyGroupsQueue = dirty.size();
         event.commit();
     }
 
     private void recordJob(Build build, String action) {
         recordJob(build.request, build.epoch, build.revision, action, build.failure != null);
+    }
+
+    private void discardBuild(Build build) {
+        recordJob(build, "discarded");
+        build.close();
     }
 
     private void recordJob(TerrainUpdates.Request<Build> request, long jobEpoch, long jobRevision,
@@ -308,55 +313,39 @@ public final class RtTerrain {
         if (geometry == null) return;
         MinecraftMaterialLookup lookup = materials;
         var settings = CausticaConfig.snapshot();
-        int limit = settings.get(MinecraftOptions.Rt.Terrain.COMPLETION_RESULTS_PER_PASS);
-        for (int i = 0; i < limit; i++) {
-            Build build = completed.poll();
-            if (build == null) break;
-            outstandingBuilds.decrementAndGet();
-            if (build.epoch != epoch || !build.materialEpoch.equals(lookup.epoch())) {
-                recordJob(build, "cpu-result-stale-epoch");
-                continue;
-            }
-            if (build.request.section.request != build.request) {
-                recordJob(build, "cpu-result-superseded");
-                continue;
-            }
-            if (build.failure != null) throw new IllegalStateException("Terrain extraction failed", build.failure);
-            if (build.cpu.mesh() == null) {
-                updates.complete(build.request, build);
-            } else if (geometry != null) {
-                long key = build.request.section.key;
-                int x = sectionX(key) << 4, y = sectionY(key) << 4, z = sectionZ(key) << 4;
-                var put = new MinecraftTerrainGeometry.Put(key, x, y, z, build.cpu.mesh(),
-                        MinecraftTerrainLightAdapter.describe(key, build.revision, x, y, z, build.cpu.lights()));
-                recordJob(build, "gpu-prepare-start");
-                var preparation = geometry.prepare(put);
-                outstandingBuilds.incrementAndGet();
-                preparation.whenComplete((mesh, failure) -> {
-                    outstandingBuilds.decrementAndGet();
-                    var result = new Build(build.request, build.epoch, build.materialEpoch, build.revision,
-                            build.cpu, failure, build.extraction, build.ready, mesh);
-                    recordJob(result, "gpu-prepare-ready");
-                    synchronized (preparationLock) {
-                        if (result.epoch != epoch) result.close();
-                        else prepared.add(result);
-                    }
-                });
-            }
+        long drainStarted = instrumentation.startStage();
+        try {
+            drainCompleted(lookup.epoch());
+        } finally {
+            instrumentation.endStage("terrain.drainCompletion", drainStarted);
         }
-        for (int i = 0; i < limit; i++) {
-            Build build = prepared.poll();
-            if (build == null) break;
-            if (build.epoch != epoch || build.request.section.request != build.request) {
+        long publishStarted = instrumentation.startStage();
+        try {
+            publishReady();
+        } finally {
+            instrumentation.endStage("terrain.publish", publishStarted);
+        }
+        long dispatchStarted = instrumentation.startStage();
+        try {
+            dispatch(mc, lookup, settings);
+        } finally {
+            instrumentation.endStage("terrain.snapshotDispatch", dispatchStarted);
+        }
+    }
+
+    void drainCompleted(ResourcePackEpoch materialEpoch) {
+        Build build;
+        while ((build = completed.poll()) != null) {
+            outstandingBuilds.decrementAndGet();
+            if (build.epoch != epoch || !build.materialEpoch.equals(materialEpoch)
+                    || build.request.section.request != build.request) {
                 recordJob(build, "prepared-result-stale");
-                build.close();
+                discardBuild(build);
                 continue;
             }
             if (build.failure != null) throw new IllegalStateException("Terrain mesh preparation failed", build.failure);
             updates.complete(build.request, build);
         }
-        publishReady(mc);
-        dispatch(mc, lookup, settings);
     }
 
     private void dispatch(Minecraft mc, MinecraftMaterialLookup lookup,
@@ -405,45 +394,78 @@ public final class RtTerrain {
         long taskRevision = ++revision;
         Object extraction = instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1);
         updates.dispatched(request);
-        outstandingBuilds.incrementAndGet();
         instrumentation.count("sectionsSnapshotted", 1);
         recordJob(request, taskEpoch, taskRevision, "dispatch", false);
+        var build = new Build(request, taskEpoch, lookup.epoch(), taskRevision, null, extraction, null, null);
         try {
-            workers.submit(() -> {
-                try {
-                    recordJob(request, taskEpoch, taskRevision, "cpu-start", false);
-                    if (taskEpoch != epoch) {
-                        recordJob(request, taskEpoch, taskRevision, "cpu-cancelled-epoch", false);
-                        completed.add(new Build(request, taskEpoch, lookup.epoch(), taskRevision, null, null, extraction, null));
-                        return;
-                    }
-                    var state = WORKER_TESS.get();
-                    state.reset(colors);
-                    var cpu = buildCpuSection(region, models, state.blockRandom, state.modelParts,
-                            state.capture, fluids, state.fluidCapture, state.mesh, state.pos, lookup, x, y, z);
-                    recordJob(request, taskEpoch, taskRevision, "cpu-ready", false);
-                    completed.add(new Build(request, taskEpoch, lookup.epoch(), taskRevision, cpu, null,
-                            extraction, instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN_READY, 1)));
-                } catch (Throwable failure) {
-                    recordJob(request, taskEpoch, taskRevision, "cpu-failed", true);
-                    completed.add(new Build(request, taskEpoch, lookup.epoch(), taskRevision, null, failure,
-                            extraction, null));
-                }
-            }, outstandingBuilds::decrementAndGet);
+            submitBuild(build, geometry, () -> {
+                var state = WORKER_TESS.get();
+                state.reset(colors);
+                return buildCpuSection(region, models, state.blockRandom, state.modelParts,
+                        state.capture, fluids, state.fluidCapture, state.mesh, state.pos, lookup, x, y, z);
+            });
         } catch (RuntimeException | Error failure) {
-            outstandingBuilds.decrementAndGet();
             updates.retry(request);
             throw failure;
         }
     }
 
-    private void publishReady(Minecraft mc) {
+    /** One terminal result owns the dispatch slot through CPU extraction, upload, and GPU preparation. */
+    void submitBuild(Build build, MinecraftTerrainGeometry target, Supplier<RtTerrainMesher.CpuSection> extract) {
+        outstandingBuilds.incrementAndGet();
+        try {
+            workers.submit(() -> {
+                try {
+                    recordJob(build, "cpu-start");
+                    if (build.epoch != epoch) {
+                        recordJob(build, "cpu-cancelled-epoch");
+                        completeBuild(build);
+                        return;
+                    }
+                    var cpu = extract.get();
+                    recordJob(build, "cpu-ready");
+                    Object ready = instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN_READY, 1);
+                    if (cpu.mesh() == null || build.epoch != epoch) {
+                        if (cpu.mesh() == null) recordJob(build, "empty-ready");
+                        completeBuild(build.result(ready, null, null));
+                        return;
+                    }
+                    long key = build.request.section.key;
+                    int x = sectionX(key) << 4, y = sectionY(key) << 4, z = sectionZ(key) << 4;
+                    var put = new MinecraftTerrainGeometry.Put(key, x, y, z, cpu.mesh(),
+                            MinecraftTerrainLightAdapter.describe(key, build.revision, x, y, z, cpu.lights()));
+                    recordJob(build, "gpu-prepare-start");
+                    var preparation = target.prepare(put);
+                    recordJob(build, "gpu-prepare-submitted");
+                    preparation.whenComplete((mesh, failure) -> {
+                        var result = build.result(ready, mesh, failure);
+                        recordJob(result, "gpu-prepare-ready");
+                        completeBuild(result);
+                    });
+                } catch (Throwable failure) {
+                    var result = build.result(null, null, failure);
+                    recordJob(result, "cpu-failed");
+                    completeBuild(result);
+                }
+            }, outstandingBuilds::decrementAndGet);
+        } catch (RuntimeException | Error failure) {
+            outstandingBuilds.decrementAndGet();
+            throw failure;
+        }
+    }
+
+    private void completeBuild(Build build) {
+        synchronized (preparationLock) {
+            if (build.epoch != epoch) {
+                outstandingBuilds.decrementAndGet();
+                discardBuild(build);
+            } else completed.add(build);
+        }
+    }
+
+    private void publishReady() {
         if (geometry == null) return;
-        int cx = mc.player.getBlockX() >> 4, cy = mc.player.getBlockY() >> 4, cz = mc.player.getBlockZ() >> 4;
-        var groups = updates.ready(PUBLICATION_BUDGET, section ->
-                (section.ready ? 0L : 1L << 60) + distance(section.key, cx, cy, cz),
-                request -> (request.result != null && request.result.prepared != null)
-                        || geometry.hasSection(request.section.key));
+        var groups = updates.ready();
         if (groups.isEmpty()) return;
         var changes = new ArrayList<MinecraftTerrainGeometry.ReadyChange>();
         for (var group : groups) {
@@ -470,14 +492,12 @@ public final class RtTerrain {
     private void reset() {
         synchronized (preparationLock) {
             epoch++;
-            Build result;
-            while ((result = prepared.poll()) != null) result.close();
+            drainDiscardedBuilds();
         }
         updates.clear();
         snapshots.clear();
         columns.clear();
         dirty.clear();
-        drainDiscardedBuilds();
         if (geometry != null) {
             var drops = geometry.sectionKeys().stream()
                     .map(key -> (MinecraftTerrainGeometry.ReadyChange) new MinecraftTerrainGeometry.Drop(key)).toList();
@@ -488,12 +508,10 @@ public final class RtTerrain {
     public void shutdown() {
         synchronized (preparationLock) {
             epoch++;
-            Build result;
-            while ((result = prepared.poll()) != null) result.close();
+            drainDiscardedBuilds();
         }
         workers.shutdown();
         updates.clear();
-        drainDiscardedBuilds();
         dirty.clear();
         snapshots.clear();
         columns.clear();
@@ -501,7 +519,11 @@ public final class RtTerrain {
     }
 
     private void drainDiscardedBuilds() {
-        while (completed.poll() != null) outstandingBuilds.decrementAndGet();
+        Build build;
+        while ((build = completed.poll()) != null) {
+            outstandingBuilds.decrementAndGet();
+            discardBuild(build);
+        }
     }
 
     private static boolean neighborsLoaded(ClientChunkCache chunks, int x, int z) {
@@ -528,12 +550,11 @@ public final class RtTerrain {
     private static int sectionY(long key) { return (int) (key >> 52); }
     private static int sectionZ(long key) { return (int) (key << 12 >> 38); }
 
-    private record Build(TerrainUpdates.Request<Build> request, long epoch, ResourcePackEpoch materialEpoch,
-                         long revision, RtTerrainMesher.CpuSection cpu, Throwable failure,
-                         Object extraction, Object ready, MinecraftTerrainGeometry.Prepared prepared) {
-        Build(TerrainUpdates.Request<Build> request, long epoch, ResourcePackEpoch materialEpoch,
-              long revision, RtTerrainMesher.CpuSection cpu, Throwable failure, Object extraction, Object ready) {
-            this(request, epoch, materialEpoch, revision, cpu, failure, extraction, ready, null);
+    record Build(TerrainUpdates.Request<Build> request, long epoch, ResourcePackEpoch materialEpoch,
+                 long revision, Throwable failure, Object extraction, Object ready,
+                 MinecraftTerrainGeometry.Prepared prepared) {
+        Build result(Object ready, MinecraftTerrainGeometry.Prepared prepared, Throwable failure) {
+            return new Build(request, epoch, materialEpoch, revision, failure, extraction, ready, prepared);
         }
         void close() { if (prepared != null) prepared.close(); }
     }

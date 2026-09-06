@@ -22,28 +22,17 @@ import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.biome.Biome;
 
 /**
- * Persistent, render-thread-only cache of per-section palette snapshots for RT tessellation, replacing
- * vanilla's per-pass {@link net.minecraft.client.renderer.chunk.RenderRegionCache}.
- *
- * <p>The vanilla cache dedupes {@code SectionCopy}s only within one dispatch pass, so during a streaming
- * fill a section's palette was re-copied ({@code SimpleBitStorage.copy}, the top CPU hotspot while
- * flying) by up to 27 neighbouring dispatches across passes — and every {@code SectionCopy} also cloned
- * the owning chunk's <em>entire</em> block-entity map, which the RT mesher never reads (block entities
- * render through {@code RtEntities}). Entries here are palette-only and live until the section is
- * edited (dirty hook), its column unloads or leaves the window, or LRU eviction — so a section is
- * copied once per load/edit instead of once per neighbouring dispatch.
- *
- * <p>A cached {@link PalettedContainer} copy is immutable after creation; concurrent reads from worker
- * threads (including one copy shared by several in-flight regions) are safe, matching how vanilla's
- * {@code SectionCopy} containers were already shared within a pass. Cache mutation stays on the render
- * thread.
+ * Render-thread cache of immutable palette snapshots shared by neighbouring tessellation jobs.
+ * Entries live until section invalidation, column removal, or LRU eviction. Jobs retain their palette
+ * revisions independently of cache eviction. Block entities are rendered separately by {@code RtEntities}.
+ * Each region's decoded state cache belongs exclusively to the worker processing that region.
  */
 final class RtSectionSnapshots {
     // Bounds worst-case cache memory to ~16 MB (palette copies run ~2-4 KB). Dispatch is column-coherent
     // nearest-first, so the live working set (in-flight neighbourhoods) is far smaller than this.
     private static final int MAX_ENTRIES = 4096;
     /** Cache/region marker for a section with no copyable states (all air, unloaded, or out of range). */
-    private static final Object AIR = new Object();
+    static final Object AIR = new Object();
 
     private final MinecraftTelemetry.Instrumentation instrumentation;
     private final Long2ObjectLinkedOpenHashMap<Object> cache = new Long2ObjectLinkedOpenHashMap<>();
@@ -106,35 +95,71 @@ final class RtSectionSnapshots {
         return section.getStates().copy();
     }
 
-    /**
-     * The immutable 3×3×3 view a tessellation job reads. Mirrors vanilla's
-     * {@code RenderSectionRegion} except that {@link #getBlockEntity} always returns null: the RT
-     * mesher never queries block entities (they render through {@code RtEntities}), which is what lets
-     * the snapshot skip {@code SectionCopy}'s per-copy clone of the whole chunk's block-entity map.
-     */
-    static final class Region implements BlockAndTintGetter {
-        private final ClientLevel level;
+    /** Immutable section revisions with a lazy, worker-confined cache of the center and one-block halo. */
+    static final class BlockStates {
+        private static final int WIDTH = 18;
         private final int minSectionX;
         private final int minSectionY;
         private final int minSectionZ;
         private final Object[] sections; // PalettedContainer<BlockState> or AIR, x-then-y-then-z minor
+        private BlockState[] decoded;
+
+        BlockStates(int minSectionX, int minSectionY, int minSectionZ, Object[] sections) {
+            this.minSectionX = minSectionX;
+            this.minSectionY = minSectionY;
+            this.minSectionZ = minSectionZ;
+            this.sections = sections;
+        }
+
+        BlockState get(int x, int y, int z) {
+            int localX = x - ((minSectionX + 1) << 4) + 1;
+            int localY = y - ((minSectionY + 1) << 4) + 1;
+            int localZ = z - ((minSectionZ + 1) << 4) + 1;
+            if (localX < 0 || localX >= WIDTH || localY < 0 || localY >= WIDTH
+                    || localZ < 0 || localZ >= WIDTH) {
+                return readSnapshot(x, y, z);
+            }
+            // Queued regions retain only palettes. Each running job decodes at most 5,832 references.
+            if (decoded == null) {
+                decoded = new BlockState[WIDTH * WIDTH * WIDTH];
+            }
+            int index = localX + WIDTH * (localZ + WIDTH * localY);
+            BlockState state = decoded[index];
+            if (state == null) {
+                state = readSnapshot(x, y, z);
+                decoded[index] = state;
+            }
+            return state;
+        }
+
+        @SuppressWarnings("unchecked")
+        private BlockState readSnapshot(int x, int y, int z) {
+            int index = (SectionPos.blockToSectionCoord(x) - minSectionX)
+                    + (SectionPos.blockToSectionCoord(y) - minSectionY) * 3
+                    + (SectionPos.blockToSectionCoord(z) - minSectionZ) * 9;
+            Object section = sections[index];
+            return section == AIR ? Blocks.AIR.defaultBlockState()
+                    : ((PalettedContainer<BlockState>) section).get(x & 15, y & 15, z & 15);
+        }
+    }
+
+    /** A tessellation job's 3×3×3 state snapshot and live biome/lighting lookup context. */
+    static final class Region implements BlockAndTintGetter {
+        private final ClientLevel level;
+        private final BlockStates blocks;
         private final CardinalLighting cardinalLighting;
         private final LevelLightEngine lightEngine;
         private final boolean debug;
 
         Region(ClientLevel level, int minSectionX, int minSectionY, int minSectionZ, Object[] sections) {
             this.level = level;
-            this.minSectionX = minSectionX;
-            this.minSectionY = minSectionY;
-            this.minSectionZ = minSectionZ;
-            this.sections = sections;
+            this.blocks = new BlockStates(minSectionX, minSectionY, minSectionZ, sections);
             this.cardinalLighting = level.cardinalLighting();
             this.lightEngine = level.getLightEngine();
             this.debug = level.isDebug();
         }
 
         @Override
-        @SuppressWarnings("unchecked")
         public BlockState getBlockState(BlockPos pos) {
             int x = pos.getX();
             int y = pos.getY();
@@ -149,14 +174,7 @@ final class RtSectionSnapshots {
                 }
                 return state == null ? Blocks.AIR.defaultBlockState() : state;
             }
-            int index = (SectionPos.blockToSectionCoord(x) - minSectionX)
-                    + (SectionPos.blockToSectionCoord(y) - minSectionY) * 3
-                    + (SectionPos.blockToSectionCoord(z) - minSectionZ) * 9;
-            Object section = sections[index];
-            if (section == AIR) {
-                return Blocks.AIR.defaultBlockState();
-            }
-            return ((PalettedContainer<BlockState>) section).get(x & 15, y & 15, z & 15);
+            return blocks.get(x, y, z);
         }
 
         @Override
@@ -176,7 +194,7 @@ final class RtSectionSnapshots {
 
         @Override
         public BlockEntity getBlockEntity(BlockPos pos) {
-            return null; // never queried by the RT mesher — see class javadoc
+            return null; // Block entities are rendered separately by RtEntities.
         }
 
         @Override

@@ -37,4 +37,32 @@ final class RtTerrainPendingTest {
         updates.clear();
         assertTrue(updates.pending().isEmpty());
     }
+    @Test
+    void readyMembershipTracksReplacementRemovalAndPublication() {
+        var updates = new TerrainUpdates<String>();
+        updates.want(1);
+        updates.want(2);
+        updates.want(3);
+        var first = updates.sections.get(1).request;
+        updates.complete(first, "ready before replacement");
+        assertEquals(List.of(first.group), updates.ready());
+        updates.rebuild(List.of(1L, 2L));
+        assertTrue(updates.ready().isEmpty());
+        assertFalse(updates.complete(first, "obsolete"));
+        updates.complete(updates.sections.get(1).request, "replacement");
+        assertTrue(updates.ready().isEmpty());
+        updates.remove(2);
+        assertTrue(updates.ready().isEmpty());
+        updates.complete(updates.sections.get(1).request, "survivor");
+        assertEquals(1, updates.ready().size());
+        assertEquals(2, updates.ready().getFirst().requests.size());
+        updates.published(updates.ready());
+        assertTrue(updates.ready().isEmpty());
+        assertFalse(updates.sections.containsKey(2));
+        updates.complete(updates.sections.get(3).request, "last");
+        assertEquals(1, updates.ready().size());
+        updates.clear();
+        assertTrue(updates.ready().isEmpty());
+    }
+
 }

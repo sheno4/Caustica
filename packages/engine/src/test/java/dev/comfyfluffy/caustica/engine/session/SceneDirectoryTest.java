@@ -137,6 +137,91 @@ final class SceneDirectoryTest {
         assertNotSame(Thread.currentThread(), retirementThread.get());
     }
 
+    @Test void independentCapturesKeepSharedDependenciesAliveAcrossReplacement() {
+        var f = new Fixture();
+        var destroyed = new AtomicInteger();
+        var nativeDestroyed = new AtomicInteger();
+        var resource = f.programs.resources.openFactory(new ContributionOwner(9)).create(destroyed::incrementAndGet);
+        f.preparing = CompletableFuture.completedFuture(nativeOwner(nativeDestroyed));
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var id = f.channel.newInstance();
+        try (var data = INSTANCE.data(17, resource)) {
+            f.channel.edit(List.of(new SceneEdit.SetInstance<>(id, f.scene, ready,
+                    GeometryTransform.translation(0, 0, 0), 255, data)));
+        }
+        var first = f.capture.get();
+        f.channel.edit(List.of(new SceneEdit.SetTransform(id, GeometryTransform.translation(5, 0, 0), 7)));
+        var second = f.capture.get();
+        f.channel.edit(List.of(set(id, f.scene, ready)));
+        ready.close();
+        resource.close();
+        f.channel.invalidate();
+        first.close();
+        f.programs.resources.awaitRetirements();
+        assertEquals(0, destroyed.get());
+        assertEquals(0, nativeDestroyed.get());
+        assertEquals(7, second.get().instances().getFirst().mask());
+        try (var data = second.get().instances().getFirst().instanceData().retain();
+             var mesh = second.get().meshes().getFirst().ready().retain()) {
+            assertEquals(17, data.bits());
+            assertSame(INSTANCE, mesh.instanceDataType());
+        }
+        second.close();
+        f.programs.resources.awaitRetirements();
+        assertEquals(1, destroyed.get());
+        assertEquals(1, nativeDestroyed.get());
+    }
+
+    @Test void capturedMeshProgramsFollowPublicationWithoutChangingEarlierFrames() {
+        var f = new Fixture();
+        var channel = f.programs.session.openChannel(new ContributionOwner(19));
+        var registration = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
+                new ShaderDefinition(ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
+                        "surface", "test.Surface"), null, IMPLEMENTATION.data(0), BINDING, INSTANCE)));
+        f.programs.session.progress();
+        f.programs.session.progress();
+        var ready = f.channel.prepare(INSTANCE, mesh(registration.exports())).join();
+        f.channel.edit(List.of(set(f.channel.newInstance(), f.scene, ready)));
+        try (var first = f.capture.get()) {
+            int published = first.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation();
+            assertTrue(published > 0);
+            try (var repeated = f.capture.get()) {
+                assertEquals(published, repeated.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation());
+            }
+            channel.invalidate();
+            f.programs.session.progress();
+            f.programs.session.progress();
+            try (var removed = f.capture.get()) {
+                assertEquals(0, removed.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation());
+                assertEquals(published, first.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation());
+            }
+        }
+    }
+
+    @Test void emitterSelectionsStayStableAcrossTransformsAndReplacement() {
+        var f = new Fixture();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var id = f.channel.newInstance();
+        var emitters = new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(0, 1, f.channel.newLight())));
+        f.channel.edit(List.of(new SceneEdit.SetInstance<>(id, f.scene, ready,
+                GeometryTransform.translation(0, 0, 0), 255, INSTANCE.data(0), emitters)));
+        try (var first = f.capture.get()) {
+            var original = first.get().instances().getFirst().primitiveEmitters();
+            assertEquals(1, original.size());
+            assertEquals(0, original.getFirst().firstPrimitive());
+            assertEquals(1, original.getFirst().primitiveCount());
+            f.channel.edit(List.of(new SceneEdit.SetTransform(id, GeometryTransform.translation(5, 0, 0), 7)));
+            try (var transformed = f.capture.get()) {
+                assertEquals(original, transformed.get().instances().getFirst().primitiveEmitters());
+            }
+            f.channel.edit(List.of(set(id, f.scene, ready)));
+            try (var replaced = f.capture.get()) {
+                assertTrue(replaced.get().instances().getFirst().primitiveEmitters().isEmpty());
+                assertEquals(original, first.get().instances().getFirst().primitiveEmitters());
+            }
+        }
+    }
+
     @Test void placementIdentityChangesOnlyAfterRemoval() {
         var f = new Fixture();
         var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();

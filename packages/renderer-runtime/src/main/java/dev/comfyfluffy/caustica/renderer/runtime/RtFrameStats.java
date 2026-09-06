@@ -26,6 +26,8 @@ public final class RtFrameStats {
             new StageMetric("geometry.packMaterial"),
             new StageMetric("geometry.snapshotAppend"),
             new StageMetric("frame.prepareTlas"),
+            new StageMetric("frame.captureScenes"),
+            new StageMetric("frame.assembleScenes"),
             new StageMetric("frame.recordTlas"),
             new StageMetric("frame.prepareLighting"),
             new StageMetric("frame.prepareTrace"),

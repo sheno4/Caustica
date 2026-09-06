@@ -5,10 +5,6 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
-import java.util.PriorityQueue;
-import java.util.function.ToLongFunction;
-import java.util.function.Predicate;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -16,6 +12,7 @@ import java.util.List;
 final class TerrainUpdates<T> {
     final Long2ObjectOpenHashMap<Section<T>> sections = new Long2ObjectOpenHashMap<>();
     private final LinkedHashSet<Group<T>> groups = new LinkedHashSet<>();
+    private final LinkedHashSet<Group<T>> ready = new LinkedHashSet<>();
     private final LinkedHashSet<Request<T>> pending = new LinkedHashSet<>();
 
     private final java.util.function.Consumer<T> discard;
@@ -62,6 +59,7 @@ final class TerrainUpdates<T> {
             if (section.request != null) {
                 Group<T> old = section.request.group;
                 if (groups.remove(old)) {
+                    ready.remove(old);
                     for (Request<T> request : old.requests) {
                         pending.remove(request);
                         if (request.result != null) discard.accept(request.result);
@@ -77,9 +75,13 @@ final class TerrainUpdates<T> {
             Request<T> request = new Request<>(section, group);
             section.request = request;
             group.requests.add(request);
-            if (section.wanted) pending.add(request);
+            if (section.wanted) {
+                pending.add(request);
+                group.remaining++;
+            }
         }
         groups.add(group);
+        if (group.remaining == 0) ready.add(group);
     }
 
     boolean complete(Request<T> request, T result) {
@@ -87,6 +89,7 @@ final class TerrainUpdates<T> {
         pending.remove(request);
         request.result = result;
         request.complete = true;
+        if (--request.group.remaining == 0) ready.add(request.group);
         return true;
     }
 
@@ -105,52 +108,15 @@ final class TerrainUpdates<T> {
         pending.add(request);
     }
 
-    /** Empty no-op groups cost nothing; actual scene changes are budgeted without splitting groups. */
-    List<Group<T>> ready(int budget, ToLongFunction<Section<T>> priority,
-                         Predicate<Request<T>> changesGeometry) {
-        var ready = new ArrayList<Group<T>>();
-        var candidates = new PriorityQueue<RankedGroup<T>>(
-                Comparator.comparingLong((RankedGroup<T> candidate) -> candidate.rank).reversed());
-        for (Group<T> group : groups) {
-            boolean complete = true;
-            long rank = Long.MAX_VALUE;
-            int cost = 0;
-            for (Request<T> request : group.requests) {
-                if (!request.complete) {
-                    complete = false;
-                    break;
-                }
-                rank = Math.min(rank, priority.applyAsLong(request.section));
-                if (changesGeometry.test(request)) cost++;
-            }
-            if (!complete) continue;
-            if (cost == 0) {
-                ready.add(group);
-                continue;
-            }
-            if (candidates.size() < budget) candidates.add(new RankedGroup<>(group, rank, cost));
-            else if (rank < candidates.peek().rank) {
-                candidates.poll();
-                candidates.add(new RankedGroup<>(group, rank, cost));
-            }
-        }
-        var nearest = new ArrayList<>(candidates);
-        nearest.sort(Comparator.comparingLong(candidate -> candidate.rank));
-        int count = 0;
-        for (var candidate : nearest) {
-            if (count > 0 && count + candidate.cost > budget) break;
-            ready.add(candidate.group);
-            count += candidate.cost;
-            if (count >= budget) break;
-        }
-        return ready;
+    /** Every complete group publishes at the next frame boundary; unfinished neighbors remain atomic. */
+    List<Group<T>> ready() {
+        return List.copyOf(ready);
     }
-
-    private record RankedGroup<T>(Group<T> group, long rank, int cost) { }
 
     void published(List<Group<T>> published) {
         for (Group<T> group : published) {
             groups.remove(group);
+            ready.remove(group);
             for (Request<T> request : group.requests) {
                 Section<T> section = request.section;
                 section.request = null;
@@ -169,6 +135,7 @@ final class TerrainUpdates<T> {
         for (Section<T> section : sections.values()) section.request = null;
         sections.clear();
         groups.clear();
+        ready.clear();
         pending.clear();
     }
 
@@ -182,6 +149,7 @@ final class TerrainUpdates<T> {
 
     static final class Group<T> {
         final List<Request<T>> requests = new ArrayList<>();
+        int remaining;
     }
 
     static final class Request<T> {

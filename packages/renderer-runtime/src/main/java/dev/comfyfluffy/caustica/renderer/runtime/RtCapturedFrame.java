@@ -8,19 +8,23 @@ import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
 import dev.comfyfluffy.caustica.support.SharedResource;
 
 import java.util.List;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /** Immutable frame inputs and the ownership acquired before command recording begins. */
 record RtCapturedFrame(FrameSnapshot inputs, SharedResource<RtProgramBackend.Published> program,
-                       SharedResource<RetainedSceneSnapshot> scenes, ResourceOwners medium) implements AutoCloseable {
+                       SharedResource<RetainedSceneSnapshot> scenes, ResourceOwners medium,
+                       long publicationCutoff) implements AutoCloseable {
     static RtCapturedFrame capture(FrameSnapshot inputs,
                                    Supplier<SharedResource<RtProgramBackend.Published>> programs,
-                                   Supplier<SharedResource<RetainedSceneSnapshot>> scenes) {
+                                   Supplier<SharedResource<RetainedSceneSnapshot>> scenes,
+                                   LongSupplier publicationCutoff) {
         var medium = captureMedium(inputs.view().medium());
         SharedResource<RtProgramBackend.Published> program = null;
         try {
             program = programs.get();
-            return new RtCapturedFrame(retainedInputs(inputs, medium), program, scenes.get(), medium);
+            long cutoff = publicationCutoff.getAsLong();
+            return new RtCapturedFrame(retainedInputs(inputs, medium), program, scenes.get(), medium, cutoff);
         } catch (Throwable failure) {
             if (program != null) program.close();
             medium.close();

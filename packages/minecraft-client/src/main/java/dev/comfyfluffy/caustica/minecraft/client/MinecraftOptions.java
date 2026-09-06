@@ -29,7 +29,7 @@ public final class MinecraftOptions {
     public static List<Option<?>> settings() {
         return List.of(
                 Rt.ENABLED, Rt.WORKER_THREADS, Rt.Composite.WATER_WAVES,
-                Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Terrain.COMPLETION_RESULTS_PER_PASS,
+                Rt.Terrain.ASYNC_DISPATCH_PER_PASS,
                 Rt.Terrain.MAX_INFLIGHT_SECTIONS, Rt.Terrain.REBASE_DISTANCE_BLOCKS,
                 Rt.Lights.MIN_FILL_RATIO, Rt.Entities.ENABLED, Rt.Entities.PARTICLES_ENABLED,
                 Rt.Entities.GLOW_ENABLED, Rt.Entities.NAME_TAGS_ENABLED,
@@ -50,7 +50,6 @@ public final class MinecraftOptions {
         public static final class Terrain {
             private Terrain() { }
             public static final Option<Integer> ASYNC_DISPATCH_PER_PASS = intAtLeast("caustica.rt.asyncDispatchPerTick", "terrain.async-dispatch-per-tick", 32, 0);
-            public static final Option<Integer> COMPLETION_RESULTS_PER_PASS = intAtLeast("caustica.rt.sectionResultsPerTick", "terrain.section-results-per-tick", 32, 0);
             public static final Option<Integer> MAX_INFLIGHT_SECTIONS = intAtLeast("caustica.rt.maxInflightSections", "terrain.max-inflight-sections", 32, 0);
             public static final Option<Integer> REBASE_DISTANCE_BLOCKS = intAtLeast("caustica.rt.rebaseDistanceBlocks", "terrain.rebase-distance-blocks", 128, 0);
         }
