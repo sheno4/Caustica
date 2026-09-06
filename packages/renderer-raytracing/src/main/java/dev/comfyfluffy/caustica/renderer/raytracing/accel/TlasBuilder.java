@@ -36,7 +36,7 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCreateAccelerationStru
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureDeviceAddressKHR;
 
-/** Builds and reuses the top-level acceleration structure for a rendered frame. */
+/** Builds frame-owned top-level acceleration structures. */
 public final class TlasBuilder {
     private static final long INSTANCE_ADDRESS_ALIGNMENT = 16L;
 
@@ -101,7 +101,7 @@ public final class TlasBuilder {
         }
     }
 
-    /** A build-ready view over a ring slot. The ring retains ownership of all resources. */
+    /** A build-ready view whose resources remain owned through the frame's graphics completion. */
     public static final class Prepared {
         public final RtAccel accel;
         private final GpuBuffer instanceBuffer;

@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final RtFramePreparation framePreparation = new RtFramePreparation();
     private final Map<GraphicsUse, FrameSnapshot> inFlightFrames = new IdentityHashMap<>();
     private final Map<SceneId, SharedResource<SceneMotionHistory>> motionHistoryByScene = new IdentityHashMap<>();
+    private Map<Long, FrameMesh> previousFrameMeshes = Map.of();
+    private TlasBuilder.InstanceBatch tlasInstances = new TlasBuilder.InstanceBatch();
     private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
     private boolean closed;
     private boolean sessionClosing;
@@ -113,7 +116,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     public void settleFrameUses() {
         synchronized (this) {
             requireOpen();
-            if (inFlightFrames.isEmpty() && motionHistoryByScene.isEmpty()) return;
+            if (inFlightFrames.isEmpty() && motionHistoryByScene.isEmpty() && previousFrameMeshes.isEmpty()) return;
         }
         ctx.drainAndWaitIdle();
         synchronized (this) {
@@ -131,7 +134,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(origin, "origin");
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
-        TlasBuilder.InstanceBatch instances = new TlasBuilder.InstanceBatch();
+        TlasBuilder.InstanceBatch instances = tlasInstances;
         instances.reset(current.instances.size());
         for (FrameInstanceSnapshot instance : current.instances) {
             float[] transform = instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z());
@@ -173,14 +176,20 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
         List<SceneLight> sceneLights = current.content.lights();
-        Map<Long, Integer> lightIndices = new LinkedHashMap<>();
-        for (int index = 0; index < sceneLights.size(); index++) {
-            lightIndices.put(sceneLights.get(index).identity(), index);
-        }
+        Map<Long, Integer> lightIndices = HashMap.newHashMap(sceneLights.size());
         int geometryCount = current.instances.isEmpty() ? 0 : current.instances.getLast().geometryBase
                 + current.instances.getLast().resolvedMesh.geometries().size();
         List<TraceChunk> chunks = RtFramePreparation.chunks(current.instances).stream().map(TraceChunk::new).toList();
-        framePreparation.run("plan", chunks, chunk -> chunk.instances.size(), chunk -> chunk.plan(pipeline));
+        List<Runnable> planning = new ArrayList<>(chunks.size() + 1);
+        planning.add(RtFramePreparation.measured("light-index", 0, sceneLights.size(), () -> {
+            for (int index = 0; index < sceneLights.size(); index++) {
+                lightIndices.put(sceneLights.get(index).identity(), index);
+            }
+        }));
+        for (TraceChunk chunk : chunks) {
+            planning.add(RtFramePreparation.measured("plan", chunk.instances.size(), 0, () -> chunk.plan(pipeline)));
+        }
+        framePreparation.run(planning, Runnable::run);
         int emitterBytes = 0;
         int hitBytes = 0;
         for (TraceChunk chunk : chunks) {
@@ -196,21 +205,29 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         framePreparation.run("pack", chunks, chunk -> chunk.instances.size(), chunk -> chunk.pack(slot, origin, lightIndices));
         BitSet linked = new BitSet(sceneLights.size());
         for (TraceChunk chunk : chunks) linked.or(chunk.linkedEmitters);
-        boolean[] linkedEmitters = new boolean[sceneLights.size()];
-        for (int index = linked.nextSetBit(0); index >= 0; index = linked.nextSetBit(index + 1)) {
-            linkedEmitters[index] = true;
+        List<Runnable> lightPacking = new ArrayList<>();
+        int firstLight = 0;
+        for (List<SceneLight> lightChunk : RtFramePreparation.chunks(sceneLights)) {
+            int first = firstLight;
+            int count = lightChunk.size();
+            lightPacking.add(RtFramePreparation.measured("lights", 0, count, () -> {
+                ByteBuffer target = MemoryUtil.memByteBuffer(slot.lights.mapped()
+                        + (long) first * RtRetainedLightPlan.RECORD_BYTES,
+                        Math.multiplyExact(count, RtRetainedLightPlan.RECORD_BYTES));
+                RtRetainedLightPlan.packInto(target, first, count, index -> sceneLights.get(index).descriptor(),
+                        origin, linked::get);
+            }));
+            firstLight += count;
         }
-        ByteBuffer lights = RtRetainedLightPlan.pack(
-                sceneLights.stream().map(SceneLight::descriptor).toList(), origin, linkedEmitters);
+        framePreparation.run(lightPacking, Runnable::run);
         if (geometryBytes > 0) {
             slot.geometry.flush(0L, geometryBytes);
         }
         if (hitBytes > 0) {
             slot.hits.flush(0L, hitBytes);
         }
-        if (lights.hasRemaining()) {
-            MemoryUtil.memByteBuffer(slot.lights.mapped(), lights.remaining()).put(lights.duplicate());
-            slot.lights.flush(0L, lights.remaining());
+        if (lightBytes > 0) {
+            slot.lights.flush(0L, lightBytes);
         }
         if (emitterBytes > 0) {
             slot.emitters.flush(0L, emitterBytes);
@@ -304,6 +321,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     private void releaseTerminalFrameRoots() {
+        previousFrameMeshes = Map.of();
+        tlasInstances = new TlasBuilder.InstanceBatch();
         releaseTerminalFrameRoots(inFlightFrames, motionHistoryByScene);
     }
 
@@ -376,8 +395,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     static ResolvedFrameInput resolveFrameInput(RetainedSceneSnapshot.Mesh mesh,
                                                RetainedSceneSnapshot.Instance instance) {
+        return new ResolvedFrameInput(resolveMesh(mesh),
+                new RtRetainedGeometryPlan.ResolvedPlacement(instance.transform(), instance.instanceData().bits()));
+    }
+
+    private static RtRetainedGeometryPlan.ResolvedMesh resolveMesh(RetainedSceneSnapshot.Mesh mesh) {
         MeshBuild<?> build = mesh.build();
-        var geometries = new ArrayList<RtRetainedGeometryPlan.ResolvedGeometry>();
+        var geometries = new ArrayList<RtRetainedGeometryPlan.ResolvedGeometry>(build.geometries().size());
         for (int index = 0; index < build.geometries().size(); index++) {
             MeshBuild.Geometry<?> geometry = build.geometries().get(index);
             RetainedSceneSnapshot.GeometryPrograms programs = mesh.geometryPrograms().get(index);
@@ -386,8 +410,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
                     geometry.volume() == null ? 0L : geometry.volume().bindingData().bits()));
         }
-        return new ResolvedFrameInput(new RtRetainedGeometryPlan.ResolvedMesh(build, geometries),
-                new RtRetainedGeometryPlan.ResolvedPlacement(instance.transform(), instance.instanceData().bits()));
+        return new RtRetainedGeometryPlan.ResolvedMesh(build, geometries);
     }
 
     private static Map<SceneId, List<LatchedInstance>> resolveFrameInstances(
@@ -397,8 +420,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             List<LatchedInstance> instances = new ArrayList<>();
             int geometryBase = 0;
             for (NativeInstance instance : values) {
-                var input = resolveFrameInput(instance.mesh.logical, instance.logical);
-                instances.add(new LatchedInstance(instance, instance.logical, input.mesh(), input.placement(),
+                var placement = new RtRetainedGeometryPlan.ResolvedPlacement(
+                        instance.logical.transform(), instance.logical.instanceData().bits());
+                instances.add(new LatchedInstance(instance, instance.logical, instance.mesh.resolved, placement,
                         geometryBase, Math.multiplyExact(geometryBase, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY)));
                 geometryBase += instance.mesh.logical.build().geometries().size();
             }
@@ -456,7 +480,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 RetainedSceneSnapshot snapshot = root.get();
                 Map<Long, FrameMesh> meshes = new LinkedHashMap<>();
                 for (RetainedSceneSnapshot.Mesh mesh : snapshot.meshes()) {
-                    meshes.put(mesh.identity(), new FrameMesh(mesh));
+                    FrameMesh previous = previousFrameMeshes.get(mesh.identity());
+                    meshes.put(mesh.identity(), previous != null && previous.logical == mesh
+                            ? previous : new FrameMesh(mesh));
                 }
                 currentContent = assembleContent(snapshot.scenes(), snapshot.lights());
                 Map<SceneId, List<NativeInstance>> instances = new IdentityHashMap<>();
@@ -468,6 +494,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 currentInstances = resolveFrameInstances(instances);
                 neeAt.retainScenes(currentContent.keySet());
                 retainRenderedScenes(currentContent.keySet());
+                previousFrameMeshes = meshes;
             } catch (Throwable failure) {
                 this.root = null;
                 suppressCleanupFailure(failure, root::close);
@@ -819,13 +846,18 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private record NativeInstance(RetainedSceneSnapshot.Instance logical, FrameMesh mesh,
                                   long placementOrdinal) { }
 
-    /** Borrows the ready mesh from the owning scene capture. */
+    /**
+     * Immutable CPU resolution reused only for the same captured mesh object. The last-frame cache
+     * borrows these references; each consuming frame's root owns the mesh and program resources.
+     */
     private static final class FrameMesh {
         final RetainedSceneSnapshot.Mesh logical;
         final RtPreparedMesh nativeMesh;
+        final RtRetainedGeometryPlan.ResolvedMesh resolved;
         FrameMesh(RetainedSceneSnapshot.Mesh logical) {
             this.logical = logical;
             nativeMesh = (RtPreparedMesh) SceneDirectory.preparedResource(logical.ready());
+            resolved = resolveMesh(logical);
         }
         RtPreparedMesh.State blas() { return nativeMesh.value(); }
     }

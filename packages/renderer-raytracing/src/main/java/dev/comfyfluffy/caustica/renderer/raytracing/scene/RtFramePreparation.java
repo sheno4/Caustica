@@ -19,12 +19,12 @@ import java.util.function.ToIntFunction;
 /** Bounded CPU phases whose borrowed frame inputs remain owned until every accepted task finishes. */
 final class RtFramePreparation implements AutoCloseable {
     private static final int WORKERS = 4;
-    private static final int INSTANCES_PER_CHUNK = 256;
+    private static final int ITEMS_PER_CHUNK = 256;
     private final ExecutorService executor = Executors.newFixedThreadPool(WORKERS,
             Thread.ofPlatform().name("Caustica frame preparation-", 0).factory());
 
     static <T> List<List<T>> chunks(List<T> inputs) {
-        int count = Math.min(WORKERS, Math.max(1, Math.ceilDiv(inputs.size(), INSTANCES_PER_CHUNK)));
+        int count = Math.min(WORKERS, Math.max(1, Math.ceilDiv(inputs.size(), ITEMS_PER_CHUNK)));
         List<List<T>> chunks = new ArrayList<>(count);
         for (int index = 0; index < count; index++) {
             chunks.add(inputs.subList(inputs.size() * index / count, inputs.size() * (index + 1) / count));
@@ -60,24 +60,30 @@ final class RtFramePreparation implements AutoCloseable {
     }
 
     <T> void run(String phase, List<T> chunks, ToIntFunction<T> instanceCount, Consumer<T> operation) {
-        run(chunks, chunk -> {
+        run(chunks, chunk -> measured(phase, instanceCount.applyAsInt(chunk), 0,
+                () -> operation.accept(chunk)).run());
+    }
+
+    static Runnable measured(String phase, int instanceCount, int lightCount, Runnable operation) {
+        return () -> {
             FramePreparationEvent event = new FramePreparationEvent();
             if (!event.isEnabled()) {
-                operation.accept(chunk);
+                operation.run();
                 return;
             }
             event.phase = phase;
-            event.instanceCount = instanceCount.applyAsInt(chunk);
+            event.instanceCount = instanceCount;
+            event.lightCount = lightCount;
             event.begin();
             long started = System.nanoTime();
             try {
-                operation.accept(chunk);
+                operation.run();
             } finally {
                 event.elapsedNanos = System.nanoTime() - started;
                 event.end();
                 event.commit();
             }
-        });
+        };
     }
 
     @Name("dev.comfyfluffy.caustica.FramePreparation")
@@ -85,6 +91,7 @@ final class RtFramePreparation implements AutoCloseable {
     static final class FramePreparationEvent extends Event {
         public String phase;
         public int instanceCount;
+        public int lightCount;
         @Timespan(Timespan.NANOSECONDS)
         public long elapsedNanos;
     }

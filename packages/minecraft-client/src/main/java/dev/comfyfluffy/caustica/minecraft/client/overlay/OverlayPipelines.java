@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.overlay;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftTextureLifetime;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
@@ -102,7 +103,7 @@ final class OverlayPipelines {
             if (texture.getFormat() != GpuFormat.RGBA8_UNORM) {
                 throw new IllegalArgumentException("font atlas must be RGBA8_UNORM");
             }
-            texture.addViews();
+            MinecraftTextureLifetime.retain(texture);
             GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 descriptor = gpu.descriptorHeap().allocateResources(1);
@@ -120,7 +121,7 @@ final class OverlayPipelines {
                 return new FontImage(texture, allocated);
             } catch (RuntimeException | Error failure) {
                 if (descriptor != null) descriptor.destroy();
-                texture.removeViews();
+                MinecraftTextureLifetime.release(texture);
                 throw failure;
             }
         }
@@ -128,7 +129,7 @@ final class OverlayPipelines {
         @Override public void close() {
             if (closed) return;
             closed = true;
-            try { descriptor.destroy(); } finally { texture.removeViews(); }
+            try { descriptor.destroy(); } finally { MinecraftTextureLifetime.release(texture); }
         }
     }
 

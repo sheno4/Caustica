@@ -4,6 +4,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftTextureLifetime;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 
@@ -34,10 +35,10 @@ public abstract class MinecraftMixin {
 		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.stop();
 		CausticaClientComposition.current().uiOverlay().destroy();
 		CausticaClientComposition.current().runtime().shutdown();
+		MinecraftTextureLifetime.drain();
 	}
 
-	// Client-tick cadence, matching where the runtime tick has always run. runTick's HEAD would raise this
-	// to frame rate and place session/resize work ahead of the Reflex sleep below.
+	// Session and resize work uses client-tick cadence, after the per-frame Reflex sleep.
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void caustica$tickRuntime(CallbackInfo ci) {
 		CausticaClientComposition.current().tickRuntime((Minecraft) (Object) this);
@@ -59,6 +60,11 @@ public abstract class MinecraftMixin {
 		lowLatency.sleep(device.vkDevice(), swapchain);
 		lowLatency.marker(device.vkDevice(), swapchain, VulkanLowLatency.SIMULATION_START,
 				lowLatency.currentSimulationId());
+	}
+
+	@Inject(method = "runTick", at = @At("TAIL"))
+	private void caustica$releaseRetiredTextures(boolean advanceGameTime, CallbackInfo ci) {
+		MinecraftTextureLifetime.drain();
 	}
 
 	@Inject(method = "runTick",

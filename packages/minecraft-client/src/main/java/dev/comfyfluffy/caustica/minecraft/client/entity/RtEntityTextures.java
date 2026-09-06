@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.entity;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftTextureLifetime;
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.EntityTextureResolver;
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTexture;
@@ -104,7 +105,7 @@ public final class RtEntityTextures implements EntityTextureResolver {
     @Override public BorrowedMinecraftTexture resolve(MinecraftEntityMesh.Texture texture) {
         VulkanGpuTextureView view = contributions.get(texture);
         if (view == null) return null;
-        view.texture().addViews();
+        MinecraftTextureLifetime.retain(view.texture());
         return new Borrow(view, texture.sampler());
     }
 
@@ -260,7 +261,7 @@ public final class RtEntityTextures implements EntityTextureResolver {
         @Override public void close() {
             if (closed) return;
             closed = true;
-            view.texture().removeViews();
+            MinecraftTextureLifetime.release(view.texture());
         }
     }
 

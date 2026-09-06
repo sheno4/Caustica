@@ -97,6 +97,27 @@ final class SceneDirectoryTest {
         assertEquals(1,snapshot.instances().size());assertEquals(1,snapshot.lights().size());
         assertEquals(10,snapshot.scenes().getLast().environment().bindingData().bits());
     }
+    @Test void capturedLightsKeepTheirDescriptorsAcrossReplacementAndRemoval() {
+        var f = new Fixture();
+        var id = f.channel.newLight();
+        var original = new LightDescriptor.Distant(0, 1, 0, 1, 1, 1, 0, false);
+        var replacement = new LightDescriptor.Distant(0, 1, 0, 2, 3, 4, 0, false);
+        f.channel.edit(List.of(new SceneEdit.SetLight(id, f.scene, original)));
+        try (var first = f.capture.get()) {
+            f.channel.edit(List.of(new SceneEdit.SetLight(id, f.scene, replacement)));
+            try (var second = f.capture.get()) {
+                assertEquals(original, first.get().lights().getFirst().descriptor());
+                assertEquals(replacement, second.get().lights().getFirst().descriptor());
+                assertEquals(first.get().lights().getFirst().identity(), second.get().lights().getFirst().identity());
+                f.channel.edit(List.of(new SceneEdit.DropLight(id)));
+                try (var removed = f.capture.get()) {
+                    assertTrue(removed.get().lights().isEmpty());
+                    assertEquals(replacement, second.get().lights().getFirst().descriptor());
+                }
+            }
+        }
+    }
+
     @Test void capturedFramesOwnResourcesAcrossReplacementAndProducerInvalidation() {
         var f = new Fixture();
         var destroyed = new AtomicInteger();

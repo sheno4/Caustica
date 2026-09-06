@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.BitSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -54,6 +56,48 @@ final class RtRetainedLightPlanTest {
                 1, 0.2, 1, 1, 1);
         assertThrows(IllegalArgumentException.class,
                 () -> RtRetainedLightPlan.pack(List.of(light), new SceneOrigin(0, 0, 0)));
+    }
+
+    @Test
+    void parallelRangesMatchSequentialLightBytesAndGlobalLinkedFlags() {
+        List<LightDescriptor> lights = new ArrayList<>();
+        int count = 1027;
+        boolean[] flags = new boolean[count];
+        BitSet linked = new BitSet(count);
+        for (int index = 0; index < count; index++) {
+            lights.add(switch (index % 3) {
+                case 0 -> new LightDescriptor.Parallelogram(index, -index, 33,
+                        2, 0, 0, 0, 3, 0, index + 1, 5, 6);
+                case 1 -> new LightDescriptor.Spot(index, 28, -index, 0, 0, 1,
+                        11, 0.2, 12, index + 1, 14);
+                default -> new LightDescriptor.Distant(0, 1, 0, 15, 16, index + 1, 0.4, false);
+            });
+            flags[index] = index % 5 == 1 || index % 7 == 2;
+            if (flags[index]) linked.set(index);
+        }
+        try (var preparation = new RtFramePreparation()) {
+            for (SceneOrigin origin : List.of(new SceneOrigin(0, 0, 0), new SceneOrigin(-17, 31, 4000))) {
+                ByteBuffer sequential = RtRetainedLightPlan.pack(lights, origin, flags);
+                ByteBuffer parallel = ByteBuffer.allocateDirect(sequential.remaining() + 16);
+                for (int index = 0; index < parallel.capacity(); index++) parallel.put(index, (byte) 0x5a);
+                List<Runnable> tasks = new ArrayList<>();
+                int firstLight = 0;
+                for (List<LightDescriptor> chunk : RtFramePreparation.chunks(lights)) {
+                    int first = firstLight;
+                    tasks.add(RtFramePreparation.measured("lights", 0, chunk.size(), () ->
+                            RtRetainedLightPlan.packInto(parallel.slice(8 + first * RtRetainedLightPlan.RECORD_BYTES,
+                                            chunk.size() * RtRetainedLightPlan.RECORD_BYTES),
+                                    first, chunk.size(), lights::get, origin, linked::get)));
+                    firstLight += chunk.size();
+                }
+                preparation.run(tasks, Runnable::run);
+                assertEquals(sequential, parallel.slice(8, sequential.remaining()));
+                for (int index = 0; index < 8; index++) {
+                    assertEquals((byte) 0x5a, parallel.get(index));
+                    assertEquals((byte) 0x5a, parallel.get(parallel.capacity() - 1 - index));
+                }
+            }
+        }
     }
 
     private static void assertRecord(ByteBuffer records, int base, int type,

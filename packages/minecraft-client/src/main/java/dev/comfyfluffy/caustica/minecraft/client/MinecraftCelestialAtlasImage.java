@@ -15,7 +15,7 @@ final class MinecraftCelestialAtlasImage implements CelestialAtlasImage {
 
     @Override public long vkImage() { return texture.vkImage(); }
 
-    @Override public void retainViews() { texture.addViews(); }
+    @Override public void retainViews() { MinecraftTextureLifetime.retain(texture); }
 
-    @Override public void releaseViews() { texture.removeViews(); }
+    @Override public void releaseViews() { MinecraftTextureLifetime.release(texture); }
 }

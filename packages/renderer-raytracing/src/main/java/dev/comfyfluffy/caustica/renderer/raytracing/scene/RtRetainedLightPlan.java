@@ -9,6 +9,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.IntFunction;
+import java.util.function.IntPredicate;
 
 /** Packs public physical-light descriptors into the reflected scene-relative GPU ABI. */
 final class RtRetainedLightPlan {
@@ -31,11 +33,19 @@ final class RtRetainedLightPlan {
         }
         ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(lights.size(), RECORD_BYTES))
                 .order(ByteOrder.nativeOrder());
-        for (int index = 0; index < lights.size(); index++) {
-            ByteBuffer record = packed.slice(index * RECORD_BYTES, RECORD_BYTES).order(ByteOrder.nativeOrder());
-            data(lights.get(index), origin, linkedEmitters[index]).write(record);
-        }
+        packInto(packed, 0, lights.size(), lights::get, origin, index -> linkedEmitters[index]);
         return packed;
+    }
+
+    /** Writes a contiguous light range into its own slice, using frame-global descriptor and flag indices. */
+    static void packInto(ByteBuffer packed, int firstLight, int lightCount,
+                         IntFunction<LightDescriptor> lightAt, SceneOrigin origin, IntPredicate linkedEmitter) {
+        for (int offset = 0; offset < lightCount; offset++) {
+            int index = firstLight + offset;
+            ByteBuffer record = packed.slice(packed.position() + offset * RECORD_BYTES, RECORD_BYTES)
+                    .order(ByteOrder.nativeOrder());
+            data(lightAt.apply(index), origin, linkedEmitter.test(index)).write(record);
+        }
     }
 
     private static RetainedLightRecordData data(LightDescriptor descriptor, SceneOrigin origin,

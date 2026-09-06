@@ -36,14 +36,14 @@ public final class MinecraftVulkanImage implements OwnedGpuImage {
                     try {
                         range.destroy();
                         VK10.vkDestroyImageView(gpu.vk(), nativeView, null);
-                    } finally { texture.removeViews(); }
+                    } finally { MinecraftTextureLifetime.release(texture); }
                 }));
     }
 
     public static MinecraftVulkanImage sampled(VulkanDeviceContext gpu, VulkanGpuTextureView view,
                                                       int width, int height, int format) {
         VulkanGpuTexture texture = view.texture();
-        texture.addViews();
+        MinecraftTextureLifetime.retain(texture);
         GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
         long nativeView = 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -66,7 +66,7 @@ public final class MinecraftVulkanImage implements OwnedGpuImage {
         } catch (RuntimeException | Error failure) {
             if (range != null) range.destroy();
             if (nativeView != 0L) VK10.vkDestroyImageView(gpu.vk(), nativeView, null);
-            texture.removeViews();
+            MinecraftTextureLifetime.release(texture);
             throw failure;
         }
     }

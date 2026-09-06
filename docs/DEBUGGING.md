@@ -65,7 +65,7 @@ This external Python analysis computes descriptive statistics and exposure chang
 - `GeometryVisibility`: raw extraction/publication/assembly timestamps. Assembly is not GPU completion or a guarantee that the object contributes visible pixels.
 - `EntityMeshFrame`: source and assembled mesh revisions/frames, including prior values. Superseded revisions need not appear.
 - `EntityMeshPublication`: ready and publication timestamps for a prepared entity mesh. Correlate with frame start times to separate engine publication delay from entity extraction and GPU preparation.
-- `FramePreparation`: elapsed time for each trace-table preparation chunk, with phase and workload size. Worker scopes overlap; do not add their elapsed times to the render-thread wait as frame time.
+- `FramePreparation`: elapsed time for each preparation chunk, with phase and workload size. `plan` and `pack` report instance counts; `light-index` and `lights` report light counts. Worker scopes overlap; do not add their elapsed times to the render-thread wait as frame time.
 - `TerrainState`: actual section/resident, neighbor-wait and worker/queue state each client tick. `observedFrameId` is the last render serial, not a claim that the tick has appeared on screen.
 - `TerrainJob`: dispatch, CPU completion, GPU preparation, publication and supersession observations keyed by epoch/revision/section coordinates. Derive queue and update latency externally; a superseded revision need not publish.
 - `NeeFrame`: retained light counts, candidate count and history validity; `rendererFrameId` uses the renderer's separate frame namespace.

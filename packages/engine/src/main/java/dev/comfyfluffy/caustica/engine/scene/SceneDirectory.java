@@ -32,7 +32,7 @@ public final class SceneDirectory {
     private final MeshPreparationBackend preparation;
     private final Set<SceneRef> scenes = new LinkedHashSet<>();
     private final Map<InstanceRef, RetainedInstance> instances = new LinkedHashMap<>();
-    private final Map<LightRef, SceneEdit.SetLight> lights = new LinkedHashMap<>();
+    private final Map<LightRef, RetainedSceneSnapshot.Light> lights = new LinkedHashMap<>();
     private final Map<SceneRef, LinkedHashMap<Object, RetainedEnvironment>> selections = new LinkedHashMap<>();
     private long identity;
     private long revision;
@@ -232,7 +232,8 @@ public final class SceneDirectory {
             if (previous != null && (entry == null || previous.resources != entry.resources)) retired.add(previous.resources);
         });
         changedLights.forEach((id, value) -> {
-            if (value == null) lights.remove(id); else lights.put(id, value);
+            if (value == null) lights.remove(id);
+            else lights.put(id, new RetainedSceneSnapshot.Light(id.identity, value.scene(), value.descriptor()));
         });
         environments.forEach((scene, entry) -> replaceEnvironment(scene, channel, entry));
         revision++;
@@ -401,13 +402,8 @@ public final class SceneDirectory {
         }
         var instanceSnapshots = new ArrayList<RetainedSceneSnapshot.Instance>(instances.size());
         for (var entry : instances.values()) instanceSnapshots.add(entry.snapshot);
-        var lightSnapshots = new ArrayList<RetainedSceneSnapshot.Light>(lights.size());
-        for (var entry : lights.entrySet()) {
-            lightSnapshots.add(new RetainedSceneSnapshot.Light(entry.getKey().identity,
-                    entry.getValue().scene(), entry.getValue().descriptor()));
-        }
         return new RetainedSceneSnapshot(revision, sceneSnapshots, List.copyOf(meshSnapshots.values()),
-                instanceSnapshots, lightSnapshots);
+                instanceSnapshots, List.copyOf(lights.values()));
     }
 
     private static EnvironmentBinding<?> selectedEnvironment(LinkedHashMap<Object, RetainedEnvironment> selections) {
