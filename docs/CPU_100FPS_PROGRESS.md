@@ -74,6 +74,54 @@ unresolved and no null guard was introduced.
 
 ## Next work
 
+### Retained-page experiment
+
+The subsequent candidate adds dense per-kind snapshot ordinals, paged lights,
+cached trace plans and packed page residency, and touched-entry terrain publication.
+It preserves generated record writers. Two diagnostic runs that rebuilt TLAS every
+frame measured static frame envelopes of 10.12/10.95 ms, but flight remained
+49.17/49.18 ms. Static render allocation remained 16.50/19.21 MB per frame, dominated
+by entity upload and capture. Static preparation-worker allocation fell to
+0.08/0.42 MB per frame.
+
+Flight terrain publication averaged 0.76 ms and TLAS preparation 2.18 ms in the first
+run. Trace preparation regressed to 17.53 ms and lighting preparation to 8.67 ms.
+The trace scheduler counted pages rather than their contained work, allowing large
+packing jobs onto the render thread. Missing trace-plan construction also ran there.
+The correction uses weighted worker chunks and constructs missing plans on workers.
+Light plans now reuse unchanged pages, and packed light bytes reuse the generated
+writer's previous output. These corrections require another live measurement.
+
+The retained-TLAS experiment encountered repeated null-write GPU device losses. Two
+complete routes with forced builds initially passed, but a later always-build run
+failed too; this does not establish build skipping as the cause. The next diagnostic
+used fresh TLAS allocations and completed two routes. A further variant with fresh
+AS handles but pooled buffers failed during its second route. All TLAS pooling and
+input-page caching were removed; only a generic writer overload remains, using the
+original fresh-resource lifetime. No fault cause is claimed from the null address report.
+
+The asynchronous entity-packing candidate subsequently reproduced the same GPU
+fault during its second route even with fresh TLAS resources. TLAS reuse therefore
+does not explain the fault. Further optimization is paused for a controlled earlier
+checkpoint comparison. This renderer checkpoint is an experiment, not a validated
+stability result. Entity packing retains textures on the render thread, runs generated
+writers on two workers, then immediately submits mesh preparation; its lifecycle
+tests pass and `EntityMeshUpload` records worker queue/CPU/allocation data.
+
+Across the two successful forced-build routes, matched engine-ready publication
+delays remained at most one observed frame. An above-ground screenshot showed
+terrain rendering, and the client shut down cleanly. Local artifacts are named
+`goal-force-tlas-*` and `goal-force-tlas-repeat-*`.
+
+With weighted workers, cached light pages, and fresh TLAS resources, the two flight
+envelopes measured 40.17/40.33 ms. The first run averaged 26,267 packed instances
+and 108,628 indexed lights per frame, a different resident population from earlier
+runs. Light packing processed only 1,191 changed lights per frame; mean lighting
+preparation was 3.20 ms. Static envelopes were 10.70/12.29 ms. These results still
+miss the acceptance target. Both routes shut down cleanly and an above-ground
+capture showed terrain rendering. Artifacts: `goal-fresh-tlas-*` and
+`goal-fresh-tlas-repeat-*`.
+
 Flight still invalidates almost every full light list and its downstream tables.
 The renderer still packs retained geometry/emitter/SBT data and traverses all TLAS
 instances each frame. Reduce that work through stable revisions and changed-page

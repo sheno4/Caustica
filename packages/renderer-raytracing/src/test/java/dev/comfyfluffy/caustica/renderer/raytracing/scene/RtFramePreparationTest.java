@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+
+
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
@@ -33,6 +36,25 @@ final class RtFramePreparationTest {
     }
 
     @Test
+    void weightedPartitionsUsePageWorkInsteadOfPageCount() {
+        List<Integer> inputs = List.of(400, 400, 400, 400);
+        List<List<Integer>> chunks = RtFramePreparation.chunks(inputs, Integer::intValue);
+        assertEquals(4, chunks.size());
+        assertEquals(inputs, chunks.stream().flatMap(List::stream).toList());
+    }
+
+    @Test
+    void singleChunkRunsOnPreparationWorker() {
+        String caller = Thread.currentThread().getName();
+        String[] worker = new String[1];
+        try (var preparation = new RtFramePreparation()) {
+            preparation.run(List.of(1), ignored -> worker[0] = Thread.currentThread().getName());
+        }
+        assertNotEquals(caller, worker[0]);
+        assertTrue(worker[0].startsWith("Caustica frame preparation-"));
+    }
+
+    @Test
     void parallelGeometryEmitterAndHitOrderMatchesSequentialPacking() {
         int count = 1027;
         var origin = new SceneOrigin(17, -3, 29);
@@ -49,7 +71,7 @@ final class RtFramePreparationTest {
         var ranges = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(1, 2, 42L),
                 new RetainedSceneSnapshot.PrimitiveEmitter(4, 1, 84L),
                 new RetainedSceneSnapshot.PrimitiveEmitter(5, 1, 99L));
-        Map<Long, Integer> indices = Map.of(42L, 1, 84L, 0);
+        var indices = new Long2IntOpenHashMap(new long[]{42, 84}, new int[]{1, 0});
         ByteBuffer sequentialGeometry = RtRetainedGeometryPlan.pack(records, origin);
         ByteBuffer sequentialEmitters = ByteBuffer.allocate(count * 28).order(ByteOrder.nativeOrder());
         boolean[] sequentialLinked = new boolean[3];

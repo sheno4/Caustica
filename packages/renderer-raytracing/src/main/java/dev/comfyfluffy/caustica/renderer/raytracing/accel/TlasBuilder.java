@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 
+import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
@@ -130,6 +131,25 @@ public final class TlasBuilder {
             instanceBuffer.destroy();
             scratch.destroy();
         }
+    }
+
+    /** Writes one scene instance using the Vulkan struct API. */
+    @FunctionalInterface
+    public interface InstanceWriter<T> {
+        void write(T instance, VkAccelerationStructureInstanceKHR target);
+    }
+
+    /** Packs every instance into fresh frame-owned input, acceleration-structure, and scratch storage. */
+    public static <T> Prepared prepare(VulkanDeviceContext ctx, List<T> instances,
+                                       InstanceWriter<T> writer, GraphicsUse graphicsUse) {
+        int count = instances.size();
+        Slot slot = createSlot(ctx, count, graphicsUse);
+        var records = VkAccelerationStructureInstanceKHR.create(slot.instanceBuffer.mapped(), count);
+        int index = 0;
+        for (var page : SnapshotList.pagesOf(instances)) {
+            for (T instance : page) writer.write(instance, records.get(index++));
+        }
+        return finish(slot, count);
     }
 
     /** Pack two instance ranges into a TLAS allocated for this frame. */

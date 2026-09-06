@@ -59,35 +59,79 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
 
     @Override public UploadedEntity upload(MinecraftEntityMesh source) {
-        float[] positions = source.positions();
-        int[] indices = source.indices();
-        float[] uvs = source.uvs();
-        float[] colors = source.vertexColors();
-        VmaMappedBuffer position = createAsync((long) positions.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                bytes -> {
-                    for (float value : positions) bytes.putFloat(value);
-                });
-        VmaMappedBuffer index = null, primitive = null, instance = null;
-        TextureSet textureSet = null;
+        try (var job = prepareUpload(source)) { return job.finish(); }
+    }
+
+    @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
+        TextureSet textureSet = resolveTextures(source);
+        VmaMappedBuffer position = null, index = null, primitive = null, instance = null;
         try {
-            index = createAsync((long) indices.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                    bytes -> {
-                        for (int value : indices) bytes.putInt(value);
-                    });
-            textureSet = resolveTextures(source);
-            TextureSet resolved = textureSet;
-            primitive = create((long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    b -> writePrimitives(b, source, positions, indices, uvs, colors, resolved));
-            instance = create(MinecraftInstanceData.BYTE_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    b -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,
-                            new MinecraftInstanceData.SampledTexture2DIndex(0), 0).write(b));
+            var materialIndices = new HashMap<MinecraftEntityMesh.Material, Integer>();
+            for (var triangle : source.triangles()) {
+                var material = triangle.material();
+                if (!materialIndices.containsKey(material)) {
+                    materialIndices.put(material, materials.resolveEntityOrFallback(materialKey(material)).materialIndex());
+                }
+            }
+            position = VmaMappedBuffer.createAsync(gpu, (long) source.vertexCount() * 12,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity positions");
+            index = VmaMappedBuffer.createAsync(gpu, (long) source.triangleCount() * 12,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity indices");
+            primitive = VmaMappedBuffer.create(gpu, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity primitives");
+            instance = VmaMappedBuffer.create(gpu, MinecraftInstanceData.BYTE_SIZE,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity instance");
+            return new PackingJob(source, textureSet, Map.copyOf(materialIndices), position, index, primitive, instance);
         } catch (RuntimeException | Error failure) {
-            Throwable cleanup = closeAll(instance, primitive, index, textureSet, position);
+            Throwable cleanup = closeAll(instance, primitive, index, position, textureSet);
             if (cleanup != null) failure.addSuppressed(cleanup);
             throw failure;
         }
-        return uploaded(source, position, index, primitive, instance, textureSet);
+    }
+
+    private final class PackingJob implements UploadJob {
+        final MinecraftEntityMesh source;
+        final TextureSet textures;
+        final Map<MinecraftEntityMesh.Material, Integer> materialIndices;
+        final VmaMappedBuffer positions, indices, primitive, instance;
+        boolean transferred;
+
+        PackingJob(MinecraftEntityMesh source, TextureSet textures,
+                   Map<MinecraftEntityMesh.Material, Integer> materialIndices,
+                   VmaMappedBuffer positions, VmaMappedBuffer indices, VmaMappedBuffer primitive, VmaMappedBuffer instance) {
+            this.source = source;
+            this.textures = textures;
+            this.materialIndices = materialIndices;
+            this.positions = positions;
+            this.indices = indices;
+            this.primitive = primitive;
+            this.instance = instance;
+        }
+
+        @Override public UploadedEntity finish() {
+            var positionValues = source.positions();
+            var indexValues = source.indices();
+            write(positions, (long) positionValues.length * 4, bytes -> {
+                for (float value : positionValues) bytes.putFloat(value);
+            });
+            write(indices, (long) indexValues.length * 4, bytes -> {
+                for (int value : indexValues) bytes.putInt(value);
+            });
+            write(primitive, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
+                    bytes -> writePrimitives(bytes, source, positionValues, indexValues, source.uvs(),
+                            source.vertexColors(), textures, materialIndices));
+            write(instance, MinecraftInstanceData.BYTE_SIZE,
+                    bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,
+                            new MinecraftInstanceData.SampledTexture2DIndex(0), 0).write(bytes));
+            transferred = true;
+            return uploaded(source, positions, indices, primitive, instance, textures);
+        }
+
+        @Override public void close() {
+            if (transferred) return;
+            transferred = true;
+            throwIfFailed(closeAll(instance, primitive, indices, positions, textures));
+        }
     }
 
     private UploadedEntity uploaded(MinecraftEntityMesh source, VmaMappedBuffer positions,
@@ -166,16 +210,9 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
 
     private void writePrimitives(ByteBuffer bytes, MinecraftEntityMesh source, float[] positions,
                                  int[] indices, float[] uvs, float[] colors,
-                                 TextureSet textureSet) {
-        var materialIndices = new HashMap<MinecraftEntityMesh.Material, Integer>();
+                                 TextureSet textureSet, Map<MinecraftEntityMesh.Material, Integer> materialIndices) {
         for (int t = 0; t < source.triangleCount(); t++) {
             var triangle = source.triangles().get(t);
-            var material = triangle.material();
-            Integer materialIndex = materialIndices.get(material);
-            if (materialIndex == null) {
-                materialIndex = materials.resolveEntityOrFallback(materialKey(material)).materialIndex();
-                materialIndices.put(material, materialIndex);
-            }
             MinecraftPrimitiveData.Float2[] uv = new MinecraftPrimitiveData.Float2[3];
             for (int corner = 0; corner < 3; corner++) {
                 int vertex = indices[t * 3 + corner];
@@ -193,7 +230,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                     ? null : textureSet.samplerIndices.get(triangle.material().texture());
             TangentBasis basis = tangentBasis(positions, indices, uvs, t);
             var record = primitiveRecord(triangle, uv, vertexColors,
-                    materialIndex,
+                    materialIndices.get(triangle.material()),
                     descriptor, samplerDescriptor, basis);
             record.write(bytes.slice(t * MinecraftPrimitiveData.BYTE_SIZE, MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
         }
@@ -303,27 +340,9 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         }
     }
 
-    private VmaMappedBuffer create(long size, int extraUsage, Writer writer) {
-        return create(size, extraUsage, writer, false);
-    }
-
-    private VmaMappedBuffer createAsync(long size, int extraUsage, Writer writer) {
-        return create(size, extraUsage, writer, true);
-    }
-
-    private VmaMappedBuffer create(long size, int extraUsage, Writer writer, boolean asyncShared) {
-        VmaMappedBuffer buffer = asyncShared
-                ? VmaMappedBuffer.createAsync(gpu, size, extraUsage, "Minecraft entity upload")
-                : VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft entity upload");
-        try {
-            ByteBuffer bytes = buffer.mapped().order(ByteOrder.LITTLE_ENDIAN);
-            writer.write(bytes);
-            buffer.flush(0L, size);
-            return buffer;
-        } catch (RuntimeException | Error failure) {
-            buffer.close();
-            throw failure;
-        }
+    private static void write(VmaMappedBuffer buffer, long size, Writer writer) {
+        writer.write(buffer.mapped().order(ByteOrder.LITTLE_ENDIAN));
+        buffer.flush(0L, size);
     }
 
     static Throwable closeAll(AutoCloseable... values) {

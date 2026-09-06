@@ -1,9 +1,11 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
+import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteOrder;
+import java.util.AbstractList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -134,6 +136,76 @@ final class RtNeeAtPlanTest {
         assertEquals(changed.power()[0] * 4.0f, scaled.power()[0]);
         assertEquals(changed.power()[1] * 4.0f, scaled.power()[1]);
         assertEquals(oldStable.power()[0], oldStable.power()[1]);
+    }
+
+    @Test
+    void changedPageDoesNotEnumerateUnchangedLights() {
+        var descriptor = new LightDescriptor.Distant(0, 1, 0, 1, 2, 3, 0.4, false);
+        var shared = new CountingPage(List.of(light(10, descriptor), light(20, descriptor)));
+        var initial = SnapshotList.ofPages(List.of(shared, List.of(light(30, descriptor))));
+        var cache = new RtNeeAtPlan.Cache();
+        cache.prepare(initial, false, 1.0);
+        var initialPower = cache.prepare(initial, true, 1.0).power().clone();
+        shared.reads = 0;
+        var current = SnapshotList.ofPages(List.of(shared, List.of(light(40, descriptor))));
+        var transition = cache.prepare(current, true, 1.0);
+
+        assertEquals(0, shared.reads);
+        assertArrayEquals(new int[]{0, 1, RtNeeAtPlan.NO_LIGHT}, transition.previousToCurrent());
+        assertArrayEquals(initialPower, transition.power());
+    }
+
+    @Test
+    void reorderedSharedPagesRemapWithoutEnumeratingTheirLights() {
+        var descriptor = new LightDescriptor.Distant(0, 1, 0, 1, 2, 3, 0.4, false);
+        var first = new CountingPage(List.of(light(10, descriptor), light(20, descriptor)));
+        var second = new CountingPage(List.of(light(30, descriptor)));
+        var cache = new RtNeeAtPlan.Cache();
+        cache.prepare(SnapshotList.ofPages(List.of(first, second)), false, 1.0);
+        first.reads = second.reads = 0;
+        var current = SnapshotList.ofPages(List.of(second, first));
+        var transition = cache.prepare(current, true, 1.0);
+
+        assertArrayEquals(new int[]{1, 2, 0}, transition.previousToCurrent());
+        assertEquals(0, first.reads + second.reads);
+        assertArrayEquals(new int[]{0, 1, 2}, cache.prepare(current, true, 1.0).previousToCurrent());
+    }
+
+    @Test
+    void repartitionedPagesPreserveIdentityAndPowerAcrossRemovalAndInsertion() {
+        var dim = new LightDescriptor.Distant(0, 1, 0, 1, 1, 1, 0.4, false);
+        var bright = new LightDescriptor.Distant(0, 1, 0, 5, 5, 5, 0.4, false);
+        var cache = new RtNeeAtPlan.Cache();
+        var initial = SnapshotList.ofPages(List.of(List.of(light(10, dim), light(20, bright)), List.of(light(30, dim))));
+        var old = cache.prepare(initial, false, 1.0);
+        var current = SnapshotList.ofPages(List.of(List.of(light(30, dim), light(40, bright)), List.of(light(20, bright))));
+        var transition = cache.prepare(current, true, 1.0);
+
+        assertArrayEquals(new int[]{RtNeeAtPlan.NO_LIGHT, 2, 0}, transition.previousToCurrent());
+        assertArrayEquals(new float[]{old.power()[2], old.power()[1], old.power()[1]}, transition.power());
+        assertArrayEquals(new float[]{1, 5, 1}, old.power(), 1.0e-5f);
+    }
+
+    @Test
+    void samePageRevisionReusesPlansAndScaleChangeRefreshesPower() {
+        var descriptor = new LightDescriptor.Parallelogram(0, 0, 0, 2, 0, 0, 0, 3, 0, 4, 5, 6);
+        var page = List.of(light(10, descriptor), light(20, descriptor));
+        var cache = new RtNeeAtPlan.Cache();
+        cache.prepare(SnapshotList.ofPages(List.of(page)), false, 1.0);
+        var stable = cache.prepare(SnapshotList.ofPages(List.of(page)), true, 1.0);
+        assertSame(stable, cache.prepare(SnapshotList.ofPages(List.of(page)), true, 1.0));
+        var scaled = cache.prepare(SnapshotList.ofPages(List.of(page)), true, 2.0);
+        assertSame(stable.previousToCurrent(), scaled.previousToCurrent());
+        assertEquals(stable.power()[0] * 4.0f, scaled.power()[0]);
+    }
+
+    private static final class CountingPage extends AbstractList<RtRetainedSceneBackend.SceneLight> {
+        private final List<RtRetainedSceneBackend.SceneLight> lights;
+        int reads;
+
+        private CountingPage(List<RtRetainedSceneBackend.SceneLight> lights) { this.lights = lights; }
+        @Override public RtRetainedSceneBackend.SceneLight get(int index) { reads++; return lights.get(index); }
+        @Override public int size() { return lights.size(); }
     }
 
     private static RtRetainedSceneBackend.SceneLight light(long identity, LightDescriptor descriptor) {

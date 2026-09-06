@@ -1,0 +1,68 @@
+package dev.comfyfluffy.caustica.renderer.raytracing.scene;
+
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+final class RtTracePageResidencyTest {
+    @Test
+    void cameraOnlyFramesKeepEveryPackedRegionResident() {
+        var residency = new RtRetainedSceneBackend.TracePageResidency();
+        Object page = new Object();
+        Object pipeline = new Object();
+        Object lightIndices = new Object();
+        var origin = new SceneOrigin(128, -64, 256);
+
+        residency.geometryWritten(page, 17, origin, 0x4000);
+        residency.hitsWritten(page, 34, pipeline);
+        residency.emittersWritten(page, 96, lightIndices);
+
+        assertTrue(residency.hasGeometry(page, 17, origin, 0x4000));
+        assertTrue(residency.hasHits(page, 34, pipeline));
+        assertTrue(residency.hasEmitters(page, 96, lightIndices));
+    }
+
+    @Test
+    void lightIndexRevisionInvalidatesOnlyEmitterIndices() {
+        var residency = new RtRetainedSceneBackend.TracePageResidency();
+        Object page = new Object();
+        Object pipeline = new Object();
+        Object previousLightIndices = new Object();
+        Object currentLightIndices = new Object();
+        var origin = SceneOrigin.ZERO;
+        residency.geometryWritten(page, 0, origin, 0x8000);
+        residency.hitsWritten(page, 0, pipeline);
+        residency.emittersWritten(page, 0, previousLightIndices);
+
+        assertTrue(residency.hasGeometry(page, 0, origin, 0x8000));
+        assertTrue(residency.hasHits(page, 0, pipeline));
+        assertFalse(residency.hasEmitters(page, 0, currentLightIndices));
+    }
+
+    @Test
+    void geometryTracksOriginAbsoluteOffsetAndEmitterAddress() {
+        var residency = new RtRetainedSceneBackend.TracePageResidency();
+        Object page = new Object();
+        var origin = new SceneOrigin(128, 0, 128);
+        residency.geometryWritten(page, 12, origin, 0x1000);
+
+        assertFalse(residency.hasGeometry(new Object(), 12, origin, 0x1000));
+        assertFalse(residency.hasGeometry(page, 13, origin, 0x1000));
+        assertFalse(residency.hasGeometry(page, 12, new SceneOrigin(256, 0, 128), 0x1000));
+        assertFalse(residency.hasGeometry(page, 12, origin, 0x2000));
+    }
+
+    @Test
+    void hitTableTracksPageOffsetAndPipelineIndependently() {
+        var residency = new RtRetainedSceneBackend.TracePageResidency();
+        Object page = new Object();
+        Object pipeline = new Object();
+        residency.hitsWritten(page, 64, pipeline);
+
+        assertFalse(residency.hasHits(new Object(), 64, pipeline));
+        assertFalse(residency.hasHits(page, 128, pipeline));
+        assertFalse(residency.hasHits(page, 64, new Object()));
+    }
+}

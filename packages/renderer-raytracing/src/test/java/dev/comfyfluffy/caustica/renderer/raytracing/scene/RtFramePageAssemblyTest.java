@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -45,6 +46,20 @@ class RtFramePageAssemblyTest {
             var moving = next.get(scene).getLast().frame(history).getFirst();
             assertEquals(GeometryTransform.translation(0, 0, 0), moving.previousTransform());
             assertEquals(GeometryTransform.translation(5, 0, 0), moving.current().transform());
+        }
+    }
+
+    @Test void tracePlansUseMotionResolvedPageIdentity() {
+        var mesh = mesh(1, 0x1000, 1);
+        var source = snapshot(List.of(mesh), List.of(List.of(instance(1, 1, mesh, 0))));
+        List<RtRetainedSceneBackend.FrameInstanceSnapshot> stationary =
+                assembly.resolve(source).get(scene).getFirst().stationary;
+        var plans = new RtRetainedSceneBackend.TracePlanCache();
+
+        try (var preparation = new RtFramePreparation()) {
+            var first = plans.resolve(List.of(stationary), preparation)[0];
+            assertSame(first, plans.resolve(List.of(stationary), preparation)[0]);
+            assertNotSame(first, plans.resolve(List.of(new ArrayList<>(stationary)), preparation)[0]);
         }
     }
 

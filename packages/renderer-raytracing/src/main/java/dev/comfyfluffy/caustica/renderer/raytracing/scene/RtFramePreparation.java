@@ -21,24 +21,39 @@ final class RtFramePreparation implements AutoCloseable {
     private static final com.sun.management.ThreadMXBean THREADS =
             java.lang.management.ManagementFactory.getPlatformMXBean(com.sun.management.ThreadMXBean.class);
     private static final int WORKERS = 4;
-    private static final int ITEMS_PER_CHUNK = 256;
+    private static final int WORK_PER_CHUNK = 256;
     private final ExecutorService executor = Executors.newFixedThreadPool(WORKERS,
             Thread.ofPlatform().name("Caustica frame preparation-", 0).factory());
 
     static <T> List<List<T>> chunks(List<T> inputs) {
-        int count = Math.min(WORKERS, Math.max(1, Math.ceilDiv(inputs.size(), ITEMS_PER_CHUNK)));
+        return chunks(inputs, ignored -> 1);
+    }
+
+    static <T> List<List<T>> chunks(List<T> inputs, ToIntFunction<? super T> work) {
+        if (inputs.isEmpty()) return List.of(inputs);
+        long totalWork = 0L;
+        for (T input : inputs) totalWork = Math.addExact(totalWork, Math.max(1, work.applyAsInt(input)));
+        int count = Math.min(Math.min(WORKERS, inputs.size()),
+                Math.max(1, Math.toIntExact(Math.ceilDiv(totalWork, WORK_PER_CHUNK))));
         List<List<T>> chunks = new ArrayList<>(count);
-        for (int index = 0; index < count; index++) {
-            chunks.add(inputs.subList(inputs.size() * index / count, inputs.size() * (index + 1) / count));
+        int first = 0;
+        long completedWork = 0L;
+        for (int index = 1; index < count; index++) {
+            long target = Math.ceilDiv(Math.multiplyExact(totalWork, index), count);
+            int lastExclusive = inputs.size() - (count - index);
+            int end = first;
+            while (end < lastExclusive && (end == first || completedWork < target)) {
+                completedWork = Math.addExact(completedWork, Math.max(1, work.applyAsInt(inputs.get(end))));
+                end++;
+            }
+            chunks.add(inputs.subList(first, end));
+            first = end;
         }
+        chunks.add(inputs.subList(first, inputs.size()));
         return chunks;
     }
 
     <T> void run(List<T> chunks, Consumer<T> operation) {
-        if (chunks.size() == 1) {
-            operation.accept(chunks.getFirst());
-            return;
-        }
         List<CompletableFuture<Void>> tasks = new ArrayList<>(chunks.size());
         Throwable failure = null;
         try {

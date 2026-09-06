@@ -1,5 +1,9 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2IntMaps;
+
+
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
@@ -38,9 +42,9 @@ final class RtRetainedContentPlanTest {
     void primitiveEmitterIdentityResolvesAgainstEachContentRevision() {
         var emitters = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(2, 3, 42L));
 
-        assertEquals(1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Map.of(42L, 1)));
-        assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Map.of()));
-        assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 1, Map.of(42L, 1)));
+        assertEquals(1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Long2IntMaps.singleton(42L, 1)));
+        assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Long2IntMaps.EMPTY_MAP));
+        assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 1, Long2IntMaps.singleton(42L, 1)));
     }
 
     @Test
@@ -51,7 +55,7 @@ final class RtRetainedContentPlanTest {
         boolean[] linked = new boolean[2];
 
         RtRetainedSceneBackend.putEmitterIndices(output, 0, 7, ranges,
-                Map.of(42L, 0, 84L, 1), linked);
+                new Long2IntOpenHashMap(new long[]{42, 84}, new int[]{0, 1}), linked);
         output.flip();
 
         assertEquals(List.of(-1, -1, 0, 0, -1, 1, 1),
@@ -77,7 +81,7 @@ final class RtRetainedContentPlanTest {
         int first = 2040 * 4 + 1;
         var output = ByteBuffer.allocate(19 * Integer.BYTES).order(ByteOrder.nativeOrder());
         boolean[] linked = new boolean[1];
-        RtRetainedSceneBackend.putEmitterIndices(output, first, 19, ranges, Map.of(42L, 0), linked);
+        RtRetainedSceneBackend.putEmitterIndices(output, first, 19, ranges, Long2IntMaps.singleton(42L, 0), linked);
         output.flip();
         for (int primitive = first; primitive < first + 19; primitive++) {
             assertEquals(primitive % 4 < 2 ? 0 : -1, output.getInt());
@@ -92,7 +96,7 @@ final class RtRetainedContentPlanTest {
     void emitterPackingClipsRangesAndPreservesMissingLightGaps() {
         var ranges = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(1, 3, 42L),
                 new RetainedSceneSnapshot.PrimitiveEmitter(5, 2, 84L));
-        var indices = Map.of(42L, 0);
+        var indices = Long2IntMaps.singleton(42L, 0);
         for (int first = 0; first < 9; first++) {
             for (int count = 0; count <= 9 - first; count++) {
                 var output = ByteBuffer.allocate(count * Integer.BYTES).order(ByteOrder.nativeOrder());

@@ -42,6 +42,7 @@ dependencies {
     implementation project(":packages:vulkan-support")
     implementation project(":packages:api-support")
     implementation "org.slf4j:slf4j-api:2.0.17"
+    implementation "it.unimi.dsi:fastutil:8.5.18"
 
     runtimeOnly project(":packages:shader-api")
     runtimeOnly project(":packages:features-builtin")

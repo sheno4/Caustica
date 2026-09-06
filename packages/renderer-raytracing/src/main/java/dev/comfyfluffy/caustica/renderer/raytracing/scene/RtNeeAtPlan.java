@@ -1,12 +1,16 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
+import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Map;
 
 /** CPU-side stable-identity and physical-power inputs for the GPU adaptive sampler. */
 final class RtNeeAtPlan {
@@ -29,6 +33,8 @@ final class RtNeeAtPlan {
         private double scale = Double.NaN;
         private float[] power = new float[0];
         private int[] identity = new int[0];
+        private List<Page> pages = List.of();
+        private IdentityHashMap<List<RtRetainedSceneBackend.SceneLight>, Page> pageLookup = new IdentityHashMap<>();
         private Plan stable;
         private Plan withoutHistory;
 
@@ -40,39 +46,73 @@ final class RtNeeAtPlan {
             if (current == lights && scale == metersPerSceneUnit) {
                 return continuous ? stable : withoutHistory;
             }
-            boolean sameMembership = current.size() == lights.size();
-            for (int index = 0; sameMembership && index < current.size(); index++) {
-                sameMembership = current.get(index).identity() == lights.get(index).identity();
+            var currentPages = SnapshotList.pagesOf(current);
+            boolean sameScale = scale == metersPerSceneUnit;
+            boolean samePages = currentPages.size() == pages.size();
+            for (int index = 0; samePages && index < pages.size(); index++) {
+                samePages = currentPages.get(index) == pages.get(index).lights;
             }
-            int[] remap;
-            if (sameMembership) {
-                remap = identity;
-            } else {
-                Map<Long, Integer> currentIndices = new HashMap<>();
-                identity = new int[current.size()];
-                for (int index = 0; index < current.size(); index++) {
-                    currentIndices.put(current.get(index).identity(), index);
-                    identity[index] = index;
-                }
-                remap = new int[lights.size()];
-                for (int index = 0; index < lights.size(); index++) {
-                    remap[index] = currentIndices.getOrDefault(lights.get(index).identity(), NO_LIGHT);
-                }
+            if (sameScale && samePages) {
+                lights = current;
+                return continuous ? stable : withoutHistory;
+            }
+            var nextPages = new ArrayList<Page>(currentPages.size());
+            var nextLookup = new IdentityHashMap<List<RtRetainedSceneBackend.SceneLight>, Page>(currentPages.size());
+            int first = 0;
+            for (var page : currentPages) {
+                var next = new Page(page, first);
+                nextPages.add(next);
+                nextLookup.put(page, next);
+                first += page.size();
+            }
+            int[] remap = identity.clone();
+            int changedCount = 0;
+            for (Page page : pages) {
+                if (!nextLookup.containsKey(page.lights)) changedCount += page.lights.size();
+            }
+            var changed = new Long2ObjectOpenHashMap<PreviousLight>(changedCount);
+            for (Page page : pages) {
+                if (nextLookup.containsKey(page.lights)) continue;
+                Arrays.fill(remap, page.first, page.first + page.lights.size(), NO_LIGHT);
+                int index = page.first;
+                for (var light : page.lights) changed.put(light.identity(), new PreviousLight(light, index++));
             }
             float[] nextPower = new float[current.size()];
-            if (scale == metersPerSceneUnit) {
-                for (int index = 0; index < lights.size(); index++) {
-                    int next = remap[index];
-                    if (next != NO_LIGHT && lights.get(index).descriptor() == current.get(next).descriptor()) {
-                        nextPower[next] = power[index];
+            boolean sameMembership = current.size() == lights.size();
+            for (Page page : nextPages) {
+                Page previous = pageLookup.get(page.lights);
+                if (previous != null) {
+                    sameMembership &= previous.first == page.first;
+                    if (previous.first != page.first) {
+                        for (int offset = 0; offset < page.lights.size(); offset++) {
+                            remap[previous.first + offset] = page.first + offset;
+                        }
+                    }
+                    if (sameScale) {
+                        System.arraycopy(power, previous.first, nextPower, page.first, page.lights.size());
+                    } else {
+                        int index = page.first;
+                        for (var light : page.lights) {
+                            nextPower[index++] = samplingPower(light.descriptor(), metersPerSceneUnit);
+                        }
+                    }
+                } else {
+                    int index = page.first;
+                    for (var light : page.lights) {
+                        PreviousLight old = changed.get(light.identity());
+                        sameMembership &= old != null && old.index == index;
+                        if (old != null) remap[old.index] = index;
+                        nextPower[index++] = sameScale && old != null && old.light.descriptor() == light.descriptor()
+                                ? power[old.index] : samplingPower(light.descriptor(), metersPerSceneUnit);
                     }
                 }
             }
-            for (int index = 0; index < current.size(); index++) {
-                if (nextPower[index] == 0.0f) {
-                    nextPower[index] = samplingPower(current.get(index).descriptor(), metersPerSceneUnit);
-                }
+            if (identity.length != current.size()) {
+                identity = new int[current.size()];
+                for (int index = 0; index < identity.length; index++) identity[index] = index;
             }
+            pages = nextPages;
+            pageLookup = nextLookup;
             power = nextPower;
             scale = metersPerSceneUnit;
             lights = current;
@@ -81,6 +121,10 @@ final class RtNeeAtPlan {
             withoutHistory = new Plan(new int[0], power, total);
             return !continuous ? withoutHistory : sameMembership ? stable : new Plan(remap, power, total);
         }
+
+        /** Shared pages keep light identity, descriptor, and local order unchanged across revisions. */
+        private record Page(List<RtRetainedSceneBackend.SceneLight> lights, int first) { }
+        private record PreviousLight(RtRetainedSceneBackend.SceneLight light, int index) { }
     }
 
     /**

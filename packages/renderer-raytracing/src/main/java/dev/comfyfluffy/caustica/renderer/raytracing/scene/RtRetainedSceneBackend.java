@@ -1,5 +1,9 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2IntMap;
+
+
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
@@ -54,8 +58,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private List<RetainedSceneSnapshot.Scene> contentScenes;
     private List<RetainedSceneSnapshot.Light> contentLights;
     private Map<SceneId, SceneContent> retainedContent;
+    private final RtLightPageAssembly lightAssembly = new RtLightPageAssembly();
     private final Map<SceneId, LightIndexRevision> lightIndicesByScene = new IdentityHashMap<>();
-    private TlasBuilder.InstanceBatch tlasInstances = new TlasBuilder.InstanceBatch();
+    private final Map<SceneId, TracePlanCache> tracePlansByScene = new IdentityHashMap<>();
+    private final Map<SceneId, RtPackedLightPages> packedLightsByScene = new IdentityHashMap<>();
     private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
     private boolean closed;
     private boolean sessionClosing;
@@ -141,14 +147,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(origin, "origin");
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
-        TlasBuilder.InstanceBatch instances = tlasInstances;
-        instances.reset(current.instances.size());
-        for (FrameInstanceSnapshot instance : current.instances) {
-            float[] transform = instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z());
-            instances.append(transform, 0, 0, 0, instance.nativeInstance.mesh.blas().accel.deviceAddress,
-                    instance.geometryBase, instance.current.mask(), instance.sbtRecordOffset);
-        }
-        return TlasBuilder.prepare(ctx, instances, graphicsUse);
+        return TlasBuilder.prepare(ctx, current.instances, (instance, target) -> {
+            target.transform().matrix().put(instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z()));
+            target.instanceCustomIndex(instance.geometryBase)
+                    .mask(instance.current.mask())
+                    .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset)
+                    .flags(org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
+                    .accelerationStructureReference(instance.nativeInstance.mesh.blas().accel.deviceAddress.value());
+        }, graphicsUse);
     }
 
     /** Packs the GeometryIndex-addressed records for one scene in the same order as its TLAS hit bases. */
@@ -185,74 +191,90 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         List<SceneLight> sceneLights = current.content.lights();
         LightIndexRevision indexed = lightIndicesByScene.get(scene);
         boolean rebuildLightIndices = indexed == null || indexed.lights != sceneLights;
-        Map<Long, Integer> lightIndices = rebuildLightIndices
-                ? HashMap.newHashMap(sceneLights.size()) : indexed.indices;
+        Long2IntMap lightIndices = rebuildLightIndices
+                ? new Long2IntOpenHashMap(sceneLights.size()) : indexed.indices;
         int geometryCount = current.instances.isEmpty() ? 0 : current.instances.getLast().geometryBase
                 + current.instances.getLast().resolvedMesh.geometries().size();
-        List<TraceChunk> chunks = RtFramePreparation.chunks(current.instances).stream().map(TraceChunk::new).toList();
-        List<Runnable> planning = new ArrayList<>(chunks.size() + 1);
-        if (rebuildLightIndices) planning.add(RtFramePreparation.measured("light-index", 0, sceneLights.size(), () -> {
-            for (int index = 0; index < sceneLights.size(); index++) {
-                lightIndices.put(sceneLights.get(index).identity(), index);
-            }
-        }));
-        for (TraceChunk chunk : chunks) {
-            planning.add(RtFramePreparation.measured("plan", chunk.instances.size(), 0, () -> chunk.plan(pipeline)));
+        if (rebuildLightIndices) {
+            RtFramePreparation.measured("light-index", 0, sceneLights.size(), () -> {
+                for (int index = 0; index < sceneLights.size(); index++) {
+                    lightIndices.put(sceneLights.get(index).identity(), index);
+                }
+            }).run();
         }
-        framePreparation.run(planning, Runnable::run);
         if (rebuildLightIndices) lightIndicesByScene.put(scene, new LightIndexRevision(sceneLights, lightIndices));
+        LightIndexRevision lightIndexRevision = lightIndicesByScene.get(scene);
+        List<List<FrameInstanceSnapshot>> pageInputs = SnapshotList.pagesOf(current.instances);
+        TracePagePlan[] pages = tracePlansByScene.computeIfAbsent(scene, ignored -> new TracePlanCache())
+                .resolve(pageInputs, framePreparation);
         int emitterBytes = 0;
-        int hitBytes = 0;
-        for (TraceChunk chunk : chunks) {
-            chunk.emitterBase = emitterBytes;
-            emitterBytes = Math.addExact(emitterBytes, chunk.emitterBytes);
-            chunk.hitBase = hitBytes;
-            hitBytes = Math.addExact(hitBytes, chunk.hits.remaining());
+        int[] emitterBases = new int[pages.length];
+        for (int index = 0; index < pages.length; index++) {
+            emitterBases[index] = emitterBytes;
+            emitterBytes = Math.addExact(emitterBytes, pages[index].emitterBytes);
         }
         int geometryBytes = Math.multiplyExact(geometryCount, RtRetainedGeometryPlan.RECORD_BYTES);
+        int hitBytes = Math.multiplyExact(Math.multiplyExact(geometryCount,
+                RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), pipeline.retainedHitRecordStride());
         int lightBytes = Math.multiplyExact(sceneLights.size(), RtRetainedLightPlan.RECORD_BYTES);
         TraceSlot slot = acquireTraceSlot(geometryBytes, hitBytes, lightBytes, emitterBytes,
                 pipeline, graphicsUse);
-        framePreparation.run("pack", chunks, chunk -> chunk.instances.size(), chunk -> chunk.pack(slot, origin, lightIndices));
-        BitSet linked = new BitSet(sceneLights.size());
-        for (TraceChunk chunk : chunks) linked.or(chunk.linkedEmitters);
-        boolean packLights = slot.packedLights != sceneLights || !origin.equals(slot.lightOrigin)
-                || !linked.equals(slot.linkedLights);
-        if (packLights) {
-            slot.packedLights = null;
-            List<Runnable> lightPacking = new ArrayList<>();
-            int firstLight = 0;
-            for (List<SceneLight> lightChunk : RtFramePreparation.chunks(sceneLights)) {
-                int first = firstLight;
-                int count = lightChunk.size();
-                lightPacking.add(RtFramePreparation.measured("lights", 0, count, () -> {
-                    ByteBuffer target = MemoryUtil.memByteBuffer(slot.lights.mapped()
-                            + (long) first * RtRetainedLightPlan.RECORD_BYTES,
-                            Math.multiplyExact(count, RtRetainedLightPlan.RECORD_BYTES));
-                    RtRetainedLightPlan.packInto(target, first, count, index -> sceneLights.get(index).descriptor(),
-                            origin, linked::get);
-                }));
-                firstLight += count;
+        List<TracePageWork> writes = new ArrayList<>();
+        boolean flushGeometry = false, flushHits = false, flushEmitters = false;
+        for (int index = 0; index < pages.length; index++) {
+            TracePagePlan page = pages[index];
+            TracePageResidency residency = slot.page(index);
+            int emitterBase = emitterBases[index];
+            long emitterAddress = page.emitterBytes == 0 ? 0L
+                    : slot.emitters.deviceAddress().addBytes(emitterBase).value();
+            int flags = 0;
+            if (!residency.hasGeometry(page.identity, page.geometryBase, origin, emitterAddress)) {
+                flags |= TracePageWork.GEOMETRY;
+                flushGeometry = true;
             }
-            framePreparation.run(lightPacking, Runnable::run);
+            if (!residency.hasHits(page.identity, page.hitBase(pipeline), pipeline)) {
+                flags |= TracePageWork.HITS;
+                flushHits = true;
+            }
+            if (!residency.hasEmitters(page.identity, emitterBase, lightIndexRevision)) {
+                flags |= TracePageWork.EMITTERS;
+                flushEmitters |= page.emitterBytes > 0;
+            }
+            if (flags != 0) writes.add(new TracePageWork(page, residency, slot, origin,
+                    emitterBase, pipeline, lightIndexRevision, lightIndices, flags));
         }
-        if (geometryBytes > 0) {
-            slot.geometry.flush(0L, geometryBytes);
+        slot.trimPages(pages.length);
+        if (!writes.isEmpty()) {
+            List<List<TracePageWork>> writeChunks = RtFramePreparation.chunks(writes, TracePageWork::work);
+            framePreparation.run("pack", writeChunks,
+                    chunk -> chunk.stream().mapToInt(work -> work.page.instances.size()).sum(),
+                    chunk -> chunk.forEach(TracePageWork::pack));
         }
-        if (hitBytes > 0) {
-            slot.hits.flush(0L, hitBytes);
+        if (flushGeometry && geometryBytes > 0) slot.geometry.flush(0L, geometryBytes);
+        if (flushHits && hitBytes > 0) slot.hits.flush(0L, hitBytes);
+        if (flushEmitters && emitterBytes > 0) slot.emitters.flush(0L, emitterBytes);
+        writes.forEach(TracePageWork::commit);
+        BitSet linked = new BitSet(sceneLights.size());
+        for (int index = 0; index < pages.length; index++) linked.or(slot.page(index).linkedEmitters);
+        List<ByteBuffer> lightPages = packedLightsByScene.computeIfAbsent(scene, ignored -> new RtPackedLightPages())
+                .resolve(sceneLights, origin, linked, framePreparation);
+        List<ByteBuffer> previousLightPages = slot.lightPages;
+        slot.lightPages = List.of();
+        int lightOffset = 0, previousLightOffset = 0;
+        boolean copiedLights = false;
+        for (int index = 0; index < lightPages.size(); index++) {
+            ByteBuffer source = lightPages.get(index);
+            ByteBuffer previous = index < previousLightPages.size() ? previousLightPages.get(index) : null;
+            if (source != previous || lightOffset != previousLightOffset) {
+                MemoryUtil.memByteBuffer(slot.lights.mapped() + lightOffset, source.remaining())
+                        .put(0, source, source.position(), source.remaining());
+                copiedLights = true;
+            }
+            lightOffset += source.remaining();
+            if (previous != null) previousLightOffset += previous.remaining();
         }
-        if (packLights && lightBytes > 0) {
-            slot.lights.flush(0L, lightBytes);
-        }
-        if (packLights) {
-            slot.packedLights = sceneLights;
-            slot.lightOrigin = origin;
-            slot.linkedLights = linked;
-        }
-        if (emitterBytes > 0) {
-            slot.emitters.flush(0L, emitterBytes);
-        }
+        if (copiedLights) slot.lights.flush(0L, lightBytes);
+        slot.lightPages = lightPages;
         ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
         RtPipeline.HitTable hitTable = hitBytes > 0 ? new RtPipeline.HitTable(
                 new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hitBytes),
@@ -267,7 +289,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     static int emitterIndex(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                            int primitive, Map<Long, Integer> lightIndices) {
+                            int primitive, Long2IntMap lightIndices) {
         for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
             if (primitive < range.firstPrimitive()) break;
             if (primitive < range.firstPrimitive() + range.primitiveCount()) {
@@ -299,14 +321,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     /** Packs a consecutive primitive range in one forward pass over the sorted, disjoint emitter ranges. */
     static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
                                   List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                                  Map<Long, Integer> lightIndices, boolean[] linkedEmitters) {
+                                  Long2IntMap lightIndices, boolean[] linkedEmitters) {
         putEmitterIndices(output, firstPrimitive, primitiveCount, ranges, lightIndices,
                 index -> linkedEmitters[index] = true);
     }
 
     static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
                                   List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                                  Map<Long, Integer> lightIndices, IntConsumer markLinked) {
+                                  Long2IntMap lightIndices, IntConsumer markLinked) {
         int primitive = firstPrimitive;
         int end = Math.addExact(firstPrimitive, primitiveCount);
         for (int index = firstEmitterRange(ranges, firstPrimitive); index < ranges.size(); index++) {
@@ -347,8 +369,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         contentScenes = null;
         contentLights = null;
         retainedContent = null;
+        lightAssembly.clear();
         lightIndicesByScene.clear();
-        tlasInstances = new TlasBuilder.InstanceBatch();
+        tracePlansByScene.clear();
+        packedLightsByScene.clear();
         releaseTerminalFrameRoots(inFlightFrames, motionHistoryByScene);
     }
 
@@ -364,23 +388,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     static Map<SceneId, SceneContent> assembleContent(
             List<RetainedSceneSnapshot.Scene> scenes, List<RetainedSceneSnapshot.Light> lights) {
-        Map<SceneId, MutableSceneContent> mutable = new IdentityHashMap<>();
-        for (RetainedSceneSnapshot.Scene scene : scenes) {
-            mutable.put(scene.id(), new MutableSceneContent(scene.environment()));
-        }
-        for (RetainedSceneSnapshot.Light light : lights) {
-            MutableSceneContent content = mutable.get(light.scene());
-            if (content == null) throw new IllegalArgumentException("light names an absent scene");
-            content.lights.add(new SceneLight(light.identity(), light.descriptor()));
-        }
-        Map<SceneId, SceneContent> content = new IdentityHashMap<>();
-        mutable.forEach((scene, value) -> content.put(scene,
-                new SceneContent(value.environment, List.copyOf(value.lights))));
-        return content;
+        return new RtLightPageAssembly().resolve(scenes, lights);
     }
 
     private void retainRenderedScenes(java.util.Set<SceneId> retained) {
         lightIndicesByScene.keySet().retainAll(retained);
+        tracePlansByScene.keySet().retainAll(retained);
+        packedLightsByScene.keySet().retainAll(retained);
         List<SharedResource<SceneMotionHistory>> removed = new ArrayList<>();
         motionHistoryByScene.entrySet().removeIf(entry -> {
             if (retained.contains(entry.getKey())) return false;
@@ -589,7 +603,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             try {
                 RetainedSceneSnapshot snapshot = root.get();
                 if (contentScenes != snapshot.scenes() || contentLights != snapshot.lights()) {
-                    retainedContent = assembleContent(snapshot.scenes(), snapshot.lights());
+                    retainedContent = lightAssembly.resolve(snapshot.scenes(), snapshot.lights());
                     contentScenes = snapshot.scenes();
                     contentLights = snapshot.lights();
                 }
@@ -694,74 +708,249 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    /** Contiguous geometry and SBT order, with private planning state and disjoint upload ranges. */
-    private static final class TraceChunk {
+    /** CPU plans follow immutable snapshot-page identity and borrow resources from the consuming frame. */
+    static final class TracePlanCache {
+        private IdentityHashMap<List<FrameInstanceSnapshot>, TracePagePlan> plans = new IdentityHashMap<>();
+
+        TracePagePlan[] resolve(List<List<FrameInstanceSnapshot>> pages, RtFramePreparation preparation) {
+            TracePagePlan[] resolved = new TracePagePlan[pages.size()];
+            var missing = new ArrayList<TracePlanRequest>();
+            for (int index = 0; index < pages.size(); index++) {
+                List<FrameInstanceSnapshot> page = pages.get(index);
+                TracePagePlan plan = plans.get(page);
+                if (plan == null) missing.add(new TracePlanRequest(index, page));
+                else resolved[index] = plan;
+            }
+            if (!missing.isEmpty()) {
+                List<List<TracePlanRequest>> chunks = RtFramePreparation.chunks(missing, TracePlanRequest::work);
+                preparation.run("plan", chunks,
+                        chunk -> chunk.stream().mapToInt(TracePlanRequest::work).sum(),
+                        chunk -> chunk.forEach(request -> resolved[request.index] =
+                                new TracePagePlan(request.instances)));
+                for (TracePlanRequest request : missing) plans.put(request.instances, resolved[request.index]);
+            }
+            if (plans.size() > pages.size() * 2 + 64) {
+                var retained = new IdentityHashMap<List<FrameInstanceSnapshot>, TracePagePlan>();
+                for (TracePagePlan plan : resolved) retained.put(plan.identity, plan);
+                plans = retained;
+            }
+            return resolved;
+        }
+    }
+
+    private record TracePlanRequest(int index, List<FrameInstanceSnapshot> instances) {
+        int work() {
+            int work = 0;
+            for (FrameInstanceSnapshot instance : instances) {
+                work = Math.addExact(work, Math.max(1, instance.geometryRecords.size()));
+            }
+            return Math.max(1, work);
+        }
+    }
+
+    /** Immutable geometry, emitter layout, and pipeline SBT data for one motion-resolved page. */
+    static final class TracePagePlan {
+        final List<FrameInstanceSnapshot> identity;
         final List<FrameInstanceSnapshot> instances;
         final int geometryBase;
         final List<RtRetainedGeometryPlan.GeometryRecord> records;
-        final int[] emitterOffsets;
-        final BitSet linkedEmitters = new BitSet();
-        ByteBuffer hits;
-        int emitterBytes;
-        int emitterBase;
-        int hitBase;
+        final List<EmitterSpan> emitterSpans;
+        final int emitterBytes;
+        private final List<RtRetainedGeometryPlan.HitGroup> hitGroups;
+        private final IdentityHashMap<RtPipeline, ByteBuffer> hitsByPipeline = new IdentityHashMap<>();
 
-        TraceChunk(List<FrameInstanceSnapshot> instances) {
+        TracePagePlan(List<FrameInstanceSnapshot> instances) {
+            identity = instances;
             this.instances = instances;
-            geometryBase = instances.isEmpty() ? 0 : instances.getFirst().geometryBase;
-            int geometryCount = instances.isEmpty() ? 0 : instances.getLast().geometryBase
+            geometryBase = instances.getFirst().geometryBase;
+            int geometryCount = instances.getLast().geometryBase
                     + instances.getLast().resolvedMesh.geometries().size() - geometryBase;
-            records = new ArrayList<>(geometryCount);
-            emitterOffsets = new int[geometryCount];
-        }
-
-        void plan(RtPipeline pipeline) {
+            var pageRecords = new ArrayList<RtRetainedGeometryPlan.GeometryRecord>(geometryCount);
+            var spans = new ArrayList<EmitterSpan>();
+            int bytes = 0;
             for (FrameInstanceSnapshot frameInstance : instances) {
                 NativeInstance instance = frameInstance.nativeInstance;
-                records.addAll(frameInstance.geometryRecords);
+                pageRecords.addAll(frameInstance.geometryRecords);
                 List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
                 for (int index = 0; index < geometries.size(); index++) {
                     MeshBuild.Geometry<?> geometry = geometries.get(index);
-                    int record = frameInstance.geometryBase - geometryBase + index;
-                    if (hasEmitterMapping(instance.logical.primitiveEmitters(), geometry.firstIndex() / 3,
-                            geometry.triangleCount())) {
-                        emitterOffsets[record] = emitterBytes;
-                        emitterBytes = Math.addExact(emitterBytes,
-                                Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
-                    } else {
-                        emitterOffsets[record] = -1;
-                    }
+                    if (!hasEmitterMapping(instance.logical.primitiveEmitters(), geometry.firstIndex() / 3,
+                            geometry.triangleCount())) continue;
+                    spans.add(new EmitterSpan(frameInstance.geometryBase - geometryBase + index, bytes,
+                            geometry.firstIndex() / 3, geometry.triangleCount(), instance.logical.primitiveEmitters()));
+                    bytes = Math.addExact(bytes, Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
                 }
             }
-            hits = pipeline.retainedHitRecords(RtRetainedGeometryPlan.hitGroups(records));
+            records = List.copyOf(pageRecords);
+            emitterSpans = List.copyOf(spans);
+            emitterBytes = bytes;
+            hitGroups = RtRetainedGeometryPlan.hitGroups(records);
         }
 
-        void pack(TraceSlot slot, SceneOrigin origin, Map<Long, Integer> lightIndices) {
-            VulkanDeviceAddress emitterAddress = slot.emitters.deviceAddress().addBytes(emitterBase);
-            for (int index = 0; index < records.size(); index++) {
-                int offset = emitterOffsets[index];
-                if (offset >= 0) records.set(index, records.get(index).withEmitterIndex(
-                        emitterAddress.addBytes(offset), 0));
+        int hitBase(RtPipeline pipeline) {
+            return Math.multiplyExact(Math.multiplyExact(geometryBase,
+                    RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), pipeline.retainedHitRecordStride());
+        }
+
+        private ByteBuffer hits(RtPipeline pipeline) {
+            ByteBuffer hits = hitsByPipeline.get(pipeline);
+            if (hits == null) {
+                hits = pipeline.retainedHitRecords(hitGroups);
+                hitsByPipeline.put(pipeline, hits);
             }
-            int geometryBytes = Math.multiplyExact(records.size(), RtRetainedGeometryPlan.RECORD_BYTES);
-            ByteBuffer geometry = MemoryUtil.memByteBuffer(slot.geometry.mapped()
-                    + (long) geometryBase * RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes)
-                    .order(ByteOrder.nativeOrder());
-            RtRetainedGeometryPlan.packInto(geometry, records, origin);
-            ByteBuffer emitters = MemoryUtil.memByteBuffer(slot.emitters.mapped() + emitterBase, emitterBytes)
-                    .order(ByteOrder.nativeOrder());
-            for (FrameInstanceSnapshot frameInstance : instances) {
-                NativeInstance instance = frameInstance.nativeInstance;
-                List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
-                for (int index = 0; index < geometries.size(); index++) {
-                    MeshBuild.Geometry<?> meshGeometry = geometries.get(index);
-                    if (emitterOffsets[frameInstance.geometryBase - geometryBase + index] >= 0) {
-                        putEmitterIndices(emitters, meshGeometry.firstIndex() / 3, meshGeometry.triangleCount(),
-                                instance.logical.primitiveEmitters(), lightIndices, linkedEmitters::set);
-                    }
+            return hits;
+        }
+
+        void packGeometry(TraceSlot slot, SceneOrigin origin, int emitterBase) {
+            List<RtRetainedGeometryPlan.GeometryRecord> output = records;
+            if (!emitterSpans.isEmpty()) {
+                var addressed = new ArrayList<>(records);
+                VulkanDeviceAddress emitters = slot.emitters.deviceAddress().addBytes(emitterBase);
+                for (EmitterSpan span : emitterSpans) {
+                    addressed.set(span.record, addressed.get(span.record)
+                            .withEmitterIndex(emitters.addBytes(span.byteOffset), 0));
                 }
+                output = addressed;
             }
-            MemoryUtil.memByteBuffer(slot.hits.mapped() + hitBase, hits.remaining()).put(hits);
+            int bytes = Math.multiplyExact(records.size(), RtRetainedGeometryPlan.RECORD_BYTES);
+            ByteBuffer target = MemoryUtil.memByteBuffer(slot.geometry.mapped()
+                    + (long) geometryBase * RtRetainedGeometryPlan.RECORD_BYTES, bytes)
+                    .order(ByteOrder.nativeOrder());
+            RtRetainedGeometryPlan.packInto(target, output, origin);
+        }
+
+        void packHits(TraceSlot slot, RtPipeline pipeline) {
+            ByteBuffer source = hits(pipeline);
+            ByteBuffer target = MemoryUtil.memByteBuffer(slot.hits.mapped() + hitBase(pipeline), source.remaining());
+            target.put(0, source, source.position(), source.remaining());
+        }
+
+        void packEmitters(TraceSlot slot, int emitterBase, Long2IntMap lightIndices,
+                          BitSet linkedEmitters) {
+            linkedEmitters.clear();
+            if (emitterBytes == 0) return;
+            ByteBuffer target = MemoryUtil.memByteBuffer(slot.emitters.mapped() + emitterBase, emitterBytes)
+                    .order(ByteOrder.nativeOrder());
+            for (EmitterSpan span : emitterSpans) {
+                target.position(span.byteOffset);
+                putEmitterIndices(target, span.firstPrimitive, span.primitiveCount,
+                        span.ranges, lightIndices, linkedEmitters::set);
+            }
+        }
+    }
+
+    private record EmitterSpan(int record, int byteOffset, int firstPrimitive, int primitiveCount,
+                               List<RetainedSceneSnapshot.PrimitiveEmitter> ranges) { }
+
+    /** Writes only the page regions whose contents differ from this completed slot. */
+    private static final class TracePageWork {
+        static final int GEOMETRY = 1;
+        static final int HITS = 2;
+        static final int EMITTERS = 4;
+        final TracePagePlan page;
+        final TracePageResidency residency;
+        final TraceSlot slot;
+        final SceneOrigin origin;
+        final int emitterBase;
+        final RtPipeline pipeline;
+        final LightIndexRevision lightIndexRevision;
+        final Long2IntMap lightIndices;
+        final int flags;
+        final BitSet linkedEmitters;
+
+        TracePageWork(TracePagePlan page, TracePageResidency residency, TraceSlot slot, SceneOrigin origin,
+                      int emitterBase, RtPipeline pipeline, LightIndexRevision lightIndexRevision,
+                      Long2IntMap lightIndices, int flags) {
+            this.page = page;
+            this.residency = residency;
+            this.slot = slot;
+            this.origin = origin;
+            this.emitterBase = emitterBase;
+            this.pipeline = pipeline;
+            this.lightIndexRevision = lightIndexRevision;
+            this.lightIndices = lightIndices;
+            this.flags = flags;
+            linkedEmitters = (flags & EMITTERS) == 0 ? null : new BitSet();
+        }
+
+        void pack() {
+            if ((flags & GEOMETRY) != 0) {
+                page.packGeometry(slot, origin, emitterBase);
+            }
+            if ((flags & HITS) != 0) {
+                page.packHits(slot, pipeline);
+            }
+            if ((flags & EMITTERS) != 0) {
+                page.packEmitters(slot, emitterBase, lightIndices, linkedEmitters);
+            }
+        }
+
+        void commit() {
+            long emitterAddress = page.emitterBytes == 0 ? 0L
+                    : slot.emitters.deviceAddress().addBytes(emitterBase).value();
+            if ((flags & GEOMETRY) != 0) {
+                residency.geometryWritten(page.identity, page.geometryBase, origin, emitterAddress);
+            }
+            if ((flags & HITS) != 0) {
+                residency.hitsWritten(page.identity, page.hitBase(pipeline), pipeline);
+            }
+            if ((flags & EMITTERS) != 0) {
+                residency.linkedEmitters.clear();
+                residency.linkedEmitters.or(linkedEmitters);
+                residency.emittersWritten(page.identity, emitterBase, lightIndexRevision);
+            }
+        }
+
+        int work() {
+            return Math.max(1, Math.addExact(page.records.size(), page.emitterBytes / Integer.BYTES));
+        }
+
+    }
+
+    /** Independent residency stamps keep light-index edits from invalidating geometry or the SBT. */
+    static final class TracePageResidency {
+        private Object geometryPage;
+        private int geometryBase;
+        private SceneOrigin geometryOrigin;
+        private long geometryEmitterAddress;
+        private Object hitPage;
+        private int hitBase;
+        private Object hitPipeline;
+        private Object emitterPage;
+        private int emitterBase;
+        private Object lightIndexRevision;
+        final BitSet linkedEmitters = new BitSet();
+
+        boolean hasGeometry(Object page, int base, SceneOrigin origin, long emitterAddress) {
+            return geometryPage == page && geometryBase == base && origin.equals(geometryOrigin)
+                    && geometryEmitterAddress == emitterAddress;
+        }
+
+        void geometryWritten(Object page, int base, SceneOrigin origin, long emitterAddress) {
+            geometryPage = page;
+            geometryBase = base;
+            geometryOrigin = origin;
+            geometryEmitterAddress = emitterAddress;
+        }
+
+        boolean hasHits(Object page, int base, Object pipeline) {
+            return hitPage == page && hitBase == base && hitPipeline == pipeline;
+        }
+
+        void hitsWritten(Object page, int base, Object pipeline) {
+            hitPage = page;
+            hitBase = base;
+            hitPipeline = pipeline;
+        }
+
+        boolean hasEmitters(Object page, int base, Object revision) {
+            return emitterPage == page && emitterBase == base && lightIndexRevision == revision;
+        }
+
+        void emittersWritten(Object page, int base, Object revision) {
+            emitterPage = page;
+            emitterBase = base;
+            lightIndexRevision = revision;
         }
     }
 
@@ -906,7 +1095,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     public record SceneContent(EnvironmentBinding<?> environment, List<SceneLight> lights) {
         public SceneContent {
-            lights = List.copyOf(lights);
+            if (!(lights instanceof SnapshotList<?>)) lights = List.copyOf(lights);
         }
     }
 
@@ -998,9 +1187,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     private static final class TraceSlot {
-        List<SceneLight> packedLights;
-        SceneOrigin lightOrigin;
-        BitSet linkedLights;
+        List<ByteBuffer> lightPages = List.of();
+        final ArrayList<TracePageResidency> pages = new ArrayList<>();
         final GpuBuffer geometry;
         final GpuBuffer hits;
         final GpuBuffer lights;
@@ -1016,6 +1204,15 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             this.tlasDescriptor = tlasDescriptor;
         }
 
+        TracePageResidency page(int index) {
+            while (pages.size() <= index) pages.add(new TracePageResidency());
+            return pages.get(index);
+        }
+
+        void trimPages(int count) {
+            if (pages.size() > count) pages.subList(count, pages.size()).clear();
+        }
+
         void destroy() {
             geometry.destroy();
             hits.destroy();
@@ -1025,13 +1222,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    private static final class MutableSceneContent {
-        final EnvironmentBinding<?> environment;
-        final List<SceneLight> lights = new ArrayList<>();
-        MutableSceneContent(EnvironmentBinding<?> environment) { this.environment = environment; }
-    }
-
-    private record LightIndexRevision(List<SceneLight> lights, Map<Long, Integer> indices) { }
+    private record LightIndexRevision(List<SceneLight> lights, Long2IntMap indices) { }
 
     record NativeInstance(RetainedSceneSnapshot.Instance logical, FrameMesh mesh,
                                   long placementOrdinal) { }
