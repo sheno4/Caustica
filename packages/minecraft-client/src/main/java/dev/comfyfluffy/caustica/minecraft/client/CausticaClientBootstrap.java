@@ -10,7 +10,6 @@ public final class CausticaClientBootstrap {
     public static void initialize() {
         CausticaMod.LOGGER.info("Caustica client initialized");
         CausticaClientComposition.current().runtime().installHost(CausticaClientComposition.current().runtimeHost());
-        CausticaClientComposition.current().runtime().startProcess();
         MinecraftDebugService.start(net.minecraft.client.Minecraft.getInstance());
 
         // Class-init runs DebugScreenEntries.register(...) via its ID field; touching the class here

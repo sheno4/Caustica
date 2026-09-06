@@ -14,7 +14,7 @@ final class RtPreparedMesh implements ResourceOwner {
     private final SharedResource<State> owner;
 
     RtPreparedMesh(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.PersistentBuild nativeBuild) {
-        this(context, build, nativeBuild.op().operation(), nativeBuild.accel(), nativeBuild.backing());
+        this(context, build, nativeBuild.operation(), nativeBuild.accel(), nativeBuild.backing());
     }
     RtPreparedMesh(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.BlasOperation operation,
                    RtAccel accel, GpuBuffer backing) {

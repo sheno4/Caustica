@@ -95,7 +95,7 @@ def verifyRendererRuntimeJar = tasks.register("verifyRendererRuntimeJar") {
         def foreign = names.findAll { it.endsWith(".class")
                 && !it.startsWith(rtRoot) && !it.startsWith(hostRoot) }
         def required = ["RtFrameRenderer.class", "RtTelemetry.class", "RtTelemetryImpl.class",
-                        "RtLifecycleCoordinator.class", "pass/RtPassSchedulerBackend.class",
+                        "pass/RtPassSchedulerBackend.class",
                         "pipeline/RtJitter.class"].collect { rtRoot + it }
         required += [hostRoot + "RuntimeHost.class"]
         if (!foreign.empty || !names.containsAll(required)) {

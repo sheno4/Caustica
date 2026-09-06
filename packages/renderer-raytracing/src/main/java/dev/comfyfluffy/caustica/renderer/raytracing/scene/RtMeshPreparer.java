@@ -8,7 +8,6 @@ import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
 
-import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import jdk.jfr.Event;
@@ -69,7 +68,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
                             build.indices().bytes().address(), RtRetainedGeometryPlan.blasRanges(build), label);
             }
             owner = new RtPreparedMesh(context, build, nativeBuild);
-            RtAccel.recordBlasBuilds(context, command, List.of(nativeBuild.op()));
+            RtAccel.recordBlasBuild(context, command, nativeBuild);
             if (build.buildPolicy() == MeshBuild.BuildPolicy.STATIC) {
                 query = new RtAccel.CompactionQuery(context);
                 query.record(command, nativeBuild.accel());
@@ -106,14 +105,14 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
         }
 
         void releaseBuildResources() {
-            try { RtAccel.freeBlasScratch(List.of(nativeBuild.op())); }
+            try { nativeBuild.scratch().destroy(); }
             finally { if (query != null) query.close(); }
         }
 
         void recordCompaction(org.lwjgl.vulkan.VkCommandBuffer command) {
             String label = "ready mesh " + mesh.identity() + " compact";
             RtAccel.CompactedBlas compacted = RtAccel.prepareCompactedBlas(context, compactedSize, label);
-            compactedOwner = new RtPreparedMesh(context, mesh.build(), nativeBuild.op().operation(),
+            compactedOwner = new RtPreparedMesh(context, mesh.build(), nativeBuild.operation(),
                     compacted.accel(), compacted.backing());
             RtAccel.recordCompaction(context, command, nativeBuild.accel(), compacted.accel(), label);
         }

@@ -32,7 +32,6 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import dev.comfyfluffy.caustica.renderer.runtime.RtDenoisingSettings;
 import dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer;
 import dev.comfyfluffy.caustica.renderer.runtime.RtDlssSuperResolution;
-import dev.comfyfluffy.caustica.renderer.runtime.RtLifecycleCoordinator;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry;
 import dev.comfyfluffy.caustica.renderer.runtime.pass.RtPassSchedulerBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
@@ -86,24 +85,24 @@ public final class MinecraftRtRuntime {
     private NgxRuntime ngxRuntime;
     private NrdLibrary nrdLibrary;
     private DenoiserBackendFactory denoiserFactory;
-    private final RtLifecycleCoordinator lifecycle = new RtLifecycleCoordinator(
-            new RtLifecycleCoordinator.Listener() {
+    private final MinecraftRtLifecycle lifecycle = new MinecraftRtLifecycle(
+            new MinecraftRtLifecycle.Listener() {
                 @Override
-                public void resourcePackReloadStarting(RtLifecycleCoordinator.ResourcePackEpoch pending) {
+                public void resourcePackReloadStarting(ResourcePackEpoch pending) {
                     if (session != null) {
                         session.resourceReloadStarting();
                     }
                 }
 
                 @Override
-                public void resourcePackApplied(RtLifecycleCoordinator.ResourcePackEpoch epoch) {
+                public void resourcePackApplied(ResourcePackEpoch epoch) {
                     if (session != null) {
-                        session.resourcePackApplied(new ResourcePackEpoch(epoch.generation()));
+                        session.resourcePackApplied(epoch);
                     }
                 }
 
                 @Override
-                public void resourcePackReloadFailed(RtLifecycleCoordinator.ResourcePackEpoch pending,
+                public void resourcePackReloadFailed(ResourcePackEpoch pending,
                                                      Throwable failure) {
                     if (session != null) {
                         session.resourceReloadFailed(failure);
@@ -154,7 +153,6 @@ public final class MinecraftRtRuntime {
         NgxRuntime createdNgxRuntime = null;
         DenoiserBackendFactory createdDenoiserFactory = null;
         try {
-            lifecycle.observeDevice(created);
             createdNgxRuntime = new NgxRuntime(created, ngxSettings);
             NrdLibrary createdNrdLibrary = NrdLibrary.loadBundled(
                     shaderCacheRoot.getParent().resolve("natives"));
@@ -173,11 +171,7 @@ public final class MinecraftRtRuntime {
                 if (createdDenoiserFactory != null) createdDenoiserFactory.close();
                 if (createdNgxRuntime != null) createdNgxRuntime.shutdown();
             } finally {
-                try {
-                    lifecycle.closeDevice(created);
-                } finally {
-                    created.destroy();
-                }
+                created.destroy();
             }
             throw failure;
         }
@@ -261,11 +255,6 @@ public final class MinecraftRtRuntime {
     /** Process-scoped extension host used when the renderer creates its engine session services. */
     public RenderSessionHost apiHost() {
         return java.util.Objects.requireNonNull(apiHost, "Caustica API host is not installed");
-    }
-
-    /** Start process-scoped lifecycle tracking after the host has installed its extensions and options. */
-    public void startProcess() {
-        lifecycle.startProcess();
     }
 
     /** Observe a resource pack that is available to the client, including the initial title-screen pack. */
@@ -470,11 +459,7 @@ public final class MinecraftRtRuntime {
                 state = State.STOPPING;
                 Session closing = session;
                 session = null;
-                try {
-                    closeRuntimeActivation(closing);
-                } finally {
-                    lifecycle.closeRenderSession(closing.renderSessionEpoch);
-                }
+                closing.close();
             }
         } finally {
             session = null;
@@ -495,16 +480,12 @@ public final class MinecraftRtRuntime {
                             if (closingNgxRuntime != null) closingNgxRuntime.shutdown();
                         }
                     } finally {
-                        try {
-                            lifecycle.closeDevice(context);
-                        } finally {
-                            context.destroy();
-                        }
+                        context.destroy();
                     }
                 }
             } finally {
                 try {
-                    lifecycle.stopProcess();
+                    lifecycle.clear();
                 } finally {
                     try {
                         SlangRuntime compilerRuntime = slangRuntime;
@@ -566,18 +547,11 @@ public final class MinecraftRtRuntime {
             LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
             return;
         }
-        RtLifecycleCoordinator.RenderSessionEpoch epoch = lifecycle.beginRenderSession();
-        startRuntimeActivation(epoch);
-    }
-
-    private void startRuntimeActivation(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch) {
-        RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch = lifecycle.beginRuntimeActivation();
         try {
             VulkanDeviceContext context = requireVulkanContext();
             DlssFrameGeneration frameGeneration = new DlssFrameGeneration(
                     requireNgxRuntime(), frameGenerationSettings());
-            session = new Session(renderSessionEpoch, activationEpoch,
-                    context, frameGeneration,
+            session = new Session(context, frameGeneration,
                     new RtFramePresenter(context, frameGeneration, this::presentationSettings),
                     java.util.Objects.requireNonNull(
                     shaderCacheRoot, "shader cache is not configured"));
@@ -586,12 +560,10 @@ public final class MinecraftRtRuntime {
         } catch (Throwable failure) {
             try {
                 if (session != null) {
-                    session.closeActivation();
+                    session.close();
                     session = null;
                 }
             } finally {
-                lifecycle.closeRuntimeActivation(activationEpoch);
-                lifecycle.closeRenderSession(renderSessionEpoch);
                 state = State.FAILED;
                 LOGGER.error("RT runtime could not create its render session", failure);
             }
@@ -616,28 +588,14 @@ public final class MinecraftRtRuntime {
             reconfigureSurface.run();
         } finally {
             try {
-                closeRuntimeActivation(closing);
+                closing.close();
             } finally {
-                try {
-                    lifecycle.closeRenderSession(closing.renderSessionEpoch);
-                } finally {
-                    state = terminalState;
-                }
+                state = terminalState;
             }
         }
     }
 
-    private void closeRuntimeActivation(Session closing) {
-        try {
-            lifecycle.closeRuntimeActivation(closing.activationEpoch);
-        } finally {
-            closing.closeActivation();
-        }
-    }
-
     private final class Session {
-        private final RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch;
-        private final RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch;
         private final DlssFrameGeneration frameGeneration;
         private final RtFramePresenter presenter;
         private final Path shaderCacheRoot;
@@ -651,12 +609,8 @@ public final class MinecraftRtRuntime {
         private RtFrameRenderer renderer;
         private long worldEpoch;
 
-        private Session(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch,
-                        RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch,
-                        VulkanDeviceContext context, DlssFrameGeneration frameGeneration,
+        private Session(VulkanDeviceContext context, DlssFrameGeneration frameGeneration,
                         RtFramePresenter presenter, Path shaderCacheRoot) {
-            this.renderSessionEpoch = renderSessionEpoch;
-            this.activationEpoch = activationEpoch;
             this.context = context;
             this.frameGeneration = frameGeneration;
             this.presenter = presenter;
@@ -671,14 +625,14 @@ public final class MinecraftRtRuntime {
                      MinecraftDimensionKey dimension, int displayWidth, int displayHeight,
                      boolean starting) {
             frameGeneration.configure(frameGenerationSettings());
-            RtLifecycleCoordinator.ResourcePackEpoch applied = lifecycle.resourcePackEpoch();
+            ResourcePackEpoch applied = lifecycle.resourcePackEpoch();
             if (requestedWorldEpoch == 0L || dimension == null || applied == null) {
                 closeWorld();
                 return false;
             }
             if (world == null || worldEpoch != requestedWorldEpoch) {
                 closeWorld();
-                openWorld(requestedWorldEpoch, dimension, new ResourcePackEpoch(applied.generation()));
+                openWorld(requestedWorldEpoch, dimension, applied);
             }
             RtDenoisingSettings denoising = denoisingSettings();
             rayReconstruction.configure(rayReconstructionSettings(denoising));
@@ -787,7 +741,7 @@ public final class MinecraftRtRuntime {
             worldEpoch = 0L;
         }
 
-        void closeActivation() {
+        void close() {
             closeWorld();
             host().destroyUiPresentation();
             if (context != null) {
