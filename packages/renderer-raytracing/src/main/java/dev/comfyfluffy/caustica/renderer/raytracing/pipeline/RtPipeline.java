@@ -227,12 +227,10 @@ public final class RtPipeline {
             throw new IllegalStateException("pipeline has no coverage-class hit groups");
         }
         ByteBuffer handles = ByteBuffer.allocate(hitCount * handleSize);
-        long firstHit = MemoryUtil.memAddress(sbt.mapped()) + (long) (raygenCount + missCount) * stride;
+        ByteBuffer mapped = sbt.mapped();
+        int firstHit = mapped.position() + Math.toIntExact((long) (raygenCount + missCount) * stride);
         for (int group = 0; group < hitCount; group++) {
-            for (int byteIndex = 0; byteIndex < handleSize; byteIndex++) {
-                handles.put(group * handleSize + byteIndex,
-                        MemoryUtil.memGetByte(firstHit + group * stride + byteIndex));
-            }
+            handles.put(group * handleSize, mapped, firstHit + Math.toIntExact(group * stride), handleSize);
         }
         return packRetainedHitRecords(handles, handleSize, Math.toIntExact(stride), groups);
     }
@@ -244,9 +242,7 @@ public final class RtPipeline {
         for (int record = 0; record < groups.size(); record++) {
             int source = fixedHitGroupIndex(groups.get(record)) * handleSize;
             int target = record * recordStride;
-            for (int byteIndex = 0; byteIndex < handleSize; byteIndex++) {
-                packed.put(target + byteIndex, fixedHitHandles.get(source + byteIndex));
-            }
+            packed.put(target, fixedHitHandles, source, handleSize);
         }
         return packed;
     }

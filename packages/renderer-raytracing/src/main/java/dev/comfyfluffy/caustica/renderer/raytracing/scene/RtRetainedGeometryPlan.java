@@ -98,6 +98,12 @@ public final class RtRetainedGeometryPlan {
                                                GeometryTransform previousTransform,
                                                MeshBuild.Stream previousPositions) {
         List<GeometryRecord> records = new ArrayList<>(mesh.geometries().size());
+        appendRecords(records, mesh, placement, previousTransform, previousPositions);
+        return List.copyOf(records);
+    }
+
+    static void appendRecords(List<GeometryRecord> records, ResolvedMesh mesh, ResolvedPlacement placement,
+                              GeometryTransform previousTransform, MeshBuild.Stream previousPositions) {
         for (ResolvedGeometry resolved : mesh.geometries()) {
             MeshBuild.Geometry<?> geometry = resolved.geometry();
             int surface = resolved.surfaceImplementation();
@@ -123,7 +129,6 @@ public final class RtRetainedGeometryPlan {
                     mesh.build().indices().bytes().address(), geometry.firstIndex(),
                     null, 0));
         }
-        return List.copyOf(records);
     }
 
     public record ResolvedMesh(MeshBuild<?> build, List<ResolvedGeometry> geometries) {
@@ -156,6 +161,12 @@ public final class RtRetainedGeometryPlan {
     public static ByteBuffer pack(List<GeometryRecord> records, SceneOrigin origin) {
         ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(records.size(), RECORD_BYTES))
                 .order(ByteOrder.LITTLE_ENDIAN);
+        packInto(packed, records, origin);
+        return packed.flip();
+    }
+
+    /** Writes directly to the frame-owned upload storage without an intermediate heap table. */
+    static void packInto(ByteBuffer packed, List<GeometryRecord> records, SceneOrigin origin) {
         for (GeometryRecord record : records) {
             int base = packed.position();
             float[] current = record.currentTransform().relativeTo(origin.x(), origin.y(), origin.z());
@@ -172,7 +183,6 @@ public final class RtRetainedGeometryPlan {
                     .write(packed.slice(base, RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN));
             packed.position(base + RECORD_BYTES);
         }
-        return packed.flip();
     }
 
     public static List<HitGroup> hitGroups(List<GeometryRecord> records) {

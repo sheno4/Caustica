@@ -26,6 +26,47 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftEntityGeometryTest {
+    @Test void publicationEventMeasuresReadinessBeforeThePublicationBoundary(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+        var output = directory.resolve("entity-publication.jfr");
+        long beforeReady, afterReady, beforePublication, afterPublication;
+        try (var recording = new jdk.jfr.Recording()) {
+            recording.enable(MinecraftEntityGeometry.EntityMeshPublicationEvent.class);
+            recording.start();
+            var scene = new PreparedScene();
+            try (var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {},
+                    ignored -> new Uploaded(0x1000))) {
+                var key = new MinecraftEntityGeometry.Key(1, 2);
+                geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+                beforeReady = System.nanoTime();
+                scene.jobs.getFirst().complete();
+                afterReady = System.nanoTime();
+                assertTrue(scene.edits.isEmpty());
+                beforePublication = System.nanoTime();
+                flush(geometry);
+                afterPublication = System.nanoTime();
+                var removed = new MinecraftEntityGeometry.Key(1, 3);
+                geometry.put(removed, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+                geometry.drop(removed);
+                scene.jobs.getLast().complete();
+                flush(geometry);
+            }
+            recording.stop();
+            recording.dump(output);
+        }
+        var events = jdk.jfr.consumer.RecordingFile.readAllEvents(output).stream()
+                .filter(event -> event.getEventType().getName().equals("dev.comfyfluffy.caustica.EntityMeshPublication"))
+                .toList();
+        assertEquals(1, events.size());
+        var event = events.getFirst();
+        assertEquals(1, event.getLong("keyDomain"));
+        assertEquals(2, event.getLong("keyValue"));
+        assertTrue(event.getLong("readyNanos") >= beforeReady);
+        assertTrue(event.getLong("readyNanos") <= afterReady);
+        assertTrue(event.getLong("publishedNanos") >= beforePublication);
+        assertTrue(event.getLong("publishedNanos") <= afterPublication);
+    }
+
     @Test void replacementKeepsOldMeshAndUsesCurrentTransformWhenReady() {
         var scene = new PreparedScene();
         var uploads = new ArrayList<>(List.of(new Uploaded(0x1000), new Uploaded(0x2000)));

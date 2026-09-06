@@ -8,6 +8,8 @@ import java.util.*;
 
 /** Keeps each live mesh visible while its replacement prepares, with independent rigid placement edits. */
 public final class MinecraftEntityGeometry implements MinecraftWorldSessionContribution {
+    private static final jdk.jfr.EventType PUBLICATION_EVENT =
+            jdk.jfr.EventType.getEventType(EntityMeshPublicationEvent.class);
     private final MeshPreparer meshes;
     private final SceneChannel channel;
     private final SceneId scene;
@@ -73,10 +75,11 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         residents.put(key, new Resident(resident.instance, capture.revision, resident.transform, resident.mask,
                 resident.live, request, null));
         future.whenComplete((ready, failure) -> {
+            long readyNanos = PUBLICATION_EVENT.isEnabled() ? System.nanoTime() : 0L;
             synchronized (MinecraftEntityGeometry.this) {
                 var result = new Generation(ready, uploaded);
                 if (stopped) result.close();
-                else completed.add(new Completion(key, request, result, failure));
+                else completed.add(new Completion(key, request, result, failure, readyNanos));
             }
         });
     }
@@ -121,6 +124,14 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             } catch (RuntimeException | Error failure) {
                 generation.close();
                 throw failure;
+            }
+            if (completion.readyNanos != 0L && PUBLICATION_EVENT.isEnabled()) {
+                var event = new EntityMeshPublicationEvent();
+                event.keyDomain = completion.key.domain;
+                event.keyValue = completion.key.value;
+                event.readyNanos = completion.readyNanos;
+                event.publishedNanos = System.nanoTime();
+                event.commit();
             }
             var published = new Resident(resident.instance, resident.revision,
                     resident.transform, resident.mask, generation, null, null);
@@ -206,7 +217,20 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                             int mask, Generation live, Preparation request, Capture queued) { }
     private record Capture(MeshRevision revision, MinecraftEntityMesh mesh, Runnable accepted) { }
     private record Preparation(Runnable accepted) { }
-    private record Completion(Key key, Preparation request, Generation generation, Throwable failure) { }
+    private record Completion(Key key, Preparation request, Generation generation, Throwable failure,
+                              long readyNanos) { }
+
+    @jdk.jfr.Name("dev.comfyfluffy.caustica.EntityMeshPublication")
+    @jdk.jfr.Label("Entity mesh readiness to retained publication")
+    @jdk.jfr.Category({"Caustica", "Geometry"})
+    @jdk.jfr.StackTrace(false)
+    @jdk.jfr.Enabled(false)
+    static final class EntityMeshPublicationEvent extends jdk.jfr.Event {
+        long keyDomain;
+        long keyValue;
+        @jdk.jfr.Label("System.nanoTime GPU-ready callback") long readyNanos;
+        @jdk.jfr.Label("System.nanoTime retained publication") long publishedNanos;
+    }
     private record Generation(ReadyMesh<MinecraftProgramTypes.InstanceData> mesh,
                               MinecraftEntityUploader.UploadedEntity uploaded) implements AutoCloseable {
         @Override public void close() { if (mesh != null) mesh.close(); uploaded.close(); }

@@ -9,8 +9,6 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
-import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
@@ -30,6 +28,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -37,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Supplier;
+import java.util.function.IntConsumer;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
 
@@ -44,6 +44,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BIND
 public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final VulkanDeviceContext ctx;
     private final RtNeeAtBackend neeAt;
+    private final RtFramePreparation framePreparation = new RtFramePreparation();
     private final Map<GraphicsUse, FrameSnapshot> inFlightFrames = new IdentityHashMap<>();
     private final Map<SceneId, SharedResource<SceneMotionHistory>> motionHistoryByScene = new IdentityHashMap<>();
     private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
@@ -176,77 +177,47 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         for (int index = 0; index < sceneLights.size(); index++) {
             lightIndices.put(sceneLights.get(index).identity(), index);
         }
-        List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
-        List<Integer> emitterOffsets = new ArrayList<>();
+        int geometryCount = current.instances.isEmpty() ? 0 : current.instances.getLast().geometryBase
+                + current.instances.getLast().resolvedMesh.geometries().size();
+        List<TraceChunk> chunks = RtFramePreparation.chunks(current.instances).stream().map(TraceChunk::new).toList();
+        framePreparation.run("plan", chunks, chunk -> chunk.instances.size(), chunk -> chunk.plan(pipeline));
         int emitterBytes = 0;
-        for (FrameInstanceSnapshot frameInstance : current.instances) {
-            NativeInstance instance = frameInstance.nativeInstance;
-            List<RtRetainedGeometryPlan.GeometryRecord> instanceRecords = RtRetainedGeometryPlan.records(
-                    frameInstance.resolvedMesh, frameInstance.resolvedPlacement,
-                    frameInstance.previousTransform,
-                    frameInstance.previousPositions);
-            for (int geometryIndex = 0; geometryIndex < instanceRecords.size(); geometryIndex++) {
-                records.add(instanceRecords.get(geometryIndex));
-                MeshBuild.Geometry<?> geometry = instance.mesh.logical.build().geometries().get(geometryIndex);
-                int primitiveBase = geometry.firstIndex() / 3;
-                if (hasEmitterMapping(instance.logical.primitiveEmitters(), primitiveBase,
-                        geometry.triangleCount())) {
-                    emitterOffsets.add(emitterBytes);
-                    emitterBytes = Math.addExact(emitterBytes,
-                            Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
-                } else {
-                    emitterOffsets.add(-1);
-                }
-            }
+        int hitBytes = 0;
+        for (TraceChunk chunk : chunks) {
+            chunk.emitterBase = emitterBytes;
+            emitterBytes = Math.addExact(emitterBytes, chunk.emitterBytes);
+            chunk.hitBase = hitBytes;
+            hitBytes = Math.addExact(hitBytes, chunk.hits.remaining());
         }
-        List<RtRetainedGeometryPlan.HitGroup> groups = RtRetainedGeometryPlan.hitGroups(records);
-        ByteBuffer hits = pipeline.retainedHitRecords(groups);
-        int geometryBytes = Math.multiplyExact(records.size(), RtRetainedGeometryPlan.RECORD_BYTES);
+        int geometryBytes = Math.multiplyExact(geometryCount, RtRetainedGeometryPlan.RECORD_BYTES);
         int lightBytes = Math.multiplyExact(sceneLights.size(), RtRetainedLightPlan.RECORD_BYTES);
-        TraceSlot slot = createTraceSlot(ctx, geometryBytes, hits.remaining(), lightBytes, emitterBytes,
+        TraceSlot slot = createTraceSlot(ctx, geometryBytes, hitBytes, lightBytes, emitterBytes,
                 pipeline, graphicsUse);
-        List<RtRetainedGeometryPlan.GeometryRecord> addressedRecords = new ArrayList<>(records.size());
-        for (int index = 0; index < records.size(); index++) {
-            int emitterOffset = emitterOffsets.get(index);
-            addressedRecords.add(emitterOffset < 0 ? records.get(index) : records.get(index).withEmitterIndex(
-                    slot.emitters.deviceAddress().addBytes(emitterOffset), 0));
-        }
-        ByteBuffer geometry = RtRetainedGeometryPlan.pack(addressedRecords, origin);
-        ByteBuffer emitters = ByteBuffer.allocate(emitterBytes).order(ByteOrder.nativeOrder());
+        framePreparation.run("pack", chunks, chunk -> chunk.instances.size(), chunk -> chunk.pack(slot, origin, lightIndices));
+        BitSet linked = new BitSet(sceneLights.size());
+        for (TraceChunk chunk : chunks) linked.or(chunk.linkedEmitters);
         boolean[] linkedEmitters = new boolean[sceneLights.size()];
-        for (FrameInstanceSnapshot frameInstance : current.instances) {
-            NativeInstance instance = frameInstance.nativeInstance;
-            for (MeshBuild.Geometry<?> meshGeometry : instance.mesh.logical.build().geometries()) {
-                int primitiveBase = meshGeometry.firstIndex() / 3;
-                if (hasEmitterMapping(instance.logical.primitiveEmitters(), primitiveBase,
-                        meshGeometry.triangleCount())) {
-                    putEmitterIndices(emitters, primitiveBase, meshGeometry.triangleCount(),
-                            instance.logical.primitiveEmitters(), lightIndices, linkedEmitters);
-                }
-            }
+        for (int index = linked.nextSetBit(0); index >= 0; index = linked.nextSetBit(index + 1)) {
+            linkedEmitters[index] = true;
         }
-        emitters.flip();
         ByteBuffer lights = RtRetainedLightPlan.pack(
                 sceneLights.stream().map(SceneLight::descriptor).toList(), origin, linkedEmitters);
-        if (geometry.hasRemaining()) {
-            MemoryUtil.memByteBuffer(slot.geometry.mapped(), geometry.remaining()).put(geometry.duplicate());
-            slot.geometry.flush(0L, geometry.remaining());
+        if (geometryBytes > 0) {
+            slot.geometry.flush(0L, geometryBytes);
         }
-        if (hits.hasRemaining()) {
-            MemoryUtil.memByteBuffer(slot.hits.mapped(), hits.remaining()).put(hits.duplicate());
-            slot.hits.flush(0L, hits.remaining());
+        if (hitBytes > 0) {
+            slot.hits.flush(0L, hitBytes);
         }
         if (lights.hasRemaining()) {
             MemoryUtil.memByteBuffer(slot.lights.mapped(), lights.remaining()).put(lights.duplicate());
             slot.lights.flush(0L, lights.remaining());
         }
-        if (emitters.hasRemaining()) {
-            MemoryUtil.memByteBuffer(slot.emitters.mapped(), emitters.remaining()).put(emitters.duplicate());
-            slot.emitters.flush(0L, emitters.remaining());
+        if (emitterBytes > 0) {
+            slot.emitters.flush(0L, emitterBytes);
         }
         ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
-        RtPipeline.HitTable hitTable = hits.hasRemaining() ? new RtPipeline.HitTable(
-                new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hits.remaining()),
+        RtPipeline.HitTable hitTable = hitBytes > 0 ? new RtPipeline.HitTable(
+                new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hitBytes),
                 pipeline.retainedHitRecordStride()) : null;
         RtNeeAtBackend.Prepared lighting = neeAt.active(scene);
         if (lighting == null) throw new IllegalStateException("prepareLighting must precede prepareTrace");
@@ -271,21 +242,37 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     static boolean hasEmitterMapping(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
                                      int firstPrimitive, int primitiveCount) {
         long end = Math.addExact((long) firstPrimitive, primitiveCount);
-        for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
-            long rangeEnd = Math.addExact((long) range.firstPrimitive(), range.primitiveCount());
-            if (rangeEnd <= firstPrimitive) continue;
-            return range.firstPrimitive() < end;
+        int index = firstEmitterRange(ranges, firstPrimitive);
+        return primitiveCount > 0 && index < ranges.size() && ranges.get(index).firstPrimitive() < end;
+    }
+
+    /** Sorted, disjoint ranges allow skipping every emitter before this geometry in logarithmic time. */
+    private static int firstEmitterRange(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges, int primitive) {
+        int low = 0, high = ranges.size();
+        while (low < high) {
+            int middle = (low + high) >>> 1;
+            var range = ranges.get(middle);
+            if ((long) range.firstPrimitive() + range.primitiveCount() <= primitive) low = middle + 1;
+            else high = middle;
         }
-        return false;
+        return low;
     }
 
     /** Packs a consecutive primitive range in one forward pass over the sorted, disjoint emitter ranges. */
     static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
                                   List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
                                   Map<Long, Integer> lightIndices, boolean[] linkedEmitters) {
+        putEmitterIndices(output, firstPrimitive, primitiveCount, ranges, lightIndices,
+                index -> linkedEmitters[index] = true);
+    }
+
+    static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
+                                  List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
+                                  Map<Long, Integer> lightIndices, IntConsumer markLinked) {
         int primitive = firstPrimitive;
         int end = Math.addExact(firstPrimitive, primitiveCount);
-        for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
+        for (int index = firstEmitterRange(ranges, firstPrimitive); index < ranges.size(); index++) {
+            var range = ranges.get(index);
             if (range.firstPrimitive() >= end) break;
             int rangeEnd = (int) Math.min((long) end, (long) range.firstPrimitive() + range.primitiveCount());
             if (rangeEnd <= primitive) continue;
@@ -294,7 +281,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 primitive++;
             }
             int dense = lightIndices.getOrDefault(range.lightIdentity(), -1);
-            if (dense >= 0) linkedEmitters[dense] = true;
+            if (dense >= 0) markLinked.accept(dense);
             while (primitive < rangeEnd) {
                 output.putInt(dense);
                 primitive++;
@@ -310,6 +297,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     public synchronized void shutdownAfterDeviceIdle() {
         if (closed) return;
         closed = true;
+        framePreparation.close();
         releaseTerminalFrameRoots();
         capture = null;
         neeAt.destroyAfterDeviceIdle();
@@ -506,8 +494,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     if (prior != null
                             && prior.placementOrdinal == instance.placementOrdinal) {
                         previousTransform = prior.transform;
-                        if (prior.topology.compatibleWith(instance.mesh.logical.build())) {
-                            previousPositions = prior.positions;
+                        if (prior.build == instance.mesh.logical.build()
+                                || RetainedSceneSnapshot.vertexTopologyCompatible(prior.build, instance.mesh.logical.build())) {
+                            previousPositions = prior.build.positions();
                         }
                     }
                     instances.add(new FrameInstanceSnapshot(
@@ -532,9 +521,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 if (root == null) return;
                 for (Map.Entry<SceneId, FrameSceneSnapshot> entry : scenes.entrySet()) {
                     if (!entry.getValue().traced()) continue;
-                    List<ResourceOwner> positions = entry.getValue().instances.stream().map(instance ->
-                            instance.nativeInstance.mesh.logical.build().positions().resource()).toList();
-                    ResourceOwners positionResources = ResourceOwners.capture(positions);
+                    SharedResource<RetainedSceneSnapshot> historyRoot = root.retain();
                     SharedResource<SceneMotionHistory> replacement = null;
                     try {
                         Map<Long, MotionInstanceHistory> historyInstances = new LinkedHashMap<>();
@@ -544,14 +531,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                             historyInstances.put(nativeInstance.logical.identity(), new MotionInstanceHistory(
                                     nativeInstance.placementOrdinal,
                                     instance.current.transform(),
-                                    MotionTopology.capture(build), build.positions()));
+                                    build));
                         }
                         SceneMotionHistory history = new SceneMotionHistory(Map.copyOf(historyInstances),
-                                positionResources);
+                                historyRoot);
                         replacement = SharedResource.owned(history, SceneMotionHistory::close);
-                        positionResources = null;
+                        historyRoot = null;
                     } finally {
-                        if (positionResources != null) positionResources.close();
+                        if (historyRoot != null) historyRoot.close();
                     }
                     SharedResource<SceneMotionHistory> previous =
                             motionHistoryByScene.put(entry.getKey(), replacement);
@@ -606,6 +593,78 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
+    /** Contiguous geometry and SBT order, with private planning state and disjoint upload ranges. */
+    private static final class TraceChunk {
+        final List<FrameInstanceSnapshot> instances;
+        final int geometryBase;
+        final List<RtRetainedGeometryPlan.GeometryRecord> records;
+        final int[] emitterOffsets;
+        final BitSet linkedEmitters = new BitSet();
+        ByteBuffer hits;
+        int emitterBytes;
+        int emitterBase;
+        int hitBase;
+
+        TraceChunk(List<FrameInstanceSnapshot> instances) {
+            this.instances = instances;
+            geometryBase = instances.isEmpty() ? 0 : instances.getFirst().geometryBase;
+            int geometryCount = instances.isEmpty() ? 0 : instances.getLast().geometryBase
+                    + instances.getLast().resolvedMesh.geometries().size() - geometryBase;
+            records = new ArrayList<>(geometryCount);
+            emitterOffsets = new int[geometryCount];
+        }
+
+        void plan(RtPipeline pipeline) {
+            for (FrameInstanceSnapshot frameInstance : instances) {
+                NativeInstance instance = frameInstance.nativeInstance;
+                RtRetainedGeometryPlan.appendRecords(records, frameInstance.resolvedMesh,
+                        frameInstance.resolvedPlacement, frameInstance.previousTransform, frameInstance.previousPositions);
+                List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
+                for (int index = 0; index < geometries.size(); index++) {
+                    MeshBuild.Geometry<?> geometry = geometries.get(index);
+                    int record = frameInstance.geometryBase - geometryBase + index;
+                    if (hasEmitterMapping(instance.logical.primitiveEmitters(), geometry.firstIndex() / 3,
+                            geometry.triangleCount())) {
+                        emitterOffsets[record] = emitterBytes;
+                        emitterBytes = Math.addExact(emitterBytes,
+                                Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
+                    } else {
+                        emitterOffsets[record] = -1;
+                    }
+                }
+            }
+            hits = pipeline.retainedHitRecords(RtRetainedGeometryPlan.hitGroups(records));
+        }
+
+        void pack(TraceSlot slot, SceneOrigin origin, Map<Long, Integer> lightIndices) {
+            VulkanDeviceAddress emitterAddress = slot.emitters.deviceAddress().addBytes(emitterBase);
+            for (int index = 0; index < records.size(); index++) {
+                int offset = emitterOffsets[index];
+                if (offset >= 0) records.set(index, records.get(index).withEmitterIndex(
+                        emitterAddress.addBytes(offset), 0));
+            }
+            int geometryBytes = Math.multiplyExact(records.size(), RtRetainedGeometryPlan.RECORD_BYTES);
+            ByteBuffer geometry = MemoryUtil.memByteBuffer(slot.geometry.mapped()
+                    + (long) geometryBase * RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes)
+                    .order(ByteOrder.nativeOrder());
+            RtRetainedGeometryPlan.packInto(geometry, records, origin);
+            ByteBuffer emitters = MemoryUtil.memByteBuffer(slot.emitters.mapped() + emitterBase, emitterBytes)
+                    .order(ByteOrder.nativeOrder());
+            for (FrameInstanceSnapshot frameInstance : instances) {
+                NativeInstance instance = frameInstance.nativeInstance;
+                List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
+                for (int index = 0; index < geometries.size(); index++) {
+                    MeshBuild.Geometry<?> meshGeometry = geometries.get(index);
+                    if (emitterOffsets[frameInstance.geometryBase - geometryBase + index] >= 0) {
+                        putEmitterIndices(emitters, meshGeometry.firstIndex() / 3, meshGeometry.triangleCount(),
+                                instance.logical.primitiveEmitters(), lightIndices, linkedEmitters::set);
+                    }
+                }
+            }
+            MemoryUtil.memByteBuffer(slot.hits.mapped() + hitBase, hits.remaining()).put(hits);
+        }
+    }
+
     private record FrameInstanceSnapshot(NativeInstance nativeInstance,
                                          RetainedSceneSnapshot.Instance current,
                                          RtRetainedGeometryPlan.ResolvedMesh resolvedMesh,
@@ -625,44 +684,21 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                               RtRetainedGeometryPlan.ResolvedPlacement placement) { }
 
     private record MotionInstanceHistory(long placementOrdinal,
-                                         GeometryTransform transform, MotionTopology topology,
-                                         MeshBuild.Stream positions) { }
-
-    private record MotionTopology(int vertexCount, MeshBuild.IndexRevision indexRevision,
-                                  List<IndexRange> geometries) {
-        static MotionTopology capture(MeshBuild<?> build) {
-            return new MotionTopology(build.vertexCount(), build.indexRevision(), build.geometries().stream()
-                    .map(geometry -> new IndexRange(geometry.firstIndex(), geometry.indexCount())).toList());
-        }
-
-        boolean compatibleWith(MeshBuild<?> build) {
-            if (vertexCount != build.vertexCount() || indexRevision == null
-                    || !indexRevision.equals(build.indexRevision())
-                    || geometries.size() != build.geometries().size()) return false;
-            for (int index = 0; index < geometries.size(); index++) {
-                IndexRange previous = geometries.get(index);
-                MeshBuild.Geometry<?> current = build.geometries().get(index);
-                if (previous.firstIndex != current.firstIndex()
-                        || previous.indexCount != current.indexCount()) return false;
-            }
-            return true;
-        }
-    }
-
-    private record IndexRange(int firstIndex, int indexCount) { }
+                                         GeometryTransform transform, MeshBuild<?> build) { }
 
     private static final class SceneMotionHistory implements AutoCloseable {
         final Map<Long, MotionInstanceHistory> instances;
-        final ResourceOwners positionResources;
+        // The captured revision owns every previous position stream, with one claim for the history.
+        final SharedResource<RetainedSceneSnapshot> root;
 
         SceneMotionHistory(Map<Long, MotionInstanceHistory> instances,
-                           ResourceOwners positionResources) {
+                           SharedResource<RetainedSceneSnapshot> root) {
             this.instances = instances;
-            this.positionResources = positionResources;
+            this.root = root;
         }
 
         @Override public void close() {
-            positionResources.close();
+            root.close();
         }
     }
 

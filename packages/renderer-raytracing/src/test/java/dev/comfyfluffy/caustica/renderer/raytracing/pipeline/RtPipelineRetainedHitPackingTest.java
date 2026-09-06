@@ -13,6 +13,7 @@ final class RtPipelineRetainedHitPackingTest {
     void duplicatesFixedGroupHandlesInPlacementGeometryRayOrder() {
         ByteBuffer handles = ByteBuffer.allocate(6 * 4);
         for (int group = 0; group < 6; group++) handles.putInt(group * 4, 100 + group);
+        handles.position(3);
 
         ByteBuffer packed = RtPipeline.packRetainedHitRecords(handles, 4, 8, List.of(
                 RtRetainedGeometryPlan.HitGroup.RADIANCE_CUTOUT,
@@ -28,6 +29,9 @@ final class RtPipelineRetainedHitPackingTest {
         assertEquals(103, packed.getInt(24));
         assertEquals(100, packed.getInt(32));
         assertEquals(105, packed.getInt(40));
-        assertEquals(0, packed.getInt(4));
+        for (int record = 0; record < 6; record++) assertEquals(0, packed.getInt(record * 8 + 4));
+        assertEquals(3, handles.position());
+        assertEquals(0, packed.position());
+        assertEquals(48, packed.remaining());
     }
 }

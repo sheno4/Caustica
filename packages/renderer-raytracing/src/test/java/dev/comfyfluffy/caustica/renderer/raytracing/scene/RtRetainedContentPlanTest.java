@@ -67,6 +67,25 @@ final class RtRetainedContentPlanTest {
         assertTrue(RtRetainedSceneBackend.hasEmitterMapping(ranges, 4, 1));
         assertTrue(RtRetainedSceneBackend.hasEmitterMapping(ranges, 3, 2));
         assertFalse(RtRetainedSceneBackend.hasEmitterMapping(ranges, 6, 3));
+        assertFalse(RtRetainedSceneBackend.hasEmitterMapping(ranges, 5, 0));
+    }
+
+    @Test
+    void emitterPackingSeeksLateRangesAndClipsAtBothGeometryBoundaries() {
+        var ranges = java.util.stream.IntStream.range(0, 2048)
+                .mapToObj(index -> new RetainedSceneSnapshot.PrimitiveEmitter(index * 4, 2, 42L)).toList();
+        int first = 2040 * 4 + 1;
+        var output = ByteBuffer.allocate(19 * Integer.BYTES).order(ByteOrder.nativeOrder());
+        boolean[] linked = new boolean[1];
+        RtRetainedSceneBackend.putEmitterIndices(output, first, 19, ranges, Map.of(42L, 0), linked);
+        output.flip();
+        for (int primitive = first; primitive < first + 19; primitive++) {
+            assertEquals(primitive % 4 < 2 ? 0 : -1, output.getInt());
+            assertEquals(primitive % 4 < 2,
+                    RtRetainedSceneBackend.hasEmitterMapping(ranges, primitive, 1));
+        }
+        assertTrue(linked[0]);
+        assertFalse(RtRetainedSceneBackend.hasEmitterMapping(ranges, 8190, 10));
     }
 
     @Test
