@@ -154,7 +154,6 @@ final class EngineWorldSessionTest {
         @Override public long vmaAllocator() { return 0; }
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
-        @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
     };
 
     private static final GpuComputeQueue COMPUTE = new GpuComputeQueue() {

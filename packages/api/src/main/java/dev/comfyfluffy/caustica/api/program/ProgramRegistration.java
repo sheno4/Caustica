@@ -35,8 +35,8 @@ public interface ProgramRegistration<E> extends AutoCloseable {
      *
      * <p>If completion is still pending, observers receive {@link Cancelled} and the set never publishes. If
      * it is ready, removal occurs at a later publication boundary. Failed and cancelled registrations have
-     * no live implementation to remove. In every case, accepted definition callbacks retain their ordinary
-     * asynchronous retirement guarantees.
+     * no live implementation to remove. In every case, accepted shader-data claims remain retained
+     * until their asynchronous uses end.
      *
      * <p>Close and readiness publication are linearized. If close wins, it returns after the registration has
      * become cancelled and the set can no longer publish. If publication wins, the registration becomes ready and

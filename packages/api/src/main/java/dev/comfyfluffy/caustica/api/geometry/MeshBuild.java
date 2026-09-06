@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.api.geometry;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 
 import java.util.List;
@@ -11,9 +11,11 @@ import java.util.Objects;
 
 /**
  * Triangle acceleration-structure input retained by the renderer.
+ * This description borrows its stream and shader-data handles. Preparation retains independent copies
+ * before returning; the caller remains responsible for closing its handles.
  *
  * <p>Streams refer to source-owned Vulkan buffers. A stream with an independent resource reference remains
- * immutable until that generation retires. A stream using {@link ResourceRef#none()} provides no tracked
+ * immutable until that generation retires. A stream using {@link ResourceOwner#none()} provides no tracked
  * resource lifetime. The buffers have
  * {@code VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR} and
  * {@code VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT} usage.
@@ -89,7 +91,7 @@ public record MeshBuild<N>(Stream positions,
      * @param resource immutable generation containing every byte transitively reachable through the stream;
      *                 address equality does not imply resource identity
      */
-    public record Stream(VulkanDeviceAddressRange bytes, int byteStride, ResourceRef resource) {
+    public record Stream(VulkanDeviceAddressRange bytes, int byteStride, ResourceOwner resource) {
         public Stream {
             Objects.requireNonNull(bytes, "bytes");
             Objects.requireNonNull(resource, "resource");

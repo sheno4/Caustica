@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.program;
 
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.TestResource;
 import org.junit.jupiter.api.Test;
 
@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ProgramContractTest {
@@ -121,21 +122,23 @@ final class ProgramContractTest {
         var releases = new java.util.concurrent.atomic.AtomicInteger();
         try (var firstOwner = TestResource.create(releases::incrementAndGet);
              var secondOwner = TestResource.create(releases::incrementAndGet)) {
-            ResourceRef firstResource = firstOwner.reference();
-            ResourceRef secondResource = secondOwner.reference();
+            ResourceOwner firstResource = firstOwner;
+            ResourceOwner secondResource = secondOwner;
 
             ShaderData<Object> first = type.data(0x1234L, firstResource);
             ShaderData<Object> second = type.data(0x1234L, secondResource);
 
-            assertSame(firstResource, first.resource());
-            assertSame(secondResource, second.resource());
+            assertNotSame(firstResource, first.resource());
+            assertNotSame(secondResource, second.resource());
             assertNotEquals(first, second);
-            assertSame(ResourceRef.none(), type.data(7L).resource());
-            try (var reader = firstResource.retain()) {
+            assertSame(ResourceOwner.none(), type.data(7L).resource());
+            try (var reader = first.retain()) {
+                first.close();
                 firstOwner.close();
                 assertEquals(0, releases.get());
             }
             assertEquals(1, releases.get());
+            second.close();
         }
         assertEquals(2, releases.get());
     }

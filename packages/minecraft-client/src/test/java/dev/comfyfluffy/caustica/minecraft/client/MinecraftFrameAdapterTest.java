@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
 
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -128,8 +128,10 @@ final class MinecraftFrameAdapterTest {
         assertEquals(launchClip.y / launchClip.w, hitClip.y / hitClip.w, 1.0e-5f);
     }
 
-    private static GpuImage image() {
-        return new GpuImage() {
+    private static OwnedGpuImage image() {
+        return new OwnedGpuImage() {
+            @Override public OwnedGpuImage retain() { return MinecraftFrameAdapterTest.image(); }
+            @Override public void close() { }
             @Override public long image() { return 11; }
             @Override public long view() { return 12; }
             @Override public GpuImageDescriptor descriptor(GpuImageDescriptorKind kind) { throw new UnsupportedOperationException(); }

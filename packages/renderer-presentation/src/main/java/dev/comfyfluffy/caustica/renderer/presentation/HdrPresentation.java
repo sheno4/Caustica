@@ -49,8 +49,9 @@ final class HdrPresentation {
             if (generation.enabled()) {
                 generation.captureHdrHudless(commandBuffer, stack, source);
             }
-            GpuImage overlay = ui.populated() ? ui.color() : null;
+            var overlay = ui.populated() ? ui.color() : null;
             if (overlay != null) {
+                use.keepAlive(overlay.retain());
                 ensurePipeline();
                 VulkanBarriers.memoryBarrier(commandBuffer, stack);
                 pipeline.dispatch(commandBuffer, source,

@@ -121,6 +121,17 @@ incorrect pairing fails to compile. Submission boundaries also compare token ide
 cannot silently publish a mismatch. The Slang representation remains exactly `uint64_t`; the type parameter
 does not prescribe whether the bits are an address, descriptor index, or packed value.
 
+`ResourceOwner` is one closeable ownership claim. `retain()` returns an independent claim and `close()`
+releases only that handle; a closed handle cannot be retained. `ShaderData` owns a retained dependency
+from construction. Program registration, scene edits, preparation, and frame capture retain their own data
+copies before returning. The caller closes its data values and resource handles when its own use ends.
+Description records borrow the data handles supplied to them. Passes use `frame.retain(owner)` to keep
+resources alive through frame completion. Final destruction callbacks run off the render thread after
+all claims end. No call implicitly consumes the caller's handle.
+
+Pass-facing `GpuImage` values are borrowed from the enclosing frame. Host image inputs use `OwnedGpuImage`
+so recording can retain an independent image claim through completion.
+
 `ProgramChannel.register` invokes one synchronous declaration callback. Its temporary `ProgramBuilder`
 issues every surface, volume, and environment ID in one owner set, and the callback returns an immutable,
 source-defined export value carrying those typed IDs. Returning commits the whole declaration atomically;
@@ -132,7 +143,7 @@ acceptance order: one bad set cannot fail another publishable set, and unaffecte
 against the last successful composition. Registration close and readiness publication are linearized, so a
 pending close which wins cannot be followed by publication.
 
-Surface and volume definitions carry shared `ResourceRef` dependencies in their typed
+Surface and volume definitions carry shared `ResourceOwner` dependencies in their typed
 `implementationData`. Geometry slots, placement data, and environment bindings carry the same form of
 opaque-data dependency. Providers create owning claims with `ResourceFactory` and supply final-release
 callbacks. The engine retains claims while programs, scenes, or frames reference the data; callbacks run
@@ -225,13 +236,18 @@ method selects timing, while `F` exposes only the frame resources valid at that 
 or resource-pack lifecycle callbacks. It compares current frame facts with the state it built and replaces
 resources when they differ. `Pass.close()` is final and occurs only after that pass's submitted uses drain.
 
-Retirement is callback-based:
+Frame execution retains its resource dependencies:
 
-- `GpuFrameUse.whenComplete` follows commands recorded for the current frame.
-- `GpuDevice.retireAfterUse` follows device work submitted before the call.
-- retained batch callbacks follow the particular values introduced by the batch.
+- the internal frame completion reservation follows commands recorded for the current frame.
+- `PassFrame.retain` attaches a shared resource claim to the frame execution without exposing GPU completion.
+- Shared resource final-release callbacks run after producer, retained scene, job, and frame claims end.
 
 Callbacks must not block or throw. None of these primitives imply that unrelated device work is idle.
+
+Frame input capture retains the selected program, scene revisions, and camera-medium data before recording.
+Pass allocations attach to a separate execution-owned resource collection through `PassFrame.retain`.
+The renderer releases that collection after accepted work completes, or after abandoned commands cannot
+execute. Graphics submission and completion callbacks remain internal platform services.
 
 ## Vulkan and descriptor heaps
 

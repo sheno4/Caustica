@@ -1,21 +1,76 @@
 package dev.comfyfluffy.caustica.engine.resource;
 
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
+import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
+import dev.comfyfluffy.caustica.api.program.ShaderData;
+import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
+
 
 import java.util.IdentityHashMap;
 
-/** Strong ownership of the distinct resource graphs reachable from one immutable value. */
-public final class ResourceOwners implements AutoCloseable {
-    private final IdentityHashMap<ResourceRef, ResourceOwner> owners = new IdentityHashMap<>();
+/** Deduplicated strong ownership for captured inputs or resources attached to one frame execution. */
+public final class ResourceOwners implements FrameResources, AutoCloseable {
+    private final IdentityHashMap<ResourceOwner, ResourceOwner> owners = new IdentityHashMap<>();
+    private boolean closed;
 
-    public static ResourceOwners capture(Iterable<? extends ResourceRef> references) {
+    @Override public synchronized void retain(ResourceOwner reference) {
+        if (closed) throw new IllegalStateException("resource collection is closed");
+        if (reference != ResourceOwner.none() && !owners.containsKey(reference)) {
+            owners.put(reference, reference.retain());
+        }
+    }
+
+    /** Retain and return the consumer's handle, never the producer's borrowed handle. */
+    private synchronized ResourceOwner acquire(ResourceOwner resource) {
+        retain(resource);
+        return resource == ResourceOwner.none() ? resource : owners.get(resource);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> ShaderData<T> data(
+            ShaderData<T> value) {
+        return (ShaderData<T>) acquire(value);
+    }
+
+    public <T> EnvironmentBinding<T> environment(
+            EnvironmentBinding<T> value) {
+        return new EnvironmentBinding<>(value.implementation(), data(value.bindingData()));
+    }
+
+    public <N> MeshBuild<N> mesh(
+            MeshBuild<N> source) {
+        var geometries = source.geometries().stream().map(geometry -> {
+            var surface = geometry.surface();
+            var volume = geometry.volume();
+            return new MeshBuild.Geometry<N>(
+                    surface == null ? null : surface(surface), volume == null ? null : volume(volume),
+                    geometry.firstIndex(), geometry.indexCount());
+        }).toList();
+        return new MeshBuild<>(stream(source.positions()), stream(source.indices()),
+                source.vertexCount(), source.indexRevision(), source.buildPolicy(), geometries);
+    }
+
+    private MeshBuild.Stream stream(
+            MeshBuild.Stream source) {
+        return new MeshBuild.Stream(source.bytes(), source.byteStride(), acquire(source.resource()));
+    }
+
+    private <B, N> MeshBuild.SurfaceSlot<B, N> surface(
+            MeshBuild.SurfaceSlot<B, N> source) {
+        return new MeshBuild.SurfaceSlot<>(source.surface(), data(source.bindingData()), source.coverage());
+    }
+
+    private <B, N> MeshBuild.VolumeSlot<B, N> volume(
+            MeshBuild.VolumeSlot<B, N> source) {
+        return new MeshBuild.VolumeSlot<>(source.volume(), data(source.bindingData()));
+    }
+
+    public static ResourceOwners capture(Iterable<? extends ResourceOwner> references) {
         ResourceOwners result = new ResourceOwners();
         try {
-            for (ResourceRef reference : references) {
-                if (reference != ResourceRef.none() && !result.owners.containsKey(reference)) {
-                    result.owners.put(reference, reference.retain());
-                }
+            for (ResourceOwner reference : references) {
+                result.retain(reference);
             }
             return result;
         } catch (Throwable failure) {
@@ -25,9 +80,10 @@ public final class ResourceOwners implements AutoCloseable {
     }
 
     /** Borrow a captured claim while this collection remains retained. */
-    public synchronized ResourceOwner borrowed(ResourceRef reference) { return owners.get(reference); }
+    public synchronized ResourceOwner borrowed(ResourceOwner reference) { return owners.get(reference); }
 
     @Override public synchronized void close() {
+        closed = true;
         owners.values().forEach(ResourceOwner::close);
         owners.clear();
     }

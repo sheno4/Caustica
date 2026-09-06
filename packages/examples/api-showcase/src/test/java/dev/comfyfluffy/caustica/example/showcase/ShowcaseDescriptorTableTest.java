@@ -21,42 +21,56 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ShowcaseDescriptorTableTest {
     @Test
-    void replacementWritesFreshTypedSlotsAndRetiresThePublishedGeneration() {
+    void replacementRetainsEachGenerationUntilItsLastFrameCompletes() {
         Device device = new Device();
-        ShowcaseDescriptorTable table = new ShowcaseDescriptorTable(device);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
+        try (var directory = new dev.comfyfluffy.caustica.engine.resource.ResourceDirectory(
+                failure -> { throw new AssertionError(failure); });
+             ShowcaseDescriptorTable table = new ShowcaseDescriptorTable(device,
+                     directory.openFactory(new dev.comfyfluffy.caustica.engine.session.ContributionOwner(1)));
+             MemoryStack stack = MemoryStack.stackPush()) {
             var resource = VkResourceDescriptorInfoEXT.calloc(stack);
             var sampler = VkSamplerCreateInfo.calloc(stack).sType$Default();
-            var first = table.replace(resource, sampler);
+            table.replace(resource, sampler);
+            Frame firstFrame = new Frame();
+            var first = table.capture(firstFrame);
+            Frame abandoned = new Frame();
+            table.capture(abandoned);
             var second = table.replace(resource, sampler);
-
-            assertEquals(0, first.texture().value());
-            assertEquals(0, first.sampler().value());
-            assertEquals(1, second.texture().value());
-            assertEquals(1, second.sampler().value());
-            assertEquals(List.of("resource:0", "sampler:0", "resource:1", "sampler:1"),
-                    device.heap.writes);
+            Frame secondFrame = new Frame();
+            table.capture(secondFrame);
+            table.close();
+            abandoned.complete();
+            directory.awaitRetirements();
             assertFalse(device.heap.resources.getFirst().destroyed);
-            device.retirements.removeFirst().run();
+            assertFalse(device.heap.resources.getLast().destroyed);
+            assertEquals(0, first.texture().value());
+            assertEquals(1, second.texture().value());
+            assertEquals(List.of("resource:0", "sampler:0", "resource:1", "sampler:1"), device.heap.writes);
+            secondFrame.complete();
+            directory.awaitRetirements();
+            assertFalse(device.heap.resources.getFirst().destroyed);
+            assertTrue(device.heap.resources.getLast().destroyed);
+            firstFrame.complete();
+            directory.awaitRetirements();
             assertTrue(device.heap.resources.getFirst().destroyed);
             assertTrue(device.heap.samplers.getFirst().destroyed);
+            assertTrue(device.heap.samplers.getLast().destroyed);
         }
+    }
 
-        table.close();
-        assertEquals(1, device.retirements.size());
-        device.retirements.removeFirst().run();
-        assertTrue(device.heap.resources.getLast().destroyed);
-        assertTrue(device.heap.samplers.getLast().destroyed);
+    private static final class Frame implements dev.comfyfluffy.caustica.api.resource.FrameResources {
+        final dev.comfyfluffy.caustica.engine.resource.ResourceOwners resources =
+                new dev.comfyfluffy.caustica.engine.resource.ResourceOwners();
+        @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) { resources.retain(resource); }
+        void complete() { resources.close(); }
     }
 
     private static final class Device implements GpuDevice {
         private final Heap heap = new Heap();
-        private final List<Runnable> retirements = new ArrayList<>();
         @Override public VkDevice vk() { throw new AssertionError(); }
         @Override public long vmaAllocator() { throw new AssertionError(); }
         @Override public int[] asyncBufferSharingQueueFamilies() { throw new AssertionError(); }
         @Override public GpuDescriptorHeap descriptorHeap() { return heap; }
-        @Override public void retireAfterUse(Runnable cleanup) { retirements.add(cleanup); }
     }
 
     private static final class Heap implements GpuDescriptorHeap, GpuDescriptorWriter {

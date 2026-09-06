@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.adapter.session;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
@@ -56,7 +55,7 @@ final class MinecraftEngineWorldSessionTest {
             }
         };
         MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE,
-                PROGRAMS, sceneBackend, (mesh, source) -> java.util.concurrent.CompletableFuture.completedFuture(dev.comfyfluffy.caustica.api.resource.ResourceRef.none().retain()), PASSES,
+                PROGRAMS, sceneBackend, (mesh, source) -> java.util.concurrent.CompletableFuture.completedFuture(dev.comfyfluffy.caustica.api.resource.ResourceOwner.none().retain()), PASSES,
                 MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(2),
                 failure -> { throw new AssertionError(failure); });
 
@@ -90,7 +89,7 @@ final class MinecraftEngineWorldSessionTest {
         };
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE, PROGRAMS, scenes, (mesh, source) -> java.util.concurrent.CompletableFuture.completedFuture(dev.comfyfluffy.caustica.api.resource.ResourceRef.none().retain()), PASSES,
+                () -> new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, COMPUTE, PROGRAMS, scenes, (mesh, source) -> java.util.concurrent.CompletableFuture.completedFuture(dev.comfyfluffy.caustica.api.resource.ResourceOwner.none().retain()), PASSES,
                         MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
                         reported -> { throw (RuntimeException) reported; }));
 
@@ -122,7 +121,6 @@ final class MinecraftEngineWorldSessionTest {
         @Override public long vmaAllocator() { return 0; }
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
-        @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
     };
 
     private static final GpuComputeQueue COMPUTE = new GpuComputeQueue() {

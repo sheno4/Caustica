@@ -13,7 +13,7 @@ import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftHdr;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftVulkanImageBorrow;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftVulkanImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
@@ -112,7 +112,15 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Unique
 	private int caustica$colorSpace = 0;
 	@Unique
-	private MinecraftVulkanImageBorrow caustica$sdrPresentationSource;
+	private MinecraftVulkanImage caustica$sdrPresentationSource;
+
+	@Inject(method = "destroySwapchain", at = @At("HEAD"))
+	private void caustica$releasePresentationSource(CallbackInfo ci) {
+		if (caustica$sdrPresentationSource != null) {
+			caustica$sdrPresentationSource.close();
+			caustica$sdrPresentationSource = null;
+		}
+	}
 	@Unique
 	private PresentationSwapchain caustica$presentationSwapchain;
 
@@ -367,10 +375,10 @@ public abstract class VulkanGpuSurfaceMixin {
 					&& view.texture().getFormat() == com.mojang.blaze3d.GpuFormat.RGBA8_UNORM) {
 				if (caustica$sdrPresentationSource == null || !caustica$sdrPresentationSource.wraps(
 						gpu, view, this.swapchainWidth, this.swapchainHeight)) {
-					MinecraftVulkanImageBorrow old = caustica$sdrPresentationSource;
-					caustica$sdrPresentationSource = MinecraftVulkanImageBorrow.sampled(gpu, view,
+					MinecraftVulkanImage old = caustica$sdrPresentationSource;
+					caustica$sdrPresentationSource = MinecraftVulkanImage.sampled(gpu, view,
 							this.swapchainWidth, this.swapchainHeight, VK10.VK_FORMAT_R8G8B8A8_UNORM);
-					if (old != null) gpu.retireAfterUse(old::destroy);
+					if (old != null) old.close();
 				}
 				if (presentation.presentSdrToPq(
 					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder),

@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.engine.session;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.scene.SceneEdit;
@@ -184,7 +183,6 @@ final class EngineSessionServicesTest {
         @Override public long vmaAllocator() { return 0; }
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
-        @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
     };
 
     private static final GpuComputeQueue COMPUTE = new GpuComputeQueue() {
@@ -198,7 +196,7 @@ final class EngineSessionServicesTest {
 
     private static final PassFrame FRAME = new PassFrame() {
         @Override public VkCommandBuffer commandBuffer() { return null; }
-        @Override public GpuFrameUse gpuUse() { return null; }
+        @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) { throw new AssertionError(); }
         @Override public long frameIndex() { return 1; }
         @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
         @Override public double timeSeconds() { return 2.0; }

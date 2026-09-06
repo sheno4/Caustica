@@ -3,24 +3,29 @@ package dev.comfyfluffy.caustica.example.showcase;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.util.Objects;
 
 /**
- * Extension-owned descriptor roots for one texture generation. A replacement is published before the old
- * slots are retired, so already-submitted shader reads keep valid descriptor bytes.
+ * Extension-owned descriptor roots retained independently by every frame that samples them.
  */
 final class ShowcaseDescriptorTable implements AutoCloseable {
     record Indices(GpuDescriptorIndex.Resource texture, GpuDescriptorIndex.Sampler sampler) { }
 
     private final GpuDevice gpu;
+    private final ResourceFactory factory;
+    private ResourceOwner owner;
     private GpuDescriptorRange<GpuDescriptorIndex.Resource> resources;
     private GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplers;
 
-    ShowcaseDescriptorTable(GpuDevice gpu) {
+    ShowcaseDescriptorTable(GpuDevice gpu, ResourceFactory factory) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
+        this.factory = factory;
     }
 
     Indices replace(VkResourceDescriptorInfoEXT texture, VkSamplerCreateInfo sampler) {
@@ -32,29 +37,29 @@ final class ShowcaseDescriptorTable implements AutoCloseable {
         writer.writeResource(nextResources, 0, texture);
         writer.writeSampler(nextSamplers, 0, sampler);
 
-        var previousResources = resources;
-        var previousSamplers = samplers;
+        var nextOwner = factory.create(() -> {
+            nextResources.destroy();
+            nextSamplers.destroy();
+        });
+        var previousOwner = owner;
         resources = nextResources;
         samplers = nextSamplers;
-        if (previousResources != null) {
-            gpu.retireAfterUse(() -> {
-                previousResources.destroy();
-                previousSamplers.destroy();
-            });
-        }
+        owner = nextOwner;
+        if (previousOwner != null) previousOwner.close();
         return new Indices(nextResources.firstIndex(), nextSamplers.firstIndex());
+    }
+
+    Indices capture(FrameResources use) {
+        use.retain(owner);
+        return new Indices(resources.firstIndex(), samplers.firstIndex());
     }
 
     @Override
     public void close() {
         if (resources == null) return;
-        var finalResources = resources;
-        var finalSamplers = samplers;
         resources = null;
         samplers = null;
-        gpu.retireAfterUse(() -> {
-            finalResources.destroy();
-            finalSamplers.destroy();
-        });
+        owner.close();
+        owner = null;
     }
 }

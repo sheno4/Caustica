@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.engine.pass;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassId;
@@ -434,12 +433,11 @@ final class PassSessionTest {
         @Override public long vmaAllocator() { return 0; }
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
-        @Override public void retireAfterUse(Runnable cleanup) { cleanup.run(); }
     };
 
     private static final PassFrame FRAME = new PassFrame() {
         @Override public VkCommandBuffer commandBuffer() { return null; }
-        @Override public GpuFrameUse gpuUse() { return null; }
+        @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) { throw new AssertionError(); }
         @Override public long frameIndex() { return 1; }
         @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
         @Override public double timeSeconds() { return 2.0; }
@@ -453,7 +451,7 @@ final class PassSessionTest {
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage acquireSceneColorOutput() { return null; }
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage exposureImage() { return null; }
         @Override public VkCommandBuffer commandBuffer() { return null; }
-        @Override public GpuFrameUse gpuUse() { return null; }
+        @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) { throw new AssertionError(); }
         @Override public long frameIndex() { return 1; }
         @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
         @Override public double timeSeconds() { return 2.0; }
@@ -468,7 +466,7 @@ final class PassSessionTest {
         @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor entrySceneTlasDescriptor() { return null; }
         @Override public VkCommandBuffer commandBuffer() { return null; }
-        @Override public GpuFrameUse gpuUse() { return null; }
+        @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) { throw new AssertionError(); }
         @Override public long frameIndex() { return 1; }
         @Override public double timeSeconds() { return 2.0; }
         @Override public double metersPerSceneUnit() { return 1.0; }

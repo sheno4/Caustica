@@ -44,7 +44,6 @@ public final class PreparedScene implements MeshPreparer, SceneChannel {
     }
     private record Mesh<N>(ShaderDataType<N> instanceDataType, ResourceOwner owner) implements ReadyMesh<N> {
         @Override public ReadyMesh<N> retain() { return new Mesh<>(instanceDataType, owner.retain()); }
-        @Override public ResourceRef reference() { return owner.reference(); }
         @Override public void close() { owner.close(); }
     }
 }

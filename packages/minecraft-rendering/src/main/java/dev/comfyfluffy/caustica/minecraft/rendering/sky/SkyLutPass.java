@@ -172,8 +172,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
     static void publishBinding(ResourceOwner owner,
                                EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
                                MinecraftEnvironmentSelector selector, long address) {
-        selector.select(new EnvironmentBinding<>(environment,
-                MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(address, owner.reference())));
+        try (var data = MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(address, owner)) {
+            selector.select(new EnvironmentBinding<>(environment, data));
+        }
     }
 
     static boolean sameBindingEpoch(long image, long epoch, long nextImage, long nextEpoch) {

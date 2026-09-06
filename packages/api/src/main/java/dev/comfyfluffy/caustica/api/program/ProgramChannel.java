@@ -8,6 +8,8 @@ import java.util.function.Function;
  * <p>A declaration runs synchronously against a temporary {@link ProgramBuilder}. The builder issues the
  * typed ids returned through the declaration's export value, but none of its implementations are accepted
  * independently: returning from the declaration commits the whole set, and throwing abandons the whole set.
+ * Supplied shader-data handles stay open until register returns; acceptance retains independent copies.
+ * The caller then closes its own data values when they are no longer needed.
  *
  * <p>Compilation and publication remain asynchronous because all owners' accepted sets form one world
  * program. {@link ProgramRegistration#whenComplete} reports whether this complete set became part of an

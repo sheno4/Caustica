@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
@@ -31,8 +31,11 @@ import java.nio.ByteOrder;
 /** The vanilla targeted-block shape rendered at display resolution and occluded through the root TLAS. */
 final class BlockOutlineFeature implements OverlayFeature {
     private final RtEntities entities;
+    private final dev.comfyfluffy.caustica.api.resource.ResourceFactory resources;
+    private dev.comfyfluffy.caustica.api.resource.ResourceOwner maskOwner;
     private final RtTerrain terrain;
-    BlockOutlineFeature(RtEntities entities, RtTerrain terrain) {
+    BlockOutlineFeature(RtEntities entities, RtTerrain terrain, dev.comfyfluffy.caustica.api.resource.ResourceFactory resources) {
+        this.resources = resources;
         this.entities = entities;
         this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
     }
@@ -49,7 +52,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     private int edgeCount;
     private int tlasDescriptor;
 
-    @Override public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    @Override public boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
             int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height) {
         if (!CausticaConfig.get(MinecraftOptions.Rt.Overlay.BLOCK_OUTLINE_ENABLED) || worldTlasDescriptor == 0) return false;
         RtTerrain currentTerrain = terrain.currentOrNull();
@@ -70,7 +73,7 @@ final class BlockOutlineFeature implements OverlayFeature {
         });
         edgeCount = vertices.size() / 6;
         if (edgeCount == 0) return false;
-        ensureResources(device, gpuUse, width, height);
+        ensureResources(device, frameResources, width, height);
         float[] data = vertices.toFloatArray();
         vbo = pool.acquireVertex(device, (long)data.length * Float.BYTES, "block outline vbo");
         vbo.mapped().order(ByteOrder.nativeOrder()).asFloatBuffer().put(data);
@@ -80,7 +83,7 @@ final class BlockOutlineFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(GpuDevice gpu, GpuFrameUse use, int width, int height) {
+    private void ensureResources(GpuDevice gpu, FrameResources use, int width, int height) {
         device = gpu;
         if (pipeline == null) {
             pipeline = new OverlayPipelines.Spec("block_outline/vertex.vert.spv", "block_outline/fragment.frag.spv")
@@ -91,11 +94,13 @@ final class BlockOutlineFeature implements OverlayFeature {
                     .blend(OverlayPipelines.ALPHA_BLEND).attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline composite");
         }
         if (mask == null || mask.width() != width || mask.height() != height) {
-            if (mask != null) { VmaImage2D old = mask; use.whenComplete(old::close); }
+            if (maskOwner != null) maskOwner.close();
             mask = VmaImage2D.create(gpu, width, height, WorldOverlayPass.TARGET_FORMAT,
                     VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, "block outline mask");
+            maskOwner = resources.create(mask::close);
             maskNeedsInitialization = true;
         }
+        use.retain(maskOwner);
     }
 
     @Override public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
@@ -137,7 +142,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     }
 
     @Override public void close() {
-        if (pipeline != null) pipeline.close(); if (compositePipeline != null) compositePipeline.close(); if (mask != null) mask.close();
+        if (pipeline != null) pipeline.close(); if (compositePipeline != null) compositePipeline.close(); if (maskOwner != null) maskOwner.close();
         pipeline = null; compositePipeline = null; mask = null; device = null;
     }
 }

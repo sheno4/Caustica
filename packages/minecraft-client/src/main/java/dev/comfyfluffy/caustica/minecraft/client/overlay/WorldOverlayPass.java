@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.overlay;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassId;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
@@ -27,8 +27,7 @@ import java.util.List;
 
 /**
  * Minecraft world-space overlays recorded directly into the renderer-owned display-resolution UI layer.
- * The engine supplies the rendered camera, entry-scene TLAS descriptor, command buffer, and completion
- * reservation through {@link UiFrame}; the pass owns only feature pipelines and transient vertex storage.
+ * The engine supplies the rendered camera, entry-scene TLAS descriptor, command buffer, and frame resource ownership through {@link UiFrame}; the pass owns only feature pipelines and transient vertex storage.
  */
 public final class WorldOverlayPass implements Pass<UiFrame> {
     public static final PassId ID = PassId.of("caustica", "world_overlay");
@@ -36,40 +35,37 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
     /** Renderer UI-layer VkFormat. */
     public static final int TARGET_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
-    private final OverlayFramePool framePool = new OverlayFramePool();
+    private final dev.comfyfluffy.caustica.api.resource.ResourceFactory resources;
     private final List<OverlayFeature> features;
     private final GpuDevice device;
 
     public WorldOverlayPass(UiSetup setup, dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities entities,
-                            RtTerrain terrain) {
+                            RtTerrain terrain, dev.comfyfluffy.caustica.api.resource.ResourceFactory resources) {
         if (setup.layerFormat() != TARGET_FORMAT) {
             throw new IllegalArgumentException("Minecraft overlay requires RGBA8_UNORM UI layer");
         }
         device = setup.gpu();
-        features = List.of(new GlowOutlineFeature(entities), new NameTagFeature(entities),
-                new BlockOutlineFeature(entities, terrain));
+        this.resources = resources;
+        features = List.of(new GlowOutlineFeature(entities, resources), new NameTagFeature(entities),
+                new BlockOutlineFeature(entities, terrain, resources));
     }
 
     @Override
     public void record(UiFrame frame) {
-        GpuFrameUse gpuUse = frame.gpuUse();
+        FrameResources frameResources = frame;
         int width = frame.layer().width();
         int height = frame.layer().height();
-        try {
-            List<OverlayFeature> ready = new ArrayList<>(features.size());
-            for (OverlayFeature feature : features) {
-                if (feature.prepare(device, framePool, gpuUse,
-                        frame.entrySceneTlasDescriptor().index().value(),
-                        new Matrix4f().set(frame.worldViewProjection()), width, height)) {
-                    ready.add(feature);
-                }
+        var framePool = new OverlayFramePool(resources, frameResources);
+        List<OverlayFeature> ready = new ArrayList<>(features.size());
+        for (OverlayFeature feature : features) {
+            if (feature.prepare(device, framePool, frameResources,
+                    frame.entrySceneTlasDescriptor().index().value(),
+                    new Matrix4f().set(frame.worldViewProjection()), width, height)) {
+                ready.add(feature);
             }
-            if (ready.isEmpty()) {
-                return;
-            }
+        }
+        if (!ready.isEmpty()) {
             recordDraws(frame.commandBuffer(), ready, frame.layer().view(), width, height);
-        } finally {
-            framePool.endFrame(gpuUse);
         }
     }
 
@@ -89,7 +85,6 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
         for (OverlayFeature f : features) {
             f.close();
         }
-        framePool.close();
     }
 
     // ---- Recording helpers shared by features ----

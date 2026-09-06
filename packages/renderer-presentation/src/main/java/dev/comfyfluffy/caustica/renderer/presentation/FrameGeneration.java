@@ -126,6 +126,7 @@ final class FrameGeneration {
         GraphicsUse use = context.graphics().beginGraphicsUse();
         try (OwnedCommandBuffer commands = context.beginGraphicsCommands("DLSS frame generation", false);
              MemoryStack stack = MemoryStack.stackPush()) {
+            if (uiReady) use.keepAlive(ui.color().retain());
             VkCommandBuffer commandBuffer = commands.commandBuffer();
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
             boolean evaluated = backend.evaluate(commandBuffer,

@@ -27,7 +27,7 @@ final class SdrPqPresentation {
     }
 
     boolean present(GraphicsSubmission submission, AcquiredSwapchainTarget target,
-            dev.comfyfluffy.caustica.api.vulkan.GpuImage source) {
+            dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage source) {
         if (source == null) {
             return false;
         }
@@ -47,6 +47,7 @@ final class SdrPqPresentation {
         try (OwnedCommandBuffer commands = context.beginGraphicsCommands("SDR to PQ presentation", true);
              MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer commandBuffer = commands.commandBuffer();
+            use.keepAlive(source.retain());
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
 
             pipeline.dispatch(commandBuffer, image,

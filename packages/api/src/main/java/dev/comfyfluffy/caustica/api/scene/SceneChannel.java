@@ -10,6 +10,10 @@ import java.util.List;
 public interface SceneChannel {
     InstanceId newInstance();
     LightId newLight();
-    /** Validates and applies all edits, or changes nothing. Meshes must already be ready. */
+    /**
+     * Validates and applies all edits, or changes nothing. Meshes must already be ready.
+     * Accepted entries retain independent mesh and shader-data claims before returning.
+     * The caller keeps ownership of every supplied handle.
+     */
     void edit(List<? extends SceneEdit> edits);
 }

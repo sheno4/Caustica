@@ -29,7 +29,7 @@ import net.minecraft.client.gui.font.TextRenderable;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.util.ARGB;
 
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
 
 /**
@@ -86,7 +86,7 @@ final class NameTagFeature implements OverlayFeature {
     }
 
     @Override
-    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    public boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
                            int worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.nameTagsEnabled()) {
             return false;

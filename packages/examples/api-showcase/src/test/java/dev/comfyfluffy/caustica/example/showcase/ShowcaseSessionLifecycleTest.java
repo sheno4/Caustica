@@ -104,7 +104,6 @@ final class ShowcaseSessionLifecycleTest {
         @Override public long vmaAllocator() { throw new AssertionError(); }
         @Override public int[] asyncBufferSharingQueueFamilies() { throw new AssertionError(); }
         @Override public GpuDescriptorHeap descriptorHeap() { throw new AssertionError(); }
-        @Override public void retireAfterUse(Runnable cleanup) { throw new AssertionError(); }
     };
 
     private static final class Passes implements PassChannel {

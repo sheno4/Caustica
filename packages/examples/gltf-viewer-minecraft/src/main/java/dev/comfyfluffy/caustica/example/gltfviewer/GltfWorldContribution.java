@@ -134,13 +134,13 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
     private CompletableFuture<ReadyMesh<GltfProgramExports.InstanceData>> prepare(
             GltfScene.Primitive primitive, boolean portal) {
         var upload = uploader.upload(context.renderSession().resources(), primitive);
-        try {
+        try (var data = GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
+                upload.primitiveDataResource())) {
             MeshBuild.CoveragePolicy coverage = primitive.cutout()
                     ? new MeshBuild.CoveragePolicy.Cutout(primitive.alphaCutoff())
                     : new MeshBuild.CoveragePolicy.Opaque();
             var slot = new MeshBuild.SurfaceSlot<>(portal ? programs.portal() : programs.material(),
-                    GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
-                            upload.primitiveDataResource()), coverage);
+                    data, coverage);
             var build = new MeshBuild<>(upload.positionsStream(), upload.indexStream(), upload.vertexCount(),
                     new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()), MeshBuild.BuildPolicy.STATIC,
                     List.of(new MeshBuild.Geometry<>(slot, null, 0, upload.indexCount())));

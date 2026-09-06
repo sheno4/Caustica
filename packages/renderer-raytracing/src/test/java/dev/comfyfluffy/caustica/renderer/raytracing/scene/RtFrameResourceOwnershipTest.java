@@ -47,29 +47,29 @@ final class RtFrameResourceOwnershipTest {
 
         MeshBuild.Geometry<Instance> geometry = new MeshBuild.Geometry<>(
                 new MeshBuild.SurfaceSlot<>(SURFACE,
-                        new ShaderData<>(BINDING, 0x1111, surface.reference()),
+                        new ShaderData<>(BINDING, 0x1111, surface),
                         new MeshBuild.CoveragePolicy.Cutout(0.5f)),
                 new MeshBuild.VolumeSlot<>(VOLUME,
-                        new ShaderData<>(BINDING, 0x2222, volume.reference())), 0, 3);
+                        new ShaderData<>(BINDING, 0x2222, volume)), 0, 3);
         MeshBuild<Instance> build = new MeshBuild<>(
-                stream(0x1000, 36, 12, positions.reference()),
-                stream(0x2000, 12, 4, indices.reference()), 3,
+                stream(0x1000, 36, 12, positions),
+                stream(0x2000, 12, 4, indices), 3,
                 new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.STATIC, List.of(geometry));
         RetainedSceneSnapshot.Mesh mesh = new RetainedSceneSnapshot.Mesh(1, build,
                 List.of(new RetainedSceneSnapshot.GeometryPrograms(3, 5)), null);
         RetainedSceneSnapshot.Instance placement = new RetainedSceneSnapshot.Instance(2, 2, SCENE, 1,
                 GeometryTransform.translation(1, 2, 3), 0xff,
-                new ShaderData<>(INSTANCE, 0x3333, instance.reference()), List.of());
+                new ShaderData<>(INSTANCE, 0x3333, instance), List.of());
         EnvironmentBinding<Binding> environmentBinding = EnvironmentBinding.of(ENVIRONMENT,
-                new ShaderData<>(BINDING, 0x4444, environment.reference()));
-        List<dev.comfyfluffy.caustica.api.resource.ResourceRef> references = List.of(
-                positions.reference(), indices.reference(), surface.reference(), volume.reference(),
-                instance.reference(), environment.reference());
+                new ShaderData<>(BINDING, 0x4444, environment));
+        List<dev.comfyfluffy.caustica.api.resource.ResourceOwner> references = List.of(
+                positions, indices, surface, volume,
+                instance, environment);
 
         ResourceOwners first = ResourceOwners.capture(references);
         surface.close();
         environment.close();
-        ResourceOwners second = ResourceOwners.capture(references);
+        ResourceOwners second = ResourceOwners.capture(references.stream().map(first::borrowed).toList());
 
         var firstInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement);
         var secondInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement);
@@ -84,12 +84,16 @@ final class RtFrameResourceOwnershipTest {
         volume.close();
         instance.close();
         second.close();
+        geometry.surface().bindingData().close();
+        geometry.volume().bindingData().close();
+        placement.instanceData().close();
+        environmentBinding.bindingData().close();
         directory.awaitRetirements();
         directory.close();
     }
 
     private static MeshBuild.Stream stream(long address, long bytes, int stride,
-                                           dev.comfyfluffy.caustica.api.resource.ResourceRef resource) {
+                                           dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) {
         return new MeshBuild.Stream(new VulkanDeviceAddressRange(
                 new VulkanDeviceAddress(address), bytes), stride, resource);
     }

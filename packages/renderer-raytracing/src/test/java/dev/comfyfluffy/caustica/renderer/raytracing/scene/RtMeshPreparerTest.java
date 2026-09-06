@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
@@ -104,7 +103,6 @@ final class RtMeshPreparerTest {
 
     private static ResourceOwner owner(List<String> events, String label) {
         return new ResourceOwner() {
-            public ResourceRef reference() { return ResourceRef.none(); }
             public ResourceOwner retain() { throw new UnsupportedOperationException(); }
             public void close() { events.add(label); }
         };

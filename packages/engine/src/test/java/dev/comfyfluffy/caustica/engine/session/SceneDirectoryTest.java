@@ -66,7 +66,7 @@ final class SceneDirectoryTest {
         var f=new Fixture();var owner=new ContributionOwner(9);var destroyed=new AtomicInteger();
         var resource=f.programs.resources.openFactory(owner).create(destroyed::incrementAndGet);
         var pending=new CompletableFuture<ResourceOwner>();f.preparing=pending;
-        var result=f.channel.prepare(INSTANCE,mesh(f.surface,null,resource.reference(),ResourceRef.none(),ResourceRef.none(),ResourceRef.none()));
+        var result=f.channel.prepare(INSTANCE,mesh(f.surface,null,resource,ResourceOwner.none(),ResourceOwner.none(),ResourceOwner.none()));
         resource.close();f.programs.resources.awaitRetirements();assertEquals(0,destroyed.get());
         pending.complete(nativeOwner(new AtomicInteger()));result.join().close();f.programs.resources.awaitRetirements();assertEquals(1,destroyed.get());
     }
@@ -107,8 +107,9 @@ final class SceneDirectoryTest {
             destroyed.incrementAndGet();
         });
         f.preparing = CompletableFuture.completedFuture(nativeOwner(nativeDestroyed));
-        var ready = f.channel.prepare(INSTANCE, mesh(f.surface, null, resource.reference(),
-                resource.reference(), resource.reference(), ResourceRef.none())).join();
+        var build = mesh(f.surface, null, resource, resource, resource, ResourceOwner.none());
+        var ready = f.channel.prepare(INSTANCE, build).join();
+        build.geometries().forEach(g -> { if (g.surface() != null) g.surface().bindingData().close(); });
         var id = f.channel.newInstance();
         f.channel.edit(List.of(set(id, f.scene, ready)));
         var first = f.capture.get();
@@ -157,10 +158,11 @@ final class SceneDirectoryTest {
         var skyData = factory.create(environmentDestroyed::incrementAndGet);
         var environment = f.programs.environment(new ContributionOwner(6)).exports();
         var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
-        f.channel.edit(List.of(new SceneEdit.SetInstance<>(f.channel.newInstance(), f.scene, ready,
-                        GeometryTransform.translation(0, 0, 0), 255, INSTANCE.data(17, data.reference())),
-                new SceneEdit.SetEnvironment(f.scene,
-                        new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(23, skyData.reference())))));
+        try (var instanceData = INSTANCE.data(17, data); var environmentData = ENVIRONMENT_BINDING.data(23, skyData)) {
+            f.channel.edit(List.of(new SceneEdit.SetInstance<>(f.channel.newInstance(), f.scene, ready,
+                            GeometryTransform.translation(0, 0, 0), 255, instanceData),
+                    new SceneEdit.SetEnvironment(f.scene, new EnvironmentBinding<>(environment, environmentData))));
+        }
         var captured = f.capture.get();
         data.close();
         skyData.close();
@@ -236,7 +238,6 @@ final class SceneDirectoryTest {
     }
     private static ResourceOwner nativeOwner(AtomicInteger destroyed) {
         return new ResourceOwner() {
-            public ResourceRef reference(){return ResourceRef.none();}
             public ResourceOwner retain(){throw new AssertionError("engine owns the native claim");}
             public void close(){destroyed.incrementAndGet();}
         };
@@ -252,14 +253,14 @@ final class SceneDirectoryTest {
         final SceneContributionChannel channel=directory.openChannel(new ContributionOwner(2));
     }
     private static MeshBuild<Instance> mesh(SurfaceId<Binding, Instance> surface) {
-        return mesh(surface, null, ResourceRef.none(), ResourceRef.none(),
-                ResourceRef.none(), ResourceRef.none());
+        return mesh(surface, null, ResourceOwner.none(), ResourceOwner.none(),
+                ResourceOwner.none(), ResourceOwner.none());
     }
 
     private static MeshBuild<Instance> mesh(
             SurfaceId<Binding, Instance> surface, VolumeId<Binding, Instance> volume,
-            ResourceRef positionsResource, ResourceRef indicesResource,
-            ResourceRef surfaceResource, ResourceRef volumeResource) {
+            ResourceOwner positionsResource, ResourceOwner indicesResource,
+            ResourceOwner surfaceResource, ResourceOwner volumeResource) {
         MeshBuild.Stream positions = new MeshBuild.Stream(
                 new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x1000), 36), 12,
                 positionsResource);

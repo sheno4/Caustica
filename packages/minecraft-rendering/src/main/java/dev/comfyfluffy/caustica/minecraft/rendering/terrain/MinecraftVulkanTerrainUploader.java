@@ -8,7 +8,6 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftInstanceData;
@@ -99,7 +98,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
 
     static List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries(
             MinecraftTerrainMesh source, MinecraftPrograms programs, VulkanDeviceAddress primitiveAddress,
-            ResourceRef resource) {
+            ResourceOwner resource) {
         List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
         for (MinecraftTerrainMesh.Geometry geometry : source.geometries()) {
             long primitiveOffset = primitiveRecordOffset(geometry.firstIndex());
@@ -140,14 +139,14 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             bindingGeneration = resources.create(() -> throwIfFailed(closeAll(primitive, atlasLease)));
             instanceGeneration = resources.create(instance::close);
             List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = geometries(
-                    source, programs, primitive.deviceRange().address(), bindingGeneration.reference());
+                    source, programs, primitive.deviceRange().address(), bindingGeneration);
             MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
-                    new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration.reference()),
-                    new MeshBuild.Stream(indices.deviceRange(), 4, indexGeneration.reference()), source.vertexCount(),
+                    new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration),
+                    new MeshBuild.Stream(indices.deviceRange(), 4, indexGeneration), source.vertexCount(),
                     new MeshBuild.IndexRevision(source.indexRevision()), MeshBuild.BuildPolicy.STATIC, geometries);
             ShaderData<MinecraftProgramTypes.InstanceData> instanceData =
                     MinecraftProgramTypes.INSTANCE_DATA.data(instance.deviceRange().address().value(),
-                            instanceGeneration.reference());
+                            instanceGeneration);
 
             return new Uploaded(build, instanceData, positionGeneration, indexGeneration,
                     bindingGeneration, instanceGeneration);
@@ -267,6 +266,11 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                             ResourceOwner instanceGeneration)
             implements UploadedSection {
         @Override public void close() {
+            for (var geometry : build.geometries()) {
+                if (geometry.surface() != null) geometry.surface().bindingData().close();
+                if (geometry.volume() != null) geometry.volume().bindingData().close();
+            }
+            instanceData.close();
             positionGeneration.close();
             indexGeneration.close();
             bindingGeneration.close();

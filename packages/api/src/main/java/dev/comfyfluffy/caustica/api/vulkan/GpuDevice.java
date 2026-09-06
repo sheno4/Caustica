@@ -7,8 +7,8 @@ import org.lwjgl.vulkan.VkDevice;
  * Vulkan device services available to extensions.
  *
  * <p>The renderer owns the device, allocator, and descriptor heaps. Extensions own their allocations and
- * release resources with {@link #retireAfterUse}, except when a lifecycle callback guarantees all uses
- * have drained.
+ * keep shared resource owners alive through every frame or job that uses their allocations.
+ * Final owner release runs the allocation cleanup callback.
  *
  * <p>Extensions submit asynchronous initialization through their contribution's
  * {@link GpuComputeQueue}, record frame-dependent work through passes, and may prepare either on their own
@@ -59,42 +59,4 @@ public interface GpuDevice {
     /** The renderer-owned resource and sampler heaps shared by every pipeline and pass. */
     GpuDescriptorHeap descriptorHeap();
 
-    /**
-     * Run {@code cleanup} once every command submitted before this call has completed on the GPU.
-     *
-     * <p>Use this for session resources not tied to the frame currently being recorded. It keeps a replaced
-     * or dropped resource alive until earlier submissions stop using it.
-     *
-     * <p>The call is safe only after the caller has prevented the old resource from being captured by work
-     * which is still recording or will record later. The usual place is the pass callback which publishes
-     * the replacement before it records any current-frame use. A CPU worker prepares replacement state and
-     * hands it to that pass; it must not swap a live GPU root and retire the old resource concurrently with
-     * recording. Data borrowed through retained geometry, scenes, or program implementations uses that
-     * owner's retirement callback instead.
-     *
-     * <pre>
-     *   public void record(PassFrame frame) {
-     *       if (frame.renderWidth() == builtWidth) return;
-     *       long previousImage = image;
-     *       long previousAllocation = allocation;
-     *       allocate(frame.renderWidth(), frame.renderHeight());
-     *       if (previousImage != 0L) gpu.retireAfterUse(
-     *               () -&gt; Vma.vmaDestroyImage(gpu.vmaAllocator(), previousImage, previousAllocation));
-     *   }
-     * </pre>
-     *
-     * <p>A session-created pass may destroy its exclusively owned resources directly from
-     * {@link dev.comfyfluffy.caustica.api.pass.Pass#close() Pass.close()}: every GPU use by that pass has
-     * drained then. This does not cover unrelated device work. Everywhere else, replacing or dropping a
-     * resource requires retirement.
-     *
-     * <p>Eligible callbacks run off the renderer thread in registration order and must not block or throw.
-     * This covers work already submitted, not the frame currently being recorded — for that,
-     * {@link GpuFrameUse#whenComplete} is the tighter reservation. It does not imply that later device work or
-     * unrelated passes are idle.
-     *
-     * <p>This method is thread-safe, but thread safety does not create the publication ordering described
-     * above. If the session no longer accepts retirement, the call throws without taking {@code cleanup}.
-     */
-    void retireAfterUse(Runnable cleanup);
 }

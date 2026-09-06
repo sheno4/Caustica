@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.engine.resource;
 
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -16,16 +16,30 @@ import static org.junit.jupiter.api.Assertions.*;
 final class ResourceDirectoryTest {
     private final ContributionOwner producer = new ContributionOwner(1);
 
+    @Test void rejectedFrameRetentionReleasesOnlyItsNewClaim() {
+        AtomicInteger destroyed = new AtomicInteger();
+        try (var directory = new ResourceDirectory(failure -> fail(failure))) {
+            var owner = directory.openFactory(producer).create(destroyed::incrementAndGet);
+            var frame = new ResourceOwners();
+            frame.close();
+            assertThrows(IllegalStateException.class, () -> frame.retain(owner));
+            assertEquals(0, destroyed.get());
+            owner.close();
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
+
     @Test void producerDrainDoesNotWaitForAnotherContributionsOwnership() {
         AtomicInteger destroyed = new AtomicInteger();
         try (var directory = new ResourceDirectory(failure -> fail(failure))) {
             var owner = directory.openFactory(producer).create(destroyed::incrementAndGet);
-            try (var consumer = directory.acquire(new ContributionOwner(2), owner.reference())) {
+            try (var consumer = directory.acquire(new ContributionOwner(2), owner)) {
                 directory.invalidate(producer);
                 directory.drain(producer, () -> {});
                 assertEquals(0, destroyed.get());
                 try (var retained = consumer.retain()) {
-                    assertSame(owner.reference(), retained.reference());
+                    assertNotSame(owner, retained);
                 }
             }
             directory.awaitRetirements();
@@ -75,7 +89,7 @@ final class ResourceDirectoryTest {
             assertEquals(1, destroyed.get());
             assertNotSame(caller, destructionThread.get());
             assertThrows(IllegalStateException.class, owner::retain);
-            assertThrows(IllegalStateException.class, () -> owner.reference().retain());
+            assertThrows(IllegalStateException.class, () -> owner.retain());
         }
     }
 
@@ -83,11 +97,11 @@ final class ResourceDirectoryTest {
         AtomicInteger destroyed = new AtomicInteger();
         try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure))) {
             var owner = directory.openFactory(producer).create(destroyed::incrementAndGet);
-            ResourceRef reference = owner.reference();
+            ResourceOwner reference = owner;
             var scene = reference.retain();
             owner.close();
             var firstFrame = scene.retain();
-            var secondFrame = reference.retain();
+            var secondFrame = scene.retain();
             scene.close();
             firstFrame.close();
             directory.awaitRetirements();
@@ -122,13 +136,13 @@ final class ResourceDirectoryTest {
              ResourceDirectory otherDevice = new ResourceDirectory(failure -> fail(failure))) {
             var owner = directory.openFactory(producer).create();
             var consumer = new ContributionOwner(2);
-            try (var shared = directory.acquire(consumer, owner.reference())) {
+            try (var shared = directory.acquire(consumer, owner)) {
                 directory.invalidate(producer);
                 try (var another = shared.retain()) {
-                    assertSame(owner.reference(), another.reference());
+                    assertNotSame(owner, another);
                 }
                 assertThrows(IllegalArgumentException.class,
-                        () -> otherDevice.acquire(consumer, shared.reference()));
+                        () -> otherDevice.acquire(consumer, shared));
             }
         }
     }
@@ -141,9 +155,9 @@ final class ResourceDirectoryTest {
             var released = factory.create();
             released.close();
             assertThrows(IllegalStateException.class,
-                    () -> ResourceOwners.capture(List.of(live.reference(), released.reference())));
-            var scene = ResourceOwners.capture(List.of(live.reference(), live.reference()));
-            var history = ResourceOwners.capture(List.of(live.reference()));
+                    () -> ResourceOwners.capture(List.of(live, released)));
+            var scene = ResourceOwners.capture(List.of(live, live));
+            var history = ResourceOwners.capture(List.of(live));
             live.close();
             scene.close();
             directory.awaitRetirements();

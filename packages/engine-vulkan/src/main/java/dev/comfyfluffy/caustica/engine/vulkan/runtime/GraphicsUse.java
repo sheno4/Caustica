@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 
 import java.util.ArrayList;
 import java.util.List;

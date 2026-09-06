@@ -24,13 +24,13 @@ final class TestScene implements SceneChannel, MeshPreparer {
     List<SceneEdit> last() { return batches.getLast(); }
     public <N> CompletableFuture<ReadyMesh<N>> prepare(ShaderDataType<N> type, MeshBuild<N> build, ReadyMesh<N> source) {
         builds.add(build);
-        var refs = Collections.newSetFromMap(new IdentityHashMap<ResourceRef,Boolean>());
+        var refs = Collections.newSetFromMap(new IdentityHashMap<ResourceOwner,Boolean>());
         refs.add(build.positions().resource()); refs.add(build.indices().resource());
         for (var geometry : build.geometries()) {
             if (geometry.surface()!=null) refs.add(geometry.surface().bindingData().resource());
             if (geometry.volume()!=null) refs.add(geometry.volume().bindingData().resource());
         }
-        var owners = refs.stream().map(ResourceRef::retain).toList();
+        var owners = refs.stream().map(ResourceOwner::retain).toList();
         var mesh = new Mesh<N>(type, TestResource.create(() -> owners.forEach(ResourceOwner::close)));
         var result = new CompletableFuture<ReadyMesh<N>>();
         if (delayed) completions.add(() -> result.complete(mesh)); else result.complete(mesh);
@@ -39,7 +39,6 @@ final class TestScene implements SceneChannel, MeshPreparer {
     void complete() { var ready=List.copyOf(completions);completions.clear();ready.forEach(Runnable::run); }
     private record Mesh<N>(ShaderDataType<N> instanceDataType, ResourceOwner owner) implements ReadyMesh<N> {
         public ReadyMesh<N> retain() { return new Mesh<>(instanceDataType, owner.retain()); }
-        public ResourceRef reference() { return owner.reference(); }
         public void close() { owner.close(); }
     }
 }

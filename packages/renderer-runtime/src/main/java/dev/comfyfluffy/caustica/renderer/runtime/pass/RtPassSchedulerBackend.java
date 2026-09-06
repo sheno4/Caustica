@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.renderer.runtime.pass;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
@@ -127,6 +127,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     public record FrameState(
             VkCommandBuffer commandBuffer,
             GpuFrameUse gpuUse,
+            dev.comfyfluffy.caustica.api.resource.FrameResources resources,
             long frameIndex,
             SceneView view,
             double timeSeconds,
@@ -246,7 +247,10 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
 
         final void requireLive() { owner.requireLive(); }
         @Override public VkCommandBuffer commandBuffer() { requireLive(); return state.commandBuffer(); }
-        @Override public GpuFrameUse gpuUse() { requireLive(); return state.gpuUse(); }
+        @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) {
+            requireLive();
+            state.resources().retain(resource);
+        }
         @Override public long frameIndex() { requireLive(); return state.frameIndex(); }
         @Override public SceneView view() { requireLive(); return state.view(); }
         @Override public double timeSeconds() { requireLive(); return state.timeSeconds(); }

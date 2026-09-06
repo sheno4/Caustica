@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.renderer.raytracing.shader.WorldShaderCompiler;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.vulkan.VK10;
 
@@ -79,15 +80,15 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             previous = active;
             active = next;
             next.state = CandidateState.ACTIVE;
-            if (previous != null) previous.state = CandidateState.RETIRING;
+            if (previous != null) {
+                previous.state = CandidateState.RETIRING;
+                previous.retired = previousRetired;
+            }
         }
         if (previous == null) {
             previousRetired.run();
         } else {
-            context.retireAfterUse(() -> {
-                previous.close();
-                previousRetired.run();
-            });
+            previous.close();
         }
     }
 
@@ -96,9 +97,14 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         context.drainAndWaitIdle();
     }
 
-    /** Currently published renderer program, or {@code null} before first publication. */
-    public synchronized Published active() {
-        return active;
+    /** Whether a complete renderer program is available for capture. */
+    public synchronized boolean hasActive() {
+        return active != null;
+    }
+
+    /** Capture the program before recording; publication cannot revoke this frame's claim. */
+    public synchronized SharedResource<Published> acquire() {
+        return active == null ? null : active.lifetime.retain();
     }
 
     @Override
@@ -113,7 +119,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         }
         compiler.shutdown();
         awaitTerminationUninterruptibly(compiler);
-        if (previous != null) context.retireAfterUse(previous::close);
+        if (previous != null) previous.close();
     }
 
     static void awaitTerminationUninterruptibly(ExecutorService executor) {
@@ -190,12 +196,15 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         private final WorldShaderCompiler compiler;
         private final ImplementationTable table;
         private final RtPipeline pipeline;
+        private final SharedResource<Published> lifetime;
+        private Runnable retired = () -> { };
         private CandidateState state = CandidateState.CANDIDATE;
 
         private Candidate(WorldShaderCompiler compiler, ImplementationTable table, RtPipeline pipeline) {
             this.compiler = compiler;
             this.table = table;
             this.pipeline = pipeline;
+            lifetime = SharedResource.owned(this, ignored -> context.deferDestroy(this::destroy));
         }
 
         @Override public RtPipeline pipeline() { return pipeline; }
@@ -208,9 +217,17 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
                     throw new IllegalStateException("cannot close the active program");
                 }
                 state = CandidateState.DISPOSED;
+                lifetime.close();
+            }
+        }
+
+        private void destroy() {
+            try {
                 pipeline.destroy();
                 table.destroy();
                 compiler.close();
+            } finally {
+                retired.run();
             }
         }
     }

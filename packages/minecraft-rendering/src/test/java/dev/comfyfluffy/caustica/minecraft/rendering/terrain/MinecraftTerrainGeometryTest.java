@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData;
@@ -176,7 +176,7 @@ final class MinecraftTerrainGeometryTest {
         var programs = new MinecraftPrograms(materialSurface, waterSurface, portalSurface, waterVolume, environment);
         var releases = new java.util.concurrent.atomic.AtomicInteger();
         try (var owner = dev.comfyfluffy.caustica.minecraft.rendering.TestResource.create(releases::incrementAndGet)) {
-            var bindingResource = owner.reference();
+            var bindingResource = owner;
 
             var geometries = MinecraftVulkanTerrainUploader.geometries(
                     source, programs, new VulkanDeviceAddress(0x4000L), bindingResource);
@@ -186,14 +186,18 @@ final class MinecraftTerrainGeometryTest {
             assertEquals(0x4000L, geometries.get(0).surface().bindingData().bits());
             assertSame(waterSurface, geometries.get(1).surface().surface());
             assertSame(waterVolume, geometries.get(1).volume().volume());
-            assertSame(bindingResource, geometries.get(0).surface().bindingData().resource());
-            assertSame(bindingResource, geometries.get(1).surface().bindingData().resource());
-            assertSame(bindingResource, geometries.get(1).volume().bindingData().resource());
+            assertNotSame(bindingResource, geometries.get(0).surface().bindingData().resource());
+            assertNotSame(bindingResource, geometries.get(1).surface().bindingData().resource());
+            assertNotSame(bindingResource, geometries.get(1).volume().bindingData().resource());
             assertEquals(0x4000L + MinecraftPrimitiveData.BYTE_SIZE,
                     geometries.get(1).surface().bindingData().bits());
             assertEquals(3, geometries.get(1).firstIndex());
             assertEquals(3, geometries.get(1).indexCount());
             try (var frame = geometries.get(1).volume().bindingData().resource().retain()) {
+                for (var geometry : geometries) {
+                    geometry.surface().bindingData().close();
+                    if (geometry.volume() != null) geometry.volume().bindingData().close();
+                }
                 owner.close();
                 assertEquals(0, releases.get());
             }
@@ -235,10 +239,10 @@ final class MinecraftTerrainGeometryTest {
         @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12,
-                    ResourceRef.none());
+                    ResourceOwner.none());
             var indices = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4,
-                    ResourceRef.none());
+                    ResourceOwner.none());
             var surface = new MeshBuild.SurfaceSlot<>(new dev.comfyfluffy.caustica.api.program.SurfaceId<
                     MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
                     MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),

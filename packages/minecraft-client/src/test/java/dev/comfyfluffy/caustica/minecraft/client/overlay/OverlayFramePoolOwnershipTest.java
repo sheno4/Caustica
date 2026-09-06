@@ -23,14 +23,4 @@ final class OverlayFramePoolOwnershipTest {
                 .anyMatch(field -> field.getType() == long.class));
     }
 
-    @Test
-    void poolRetainsBuffersUntilFrameRetirement() throws Exception {
-        var acquired = OverlayFramePool.class.getDeclaredField("acquired");
-
-        assertTrue(Modifier.isFinal(acquired.getModifiers()));
-        assertEquals(void.class,
-                OverlayFramePool.class.getDeclaredMethod("endFrame",
-                        dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse.class).getReturnType());
-    }
-
 }

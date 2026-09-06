@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
@@ -60,7 +60,7 @@ final class ProgramSceneFallbackTest {
         CapturingSceneBackend scenesBackend = new CapturingSceneBackend();
         SceneDirectory scenes = new SceneDirectory(
                 programs, resources,
-                scenesBackend, (input, source) -> java.util.concurrent.CompletableFuture.completedFuture(ResourceRef.none().retain()));
+                scenesBackend, (input, source) -> java.util.concurrent.CompletableFuture.completedFuture(ResourceOwner.none().retain()));
         var scene = scenes.createScene();
         var geometry = scenes.openChannel(new ContributionOwner(2));
         var mesh = geometry.prepare(INSTANCE,mesh(registration.exports())).join();
@@ -99,7 +99,7 @@ final class ProgramSceneFallbackTest {
             builder.volume(new VolumeDefinition<>(shader("volume","test.Volume"),IMPLEMENTATION.data(0),BINDING,INSTANCE))));
         var backend=new CapturingSceneBackend();
         var scenes=new SceneDirectory(programs,resources,backend,
-            (input,source)->java.util.concurrent.CompletableFuture.completedFuture(ResourceRef.none().retain()));
+            (input,source)->java.util.concurrent.CompletableFuture.completedFuture(ResourceOwner.none().retain()));
         var scene=scenes.createScene();var channel=scenes.openChannel(new ContributionOwner(2));
         var ready=channel.prepare(INSTANCE,mesh(registration.exports())).join();
         channel.edit(List.of(new SceneEdit.SetInstance<>(channel.newInstance(),scene,ready,
@@ -125,10 +125,10 @@ final class ProgramSceneFallbackTest {
         return new MeshBuild<>(
                 new MeshBuild.Stream(new VulkanDeviceAddressRange(
                         new VulkanDeviceAddress(0x1000), 3L * 3L * Float.BYTES), 3 * Float.BYTES,
-                        ResourceRef.none()),
+                        ResourceOwner.none()),
                 new MeshBuild.Stream(new VulkanDeviceAddressRange(
                         new VulkanDeviceAddress(0x2000), 3L * Integer.BYTES), Integer.BYTES,
-                        ResourceRef.none()),
+                        ResourceOwner.none()),
                 3, new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.STATIC, List.of(new MeshBuild.Geometry<>(
                         new MeshBuild.SurfaceSlot<>(exports.surface(), BINDING.data(21),
                                 new MeshBuild.CoveragePolicy.Cutout(0.5f)),

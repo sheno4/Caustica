@@ -107,7 +107,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 MinecraftEntityMesh.Triangle triangle = source.triangles().get(first);
                 ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
                         primitive.deviceAddressAt((long) first * MinecraftPrimitiveData.BYTE_SIZE).value(),
-                        bindingGeneration.reference());
+                        bindingGeneration);
                 MeshBuild.CoveragePolicy policy = coveragePolicy(triangle.coverage());
                 var surface = triangle.material().program() == MinecraftEntityMesh.Program.PORTAL
                         ? new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy)
@@ -115,11 +115,11 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 geometries.add(new MeshBuild.Geometry<>(surface, null, first * 3, (end - first) * 3));
             }
             MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
-                    new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration.reference()),
-                    new MeshBuild.Stream(indices.deviceRange(), 4, indexGeneration.reference()), source.vertexCount(),
+                    new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration),
+                    new MeshBuild.Stream(indices.deviceRange(), 4, indexGeneration), source.vertexCount(),
                     new MeshBuild.IndexRevision(source.indexRevision()), MeshBuild.BuildPolicy.REFITTABLE, geometries);
             ShaderData<MinecraftProgramTypes.InstanceData> instanceData = MinecraftProgramTypes.INSTANCE_DATA.data(
-                    instance.deviceRange().address().value(), instanceGeneration.reference());
+                    instance.deviceRange().address().value(), instanceGeneration);
 
             return new Uploaded(build, instanceData, positionGeneration, indexGeneration,
                     bindingGeneration, instanceGeneration);
@@ -360,6 +360,11 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                             ResourceOwner bindingGeneration,
                             ResourceOwner instanceGeneration) implements UploadedEntity {
         @Override public void close() {
+            for (var geometry : build.geometries()) {
+                if (geometry.surface() != null) geometry.surface().bindingData().close();
+                if (geometry.volume() != null) geometry.volume().bindingData().close();
+            }
+            instanceData.close();
             positionGeneration.close();
             indexGeneration.close();
             bindingGeneration.close();

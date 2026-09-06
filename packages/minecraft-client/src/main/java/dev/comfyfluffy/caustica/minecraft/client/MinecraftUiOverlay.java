@@ -18,7 +18,7 @@ import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import org.lwjgl.vulkan.VK10;
 
@@ -66,7 +66,7 @@ public final class MinecraftUiOverlay {
     // the hand/screen-effects redirects in HDR mode, or the GUI). Reset at the start of GameRenderer.render
     // via beginFrame().
     private boolean overlayClearedThisFrame;
-    private MinecraftVulkanImageBorrow borrowedImage;
+    private MinecraftVulkanImage ownedImage;
 
     public MinecraftUiOverlay(MinecraftRtRuntime runtime) {
         this.runtime = java.util.Objects.requireNonNull(runtime, "runtime");
@@ -126,8 +126,8 @@ public final class MinecraftUiOverlay {
         return 0L;
     }
 
-    public GpuImage presentationImage() {
-        return borrowedImage;
+    public OwnedGpuImage presentationImage() {
+        return ownedImage;
     }
 
     public UiPresentationResources capturePresentation() {
@@ -136,7 +136,7 @@ public final class MinecraftUiOverlay {
     }
 
     static UiPresentationResources snapshotPresentation(boolean enabled, boolean populated,
-                                                          dev.comfyfluffy.caustica.api.vulkan.GpuImage color,
+                                                          dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage color,
                                                           int width, int height) {
         return new UiPresentationResources(enabled, populated, color, width, height);
     }
@@ -151,18 +151,18 @@ public final class MinecraftUiOverlay {
     }
 
     /** The sampled overlay image consumed by renderer-owned UI commands. */
-    public GpuImage uiPassTarget(RenderTarget main) {
+    public OwnedGpuImage uiPassTarget(RenderTarget main) {
         TextureTarget target = prepare(main);
         VulkanDeviceContext gpu = runtime.vulkanContextOrNull();
         if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
-        if (borrowedImage == null || !borrowedImage.wraps(gpu, view, target.width, target.height)) {
-            MinecraftVulkanImageBorrow replacement = MinecraftVulkanImageBorrow.sampled(
+        if (ownedImage == null || !ownedImage.wraps(gpu, view, target.width, target.height)) {
+            MinecraftVulkanImage replacement = MinecraftVulkanImage.sampled(
                     gpu, view, target.width, target.height, VK10.VK_FORMAT_R8G8B8A8_UNORM);
-            MinecraftVulkanImageBorrow old = borrowedImage;
-            borrowedImage = replacement;
-            if (old != null) gpu.retireAfterUse(old::destroy);
+            MinecraftVulkanImage old = ownedImage;
+            ownedImage = replacement;
+            if (old != null) old.close();
         }
-        return borrowedImage;
+        return ownedImage;
     }
 
     /** Reset the per-frame clear latch. Called at the start of {@code GameRenderer.render} (every frame). */
@@ -257,11 +257,9 @@ public final class MinecraftUiOverlay {
         usedThisFrame = false;
         overlayClearedThisFrame = false;
         compositeFailed = false;
-        if (borrowedImage != null) {
-            VulkanDeviceContext gpu = runtime.vulkanContextOrNull();
-            if (gpu != null) gpu.retireAfterUse(borrowedImage::destroy);
-            else borrowedImage.destroy();
-            borrowedImage = null;
+        if (ownedImage != null) {
+            ownedImage.close();
+            ownedImage = null;
         }
         if (overlay != null) {
             overlay.destroyBuffers();

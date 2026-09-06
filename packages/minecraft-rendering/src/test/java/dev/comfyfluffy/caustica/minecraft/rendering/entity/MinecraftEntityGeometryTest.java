@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -216,10 +216,10 @@ final class MinecraftEntityGeometryTest {
         @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12,
-                    ResourceRef.none());
+                    ResourceOwner.none());
             var indices = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4,
-                    ResourceRef.none());
+                    ResourceOwner.none());
             var surface = new MeshBuild.SurfaceSlot<>(new SurfaceId<
                     MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
                     MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),

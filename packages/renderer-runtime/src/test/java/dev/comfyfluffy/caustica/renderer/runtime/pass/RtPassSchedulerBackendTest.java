@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.renderer.runtime.pass;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
@@ -22,12 +22,34 @@ import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtPassSchedulerBackendTest {
+    @Test
+    void passRetentionBelongsToExecutionAndCannotBeUsedAfterInvocation() {
+        Fixture fixture = new Fixture();
+        var destroyed = new java.util.concurrent.atomic.AtomicInteger();
+        try (var directory = new dev.comfyfluffy.caustica.engine.resource.ResourceDirectory(failure -> fail(failure))) {
+            var owner = directory.openFactory(new dev.comfyfluffy.caustica.engine.session.ContributionOwner(1))
+                    .create(destroyed::incrementAndGet);
+            var invocation = fixture.backend.beginWorldResource(new PassKey(0, PassKey.Stage.WORLD_RESOURCE));
+            var frame = invocation.frame();
+            frame.retain(owner);
+            frame.retain(owner);
+            owner.close();
+            invocation.submit(() -> { });
+            assertThrows(IllegalStateException.class, () -> frame.retain(owner));
+            directory.awaitRetirements();
+            assertEquals(0, destroyed.get());
+            fixture.resources.close();
+            directory.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
     @Test
     void acquiredOutputIsStableAndAdvancesValidatedChain() {
         Fixture fixture = new Fixture();
@@ -118,6 +140,8 @@ final class RtPassSchedulerBackendTest {
     }
 
     private static final class Fixture {
+        final dev.comfyfluffy.caustica.engine.resource.ResourceOwners resources =
+                new dev.comfyfluffy.caustica.engine.resource.ResourceOwners();
         final FakeUse use = new FakeUse();
         final FakeCommands commands = new FakeCommands();
         final FakeImage reconstruction = new FakeImage(1);
@@ -135,7 +159,7 @@ final class RtPassSchedulerBackendTest {
 
         RtPassSchedulerBackend.FrameState frameState() {
             return new RtPassSchedulerBackend.FrameState(
-                    fakeCommandBuffer(), use, 4L, view, 12.5, 0.5, 960, 540,
+                    fakeCommandBuffer(), use, resources, 4L, view, 12.5, 0.5, 960, 540,
                     reconstruction, exposure, postA, postB, null);
         }
     }
@@ -159,7 +183,6 @@ final class RtPassSchedulerBackendTest {
         @Override public long vmaAllocator() { return 0L; }
         @Override public int[] asyncBufferSharingQueueFamilies() { return new int[] { 0 }; }
         @Override public GpuDescriptorHeap descriptorHeap() { return null; }
-        @Override public void retireAfterUse(Runnable cleanup) { throw new AssertionError(); }
     }
 
     private record FakeImage(long image) implements GpuImage {

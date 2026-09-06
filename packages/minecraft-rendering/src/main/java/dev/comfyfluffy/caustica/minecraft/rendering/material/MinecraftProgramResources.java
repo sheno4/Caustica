@@ -163,6 +163,12 @@ public final class MinecraftProgramResources implements AutoCloseable {
             epoch = new Epoch(descriptors, materialTable, implementation, primitive, instance,
                     firstDescriptor, images);
             epoch.owner = resourceFactory.create(epoch::destroy);
+            epoch.implementationData = MinecraftProgramTypes.IMPLEMENTATION_DATA.data(
+                    implementation.deviceRange().address().value(), epoch.owner);
+            epoch.bindingData = MinecraftProgramTypes.PRIMITIVE_DATA.data(
+                    primitive.deviceRange().address().value(), epoch.owner);
+            epoch.instanceData = MinecraftProgramTypes.INSTANCE_DATA.data(
+                    instance.deviceRange().address().value(), epoch.owner);
             return epoch;
         } catch (RuntimeException | Error failure) {
             Throwable cleanup = null;
@@ -307,6 +313,9 @@ public final class MinecraftProgramResources implements AutoCloseable {
         private final List<UploadedImage> images;
         private final ResourceOwner samplerLease;
         private ResourceOwner owner;
+        private ShaderData<MinecraftProgramTypes.ImplementationData> implementationData;
+        private ShaderData<MinecraftProgramTypes.PrimitiveData> bindingData;
+        private ShaderData<MinecraftProgramTypes.InstanceData> instanceData;
         private boolean sealed;
         private boolean closed;
         private Epoch(GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors,
@@ -332,28 +341,31 @@ public final class MinecraftProgramResources implements AutoCloseable {
             if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
             if (sealed) throw new IllegalStateException("Minecraft material epoch is already immutable");
         }
+        /** Borrowed from this epoch; consumers retain their own copy before returning. */
         public synchronized ShaderData<MinecraftProgramTypes.ImplementationData> implementationData() {
             requirePublished();
-            return MinecraftProgramTypes.IMPLEMENTATION_DATA.data(
-                    implementation.deviceRange().address().value(), owner.reference());
+            return implementationData;
         }
         long materialTableBuffer() { return materialTable.buffer(); }
+        /** Borrowed from this epoch; consumers retain their own copy before returning. */
         public synchronized ShaderData<MinecraftProgramTypes.PrimitiveData> fallbackBindingData() {
             requirePublished();
-            return MinecraftProgramTypes.PRIMITIVE_DATA.data(
-                    primitive.deviceRange().address().value(), owner.reference());
+            return bindingData;
         }
+        /** Borrowed from this epoch; consumers retain their own copy before returning. */
         public synchronized ShaderData<MinecraftProgramTypes.InstanceData> fallbackInstanceData() {
             requirePublished();
-            return MinecraftProgramTypes.INSTANCE_DATA.data(
-                    instance.deviceRange().address().value(), owner.reference());
+            return instanceData;
         }
-        /** Strong ownership transferred to an accepted upload or another asynchronous consumer. */
+        /** Acquire an independent epoch claim for an upload or another asynchronous consumer. */
         public ResourceOwner retain() { return owner.retain(); }
 
         @Override public synchronized void close() {
             if (closed) return;
             closed = true;
+            implementationData.close();
+            bindingData.close();
+            instanceData.close();
             owner.close();
         }
         private void requirePublished() {

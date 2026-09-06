@@ -11,7 +11,6 @@ import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneEdit;
@@ -36,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 
 final class GltfWorldContributionTest {
     @Test
@@ -70,12 +70,12 @@ final class GltfWorldContributionTest {
         assertEquals(20.0, authored.transform().translationY());
         assertEquals(30.0, authored.transform().translationZ());
         var authoredMesh = geometry.builds.getFirst();
-        assertSame(resources.generations.get(0).reference(), authoredMesh.positions().resource());
-        assertSame(resources.generations.get(1).reference(), authoredMesh.indices().resource());
-        assertSame(resources.generations.get(2).reference(),
+        assertSame(resources.generations.get(0), authoredMesh.positions().resource());
+        assertSame(resources.generations.get(1), authoredMesh.indices().resource());
+        assertNotSame(resources.generations.get(2),
                 authoredMesh.geometries().getFirst().surface().bindingData().resource());
 
-        var oldFrame = resources.generations.stream().map(owner -> owner.reference().retain()).toList();
+        var oldFrame = geometry.readyMeshes.stream().map(mesh -> mesh.retain()).toList();
         contribution.resourcePackChanged(new ResourcePackEpoch(3));
         assertEquals(2, count(geometry.last(), SceneEdit.DropInstance.class));
         assertEquals(4, geometry.builds.size());
@@ -177,15 +177,15 @@ final class GltfWorldContributionTest {
             ResourceOwner primitiveData = generation(resources);
             return new Uploaded() {
                 @Override public MeshBuild.Stream positionsStream() {
-                    return stream(base, 36, 12, positions.reference());
+                    return stream(base, 36, 12, positions);
                 }
                 @Override public MeshBuild.Stream indexStream() {
-                    return stream(base + 0x100, 12, 4, indices.reference());
+                    return stream(base + 0x100, 12, 4, indices);
                 }
                 @Override public VulkanDeviceAddress primitiveDataAddress() {
                     return new VulkanDeviceAddress(base + 0x200);
                 }
-                @Override public ResourceRef primitiveDataResource() { return primitiveData.reference(); }
+                @Override public ResourceOwner primitiveDataResource() { return primitiveData; }
                 @Override public int vertexCount() { return 3; }
                 @Override public int indexCount() { return 3; }
                 @Override public void drop() {
@@ -198,7 +198,7 @@ final class GltfWorldContributionTest {
         private ResourceOwner generation(ResourceFactory resources) {
             return resources.create(destroyed::incrementAndGet);
         }
-        private static MeshBuild.Stream stream(long address, long size, int stride, ResourceRef resource) {
+        private static MeshBuild.Stream stream(long address, long size, int stride, ResourceOwner resource) {
             return new MeshBuild.Stream(new VulkanDeviceAddressRange(
                     new VulkanDeviceAddress(address), size), stride, resource);
         }

@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -356,33 +356,34 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         closeAll(removed, null);
     }
 
+    /** Capture retained scene revisions independently of command recording. */
+    public synchronized SharedResource<RetainedSceneSnapshot> captureSnapshot() {
+        requireOpen();
+        return capture.get();
+    }
+
+    /** Attach captured inputs to one execution; later scene edits cannot change this frame. */
+    public synchronized void beginFrame(SharedResource<RetainedSceneSnapshot> root, GraphicsUse graphicsUse) {
+        requireOpen();
+        FrameSnapshot frame = new FrameSnapshot(graphicsUse, root.retain());
+        inFlightFrames.put(graphicsUse, frame);
+        try {
+            graphicsUse.whenSubmitted(frame::accept);
+            graphicsUse.keepAlive(frame);
+        } catch (Throwable failure) {
+            frame.close();
+            throw failure;
+        }
+    }
+
     private FrameSnapshot frameLease(SceneId scene, GraphicsUse graphicsUse) {
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         requireOpen();
-        boolean created = !inFlightFrames.containsKey(graphicsUse);
-        FrameSnapshot frame = latchFrameRoot(inFlightFrames, graphicsUse,
-                () -> new FrameSnapshot(graphicsUse, capture.get()));
-        if (created) {
-            try {
-                graphicsUse.whenSubmitted(frame::accept);
-                graphicsUse.keepAlive(frame);
-            } catch (Throwable failure) {
-                frame.close();
-                throw failure;
-            }
-        }
+        FrameSnapshot frame = Objects.requireNonNull(inFlightFrames.get(graphicsUse), "frame was not captured");
         if (!frame.currentContent.containsKey(scene)) {
             throw new IllegalArgumentException("scene is not in the frame's scene revision");
         }
         return frame;
-    }
-
-    static <K, V> V latchFrameRoot(Map<K, V> frames, K graphicsUse, Supplier<V> currentRoot) {
-        V latched = frames.get(graphicsUse);
-        if (latched != null) return latched;
-        V created = Objects.requireNonNull(currentRoot.get(), "currentRoot");
-        frames.put(graphicsUse, created);
-        return created;
     }
 
     static ResolvedFrameInput resolveFrameInput(RetainedSceneSnapshot.Mesh mesh,
@@ -531,7 +532,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 if (root == null) return;
                 for (Map.Entry<SceneId, FrameSceneSnapshot> entry : scenes.entrySet()) {
                     if (!entry.getValue().traced()) continue;
-                    List<ResourceRef> positions = entry.getValue().instances.stream().map(instance ->
+                    List<ResourceOwner> positions = entry.getValue().instances.stream().map(instance ->
                             instance.nativeInstance.mesh.logical.build().positions().resource()).toList();
                     ResourceOwners positionResources = ResourceOwners.capture(positions);
                     SharedResource<SceneMotionHistory> replacement = null;

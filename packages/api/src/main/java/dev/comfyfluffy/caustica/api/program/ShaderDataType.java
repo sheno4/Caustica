@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.program;
 
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 
 import java.util.Objects;
 
@@ -32,11 +32,11 @@ public final class ShaderDataType<T> {
      * using this schema.
      */
     public ShaderData<T> data(long bits) {
-        return new ShaderData<>(this, bits, ResourceRef.none());
+        return new ShaderData<>(this, bits, ResourceOwner.none());
     }
 
-    /** Wraps bits and the resource generation keeping their reachable storage alive. */
-    public ShaderData<T> data(long bits, ResourceRef resource) {
+    /** Creates an owning value by retaining the dependency; close the value when its producer use ends. */
+    public ShaderData<T> data(long bits, ResourceOwner resource) {
         return new ShaderData<>(this, bits, resource);
     }
 

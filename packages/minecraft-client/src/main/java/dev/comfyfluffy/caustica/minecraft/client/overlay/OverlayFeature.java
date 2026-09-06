@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.client.overlay;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.joml.Matrix4fc;
 
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 
 /**
@@ -19,7 +19,7 @@ public interface OverlayFeature {
      * {@code graphicsUse} is the exact completion token for resources referenced by the recorded commands.
      * {@code width}/{@code height} are the composite target's (display-res) extent.
      */
-    boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
                     int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height);
 
     /**

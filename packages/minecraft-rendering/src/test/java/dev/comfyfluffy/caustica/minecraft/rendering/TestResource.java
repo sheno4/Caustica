@@ -1,10 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.rendering;
 
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 
 /** In-memory provider graph for testing ownership carried by API values. */
-public final class TestResource implements ResourceRef {
+public final class TestResource {
     private final Runnable release;
     private int references;
 
@@ -18,7 +17,7 @@ public final class TestResource implements ResourceRef {
         return resource.new Owner();
     }
 
-    @Override public ResourceOwner retain() {
+    private ResourceOwner retain() {
         if (references == 0) throw new IllegalStateException("resource is released");
         references++;
         return new Owner();
@@ -26,7 +25,6 @@ public final class TestResource implements ResourceRef {
 
     private final class Owner implements ResourceOwner {
         private boolean closed;
-        @Override public ResourceRef reference() { return TestResource.this; }
         @Override public ResourceOwner retain() {
             if (closed) throw new IllegalStateException("owner is closed");
             return TestResource.this.retain();

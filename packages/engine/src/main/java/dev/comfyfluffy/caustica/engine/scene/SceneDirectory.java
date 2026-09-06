@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.api.geometry.ReadyMesh;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneEdit;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -105,14 +104,19 @@ public final class SceneDirectory {
                     throw new IllegalArgumentException("refit schema mismatch");
                 }
             }
-            inputs = ResourceOwners.capture(buildReferences(build));
+            inputs = new ResourceOwners();
             try {
                 sourceClaim = source == null ? null : source.retain();
             } catch (Throwable error) {
                 inputs.close();
                 throw error;
             }
-            mesh = meshSnapshot(++identity, build, null);
+            try { mesh = meshSnapshot(++identity, inputs.mesh(build), null); }
+            catch (Throwable failure) {
+                inputs.close();
+                if (sourceClaim != null) sourceClaim.close();
+                throw failure;
+            }
             channel.preparations.add(terminal);
         }
         try {
@@ -206,12 +210,12 @@ public final class SceneDirectory {
             changedInstances.replaceAll((id, entry) -> {
                 if (entry == null || entry.resources != null) return entry;
                 ResourceOwners owners = ResourceOwners.capture(List.of(
-                        entry.value.mesh().reference(), entry.value.instanceData().resource()));
+                        entry.value.mesh(), entry.value.instanceData()));
                 acquired.add(owners);
                 return new RetainedInstance(ownInstance(entry.value, owners), entry.placementOrdinal, owners);
             });
             changedEnvironments.forEach((scene, binding) -> {
-                RetainedEnvironment entry = new RetainedEnvironment(binding, binding.bindingData().resource().retain());
+                RetainedEnvironment entry = ownEnvironment(binding);
                 acquired.add(entry);
                 environments.put(scene, entry);
             });
@@ -234,11 +238,17 @@ public final class SceneDirectory {
         retired.forEach(ResourceOwners::close);
     }
 
+    private static RetainedEnvironment ownEnvironment(EnvironmentBinding<?> binding) {
+        var owners = new ResourceOwners();
+        try { return new RetainedEnvironment(owners.environment(binding), owners); }
+        catch (Throwable failure) { owners.close(); throw failure; }
+    }
+
     private static <N> SceneEdit.SetInstance<N> ownInstance(SceneEdit.SetInstance<N> value, ResourceOwners owners) {
         @SuppressWarnings("unchecked")
-        ReadyMesh<N> mesh = (ReadyMesh<N>) owners.borrowed(value.mesh().reference());
+        ReadyMesh<N> mesh = (ReadyMesh<N>) owners.borrowed(value.mesh());
         return new SceneEdit.SetInstance<>(value.instance(), value.scene(), mesh, value.transform(), value.mask(),
-                value.instanceData(), value.primitiveLights());
+                owners.data(value.instanceData()), value.primitiveLights());
     }
 
     private void validateInstance(SceneContributionChannel channel, SceneEdit.SetInstance<?> instance) {
@@ -274,7 +284,7 @@ public final class SceneDirectory {
         }
         SceneRef scene = validateEnvironment(channel.owner, channel.scene, binding);
         replaceEnvironment(scene, channel,
-                new RetainedEnvironment(binding, binding.bindingData().resource().retain()));
+                ownEnvironment(binding));
         revision++;
     }
 
@@ -359,14 +369,14 @@ public final class SceneDirectory {
 
     /** Captures all scenes and their direct ownership claims at one atomic edit boundary. */
     public synchronized SharedResource<RetainedSceneSnapshot> capture() {
-        var references = new ArrayList<ResourceRef>();
+        var references = new ArrayList<ResourceOwner>();
         instances.values().forEach(entry -> {
-            references.add(entry.value.mesh().reference());
-            references.add(entry.value.instanceData().resource());
+            references.add(entry.value.mesh());
+            references.add(entry.value.instanceData());
         });
         scenes.forEach(scene -> {
             EnvironmentBinding<?> environment = selectedEnvironment(selections.get(scene));
-            if (environment != null) references.add(environment.bindingData().resource());
+            if (environment != null) references.add(environment.bindingData());
         });
         ResourceOwners owners = ResourceOwners.capture(references);
         try {
@@ -384,16 +394,16 @@ public final class SceneDirectory {
         for (var entry : instances.values()) {
             var instance = entry.value;
             var mesh = ((ReadyClaim<?>) instance.mesh()).state;
-            var ready = owners == null ? instance.mesh() : (ReadyMesh<?>) owners.borrowed(instance.mesh().reference());
+            var ready = owners == null ? instance.mesh() : (ReadyMesh<?>) owners.borrowed(instance.mesh());
             if (!meshSnapshots.containsKey(mesh.mesh.identity())) {
                 meshSnapshots.put(mesh.mesh.identity(), meshSnapshot(mesh.mesh.identity(), mesh.mesh.build(), ready));
             }
         }
         List<RetainedSceneSnapshot.Scene> sceneSnapshots = scenes.stream()
-                .map(scene -> new RetainedSceneSnapshot.Scene(scene, selectedEnvironment(selections.get(scene))))
+                .map(scene -> new RetainedSceneSnapshot.Scene(scene, snapshotEnvironment(selectedEnvironment(selections.get(scene)), owners)))
                 .toList();
         List<RetainedSceneSnapshot.Instance> instanceSnapshots = instances.entrySet().stream()
-                .map(entry -> instanceSnapshot(entry.getKey(), entry.getValue())).toList();
+                .map(entry -> instanceSnapshot(entry.getKey(), entry.getValue(), owners)).toList();
         List<RetainedSceneSnapshot.Light> lightSnapshots = lights.entrySet().stream()
                 .map(entry -> new RetainedSceneSnapshot.Light(entry.getKey().identity,
                         entry.getValue().scene(), entry.getValue().descriptor())).toList();
@@ -401,16 +411,20 @@ public final class SceneDirectory {
                 instanceSnapshots, lightSnapshots);
     }
 
+    private static EnvironmentBinding<?> snapshotEnvironment(EnvironmentBinding<?> binding, ResourceOwners owners) {
+        return binding == null || owners == null ? binding : owners.environment(binding);
+    }
+
     private static EnvironmentBinding<?> selectedEnvironment(LinkedHashMap<Object, RetainedEnvironment> selections) {
         return selections == null || selections.isEmpty() ? null : selections.lastEntry().getValue().binding;
     }
 
     private record RetainedInstance(SceneEdit.SetInstance<?> value, long placementOrdinal, ResourceOwners resources) { }
-    private record RetainedEnvironment(EnvironmentBinding<?> binding, ResourceOwner owner) implements AutoCloseable {
+    private record RetainedEnvironment(EnvironmentBinding<?> binding, ResourceOwners owner) implements AutoCloseable {
         @Override public void close() { owner.close(); }
     }
 
-    private static RetainedSceneSnapshot.Instance instanceSnapshot(InstanceRef id, RetainedInstance entry) {
+    private static RetainedSceneSnapshot.Instance instanceSnapshot(InstanceRef id, RetainedInstance entry, ResourceOwners owners) {
         var instance = entry.value;
         var primitiveEmitters = instance.primitiveLights().ranges().stream()
                 .map(range -> new RetainedSceneSnapshot.PrimitiveEmitter(range.firstPrimitive(),
@@ -420,7 +434,7 @@ public final class SceneDirectory {
                 ((ReadyClaim<?>) instance.mesh()).state.mesh.identity(),
                 instance.transform(),
                 instance.mask(),
-                instance.instanceData(),
+                owners == null ? instance.instanceData() : owners.data(instance.instanceData()),
                 primitiveEmitters);
     }
 
@@ -446,8 +460,8 @@ public final class SceneDirectory {
         }
     }
 
-    private static List<ResourceRef> buildReferences(MeshBuild<?> build) {
-        var references = new ArrayList<ResourceRef>();
+    private static List<ResourceOwner> buildReferences(MeshBuild<?> build) {
+        var references = new ArrayList<ResourceOwner>();
         references.add(build.positions().resource());
         references.add(build.indices().resource());
         for (var geometry : build.geometries()) {
@@ -522,12 +536,11 @@ public final class SceneDirectory {
             long identity) implements LightId {
     }
 
-    private static final class ReadyState<N> implements ResourceRef {
+    private static final class ReadyState<N> {
         final SceneDirectory directory;
         final RetainedSceneSnapshot.Mesh mesh;
         final ShaderDataType<N> type;
         final ResourceOwner nativeOwner;
-        final SharedResource.Reference<ReadyState<N>> lifetime;
         final SharedResource<ReadyState<N>> initial;
 
         ReadyState(SceneDirectory directory,
@@ -542,13 +555,8 @@ public final class SceneDirectory {
             initial = SharedResource.owned(this, ignored -> {
                 try { nativeOwner.close(); } finally { inputs.close(); }
             });
-            lifetime = initial.reference();
         }
 
-        @Override
-        public ReadyMesh<N> retain() {
-            return new ReadyClaim<>(this, lifetime.retain());
-        }
     }
 
     private static final class ReadyClaim<N> implements ReadyMesh<N> {
@@ -567,11 +575,6 @@ public final class SceneDirectory {
         @Override
         public ShaderDataType<N> instanceDataType() {
             return state.type;
-        }
-
-        @Override
-        public ResourceRef reference() {
-            return state;
         }
 
         @Override

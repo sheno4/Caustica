@@ -18,6 +18,8 @@ public final class SharedResource<T> implements AutoCloseable {
         ));
     }
 
+    public synchronized boolean isOpen() { return state != null; }
+
     public synchronized T get() {
         return openState().value();
     }

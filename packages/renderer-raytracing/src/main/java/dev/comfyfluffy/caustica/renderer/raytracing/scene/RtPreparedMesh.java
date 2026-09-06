@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
@@ -25,18 +24,16 @@ final class RtPreparedMesh implements ResourceOwner {
         state = owner.get();
     }
     State value() { return owner.get(); }
-    @Override public ResourceRef reference() { return state; }
     @Override public ResourceOwner retain() { return new RtPreparedMesh(owner.retain()); }
     @Override public void close() { owner.close(); }
 
-    static final class State implements ResourceRef {
+    static final class State {
         final VulkanDeviceContext context;
         final MeshBuild<?> build;
         final RtAccel.BlasOperation operation;
         final RtAccel accel;
         final GpuBuffer backing;
         final SharedResource<State> initial;
-        final SharedResource.Reference<State> lifetime;
         State(VulkanDeviceContext context, MeshBuild<?> build, RtAccel.BlasOperation operation,
               RtAccel accel, GpuBuffer backing) {
             this.context = context;
@@ -46,10 +43,6 @@ final class RtPreparedMesh implements ResourceOwner {
             this.backing = backing;
             initial = SharedResource.owned(this, ignored -> context.deferDestroy(
                     () -> RtAccel.destroyCallerOwnedAccel(accel, backing)));
-            lifetime = initial.reference();
-        }
-        @Override public ResourceOwner retain() {
-            return new RtPreparedMesh(lifetime.retain());
         }
     }
 }

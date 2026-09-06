@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
@@ -23,10 +23,10 @@ final class ResourceOwnersTest {
         var generation = channel.create(retired::incrementAndGet);
 
         ResourceOwners first = ResourceOwners.capture(List.of(
-                generation.reference(), generation.reference(), ResourceRef.none()));
-        ResourceOwners history = ResourceOwners.capture(List.of(generation.reference()));
+                generation, generation, ResourceOwner.none()));
+        ResourceOwners history = ResourceOwners.capture(List.of(generation));
         generation.close();
-        ResourceOwners second = ResourceOwners.capture(List.of(generation.reference()));
+        ResourceOwners second = ResourceOwners.capture(List.of(first.borrowed(generation)));
 
         first.close();
         second.close();
@@ -48,7 +48,7 @@ final class ResourceOwnersTest {
         dropped.close();
 
         assertThrows(IllegalStateException.class, () -> ResourceOwners.capture(
-                List.of(first.reference(), dropped.reference())));
+                List.of(first, dropped)));
 
         first.close();
         directory.awaitRetirements();

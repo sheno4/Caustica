@@ -314,7 +314,7 @@ public final class MinecraftRtRuntime {
         if (frameActive && session != null && session.renderer != null) session.renderer.beginFrame();
     }
 
-    public void recordUiPasses(GpuImage uiLayer) {
+    public void recordUiPasses(dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage uiLayer) {
         if (session != null && session.renderer != null) session.renderer.recordUiPasses(uiLayer);
     }
 
@@ -347,7 +347,7 @@ public final class MinecraftRtRuntime {
     }
 
     public boolean presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
-            dev.comfyfluffy.caustica.api.vulkan.GpuImage source) {
+            dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage source) {
         return session != null && session.presenter.presentSdrToPq(submission, target, source);
     }
 
@@ -640,7 +640,7 @@ public final class MinecraftRtRuntime {
             renderer.configureDenoising(denoising);
 
             world.progress();
-            boolean resourcesReady = programs.active() != null;
+            boolean resourcesReady = programs.hasActive();
             if (resourcesReady) {
                 telemetry.beginFrameIfInactive();
             }
@@ -708,6 +708,7 @@ public final class MinecraftRtRuntime {
             if (world == null && programs == null && scenes == null
                     && renderer == null && rayReconstruction == null && superResolution == null) return;
             host().resetFrameBridge();
+            if (renderer != null) renderer.releaseCapturedFrame();
             if (world != null) {
                 world.close();
                 world = null;

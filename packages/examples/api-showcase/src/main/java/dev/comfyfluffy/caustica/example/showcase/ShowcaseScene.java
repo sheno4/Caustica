@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.example.showcase;
 import dev.comfyfluffy.caustica.api.geometry.*;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.*;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import java.util.List;
@@ -45,7 +44,7 @@ final class ShowcaseScene {
         CompletableFuture<ReadyMesh<ShowcasePrograms.InstanceData>> prepared;
         try {
             prepared = meshes.prepare(ShowcasePrograms.INSTANCE,
-                    meshBuild(positions, indices, indexRevision, resource.reference()));
+                    meshBuild(positions, indices, indexRevision, resource));
         } finally {
             resource.close();
         }
@@ -70,7 +69,7 @@ final class ShowcaseScene {
 
     private MeshBuild<ShowcasePrograms.InstanceData> meshBuild(VulkanDeviceAddressRange currentPositions,
                                                                 VulkanDeviceAddressRange indices,
-                                                               long indexRevision, ResourceRef resource) {
+                                                               long indexRevision, ResourceOwner resource) {
         var opaque = new MeshBuild.SurfaceSlot<>(programs.opaque(),
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
         var cutout = new MeshBuild.SurfaceSlot<>(programs.cutout(),

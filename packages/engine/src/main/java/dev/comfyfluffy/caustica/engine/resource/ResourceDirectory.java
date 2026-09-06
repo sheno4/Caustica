@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.engine.resource;
 
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import dev.comfyfluffy.caustica.support.SharedResource;
 
@@ -41,15 +40,15 @@ public final class ResourceDirectory implements AutoCloseable {
     }
 
     /** Resources may be shared across contributions in the same device session. */
-    public synchronized void validate(ContributionOwner owner, ResourceRef reference) {
-        if (reference == ResourceRef.none()) return;
-        if (!(reference instanceof State state) || state.directory != this) {
+    public synchronized void validate(ContributionOwner owner, ResourceOwner reference) {
+        if (reference == ResourceOwner.none()) return;
+        if (!(reference instanceof Claim claim) || claim.state.directory != this) {
             throw new IllegalArgumentException("resource belongs to another device session");
         }
-        if (!state.lifetime.isAlive()) throw new IllegalStateException("resource has been released");
+        if (!claim.owner.isOpen()) throw new IllegalStateException("resource has been released");
     }
 
-    public synchronized ResourceOwner acquire(ContributionOwner owner, ResourceRef reference) {
+    public synchronized ResourceOwner acquire(ContributionOwner owner, ResourceOwner reference) {
         validate(owner, reference);
         return reference.retain();
     }
@@ -117,7 +116,7 @@ public final class ResourceDirectory implements AutoCloseable {
         }
     }
 
-    private static final class State implements ResourceRef {
+    private static final class State {
         final ResourceDirectory directory;
         final ContributionOwner owner;
         final Runnable destroy;
@@ -133,7 +132,6 @@ public final class ResourceDirectory implements AutoCloseable {
             producer = new Claim(initial);
         }
 
-        @Override public ResourceOwner retain() { return new Claim(lifetime.retain()); }
     }
 
     private static final class Claim implements ResourceOwner {
@@ -144,7 +142,6 @@ public final class ResourceDirectory implements AutoCloseable {
             this.owner = owner;
             state = owner.get();
         }
-        @Override public ResourceRef reference() { return state; }
         @Override public ResourceOwner retain() { return new Claim(owner.retain()); }
         @Override public void close() { owner.close(); }
     }

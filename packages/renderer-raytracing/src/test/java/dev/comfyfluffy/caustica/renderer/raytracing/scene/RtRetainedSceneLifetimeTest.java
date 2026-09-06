@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
@@ -13,7 +13,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -22,28 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtRetainedSceneLifetimeTest {
-    @Test
-    void graphicsUseLatchesGeometryAndContentFromOneRevision() {
-        record Root(int geometryRevision, int contentRevision) { }
-        Object firstUse = new Object();
-        Object secondUse = new Object();
-        Map<Object, Root> frames = new LinkedHashMap<>();
-        AtomicReference<Root> published = new AtomicReference<>(new Root(1, 1));
-
-        Root firstGeometryRead = RtRetainedSceneBackend.latchFrameRoot(
-                frames, firstUse, published::get);
-        published.set(new Root(2, 2));
-        Root firstContentRead = RtRetainedSceneBackend.latchFrameRoot(
-                frames, firstUse, published::get);
-        Root secondFrame = RtRetainedSceneBackend.latchFrameRoot(
-                frames, secondUse, published::get);
-
-        assertSame(firstGeometryRead, firstContentRead);
-        assertEquals(firstGeometryRead.geometryRevision(), firstContentRead.contentRevision());
-        assertEquals(2, secondFrame.geometryRevision());
-        assertEquals(2, secondFrame.contentRevision());
-    }
-
     @Test
     void terminalFrameRootsRetireDisplacedSnapshotBeforeContributionDrain() {
         AtomicInteger retirements = new AtomicInteger();
@@ -104,9 +81,9 @@ final class RtRetainedSceneLifetimeTest {
         AtomicInteger positionRetirements = new AtomicInteger();
         var position = resources.create(positionRetirements::incrementAndGet);
         ResourceOwners frameResources = ResourceOwners.capture(List.of(
-                position.reference(), ResourceRef.none()));
+                position, ResourceOwner.none()));
         ResourceOwners historyResources = ResourceOwners.capture(List.of(
-                position.reference(), ResourceRef.none()));
+                position, ResourceOwner.none()));
         AtomicInteger rootRetirements = new AtomicInteger();
         SharedResource<String> sceneRoot = SharedResource.owned(
                 "revision with explicit NONE positions", ignored -> rootRetirements.incrementAndGet());

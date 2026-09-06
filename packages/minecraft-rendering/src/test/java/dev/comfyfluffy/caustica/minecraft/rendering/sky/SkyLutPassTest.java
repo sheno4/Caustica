@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.minecraft.rendering.sky;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.minecraft.rendering.TestResource;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.MinecraftEnvironmentBindingData;
@@ -99,10 +98,10 @@ final class SkyLutPassTest {
                 selected.add(binding);
             }, 0x1000L);
 
-            assertNotSame(ResourceRef.none(), first.reference());
-            assertNotSame(first.reference(), second.reference());
-            assertSame(first.reference(), selected.get(0).bindingData().resource());
-            assertSame(second.reference(), selected.get(1).bindingData().resource());
+            assertNotSame(ResourceOwner.none(), first);
+            assertNotSame(first, second);
+            assertNotSame(first, selected.get(0).bindingData().resource());
+            assertNotSame(second, selected.get(1).bindingData().resource());
         }
         assertEquals(0, releases.get());
         readers.forEach(ResourceOwner::close);
@@ -115,7 +114,7 @@ final class SkyLutPassTest {
         var first = TestResource.create(lifetime.retain()::close);
         var second = TestResource.create(lifetime.retain()::close);
         var firstFrame = first.retain();
-        var secondFrame = second.reference().retain();
+        var secondFrame = second.retain();
         first.close();
         second.close();
         lifetime.close();

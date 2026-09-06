@@ -1,0 +1,1 @@
+- Persist terrain light IDs for unchanged emitters across section rebuilds; dropping and recreating them currently discards global and local adaptive sampling feedback keyed by light identity.

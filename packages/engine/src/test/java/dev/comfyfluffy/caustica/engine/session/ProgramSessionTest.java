@@ -340,12 +340,14 @@ final class ProgramSessionTest {
         var released = resourceChannel.create();
         released.close();
 
+        var firstData = IMPLEMENTATION.data(1, first);
         assertThrows(IllegalStateException.class, () -> channel.register(builder -> {
             builder.surface(new SurfaceDefinition<>(shader("first", "sample.ResourceFirst"), null,
-                    IMPLEMENTATION.data(1, first.reference()), BINDING, INSTANCE));
+                    firstData, BINDING, INSTANCE));
             return builder.volume(new VolumeDefinition<>(shader("second", "sample.ResourceSecond"),
-                    IMPLEMENTATION.data(2, released.reference()), BINDING, INSTANCE));
+                    IMPLEMENTATION.data(2, released), BINDING, INSTANCE));
         }));
+        firstData.close();
         first.close();
         resources.awaitRetirements();
         assertEquals(1, firstRetired.get(), "a rejected declaration must release earlier acquisitions");
@@ -355,7 +357,7 @@ final class ProgramSessionTest {
 
         assertThrows(IllegalArgumentException.class, () -> channel.register(builder -> builder.surface(
                 new SurfaceDefinition<>(shader("foreign_session", "sample.ForeignSession"), null,
-                        IMPLEMENTATION.data(4, foreignSession.reference()),
+                        IMPLEMENTATION.data(4, foreignSession),
                         BINDING, INSTANCE))));
     }
 
@@ -371,12 +373,16 @@ final class ProgramSessionTest {
         var generation = resources.openFactory(owner).create(() -> events.add("resource"));
 
 
+        var surfaceData = IMPLEMENTATION.data(1, generation);
+        var volumeData = IMPLEMENTATION.data(2, generation);
         ProgramRegistration<?> registration = channel.register(builder -> {
             builder.surface(new SurfaceDefinition<>(shader("surface_root", "sample.ResourceSurface"), null,
-                    IMPLEMENTATION.data(1, generation.reference()), BINDING, INSTANCE));
+                    surfaceData, BINDING, INSTANCE));
             return builder.volume(new VolumeDefinition<>(shader("volume_root", "sample.ResourceVolume"),
-                    IMPLEMENTATION.data(2, generation.reference()), BINDING, INSTANCE));
+                    volumeData, BINDING, INSTANCE));
         });
+        surfaceData.close();
+        volumeData.close();
         generation.close();
         resources.awaitRetirements();
         assertTrue(events.isEmpty());
@@ -409,9 +415,10 @@ final class ProgramSessionTest {
 
         var failedRoot = resources.openFactory(owner).create(() -> retired.add("failed-resource"));
 
-        channel.register(builder -> builder.surface(new SurfaceDefinition<>(
-                shader("failed_root", "sample.FailedResource"), null,
-                IMPLEMENTATION.data(1, failedRoot.reference()), BINDING, INSTANCE)));
+        try (var data = IMPLEMENTATION.data(1, failedRoot)) {
+            channel.register(builder -> builder.surface(new SurfaceDefinition<>(
+                    shader("failed_root", "sample.FailedResource"), null, data, BINDING, INSTANCE)));
+        }
         failedRoot.close();
         session.progress();
         backend.fail("failed");
@@ -423,9 +430,11 @@ final class ProgramSessionTest {
 
         var cancelledRoot = resources.openFactory(owner).create(() -> retired.add("cancelled-resource"));
 
-        ProgramRegistration<?> cancelled = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
-                shader("cancelled_root", "sample.CancelledResource"), null,
-                IMPLEMENTATION.data(2, cancelledRoot.reference()), BINDING, INSTANCE)));
+        ProgramRegistration<?> cancelled;
+        try (var data = IMPLEMENTATION.data(2, cancelledRoot)) {
+            cancelled = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
+                    shader("cancelled_root", "sample.CancelledResource"), null, data, BINDING, INSTANCE)));
+        }
         cancelledRoot.close();
         session.progress();
         cancelled.close();

@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.example.gltfcontent;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
@@ -95,17 +94,17 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
                                      int vertexCount, int indexCount) implements GltfPrimitiveUploader.Uploaded {
         @Override public MeshBuild.Stream positionsStream() {
             return new MeshBuild.Stream(positions.buffer.deviceRange(), 3 * Float.BYTES,
-                    positions.generation.reference());
+                    positions.generation);
         }
         @Override public MeshBuild.Stream indexStream() {
             return new MeshBuild.Stream(indices.buffer.deviceRange(), Integer.BYTES,
-                    indices.generation.reference());
+                    indices.generation);
         }
         @Override public VulkanDeviceAddress primitiveDataAddress() {
             return primitiveData.buffer.deviceRange().address();
         }
-        @Override public ResourceRef primitiveDataResource() {
-            return primitiveData.generation.reference();
+        @Override public ResourceOwner primitiveDataResource() {
+            return primitiveData.generation;
         }
         @Override public void drop() {
             primitiveData.drop();

@@ -123,7 +123,7 @@ public final class RtFramePresenter {
     }
 
     public boolean presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
-            GpuImage source) {
+            dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage source) {
         return sdrPqPresentation.present(submission, target, source);
     }
 

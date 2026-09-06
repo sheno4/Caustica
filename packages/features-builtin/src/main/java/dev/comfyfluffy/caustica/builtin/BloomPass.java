@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.builtin;
 
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
@@ -17,7 +19,6 @@ import dev.comfyfluffy.caustica.vulkan.VulkanSampler;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -56,6 +57,8 @@ public final class BloomPass implements Pass<PostEffectFrame> {
             List.of(ENABLED, STRENGTH, THRESHOLD_SCENE_LINEAR, SOFT_KNEE_FRACTION, RADIUS, LEVELS);
 
     private final GpuDevice gpu;
+    private final ResourceFactory resources;
+    private ResourceOwner levelsOwner;
     private final Supplier<OptionValues> options;
     private final VulkanSampler sampler;
     private final ShaderObjectCompute shader;
@@ -63,8 +66,10 @@ public final class BloomPass implements Pass<PostEffectFrame> {
     private int builtWidth;
     private int builtHeight;
 
-    public BloomPass(PostEffectSetup setup, Supplier<OptionValues> options) {
+    public BloomPass(PostEffectSetup setup, ResourceFactory resources,
+                     Supplier<OptionValues> options) {
         this.gpu = Objects.requireNonNull(setup, "setup").gpu();
+        this.resources = resources;
         this.options = Objects.requireNonNull(options, "options");
         VulkanSampler createdSampler = VulkanSampler.linearClamp(gpu);
         try {
@@ -98,7 +103,9 @@ public final class BloomPass implements Pass<PostEffectFrame> {
         if (!values.get(ENABLED)) return;
 
         GpuImage scene = frame.sceneColor();
-        ensureLevels(frame, scene.width(), scene.height());
+        boolean rebuilt = ensureLevels(scene.width(), scene.height());
+        frame.retain(levelsOwner);
+        if (rebuilt) ComputeSynchronization.initializeImages(frame.commandBuffer(), Arrays.asList(levels));
         GpuImage target = frame.acquireSceneColorOutput();
         GpuImage exposure = frame.exposureImage();
         float threshold = values.get(THRESHOLD_SCENE_LINEAR);
@@ -128,15 +135,17 @@ public final class BloomPass implements Pass<PostEffectFrame> {
                 target.width(), target.height());
     }
 
-    private void ensureLevels(PostEffectFrame frame, int displayWidth, int displayHeight) {
-        if (displayWidth == builtWidth && displayHeight == builtHeight) return;
+    private boolean ensureLevels(int displayWidth, int displayHeight) {
+        if (displayWidth == builtWidth && displayHeight == builtHeight) return false;
         VmaImage2D[] replacement = allocateLevels(displayWidth, displayHeight);
-        ComputeSynchronization.initializeImages(frame.commandBuffer(), Arrays.asList(replacement));
-        VmaImage2D[] previous = levels;
+        var replacementOwner = resources.create(() -> closeLevels(replacement));
+        var previousOwner = levelsOwner;
         levels = replacement;
+        levelsOwner = replacementOwner;
         builtWidth = displayWidth;
         builtHeight = displayHeight;
-        if (previous.length != 0) gpu.retireAfterUse(() -> closeLevels(previous));
+        if (previousOwner != null) previousOwner.close();
+        return true;
     }
 
     private VmaImage2D[] allocateLevels(int displayWidth, int displayHeight) {
@@ -202,7 +211,8 @@ public final class BloomPass implements Pass<PostEffectFrame> {
 
     @Override
     public void close() {
-        closeLevels(levels);
+        if (levelsOwner != null) levelsOwner.close();
+        levelsOwner = null;
         levels = new VmaImage2D[0];
         shader.close();
         sampler.close();

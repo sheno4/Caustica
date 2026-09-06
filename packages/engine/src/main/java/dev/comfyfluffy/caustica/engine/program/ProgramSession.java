@@ -12,9 +12,8 @@ import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
-import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
+import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.ArrayDeque;
@@ -353,19 +352,39 @@ public final class ProgramSession {
 
     private List<ResourceOwner> acquireImplementationResources(
             ProgramContributionChannel channel, List<Declaration> declarations) {
-        Map<ResourceRef, Boolean> acquired = new IdentityHashMap<>();
         List<ResourceOwner> leases = new ArrayList<>();
         try {
-            for (Declaration declaration : declarations) {
-                ResourceRef reference = declaration.implementationDataResource();
-                if (reference == ResourceRef.none() || acquired.put(reference, Boolean.TRUE) != null) continue;
-                leases.add(resources.acquire(channel.owner, reference));
-            }
+            declarations.replaceAll(declaration -> {
+                resources.validate(channel.owner, declaration.implementationDataResource());
+                return switch (declaration) {
+                    case SurfaceDeclaration surface -> new SurfaceDeclaration(surface.reference(),
+                            retainSurface(surface.definition(), leases));
+                    case VolumeDeclaration volume -> new VolumeDeclaration(volume.reference(),
+                            retainVolume(volume.definition(), leases));
+                    case EnvironmentDeclaration environment -> environment;
+                };
+            });
             return List.copyOf(leases);
         } catch (Throwable failure) {
             leases.forEach(ResourceOwner::close);
             throw failure;
         }
+    }
+
+    private static <B, N> SurfaceDefinition<B, N> retainSurface(SurfaceDefinition<B, N> definition,
+                                                               List<ResourceOwner> leases) {
+        var data = definition.implementationData().retain();
+        leases.add(data);
+        return new SurfaceDefinition<>(definition.surface(), definition.coverage(), data,
+                definition.bindingDataType(), definition.instanceDataType());
+    }
+
+    private static <B, N> VolumeDefinition<B, N> retainVolume(VolumeDefinition<B, N> definition,
+                                                            List<ResourceOwner> leases) {
+        var data = definition.implementationData().retain();
+        leases.add(data);
+        return new VolumeDefinition<>(definition.implementation(), data,
+                definition.bindingDataType(), definition.instanceDataType());
     }
 
     private void requireNoTypeConflicts(List<Declaration> declarations) {
@@ -447,7 +466,7 @@ public final class ProgramSession {
         Reference reference();
         ProgramComposition.Declaration external();
         List<ShaderDefinition> shaders();
-        ResourceRef implementationDataResource();
+        ResourceOwner implementationDataResource();
     }
 
     private record SurfaceDeclaration(SurfaceReference reference, SurfaceDefinition<?, ?> definition)
@@ -459,7 +478,7 @@ public final class ProgramSession {
             return definition.coverage() == null ? List.of(definition.surface())
                     : List.of(definition.surface(), definition.coverage());
         }
-        @Override public ResourceRef implementationDataResource() {
+        @Override public ResourceOwner implementationDataResource() {
             return definition.implementationData().resource();
         }
     }
@@ -470,7 +489,7 @@ public final class ProgramSession {
             return new ProgramComposition.Volume(reference.key, definition);
         }
         @Override public List<ShaderDefinition> shaders() { return List.of(definition.implementation()); }
-        @Override public ResourceRef implementationDataResource() {
+        @Override public ResourceOwner implementationDataResource() {
             return definition.implementationData().resource();
         }
     }
@@ -481,7 +500,7 @@ public final class ProgramSession {
             return new ProgramComposition.Environment(reference.key, definition);
         }
         @Override public List<ShaderDefinition> shaders() { return List.of(definition.implementation()); }
-        @Override public ResourceRef implementationDataResource() { return ResourceRef.none(); }
+        @Override public ResourceOwner implementationDataResource() { return ResourceOwner.none(); }
     }
 
     private final class Builder implements ProgramBuilder {

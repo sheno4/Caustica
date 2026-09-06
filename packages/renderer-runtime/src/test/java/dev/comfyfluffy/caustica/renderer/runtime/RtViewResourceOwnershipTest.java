@@ -3,19 +3,17 @@ package dev.comfyfluffy.caustica.renderer.runtime;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 final class RtViewResourceOwnershipTest {
     @Test
-    void frameRetainsBothCameraMediumDataGraphsUntilCompletion() {
+    void captureRetainsCameraMediumBeforeAnyCommandsAreRecorded() {
         AtomicInteger destroyed = new AtomicInteger();
         try (var resources = new ResourceDirectory(failure -> fail(failure))) {
             var factory = resources.openFactory(new ContributionOwner(1));
@@ -23,37 +21,38 @@ final class RtViewResourceOwnershipTest {
             var instance = factory.create(destroyed::incrementAndGet);
             ShaderDataType<Object> type = ShaderDataType.create("camera medium");
             var medium = new ViewMedium.Volume<>(new VolumeId<Object, Object>() { },
-                    type.data(0x1000, binding.reference()), type.data(0x2000, instance.reference()));
-            var callbacks = new ArrayList<Runnable>();
-            RtFrameRenderer.retainViewResources(medium, new GpuFrameUse() {
-                @Override public void whenSubmitted(Runnable callback) { fail("ownership requires no submission callback"); }
-                @Override public void whenComplete(Runnable callback) { callbacks.add(callback); }
-            });
+                    type.data(0x1000, binding), type.data(0x2000, instance));
+            var captured = RtCapturedFrame.captureMedium(medium);
+            medium.bindingData().close();
+            medium.instanceData().close();
 
             binding.close();
             instance.close();
             resources.awaitRetirements();
             assertEquals(0, destroyed.get());
 
-            callbacks.forEach(Runnable::run);
+            captured.close();
             resources.awaitRetirements();
             assertEquals(2, destroyed.get());
         }
     }
 
     @Test
-    void rejectedCompletionRegistrationReleasesItsAcquiredOwners() {
+    void failedCaptureReleasesEarlierAcquisitions() {
         AtomicInteger destroyed = new AtomicInteger();
         try (var resources = new ResourceDirectory(failure -> fail(failure))) {
-            var owner = resources.openFactory(new ContributionOwner(1)).create(destroyed::incrementAndGet);
+            var factory = resources.openFactory(new ContributionOwner(1));
+            var owner = factory.create(destroyed::incrementAndGet);
+            var released = factory.create();
+            var reference = released;
+
             ShaderDataType<Object> type = ShaderDataType.create("camera medium");
             var medium = new ViewMedium.Volume<>(new VolumeId<Object, Object>() { },
-                    type.data(0x1000, owner.reference()), type.data(0x2000, owner.reference()));
-            assertThrows(IllegalStateException.class, () -> RtFrameRenderer.retainViewResources(medium,
-                    new GpuFrameUse() {
-                        @Override public void whenSubmitted(Runnable callback) { fail(); }
-                        @Override public void whenComplete(Runnable callback) { throw new IllegalStateException("resolved"); }
-                    }));
+                    type.data(0x1000, owner), type.data(0x2000, reference));
+            medium.instanceData().close();
+            released.close();
+            assertThrows(IllegalStateException.class, () -> RtCapturedFrame.captureMedium(medium));
+            medium.bindingData().close();
             owner.close();
             resources.awaitRetirements();
             assertEquals(1, destroyed.get());

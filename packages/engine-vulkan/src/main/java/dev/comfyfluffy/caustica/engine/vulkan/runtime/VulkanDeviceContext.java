@@ -194,11 +194,6 @@ public final class VulkanDeviceContext implements GpuDevice {
     }
 
     @Override
-    public void retireAfterUse(Runnable cleanup) {
-        graphics.retireAfterLatestSubmittedGraphics(cleanup);
-    }
-
-    @Override
     public int[] asyncBufferSharingQueueFamilies() {
         return distinctQueueFamilies(graphicsQueue.familyIndex(), computeQueue.familyIndex());
     }

@@ -1,19 +1,17 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackendFactory;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
-
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsQueue;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
-
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
@@ -21,7 +19,6 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.session.EngineSessionServices;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.WorldPushData;
@@ -37,7 +34,6 @@ import org.lwjgl.vulkan.VkCopyImageInfo2;
 import org.lwjgl.vulkan.VkImageCopy2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.TlasBuilder;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
@@ -53,7 +49,6 @@ import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.renderer.presentation.RtToneLut;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -94,15 +89,24 @@ public final class RtFrameRenderer {
     private final RtFrameResources frameResources;
     private RtRenderSettings settings;
     private final RtFrameHistory history = new RtFrameHistory();
-    private FrameSnapshot frameSnapshot;
-    private RtFrameInput currentFrame;
+    private SharedResource<RtCapturedFrame> frameSnapshot;
+    private FrameExecution execution;
     private boolean loggedActive;
     private long debugCaptureFrameSerial = -1;
     private float debugCapturePreExposure;
     private RtDenoisingSettings debugCaptureDenoising;
 
-    private GraphicsUse pendingGraphicsUse;
-    private RtRetainedSceneBackend.PreparedTrace currentTrace;
+    private static final class FrameExecution {
+        final GraphicsUse graphicsUse;
+        final ResourceOwners resources = new ResourceOwners();
+        RtFrameInput frame;
+        RtRetainedSceneBackend.PreparedTrace trace;
+
+        FrameExecution(GraphicsUse graphicsUse) {
+            this.graphicsUse = graphicsUse;
+            graphicsUse.keepAlive(resources);
+        }
+    }
 
     public RtFrameRenderer(VulkanDeviceContext context, RtProgramBackend programs, RtRetainedSceneBackend scenes,
                     RtPassSchedulerBackend passes, EngineSessionServices services,
@@ -170,7 +174,7 @@ public final class RtFrameRenderer {
      */
     public boolean exportLatestResidualExposureExr(Path outputPath) throws java.io.IOException {
         context.backend().assertRenderThread();
-        if (presentationResources().exposure().image() == null || pendingGraphicsUse != null) {
+        if (presentationResources().exposure().image() == null || execution != null) {
             return false;
         }
 
@@ -193,7 +197,7 @@ public final class RtFrameRenderer {
     public DebugImageCapture exportLatestDebugImage(String name, Path output) throws IOException {
         context.backend().assertRenderThread();
         if (!debugImageNames().contains(name)) throw new IllegalArgumentException("Unknown debug image: " + name);
-        if (debugCaptureFrameSerial < 0 || pendingGraphicsUse != null) return null;
+        if (debugCaptureFrameSerial < 0 || execution != null) return null;
         TraceImages images = traceImages();
         GpuImage image = switch (name) {
             case "reconstructed-color" -> images.reconstructedColor();
@@ -242,7 +246,7 @@ public final class RtFrameRenderer {
     }
 
     public boolean requiresSourceWorldFallback() {
-        return programs.active() == null;
+        return !programs.hasActive();
     }
 
     /**
@@ -252,12 +256,16 @@ public final class RtFrameRenderer {
      */
     public boolean completeStartupBoundary() {
         services.progress();
-        return programs.active() != null;
+        return programs.hasActive();
     }
 
     /** Capture the immutable host frame for the next composite. Called from the host render adapter. */
     public void captureFrame(FrameSnapshot snapshot) {
-        frameSnapshot = Objects.requireNonNull(snapshot, "snapshot");
+        services.progress();
+        var captured = RtCapturedFrame.capture(Objects.requireNonNull(snapshot, "snapshot"),
+                programs::acquire, scenes::captureSnapshot);
+        releaseCapturedFrame();
+        frameSnapshot = SharedResource.owned(captured, RtCapturedFrame::close);
     }
 
     /** Reset exposure filtering after an explicit render-state invalidation such as F3+A. */
@@ -271,7 +279,7 @@ public final class RtFrameRenderer {
      * HDR content instead of selecting the SDR-to-PQ path.
      */
     public void beginFrame() {
-        if (pendingGraphicsUse != null) {
+        if (execution != null) {
             throw new IllegalStateException("Previous RT graphics use was never completed");
         }
         debugCaptureFrameSerial = -1;
@@ -279,38 +287,38 @@ public final class RtFrameRenderer {
         telemetry.beginRenderFrame();
         telemetry.beginFrameIfInactive();
         presenter.beginFrame();
-        frameSnapshot = null;
-        currentFrame = null;
+        releaseCapturedFrame();
+        execution = null;
     }
 
     /** Records UI passes in an owned heap command buffer after the host UI layer is available. */
-    public void recordUiPasses(GpuImage uiLayer) {
+    public void recordUiPasses(dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage uiLayer) {
         Objects.requireNonNull(uiLayer, "uiLayer");
-        if (pendingGraphicsUse == null || currentTrace == null || frameSnapshot == null) {
+        if (execution == null || execution.trace == null || frameSnapshot == null) {
             throw new IllegalStateException("no retained frame is available for UI recording");
         }
-        try (RtFrameCommands commands = new RtFrameCommands(context, gpuTiming, pendingGraphicsUse, telemetry.frameSerial())) {
+        try (RtFrameCommands commands = new RtFrameCommands(context, gpuTiming, execution.graphicsUse, telemetry.frameSerial())) {
+            execution.graphicsUse.keepAlive(uiLayer.retain());
             VkCommandBuffer commandBuffer = commands.heap("UI extensions");
-            passes.beginFrame(passFrame(commandBuffer, pendingGraphicsUse,
-                    new RtPassSchedulerBackend.UiState(uiLayer, currentFrame.projectionView().get(new float[16]),
-                            currentTrace.tlasDescriptor())));
+            passes.beginFrame(passFrame(commandBuffer, execution.graphicsUse,
+                    new RtPassSchedulerBackend.UiState(uiLayer, execution.frame.projectionView().get(new float[16]),
+                            execution.trace.tlasDescriptor())));
             try {
                 services.passes().recordUi();
             } finally {
                 passes.endFrame();
             }
-            commands.submit(context.backend().createGraphicsSubmission(), pendingGraphicsUse);
+            commands.submit(context.backend().createGraphicsSubmission(), execution.graphicsUse);
         }
     }
 
     /** Signals this frame's completion reservation after the host has recorded any UI consumers. */
     public void finishGraphicsUse() {
-        GraphicsUse graphicsUse = pendingGraphicsUse;
-        if (graphicsUse == null) {
+        if (execution == null) {
             return;
         }
-        pendingGraphicsUse = null;
-        currentTrace = null;
+        GraphicsUse graphicsUse = execution.graphicsUse;
+        execution = null;
         GraphicsSubmission submission = context.backend().createGraphicsSubmission();
         context.graphics().resolveGraphicsUse(submission, graphicsUse);
     }
@@ -321,22 +329,19 @@ public final class RtFrameRenderer {
 
     public boolean composite(long nativeColorImage, int width, int height) {
         VulkanDiagnostics.setInFlight("graphics-latest", "frame=" + frameCounter + " size=" + width + "x" + height);
-        services.progress();
-        FrameSnapshot snapshot = frameSnapshot;
-        if (snapshot == null) {
+        SharedResource<RtCapturedFrame> captured = frameSnapshot;
+        if (captured == null) {
             // No scene was captured this frame. Skip RT so the present path falls back to the host image.
             return false;
         }
+        FrameSnapshot snapshot = captured.get().inputs();
         try {
             if (!ensurePresentationResources(context, width, height)) {
                 return false;
             }
-            RtProgramBackend.Published active = programs.active();
-            if (active == null) {
-                return false;
-            }
+            if (captured.get().program() == null) return false;
             if (history.changesScene(snapshot)) resetSceneHistory();
-            recordFrame(context, active, nativeColorImage, snapshot);
+            recordFrame(context, captured, nativeColorImage, snapshot);
             if (!loggedActive) {
                 loggedActive = true;
                 LOGGER.info("RT composite active: {}x{}, RT output replaces the world target", width, height);
@@ -403,53 +408,51 @@ public final class RtFrameRenderer {
         history.reset();
     }
 
-    private void recordFrame(VulkanDeviceContext ctx, RtProgramBackend.Published program, long nativeColorImage,
+    private void recordFrame(VulkanDeviceContext ctx,
+                             SharedResource<RtCapturedFrame> captured,
+                             long nativeColorImage,
                              FrameSnapshot snapshot) {
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
         GraphicsQueue graphics = ctx.graphics();
         GraphicsUse graphicsUse = graphics.beginGraphicsUse();
-        pendingGraphicsUse = graphicsUse;
-        retainViewResources(snapshot.view().medium(), graphicsUse);
+        execution = new FrameExecution(graphicsUse);
+        graphicsUse.keepAlive(captured.retain());
+        RtProgramBackend.Published program = captured.get().program().get();
+        scenes.beginFrame(captured.get().scenes(), graphicsUse);
         GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter = graphics.graphicsUseWaiter();
         presentationResources().exposure().beginFrame(graphicsUseWaiter, telemetry.frameSerial());
-        currentFrame = history.capture(snapshot, frameCounter, System.nanoTime(), traceExtent(),
+        execution.frame = history.capture(snapshot, frameCounter, System.nanoTime(), traceExtent(),
                 reconstruction.settings().route(), exposure().preExposure(), settings.jitterSignX(), settings.jitterSignY());
-        if (!currentFrame.historyContinuous()) reconstruction.resetHistory();
+        if (!execution.frame.historyContinuous()) reconstruction.resetHistory();
         int debugView = settings.debugView();
         try (RtFrameCommands commands = new RtFrameCommands(ctx, gpuTiming, graphicsUse, telemetry.frameSerial());
              MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer cmd = commands.heap("world resources and trace");
-            recordTrace(ctx, cmd, stack, graphicsUse, program, currentFrame, commands);
-            var output = reconstruction.record(commands, stack, graphicsUse, currentFrame,
+            recordTrace(ctx, cmd, stack, graphicsUse, program, execution.frame, commands);
+            var output = reconstruction.record(commands, stack, graphicsUse, execution.frame,
                     traceResources(), presentationResources());
             recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
                     graphicsUse, output, nativeColorImage, debugView);
             commands.submit(submission, graphicsUse);
             debugCaptureFrameSerial = telemetry.frameSerial();
-            debugCapturePreExposure = currentFrame.preExposure();
+            debugCapturePreExposure = execution.frame.preExposure();
             debugCaptureDenoising = reconstruction.settings();
-            history.submitted(currentFrame);
-            reconstruction.submitted(currentFrame);
+            history.submitted(execution.frame);
+            reconstruction.submitted(execution.frame);
         }
         // Submission makes every frame-owned address reachable until the final overlay consumer.
         presentationResources().exposure().markStateReadbackUse(graphicsUse);
         presenter.publish(new RtFramePresenter.RenderedFrame(
                 presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().depth(),
                 traceExtent().renderWidth(), traceExtent().renderHeight(),
-                new Matrix4f(currentFrame.projectionView()), new Matrix4f(currentFrame.previousProjectionView()),
+                new Matrix4f(execution.frame.projectionView()), new Matrix4f(execution.frame.previousProjectionView()),
                 settings.hdr() && debugView == 0));
     }
 
-    static void retainViewResources(ViewMedium medium, GpuFrameUse frameUse) {
-        if (!(medium instanceof ViewMedium.Volume<?, ?> volume)) return;
-        ResourceOwners owners = ResourceOwners.capture(List.of(
-                volume.bindingData().resource(), volume.instanceData().resource()));
-        try {
-            frameUse.whenComplete(owners::close);
-        } catch (RuntimeException | Error failure) {
-            owners.close();
-            throw failure;
-        }
+    /** Release unsubmitted input ownership; accepted executions keep their independent claims. */
+    public void releaseCapturedFrame() {
+        if (frameSnapshot != null) frameSnapshot.close();
+        frameSnapshot = null;
     }
 
     private void recordTrace(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
@@ -520,7 +523,7 @@ public final class RtFrameRenderer {
                 trace = scenes.prepareTrace(entryScene, sceneOrigin,
                         program.pipeline(), frameTlas.accel.handle, graphicsUse);
             }
-            currentTrace = trace;
+            execution.trace = trace;
             ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
             writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, pathScratch);
             program.writeCompositionDataAddress(roots);
@@ -636,9 +639,9 @@ public final class RtFrameRenderer {
 
     private RtPassSchedulerBackend.FrameState passFrame(VkCommandBuffer commandBuffer, GraphicsUse graphicsUse,
                                                          RtPassSchedulerBackend.UiState ui, GpuImage output) {
-        return new RtPassSchedulerBackend.FrameState(commandBuffer, graphicsUse, frameCounter,
-                currentFrame.snapshot().view(), currentFrame.snapshot().timeSeconds(),
-                currentFrame.snapshot().metersPerWorldUnit(),
+        return new RtPassSchedulerBackend.FrameState(commandBuffer, graphicsUse, execution.resources, frameCounter,
+                execution.frame.snapshot().view(), execution.frame.snapshot().timeSeconds(),
+                execution.frame.snapshot().metersPerWorldUnit(),
                 traceExtent().renderWidth(), traceExtent().renderHeight(), output,
                 presentationResources().exposure().image(), presentationResources().postColorA(),
                 presentationResources().postColorB(), ui);
@@ -652,7 +655,7 @@ public final class RtFrameRenderer {
         target.putLong(base + RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
                 pathScratch.deviceAddress().value());
         target.putFloat(base + RtBindings.WORLD_RECONSTRUCTION_MICRO_JITTER_SCALE_OFFSET,
-                currentFrame.route() == DenoiserRoute.RAY_RECONSTRUCTION ? 0.1f : 0.0f);
+                execution.frame.route() == DenoiserRoute.RAY_RECONSTRUCTION ? 0.1f : 0.0f);
         target.putLong(base + RtBindings.WORLD_STABLE_PLANE_BUFFER_ADDRESS_OFFSET,
                 traceResources().stablePlaneBuffer().deviceAddress().value());
         target.putInt(base + RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET, storageIndex(traceImages().traceColor()));
@@ -737,10 +740,8 @@ public final class RtFrameRenderer {
         frameResources.destroy();
         history.reset();
         loggedActive = false;
-        frameSnapshot = null;
-        currentFrame = null;
-        currentTrace = null;
-        pendingGraphicsUse = null;
+        releaseCapturedFrame();
+        execution = null;
     }
 
     private static VkImageCopy2.Buffer copyRegion(MemoryStack stack, int width, int height) {

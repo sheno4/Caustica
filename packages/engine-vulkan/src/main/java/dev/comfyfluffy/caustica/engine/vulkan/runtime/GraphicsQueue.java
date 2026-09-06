@@ -6,7 +6,6 @@ import org.lwjgl.vulkan.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 /** Graphics command ownership, reusable allocation waits, and off-thread retirement. */
@@ -19,7 +18,6 @@ public final class GraphicsQueue {
         return thread;
     });
     private final ArrayList<DestroyJob> destroyJobs = new ArrayList<>();
-    private final AtomicLong latestSubmittedGraphicsValue = new AtomicLong();
     private long nextGraphicsValue;
     private volatile Throwable executorFailure;
 
@@ -48,7 +46,6 @@ public final class GraphicsQueue {
         if (use.owner() != this) throw new IllegalArgumentException("Graphics use belongs to another device");
         use.resolveSubmission(() -> {
             enqueueGraphicsSignal(submission, graphicsTimeline, use.value());
-            latestSubmittedGraphicsValue.set(use.value());
         });
     }
 
@@ -65,11 +62,6 @@ public final class GraphicsQueue {
     public void retireAfterGraphics(TrackedGraphicsUse trackedUse, Runnable destroy) {
         assertRenderThread();
         trackedUse.whenMarksApplied(() -> keepAliveAfterGraphicsValue(trackedUse.value, destroy));
-    }
-
-    public void retireAfterLatestSubmittedGraphics(Runnable destroy) {
-        checkExecutorFailure();
-        keepAliveAfterGraphicsValue(latestSubmittedGraphicsValue.get(), destroy);
     }
 
     void keepAliveAfterGraphicsValue(long value, Runnable release) {

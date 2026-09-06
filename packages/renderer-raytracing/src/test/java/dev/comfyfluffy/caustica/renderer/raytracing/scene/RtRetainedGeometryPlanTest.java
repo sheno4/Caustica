@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
@@ -263,6 +263,6 @@ final class RtRetainedGeometryPlanTest {
 
     private static MeshBuild.Stream stream(long address, long bytes, int stride) {
         return new MeshBuild.Stream(new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), bytes), stride,
-                ResourceRef.none());
+                ResourceOwner.none());
     }
 }

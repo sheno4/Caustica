@@ -10,7 +10,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
 
-import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
@@ -31,7 +31,11 @@ import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
  */
 final class GlowOutlineFeature implements OverlayFeature {
     private final RtEntities entities;
-    GlowOutlineFeature(RtEntities entities) { this.entities = entities; }
+    private final dev.comfyfluffy.caustica.api.resource.ResourceFactory resources;
+    private dev.comfyfluffy.caustica.api.resource.ResourceOwner maskOwner;
+    GlowOutlineFeature(RtEntities entities, dev.comfyfluffy.caustica.api.resource.ResourceFactory resources) {
+        this.entities = entities; this.resources = resources;
+    }
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
     private static final int MASK_PUSH_BYTES = 112;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
@@ -53,7 +57,7 @@ final class GlowOutlineFeature implements OverlayFeature {
     private int drawCount;
 
     @Override
-    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    public boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
                            int worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.glowEnabled()) {
             return false;
@@ -62,7 +66,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         if (batches.isEmpty()) {
             return false;
         }
-        ensureResources(device, gpuUse, width, height);
+        ensureResources(device, frameResources, width, height);
 
         // Merge every glowing entity's mesh into one vertex/index pair (indices rebased onto the merged
         // vertex buffer); one draw per entity so each can push its own outline colour.
@@ -115,7 +119,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(GpuDevice device, GpuFrameUse gpuUse, int width, int height) {
+    private void ensureResources(GpuDevice device, FrameResources frameResources, int width, int height) {
         this.device = device;
         if (maskPipeline == null) {
             maskPipeline = new OverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")
@@ -129,15 +133,14 @@ final class GlowOutlineFeature implements OverlayFeature {
                     .build(device, "glow composite");
         }
         if (maskImage == null || maskImage.width() != width || maskImage.height() != height) {
-            if (maskImage != null) {
-                VmaImage2D retired = maskImage;
-                gpuUse.whenComplete(retired::close);
-            }
+            if (maskOwner != null) maskOwner.close();
             maskImage = VmaImage2D.create(device, width, height, MASK_FORMAT,
                     VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                     "glow outline mask " + width + "x" + height);
+            maskOwner = resources.create(maskImage::close);
             maskNeedsInitialization = true;
         }
+        frameResources.retain(maskOwner);
     }
 
     @Override
@@ -191,7 +194,8 @@ final class GlowOutlineFeature implements OverlayFeature {
             compositePipeline = null;
         }
         if (maskImage != null) {
-            maskImage.close();
+            maskOwner.close();
+            maskOwner = null;
             maskImage = null;
         }
         device = null;

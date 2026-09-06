@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.api.resource.ResourceRef;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.resource.TestResource;
 import org.junit.jupiter.api.Test;
 
@@ -29,7 +29,7 @@ final class MeshBuildTest {
         var stream = stream(range(0x1000L, 96L).slice(32L, 64L), 16);
         assertEquals(new VulkanDeviceAddress(0x1020L), stream.bytes().address());
         assertEquals(64L, stream.byteSize());
-        assertSame(ResourceRef.none(), stream.resource());
+        assertSame(ResourceOwner.none(), stream.resource());
     }
 
     @Test
@@ -37,8 +37,8 @@ final class MeshBuildTest {
         var releases = new java.util.concurrent.atomic.AtomicInteger();
         try (var firstOwner = TestResource.create(releases::incrementAndGet);
              var secondOwner = TestResource.create(releases::incrementAndGet)) {
-            ResourceRef firstResource = firstOwner.reference();
-            ResourceRef secondResource = secondOwner.reference();
+            ResourceOwner firstResource = firstOwner;
+            ResourceOwner secondResource = secondOwner;
             VulkanDeviceAddressRange bytes = range(0x1000L, 64L);
 
             MeshBuild.Stream first = new MeshBuild.Stream(bytes, 16, firstResource);
@@ -141,7 +141,7 @@ final class MeshBuildTest {
     }
 
     private static MeshBuild.Stream stream(VulkanDeviceAddressRange bytes, int byteStride) {
-        return new MeshBuild.Stream(bytes, byteStride, ResourceRef.none());
+        return new MeshBuild.Stream(bytes, byteStride, ResourceOwner.none());
     }
 
     private static MeshBuild.Geometry<Instance> geometry(
