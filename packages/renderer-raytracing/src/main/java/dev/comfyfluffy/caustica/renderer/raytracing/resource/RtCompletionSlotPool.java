@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.renderer.raytracing.scene;
+package dev.comfyfluffy.caustica.renderer.raytracing.resource;
 
 import java.util.ArrayList;
 import java.util.function.Consumer;
@@ -6,17 +6,17 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** Slots become writable only after their graphics completion callback returns them to this pool. */
-final class RtTraceSlotPool<T> implements AutoCloseable {
+public final class RtCompletionSlotPool<T> implements AutoCloseable {
     private final ArrayList<T> available = new ArrayList<>();
     private final Consumer<T> retire;
     private boolean closed;
 
-    RtTraceSlotPool(Consumer<T> retire) {
+    public RtCompletionSlotPool(Consumer<T> retire) {
         this.retire = retire;
     }
 
-    synchronized T acquire(Predicate<T> fits, Supplier<T> create) {
-        if (closed) throw new IllegalStateException("trace slot pool is closed");
+    public synchronized T acquire(Predicate<T> fits, Supplier<T> create) {
+        if (closed) throw new IllegalStateException("completion slot pool is closed");
         for (int index = 0; index < available.size(); index++) {
             if (fits.test(available.get(index))) return available.remove(index);
         }
@@ -24,7 +24,19 @@ final class RtTraceSlotPool<T> implements AutoCloseable {
         return create.get();
     }
 
-    synchronized void release(T slot) {
+    /** A rejected completion registration returns the unused reservation to the pool. */
+    public T acquire(Predicate<T> fits, Supplier<T> create, Consumer<Runnable> whenComplete) {
+        T slot = acquire(fits, create);
+        try {
+            whenComplete.accept(() -> release(slot));
+            return slot;
+        } catch (RuntimeException | Error failure) {
+            release(slot);
+            throw failure;
+        }
+    }
+
+    public synchronized void release(T slot) {
         if (closed) retire.accept(slot);
         else available.add(slot);
     }
@@ -35,7 +47,7 @@ final class RtTraceSlotPool<T> implements AutoCloseable {
         available.clear();
     }
 
-    static long capacity(int bytes) {
+    public static long capacity(int bytes) {
         return 1L << (64 - Long.numberOfLeadingZeros(Math.max(256L, bytes) - 1));
     }
 }

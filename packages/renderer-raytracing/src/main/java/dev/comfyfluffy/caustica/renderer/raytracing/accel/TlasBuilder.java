@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
+import dev.comfyfluffy.caustica.renderer.raytracing.resource.RtCompletionSlotPool;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -36,10 +37,11 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_OPAQUE_BIT_K
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCreateAccelerationStructureKHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.vkDestroyAccelerationStructureKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureDeviceAddressKHR;
 
-/** Builds frame-owned top-level acceleration structures. */
+/** Builds top-level acceleration structures whose storage is exclusive through graphics completion. */
 public final class TlasBuilder {
     private static final long INSTANCE_ADDRESS_ALIGNMENT = 16L;
 
@@ -122,11 +124,15 @@ public final class TlasBuilder {
         }
     }
 
-    /** One frame's instance buffer, acceleration structure, and build scratch. */
+    /** Writable only while reserved by one graphics use, or after that use completes. */
     private static final class Slot {
+        private final int capacity;
         private RtAccel accel;
         private GpuBuffer instanceBuffer;
         private GpuBuffer scratch;
+        private List<ByteBuffer> inputPages = List.of();
+
+        private Slot(int capacity) { this.capacity = capacity; }
 
         private void destroy() {
             accel.destroy();
@@ -135,13 +141,39 @@ public final class TlasBuilder {
         }
     }
 
+    /** Completed TLAS storage can serve another frame; in-flight builds never share a slot. */
+    public static final class Pool implements AutoCloseable {
+        private final VulkanDeviceContext ctx;
+        private final RtCompletionSlotPool<Slot> slots;
+
+        public Pool(VulkanDeviceContext ctx) {
+            this.ctx = ctx;
+            slots = new RtCompletionSlotPool<>(slot -> ctx.deferDestroy(slot::destroy));
+        }
+
+        public Reserved reserve(int count, GraphicsUse graphicsUse) {
+            var slot = slots.acquire(candidate -> candidate.capacity >= count,
+                    () -> createSlot(ctx, capacity(count)), graphicsUse::whenComplete);
+            return new Reserved(slot, count);
+        }
+
+        @Override public void close() { slots.close(); }
+    }
+
+    /** Growth headroom applies to allocation sizing; each recorded build uses its actual instance count. */
+    static int capacity(int count) {
+        int minimum = Math.max(64, count);
+        long rounded = 1L << (32 - Integer.numberOfLeadingZeros(minimum - 1));
+        return (int) Math.min(Integer.MAX_VALUE, rounded);
+    }
+
     /** Writes one scene instance using the Vulkan struct API. */
     @FunctionalInterface
     public interface InstanceWriter<T> {
         void write(T instance, VkAccelerationStructureInstanceKHR target);
     }
 
-    /** Fresh frame-owned resources whose instance buffer has not yet been packed or flushed. */
+    /** Exclusively reserved resources whose instance buffer has not yet been packed or flushed. */
     public static final class Reserved {
         private final Slot slot;
         private final int count;
@@ -162,23 +194,41 @@ public final class TlasBuilder {
      * this work before recording the build or ending the graphics use that owns the reservation.
      */
     public static <T> Prepared pack(Reserved reserved, List<T> instances, InstanceWriter<T> writer) {
+        reserved.slot.inputPages = List.of();
         writeInstances(instances, reserved.slot.instanceBuffer.mapped(), writer);
         return finish(reserved.slot, reserved.count);
     }
 
     /**
-     * Copies exactly the reserved instance count from ordered CPU pages into fresh frame-owned input.
+     * Updates changed CPU pages in exclusively reserved input; unchanged pages keep their existing bytes.
      * The caller must join this copy and flush before recording or ending the owning graphics use.
      */
     public static Prepared packPages(Reserved reserved, List<ByteBuffer> pages) {
+        var previous = reserved.slot.inputPages;
+        reserved.slot.inputPages = List.of();
         ByteBuffer target = MemoryUtil.memByteBuffer(reserved.slot.instanceBuffer.mapped(),
                 Math.multiplyExact(reserved.count, VkAccelerationStructureInstanceKHR.SIZEOF));
-        int offset = 0;
-        for (ByteBuffer page : pages) {
-            target.put(offset, page, page.position(), page.remaining());
-            offset += page.remaining();
+        boolean copied = copyPages(target, pages, previous) != 0;
+        var prepared = finish(reserved.slot, reserved.count, copied);
+        reserved.slot.inputPages = List.copyOf(pages);
+        return prepared;
+    }
+
+    /** Immutable source buffers retain their position and length while cached by a completed slot. */
+    static int copyPages(ByteBuffer target, List<ByteBuffer> pages, List<ByteBuffer> previous) {
+        int offset = 0, previousOffset = 0, copied = 0;
+        for (int index = 0; index < pages.size(); index++) {
+            var page = pages.get(index);
+            var old = index < previous.size() ? previous.get(index) : null;
+            int bytes = page.remaining();
+            if (page != old || offset != previousOffset) {
+                target.put(offset, page, page.position(), bytes);
+                copied = Math.addExact(copied, bytes);
+            }
+            offset = Math.addExact(offset, bytes);
+            if (old != null) previousOffset = Math.addExact(previousOffset, old.remaining());
         }
-        return finish(reserved.slot, reserved.count);
+        return copied;
     }
 
     /** Packs every instance into fresh frame-owned input, acceleration-structure, and scratch storage. */
@@ -215,7 +265,11 @@ public final class TlasBuilder {
     }
 
     private static Prepared finish(Slot slot, int count) {
-        if (count > 0) {
+        return finish(slot, count, true);
+    }
+
+    private static Prepared finish(Slot slot, int count, boolean flush) {
+        if (flush && count > 0) {
             slot.instanceBuffer.flush(0L, (long) count * VkAccelerationStructureInstanceKHR.SIZEOF);
         }
         return new Prepared(slot.accel, slot.instanceBuffer, slot.scratch, count,
@@ -252,19 +306,29 @@ public final class TlasBuilder {
         }
     }
 
-    /**
-     * Allocate this frame's TLAS sized exactly to {@code capacity}, retiring it once the frame completes.
-     * A zero-instance scene still needs a buffer the build can address, so the allocation is never empty.
-     */
     private static Slot createSlot(VulkanDeviceContext ctx, int capacity, GraphicsUse graphicsUse) {
+        var slot = createSlot(ctx, capacity);
+        try {
+            graphicsUse.whenComplete(slot::destroy);
+            return slot;
+        } catch (RuntimeException | Error failure) {
+            slot.destroy();
+            throw failure;
+        }
+    }
+
+    /** Zero-instance builds still need an addressable input buffer. All size queries use slot capacity. */
+    private static Slot createSlot(VulkanDeviceContext ctx, int capacity) {
         VkDevice vk = ctx.vk();
         String label = "frame TLAS (" + capacity + " instances)";
-        Slot slot = new Slot();
-        slot.instanceBuffer = ctx.createAlignedBuffer(
-                (long) VkAccelerationStructureInstanceKHR.SIZEOF * Math.max(1, capacity),
-                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true,
-                label + " instance buffer", INSTANCE_ADDRESS_ALIGNMENT);
+        Slot slot = new Slot(capacity);
+        GpuBuffer backing = null;
+        long handle = 0;
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            slot.instanceBuffer = ctx.createAlignedBuffer(
+                    (long) VkAccelerationStructureInstanceKHR.SIZEOF * Math.max(1, capacity),
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true,
+                    label + " instance buffer", INSTANCE_ADDRESS_ALIGNMENT);
             VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = buildInfo(
                     stack, slot.instanceBuffer.deviceAddress());
             VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack)
@@ -272,7 +336,7 @@ public final class TlasBuilder {
             vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     build.get(0), stack.ints(capacity), sizes);
 
-            GpuBuffer backing = ctx.createBuffer(sizes.accelerationStructureSize(),
+            backing = ctx.createBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, label + " backing");
             VkAccelerationStructureCreateInfoKHR createInfo = VkAccelerationStructureCreateInfoKHR.calloc(stack)
                     .sType$Default().buffer(backing.handle()).offset(0).size(sizes.accelerationStructureSize())
@@ -280,17 +344,24 @@ public final class TlasBuilder {
             java.nio.LongBuffer accelerationStructure = stack.mallocLong(1);
             VulkanDeviceContext.check(vkCreateAccelerationStructureKHR(vk, createInfo, null, accelerationStructure),
                     "vkCreateAccelerationStructureKHR");
-            long handle = accelerationStructure.get(0);
+            handle = accelerationStructure.get(0);
             RtDebugLabels.nameAccelerationStructure(ctx, handle, label);
-            slot.scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
             VkAccelerationStructureDeviceAddressInfoKHR addressInfo =
                     VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack).sType$Default()
                             .accelerationStructure(handle);
             slot.accel = new RtAccel(vk, handle,
                     new VulkanDeviceAddress(vkGetAccelerationStructureDeviceAddressKHR(vk, addressInfo)), backing);
+            slot.scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
+        } catch (RuntimeException | Error failure) {
+            if (slot.scratch != null) slot.scratch.destroy();
+            if (slot.accel != null) slot.accel.destroy();
+            else {
+                if (handle != 0) vkDestroyAccelerationStructureKHR(vk, handle, null);
+                if (backing != null) backing.destroy();
+            }
+            if (slot.instanceBuffer != null) slot.instanceBuffer.destroy();
+            throw failure;
         }
-        // Registered only once every member exists, so retirement never runs against a half-built slot.
-        graphicsUse.whenComplete(slot::destroy);
         return slot;
     }
 

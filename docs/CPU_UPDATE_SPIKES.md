@@ -25,6 +25,8 @@ or JFR exports run during timed captures.
 | Individual ranges, batch validation | 8.33 ms | 15.25 ms | 26.33 ms | 77.58 ms | 2.71 ms | 0.207 MB |
 | Shared batches, cheaper terrain selection | 8.06 ms | 15.55 ms | 25.64 ms | 80.98 ms | 2.46 ms | 0.170 MB |
 | Separate emitter layout | 7.14 ms | 15.48 ms | 25.67 ms | 81.29 ms | 1.94 ms | 0.191 MB |
+| Completed TLAS slot reuse | 7.35 ms | 15.20 ms | 31.34 ms | 82.30 ms | 2.00 ms | 0.213 MB |
+| TLAS slot reuse with changed-page input copies | 7.08 ms | 15.50 ms | 25.74 ms | 79.32 ms | 1.87 ms | 0.207 MB |
 
 The first individual-range implementation regressed CPU performance despite
 reducing packing. JFR showed full-instance identity-map/residency scans on the
@@ -83,6 +85,53 @@ emitter membership/reindexing, light capacity, and terrain selection equivalence
 The client completed all captures and clean shutdown. A post-capture terrain image
 was inspected; this is not a quantitative visual-latency test.
 
+## TLAS storage reuse
+
+The following iteration shares the existing completion-slot pool between trace
+tables and TLAS storage. Only completed slots are reusable. Each TLAS slot retains
+its acceleration structure, scratch, and mapped instance buffer with power-of-two
+capacity headroom; actual build counts remain independent of capacity. Closing the
+pool retires completed storage and handles late returns without waiting. At 46,658
+instances this reserves 65,536 entries; at 27,355 it reserves 32,768. This trades
+bounded capacity headroom for avoiding repeated GPU allocation.
+
+Pool-only normal-flight reservation averaged 0.002 ms versus 0.062 ms before reuse.
+Its maximum-speed interval averaged 14.19 ms, p99 35.23 ms. These results demonstrate
+lower reservation cost, not an overall tail improvement. The first pool launch
+failed before profiling with the same server-side `Biome.shouldFreeze` null-position
+crash previously seen at baseline; the retry completed the captures and shutdown.
+
+Pooled instance inputs also retain immutable CPU page identities. Changed page
+identities or byte offsets trigger copying; unchanged pages retain their mapped
+bytes. Direct packing invalidates this cache. A failed write/flush cannot publish
+new cache state. Empty or smaller builds use their actual count, so they do not
+read stale tail bytes. TLAS construction itself still runs for every frame.
+
+The combined candidate measured static geometry preparation at 0.494 ms and
+TLAS packing at 0.032 ms/job. Normal-flight TLAS packing averaged 0.255 ms/job
+versus 0.345 ms for pool-only input copying. Reservation remained 0.002 ms.
+Normal-flight active geometry was 46,741, close to baseline's 46,855; mean interval
+was about 19% lower than baseline, but p99 was unchanged within observed variation.
+At maximum speed the combined candidate averaged 14.26 ms per interval,
+p95 24.79 ms, p99 33.64 ms, maximum 51.43 ms. Maximum-speed geometry preparation
+still averaged 3.74 ms; this remains a material cost. There is no demonstrated
+elimination of update spikes.
+
+In the final maximum-speed capture, 135,035 terrain-ready observations reached
+assembly within 0–1 frames. Publication-worker duration averaged 0.0176 ms,
+p99 0.0898 ms, maximum 6.66 ms. No ZGC allocation stalls were recorded. Worker
+execution samples still emphasize emitter-index lookup/remapping and terrain
+meshing; render samples emphasize residency lookups and pending-terrain ranking.
+
+Final validation: 149 renderer-raytracing, 49 renderer-runtime, and 154
+Minecraft-client tests pass (352 total). New tests cover completion-only reuse,
+late shutdown returns, rejected reservations, capacity growth/shrink, untouched
+packing headroom, and page-copy identity/offset changes. The final client completed
+all captures and clean shutdown. After the post-flight teleport, an immediate
+image still showed loading terrain; after 200 ticks, the expected terrain view
+was present and was inspected. The original camera and temporary flight speed
+were restored; default resolution remains in use.
+
 Manifests and reports are under ignored `tmp/cpu-optimization/`; raw JFR files
 are under `run/caustica-debug/`.
 
@@ -97,6 +146,12 @@ are under `run/caustica-debug/`.
 - `emitter-layout-{static,fast,max}`: final emitter-specific invalidation; fast
   `recording-08bbee11-0f86-4774-bd4d-4e0f9530759a.jfr`, maximum-speed
   `recording-f9e0f598-02e4-4dbd-bc55-fc62fd98813e.jfr`.
+- `tlas-pool-{static,fast,max}`: completed TLAS storage reuse; fast
+  `recording-6c8bb1d1-4b8e-49bc-a7cf-59f241875e6d.jfr`, maximum-speed
+  `recording-3c9ed091-7df2-4f2f-8005-b3e772271329.jfr`.
+- `tlas-delta-{static,fast,max}`: final combined candidate; fast
+  `recording-bf1ba9e6-61b9-4475-863f-69e247c5c567.jfr`, maximum-speed
+  `recording-c7a22b37-9469-44c0-97d4-dd0de6036c66.jfr`.
 
 ## Stable views and remaining work
 
@@ -107,7 +162,24 @@ writers remain in use; no handwritten memory layout optimization is claimed.
 
 Emitter membership has its own revision, so unrelated nonemitting changes retain
 linked-light results. Production plan resolution no longer flattens all instances;
-unchanged page translation maps are shared. Remaining costs include TLAS allocation
-and descriptor copying, emitter remapping on actual light changes, page-directory
+unchanged page translation maps are shared. Remaining costs include TLAS growth
+and changed descriptor copying, emitter remapping on actual light changes, page-directory
 assembly, publication synchronization, Minecraft extraction and vanilla light updates. Further iterations
 must measure tails and worker costs rather than rely on mean CPU frame rate.
+
+The remaining synchronization is architectural: `RtFramePreparation.Batch.close`
+joins work launched after frame capture. Its tasks borrow frame roots and mapped
+slots, so deleting the joins would permit rendering or retirement while writes
+continue. The next boundary is preparation of a ready atomic edit group before
+logical publication. A worker can prepare mesh-invariant templates, changed
+instance/trace batches, matching light indices/emitter mappings, and independently
+owned buffer revisions against a retained base. Final generation validation and
+one atomic commit install the group. Superseded work releases its claims; previous
+committed revisions remain owned by frames and motion history. This must use the
+engine's scene grouping contract, rather than a separate terrain-only scene path.
+
+Camera inputs, accepted-frame motion history, graphics-use reservation, command
+recording, TLAS construction, and screen-space lighting/history remain frame-specific.
+Ready work can reach the next capture; work that is not ready leaves the previous
+coherent content visible. Measure preparation-ready, logical-publication, assembly,
+and presentation separately so moving work earlier does not conceal update latency.

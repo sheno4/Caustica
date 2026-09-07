@@ -25,6 +25,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.TlasBuilder;
+import dev.comfyfluffy.caustica.renderer.raytracing.resource.RtCompletionSlotPool;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import org.lwjgl.system.MemoryUtil;
@@ -50,7 +51,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final VulkanDeviceContext ctx;
     private final RtNeeAtBackend neeAt;
     private final RtFramePreparation framePreparation = new RtFramePreparation();
-    private final RtTraceSlotPool<TraceSlot> traceSlots;
+    private final RtCompletionSlotPool<TraceSlot> traceSlots;
+    private final TlasBuilder.Pool tlasSlots;
     private final Map<GraphicsUse, FrameSnapshot> inFlightFrames = new IdentityHashMap<>();
     private final Map<SceneId, SharedResource<SceneMotionHistory>> motionHistoryByScene = new IdentityHashMap<>();
     private final FrameAssembly frameAssembly = new FrameAssembly(mesh ->
@@ -71,7 +73,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     public RtRetainedSceneBackend(VulkanDeviceContext ctx) {
         this.ctx = Objects.requireNonNull(ctx);
         this.neeAt = new RtNeeAtBackend(ctx);
-        this.traceSlots = new RtTraceSlotPool<>(slot -> ctx.deferDestroy(slot::destroy));
+        this.traceSlots = new RtCompletionSlotPool<>(slot -> ctx.deferDestroy(slot::destroy));
+        this.tlasSlots = new TlasBuilder.Pool(ctx);
     }
 
     @Override public synchronized void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
@@ -149,7 +152,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(origin, "origin");
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
-        return TlasBuilder.prepare(ctx, current.instances, tlasWriter(origin), graphicsUse);
+        return TlasBuilder.pack(tlasSlots.reserve(current.instances.size(), graphicsUse), current.instances, tlasWriter(origin));
     }
 
     private static TlasBuilder.InstanceWriter<FrameInstanceSnapshot> tlasWriter(SceneOrigin origin) {
@@ -179,7 +182,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                                                                     RtPipeline pipeline, GraphicsUse graphicsUse) {
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
         TlasBuilder.Reserved reserved = RtFramePreparation.measure("tlas-reserve", current.instances.size(), 0,
-                () -> TlasBuilder.reserve(ctx, current.instances.size(), graphicsUse));
+                () -> tlasSlots.reserve(current.instances.size(), graphicsUse));
         TlasBuilder.Prepared[] tlas = new TlasBuilder.Prepared[1];
         RtPackedTlasPages packedTlas = packedTlasByScene.computeIfAbsent(scene, ignored -> new RtPackedTlasPages());
         PendingTrace trace;
@@ -456,6 +459,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         capture = null;
         neeAt.destroyAfterDeviceIdle();
         traceSlots.close();
+        tlasSlots.close();
     }
 
     private void releaseTerminalFrameRoots() {
@@ -1516,17 +1520,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
         try {
             geometry = ctx.createMappedGpuUploadBuffer(
-                    RtTraceSlotPool.capacity(Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes)),
+                    RtCompletionSlotPool.capacity(Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes)),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained geometry records");
             hits = ctx.createMappedGpuUploadBuffer(
-                    RtTraceSlotPool.capacity(Math.max(pipeline.retainedHitRecordStride(), hitBytes)),
+                    RtCompletionSlotPool.capacity(Math.max(pipeline.retainedHitRecordStride(), hitBytes)),
                     VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, "retained hit SBT",
                     pipeline.retainedHitTableAlignment());
             lights = ctx.createMappedGpuUploadBuffer(
-                    RtTraceSlotPool.capacity(Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes)),
+                    RtCompletionSlotPool.capacity(Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes)),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained light records");
             emitters = ctx.createMappedGpuUploadBuffer(
-                    RtTraceSlotPool.capacity(Math.max(Integer.BYTES, emitterBytes)),
+                    RtCompletionSlotPool.capacity(Math.max(Integer.BYTES, emitterBytes)),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained primitive-light indices");
             descriptor = ctx.descriptorHeap().allocateResources(1);
             return new TraceSlot(geometry, hits, lights, emitters, descriptor);

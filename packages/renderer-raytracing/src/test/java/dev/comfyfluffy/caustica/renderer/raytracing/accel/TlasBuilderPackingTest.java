@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 class TlasBuilderPackingTest {
     @Test void workerPacksEveryFieldInPageOrderWithoutOverwritingTheNextRecord() throws Exception {
         var instances = SnapshotList.ofPages(List.of(List.of(7, 2), List.of(19)));
-        int bytes = VkAccelerationStructureInstanceKHR.SIZEOF * (instances.size() + 1);
+        int bytes = VkAccelerationStructureInstanceKHR.SIZEOF * TlasBuilder.capacity(instances.size());
         var memory = MemoryUtil.memAlloc(bytes);
         for (int index = 0; index < bytes; index++) memory.put(index, (byte) 0x5a);
         long address = MemoryUtil.memAddress(memory);
