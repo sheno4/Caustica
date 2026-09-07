@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class RtPackedTlasPagesTest {
     private static final SceneOrigin ORIGIN = new SceneOrigin(17, -3, 29);
 
-    @Test void reusesRangeDespiteDifferentPreviousMotionAndListIdentity() {
+    @Test void reusesUnchangedCurrentPageAcrossFrameContainers() {
         var cache = new RtPackedTlasPages();
         var range = range();
         var calls = new AtomicInteger();
@@ -25,14 +25,26 @@ class RtPackedTlasPagesTest {
             calls.incrementAndGet();
             write(input, target, ORIGIN);
         };
-        var moving = List.of(new Input(range, 7, 2));
-        var stationary = List.of(new Input(range, 7, 7));
-        var first = cache.resolve(moving, Input::range, ORIGIN, writer);
-        var second = cache.resolve(stationary, Input::range, new SceneOrigin(17, -3, 29), writer);
+        var current = List.of(new Input(range, 7, 2));
+        var first = cache.resolve(SnapshotList.ofPages(List.of(current)), ORIGIN, writer);
+        var second = cache.resolve(SnapshotList.ofPages(List.of(current)), new SceneOrigin(17, -3, 29), writer);
         assertSame(first.getFirst(), second.getFirst());
         assertEquals(1, calls.get());
         assertFalse(first.getFirst().isDirect());
         assertTrue(first.getFirst().isReadOnly());
+    }
+
+    @Test void changingNonFirstInstanceRebuildsOnlyItsCurrentPage() {
+        var cache = new RtPackedTlasPages();
+        var first = new Input(range(), 7, 2);
+        var page = List.of(first, new Input(range(), 9, 2));
+        var stable = List.of(new Input(range(), 5, 5));
+        var before = resolve(cache, SnapshotList.ofPages(List.of(page, stable)), ORIGIN);
+        var changed = List.of(first, new Input(range(), 13, 9));
+        var after = resolve(cache, SnapshotList.ofPages(List.of(changed, stable)), ORIGIN);
+        assertNotEquals(before.getFirst(), after.getFirst());
+        assertSame(before.getLast(), after.getLast());
+        assertEquals(before.getFirst(), resolve(new RtPackedTlasPages(), page, ORIGIN).getFirst());
     }
 
     @Test void newRangeGenerationAndOriginRepackCurrentFields() {
@@ -84,7 +96,7 @@ class RtPackedTlasPagesTest {
     }
 
     private static List<ByteBuffer> resolve(RtPackedTlasPages cache, List<Input> inputs, SceneOrigin origin) {
-        return cache.resolve(inputs, Input::range, origin, (input, target) -> write(input, target, origin));
+        return cache.resolve(inputs, origin, (input, target) -> write(input, target, origin));
     }
 
     private static void write(Input input, VkAccelerationStructureInstanceKHR target, SceneOrigin origin) {

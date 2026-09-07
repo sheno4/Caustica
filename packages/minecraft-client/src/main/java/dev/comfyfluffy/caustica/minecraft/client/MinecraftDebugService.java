@@ -172,11 +172,23 @@ public final class MinecraftDebugService implements AutoCloseable {
             }
             case "input.set" -> {
                 requireWorld();
+                var abilities = client.player.getAbilities();
+                float previousFlyingSpeed = abilities.getFlyingSpeed();
+                if (request.has("flyingSpeed")) {
+                    float flyingSpeed = request.get("flyingSpeed").getAsFloat();
+                    if (!client.player.isSpectator())
+                        throw new IllegalArgumentException("flyingSpeed requires spectator mode");
+                    if (!Float.isFinite(flyingSpeed) || flyingSpeed < 0.0f || flyingSpeed > 0.2f)
+                        throw new IllegalArgumentException("flyingSpeed must be finite and between 0 and 0.2");
+                    abilities.setFlyingSpeed(flyingSpeed);
+                }
                 client.setScreenAndShow(null);
                 client.options.keyUp.setDown(request.has("forward") && request.get("forward").getAsBoolean());
                 client.options.keySprint.setDown(request.has("sprint") && request.get("sprint").getAsBoolean());
                 future.complete(Map.of("forward", client.options.keyUp.isDown(),
-                        "sprint", client.options.keySprint.isDown()));
+                        "sprint", client.options.keySprint.isDown(),
+                        "previousFlyingSpeed", previousFlyingSpeed,
+                        "currentFlyingSpeed", abilities.getFlyingSpeed()));
             }
             case "command" -> command(request, future);
             case "screenshot", "image.capture" -> {
@@ -205,7 +217,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                 } else {
                     events.addAll(List.of("Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
                             "GeometryBuildReadyLatency", "BlasCommandRecord", "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
-                            "GpuStage", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication"));
+                            "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication"));
                 }
                 for (String name : events)
                     recording.enable("dev.comfyfluffy.caustica." + name).withThreshold(java.time.Duration.ZERO);
@@ -277,7 +289,9 @@ public final class MinecraftDebugService implements AutoCloseable {
         if (client.level != null) result.put("world", Map.of("dimension", client.level.dimension().toString(),
                 "gameTime", client.level.getGameTime()));
         if (client.player != null) result.put("player", Map.of("x", client.player.getX(), "y", client.player.getY(),
-                "z", client.player.getZ(), "yaw", client.player.getYRot(), "pitch", client.player.getXRot()));
+                "z", client.player.getZ(), "yaw", client.player.getYRot(), "pitch", client.player.getXRot(),
+                "currentFlyingSpeed", client.player.getAbilities().getFlyingSpeed(),
+                "flying", client.player.getAbilities().flying, "sprinting", client.player.isSprinting()));
         if (client.level != null) {
             var camera = client.gameRenderer.mainCamera();
             var position = camera.position();

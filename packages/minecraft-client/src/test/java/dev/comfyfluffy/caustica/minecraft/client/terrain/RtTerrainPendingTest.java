@@ -6,6 +6,44 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class RtTerrainPendingTest {
     @Test
+    void selectionSkipsAvailabilityChecksForLowerPriorityRequests() {
+        var updates = new TerrainUpdates<String>();
+        for (int key = 1; key <= 1000; key++) updates.want(key);
+        var checked = new java.util.ArrayList<Long>();
+        var selected = updates.selectPending(2,
+                java.util.Comparator.comparingLong(request -> request.section.key), request -> {
+                    checked.add(request.section.key);
+                    return request.section.key != 1;
+                });
+        assertEquals(List.of(2L, 3L), selected.stream().map(request -> request.section.key).toList());
+        assertEquals(List.of(1L, 2L, 3L), checked);
+        assertEquals(1000, updates.pending().size());
+    }
+
+    @Test
+    void selectionPreservesTopAvailableRequestsAcrossInsertionOrdersAndRetries() {
+        var random = new java.util.Random(42);
+        for (int pass = 0; pass < 20; pass++) {
+            var updates = new TerrainUpdates<String>();
+            var keys = new java.util.ArrayList<Long>();
+            for (long key = 0; key < 100; key++) keys.add(key);
+            java.util.Collections.shuffle(keys, random);
+            keys.forEach(updates::want);
+            var order = java.util.Comparator
+                    .comparingInt((TerrainUpdates.Request<String> request) -> request.section.ready ? 0 : 1)
+                    .thenComparingLong(request -> request.section.key);
+            for (long key : keys) updates.sections.get(key).ready = key % 3 == 0;
+            var retried = updates.sections.get(9).request;
+            updates.dispatched(retried);
+            updates.retry(retried);
+            var expected = updates.pending().stream().filter(request -> request.section.key % 5 != 0)
+                    .sorted(order).limit(7).toList();
+            var selected = updates.selectPending(7, order, request -> request.section.key % 5 != 0);
+            assertEquals(expected, selected);
+        }
+    }
+
+    @Test
     void dispatchRetryAndCompletionOnlyVisitPendingWork() {
         var updates = new TerrainUpdates<String>();
         updates.want(1);

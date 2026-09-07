@@ -11,22 +11,19 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.function.Function;
 
-/** Range generations fix current TLAS fields; cached bytes borrow BLAS addresses owned by the frame. */
+/** Immutable current-instance pages fix TLAS fields; cached bytes borrow BLAS addresses owned by the frame. */
 final class RtPackedTlasPages {
-    private IdentityHashMap<RtStableTraceRanges.PageRange, Page> cached = new IdentityHashMap<>();
+    private IdentityHashMap<List<?>, Page> cached = new IdentityHashMap<>();
     private ByteBuffer scratch = ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder());
 
     /** One joined packing worker owns this cache and its scratch; previous motion does not affect TLAS fields. */
-    <T> List<ByteBuffer> resolve(List<T> instances, Function<T, RtStableTraceRanges.PageRange> range,
-                               SceneOrigin origin, TlasBuilder.InstanceWriter<T> writer) {
+    <T> List<ByteBuffer> resolve(List<T> instances, SceneOrigin origin, TlasBuilder.InstanceWriter<T> writer) {
         var result = new ArrayList<ByteBuffer>();
-        var next = new IdentityHashMap<RtStableTraceRanges.PageRange, Page>();
+        var next = new IdentityHashMap<List<?>, Page>();
         for (List<T> input : SnapshotList.pagesOf(instances)) {
             if (input.isEmpty()) continue;
-            var identity = range.apply(input.getFirst());
-            Page page = cached.get(identity);
+            Page page = cached.get(input);
             if (page == null || !page.origin.equals(origin)) {
                 int bytes = Math.multiplyExact(input.size(), VkAccelerationStructureInstanceKHR.SIZEOF);
                 if (scratch.capacity() < bytes) {
@@ -40,7 +37,7 @@ final class RtPackedTlasPages {
                 page = new Page(origin, packed.asReadOnlyBuffer().order(ByteOrder.nativeOrder()));
             }
             result.add(page.bytes);
-            next.put(identity, page);
+            next.put(input, page);
         }
         cached = next;
         return List.copyOf(result);

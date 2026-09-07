@@ -29,11 +29,11 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | Operation | Arguments / result |
 | --- | --- |
 | `schema` | Available operations, named views and raw image names |
-| `status` | World/player/camera, renderer state, settings and latest recorded counters |
+| `status` | World/player/camera, renderer state, settings and latest recorded counters. The player includes `currentFlyingSpeed`, `flying`, and `sprinting`. |
 | `settings.get` | Setting IDs, values and whether JVM overrides apply |
 | `settings.set` | `values` mapping setting IDs to primitive values; JVM overrides cannot be changed |
 | `view.set` | `name` from schema; `off` restores normal presentation |
-| `input.set` | `forward` and `sprint` booleans (default false); closes the current screen and holds the corresponding game keys for continuous flight. Use spectator mode and a level camera for repeatable routes; call with no arguments to release both keys. |
+| `input.set` | `forward` and `sprint` booleans (default false); closes the current screen and holds the corresponding game keys for continuous flight. Optional `flyingSpeed` sets the spectator ability speed: a finite number from 0 to 0.2, matching the mouse-wheel range. Omission leaves speed unchanged. Returns `previousFlyingSpeed` and `currentFlyingSpeed` alongside key states. Call with no arguments to release both keys. |
 | `wait` | `frames` and/or `ticks`; world required, counts must advance |
 | `command` | `command` without slash; default `target:server` executes on the integrated server with player permissions and returns a result; `target:client` sends through the normal network connection and confirms dispatch only |
 | `screenshot` | PNG path after completion |
@@ -43,6 +43,10 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | `jfr.stop` | Stop/save recording and return its path |
 | `job` | `jobId`; returns pending/completed/failed state |
 | `client.stop` | Stop the debug client gracefully after returning acknowledgement |
+
+For repeatable flight routes, use spectator mode and a level camera. Ability speed defaults to `0.05`; `0.2` is the maximum mouse-wheel speed. With sprint held, steady horizontal speeds are approximately 21.78 and 87.11 blocks per second respectively at 20 ticks per second. The ability value is an acceleration parameter, not blocks per second. Read `status.player.currentFlyingSpeed` to record the actual configuration; a previous mouse-wheel adjustment can change it.
+
+Save the `previousFlyingSpeed` returned by the initial `input.set` call. In the benchmark's `finally` block, call `input.set` with `forward:false`, `sprint:false`, and `flyingSpeed` set to that saved value while still in spectator mode. Releasing keys alone leaves the ability speed unchanged. The override uses the same client ability setter as spectator mouse-wheel input.
 
 Direct clients POST JSON `{ "op": "status" }` to the discovery `baseUrl` plus `/api`, with `Authorization: Bearer TOKEN`. Replies are `{ok:true,jobId}` or `{ok:true,result}`; poll `job` for asynchronous completion. Errors have `ok:false,error` or a failed job. Discovery includes `protocolVersion` and process ID.
 

@@ -61,7 +61,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final RtLightPageAssembly lightAssembly = new RtLightPageAssembly();
     private final Map<SceneId, LightIndexRevision> lightIndicesByScene = new IdentityHashMap<>();
     private final Map<SceneId, TracePlanCache> tracePlansByScene = new IdentityHashMap<>();
-    private final Map<SceneId, IdentityHashMap<RtStableTraceRanges.PageRange, EmitterPageCache>> emitterPagesByScene = new IdentityHashMap<>();
+    private final Map<SceneId, EmitterCaches> emitterPagesByScene = new IdentityHashMap<>();
     private final Map<SceneId, RtPackedLightPages> packedLightsByScene = new IdentityHashMap<>();
     private final Map<SceneId, RtPackedTlasPages> packedTlasByScene = new IdentityHashMap<>();
     private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
@@ -163,6 +163,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         };
     }
 
+    private static TlasBuilder.InstanceWriter<LatchedInstance> latchedWriter(SceneOrigin origin) {
+        return (instance, target) -> {
+            target.transform().matrix().put(instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z()));
+            target.instanceCustomIndex(instance.geometryBase)
+                    .mask(instance.current.mask())
+                    .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset)
+                    .flags(org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
+                    .accelerationStructureReference(instance.nativeInstance.mesh.blas().accel.deviceAddress.value());
+        };
+    }
+
     /** Joins TLAS packing and trace preparation before exposing frame-owned geometry for recording. */
     public synchronized PreparedWorldGeometry prepareWorldGeometry(SceneId scene, SceneOrigin origin,
                                                                     RtPipeline pipeline, GraphicsUse graphicsUse) {
@@ -174,8 +185,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         PendingTrace trace;
         try (var batch = framePreparation.batch()) {
             batch.submit(RtFramePreparation.measured("tlas-pack", current.instances.size(), 0,
-                    () -> tlas[0] = TlasBuilder.packPages(reserved, packedTlas.resolve(current.instances,
-                            FrameInstanceSnapshot::range, origin, tlasWriter(origin)))));
+                    () -> tlas[0] = TlasBuilder.packPages(reserved, packedTlas.resolve(current.tlasInstances,
+                            origin, latchedWriter(origin)))));
             trace = prepareTraceGeometry(scene, current, origin, pipeline, graphicsUse);
         }
         return new PreparedWorldGeometry(tlas[0], trace);
@@ -231,7 +242,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         int geometryCount = current.geometryHighWater;
         List<List<FrameInstanceSnapshot>> pageInputs = SnapshotList.pagesOf(current.instances);
         LightIndexRevision[] preparedIndex = {indexed};
-        TracePagePlan[] pages;
+        var tracePlans = tracePlansByScene.computeIfAbsent(scene, ignored -> new TracePlanCache());
+        TraceBatch[] pages;
         try (var batch = framePreparation.batch()) {
             if (rebuildLightIndices) {
                 batch.submit(RtFramePreparation.measured("light-index", 0, sceneLights.size(),
@@ -242,8 +254,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                             preparedIndex[0] = new LightIndexRevision(sceneLights, indices);
                         }));
             }
-            pages = tracePlansByScene.computeIfAbsent(scene, ignored -> new TracePlanCache())
-                    .resolve(pageInputs, framePreparation);
+            pages = tracePlans.resolveBatches(pageInputs, framePreparation);
         }
         LightIndexRevision lightIndexRevision = preparedIndex[0];
         if (rebuildLightIndices) lightIndicesByScene.put(scene, lightIndexRevision);
@@ -255,39 +266,52 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         int lightBytes = Math.multiplyExact(sceneLights.size(), RtRetainedLightPlan.RECORD_BYTES);
         TraceSlot slot = acquireTraceSlot(geometryBytes, hitBytes, lightBytes, emitterBytes,
                 pipeline, graphicsUse);
-        var activeResidencies = new IdentityHashMap<RtStableTraceRanges.PageRange, TracePageResidency>();
-        var emitterPages = emitterPagesByScene.computeIfAbsent(scene, ignored -> new IdentityHashMap<>());
+        var emitterCaches = emitterPagesByScene.computeIfAbsent(scene, ignored -> new EmitterCaches());
+        var emitterPages = emitterCaches.pages;
         List<TracePageWork> writes = new ArrayList<>();
+        List<TraceBatchResidency> checkedBatches = new ArrayList<>();
         boolean flushGeometry = false, flushHits = false;
         int activeGeometryRecords = 0;
         int activeEmitterBytes = 0;
+        int activeInstances = 0;
         for (int index = 0; index < pages.length; index++) {
-            TracePagePlan page = pages[index];
-            activeGeometryRecords = Math.addExact(activeGeometryRecords, page.records.size());
-            activeEmitterBytes = Math.addExact(activeEmitterBytes, page.emitterBytes);
-            TracePageResidency residency = activeResidencies.computeIfAbsent(page.range, slot::page);
-            int emitterBase = page.range.emitterBase();
-            long emitterAddress = page.emitterBytes == 0 ? 0L
-                    : slot.emitters.deviceAddress().addBytes(emitterBase).value();
-            int flags = 0;
-            if (!residency.hasGeometry(page.identity, page.geometryBase, origin, emitterAddress)) {
-                flags |= TracePageWork.GEOMETRY;
-                flushGeometry = true;
+            TraceBatch batch = pages[index];
+            activeGeometryRecords = Math.addExact(activeGeometryRecords, batch.geometryCount);
+            activeEmitterBytes = Math.addExact(activeEmitterBytes, batch.emitterBytes);
+            activeInstances = Math.addExact(activeInstances, batch.plans.length);
+            var batchResidency = slot.batch(batch, pages);
+            boolean geometryResident = batchResidency.hasGeometry(origin, pipeline);
+            boolean emittersResident = batch.emitterBytes == 0 || batchResidency.hasEmitters(lightIndexRevision);
+            if (geometryResident && emittersResident) continue;
+            checkedBatches.add(batchResidency);
+            for (var page : geometryResident ? batch.emitters : batch.plans) {
+                TracePageResidency residency = slot.page(page.range, batchResidency);
+                int emitterBase = page.range.emitterBase();
+                long emitterAddress = page.emitterBytes == 0 ? 0L
+                        : slot.emitters.deviceAddress().addBytes(emitterBase).value();
+                int flags = 0;
+                if (!geometryResident && !residency.hasGeometry(page.identity, page.geometryBase, origin, emitterAddress)) {
+                    flags |= TracePageWork.GEOMETRY;
+                    flushGeometry = true;
+                }
+                if (!geometryResident && !residency.hasHits(page.identity, page.hitBase(pipeline), pipeline)) {
+                    flags |= TracePageWork.HITS;
+                    flushHits = true;
+                }
+                EmitterPageCache emitterPage = null;
+                if (!emittersResident && page.emitterBytes != 0) {
+                    emitterPage = emitterPages.computeIfAbsent(page.range, ignored -> new EmitterPageCache());
+                    if (emitterPage.runs == null || !emitterPage.runs.hasRevision(lightIndexRevision)
+                            || !residency.hasEmitters(page.range, emitterBase, emitterPage.runs.generation())) {
+                        flags |= TracePageWork.EMITTERS;
+                    }
+                }
+                if (flags != 0) writes.add(new TracePageWork(page, residency, slot, origin,
+                        emitterBase, pipeline, lightIndexRevision, lightIndices, emitterPage, flags));
             }
-            if (!residency.hasHits(page.identity, page.hitBase(pipeline), pipeline)) {
-                flags |= TracePageWork.HITS;
-                flushHits = true;
-            }
-            EmitterPageCache emitterPage = emitterPages.computeIfAbsent(page.range, ignored -> new EmitterPageCache());
-            if (emitterPage.runs == null || !emitterPage.runs.hasRevision(lightIndexRevision)
-                    || !residency.hasEmitters(page.range, emitterBase, emitterPage.runs.generation())) {
-                flags |= TracePageWork.EMITTERS;
-            }
-            if (flags != 0) writes.add(new TracePageWork(page, residency, slot, origin,
-                    emitterBase, pipeline, lightIndexRevision, lightIndices, emitterPage, flags));
         }
         RtFramePreparation.traceRanges(activeGeometryRecords, geometryCount,
-                activeEmitterBytes, emitterBytes, pages.length);
+                activeEmitterBytes, emitterBytes, activeInstances);
         if (!writes.isEmpty()) {
             List<List<TracePageWork>> writeChunks = RtFramePreparation.chunks(writes, TracePageWork::work);
             framePreparation.run("pack", writeChunks,
@@ -300,9 +324,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         for (TracePageWork write : writes) flushEmitters |= write.emittersWritten;
         if (flushEmitters) slot.emitters.flush(0L, emitterBytes);
         writes.forEach(TracePageWork::commit);
-        emitterPages.keySet().retainAll(activeResidencies.keySet());
-        BitSet linked = new BitSet(sceneLights.size());
-        for (TracePageResidency residency : activeResidencies.values()) residency.addLinkedEmittersTo(linked);
+        for (var batch : checkedBatches) batch.written(origin, pipeline, lightIndexRevision);
+        slot.retainPages(pages);
+        var emitterLayout = tracePlans.emitterLayout;
+        if (emitterCaches.layout != emitterLayout) {
+            emitterPages.keySet().retainAll(slot.pages.keySet());
+            emitterCaches.layout = emitterLayout;
+        }
+        BitSet linked = slot.linked(emitterLayout, lightIndexRevision);
         List<ByteBuffer> lightPages = packedLightsByScene.computeIfAbsent(scene, ignored -> new RtPackedLightPages())
                 .resolve(sceneLights, origin, linked, framePreparation);
         List<ByteBuffer> previousLightPages = slot.lightPages;
@@ -322,7 +351,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         if (copiedLights) slot.lights.flush(0L, lightBytes);
         slot.lightPages = lightPages;
-        slot.retainPages(activeResidencies);
         RtPipeline.HitTable hitTable = hitBytes > 0 ? new RtPipeline.HitTable(
                 new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hitBytes),
                 pipeline.retainedHitRecordStride()) : null;
@@ -586,13 +614,26 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             if (!replacedPrograms && assembledInstances == snapshot.instances() && assembledScenes == snapshot.scenes()) {
                 return assembledPages;
             }
-            Map<SceneId, List<InstancePage>> reusablePages = replacedPrograms ? null : assembledPages;
             List<List<RetainedSceneSnapshot.Instance>> sourcePages = SnapshotList.pagesOf(snapshot.instances());
             var retainedSources = new IdentityHashMap<List<RetainedSceneSnapshot.Instance>, Boolean>();
             for (var source : sourcePages) retainedSources.put(source, Boolean.TRUE);
+            var changedInstances = new Long2ObjectOpenHashMap<RetainedSceneSnapshot.Instance>();
+            for (var source : sourcePages) {
+                if (!previousInstancePages.containsKey(source)) {
+                    for (var instance : source) changedInstances.put(instance.placementOrdinal(), instance);
+                }
+            }
+            var previousInstances = new Long2ObjectOpenHashMap<InstancePage>();
             for (var entry : previousInstancePages.entrySet()) {
                 if (retainedSources.containsKey(entry.getKey())) continue;
-                entry.getValue().forEach((scene, page) -> traceRanges.get(scene).release(page.range));
+                entry.getValue().forEach((scene, page) -> {
+                    for (var instance : page.instances) {
+                        var next = changedInstances.get(instance.nativeInstance.placementOrdinal);
+                        if (next != null && next.scene() == scene && next.identity() == instance.current.identity()) {
+                            previousInstances.put(instance.nativeInstance.placementOrdinal, page);
+                        } else traceRanges.get(scene).release(instance.range);
+                    }
+                });
             }
             var nextPages = new IdentityHashMap<List<RetainedSceneSnapshot.Instance>, Map<SceneId, InstancePage>>();
             Map<SceneId, List<InstancePage>> resolved = new IdentityHashMap<>();
@@ -601,31 +642,27 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             }
             for (var source : sourcePages) {
                 var previous = previousInstancePages.get(source);
-                Map<SceneId, InstancePage> translated = new IdentityHashMap<>();
+                Map<SceneId, InstancePage> translated = previous != null
+                        && (assembledScenes == snapshot.scenes() || resolved.keySet().containsAll(previous.keySet()))
+                        ? previous : new IdentityHashMap<>();
                 if (previous != null) {
                     previous.forEach((scene, page) -> {
                         List<InstancePage> scenePages = resolved.get(scene);
                         if (scenePages == null) {
-                            traceRanges.get(scene).release(page.range);
+                            page.instances.forEach(instance -> traceRanges.get(scene).release(instance.range));
                             return;
                         }
-                        translated.put(scene, page);
+                        if (translated != previous) translated.put(scene, page);
                         scenePages.add(page);
                     });
                 } else {
-                    Map<SceneId, List<NativeInstance>> instances = new IdentityHashMap<>();
+                    Map<SceneId, List<RetainedSceneSnapshot.Instance>> instances = new IdentityHashMap<>();
                     for (var instance : source) {
-                        instances.computeIfAbsent(instance.scene(), ignored -> new ArrayList<>()).add(
-                                new NativeInstance(instance, previousFrameMeshes.get(instance.meshIdentity()), instance.placementOrdinal()));
+                        instances.computeIfAbsent(instance.scene(), ignored -> new ArrayList<>()).add(instance);
                     }
                     instances.forEach((scene, values) -> {
-                        int geometryCount = geometryCount(values);
-                        int emitterBytes = emitterBytes(values);
                         var ranges = traceRanges.computeIfAbsent(scene, ignored -> new RtStableTraceRanges());
-                        List<InstancePage> previousPages = reusablePages == null ? null : reusablePages.get(scene);
-                        InstancePage previousPage = previousPages == null ? null
-                                : page(previousPages, values.getFirst().placementOrdinal);
-                        var page = new InstancePage(values, ranges.reserve(geometryCount, emitterBytes), previousPage);
+                        var page = new InstancePage(values, ranges, previousInstances, previousFrameMeshes);
                         translated.put(scene, page);
                         resolved.get(scene).add(page);
                     });
@@ -641,23 +678,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             return assembledPages;
         }
 
-        private static int geometryCount(List<NativeInstance> instances) {
-            int count = 0;
-            for (NativeInstance instance : instances) {
-                count = Math.addExact(count, instance.mesh.logical.build().geometries().size());
-            }
-            return count;
-        }
-
-        private static int emitterBytes(List<NativeInstance> instances) {
+        private static int emitterBytes(RetainedSceneSnapshot.Instance instance, FrameMesh mesh) {
             int bytes = 0;
-            for (NativeInstance instance : instances) {
-                List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
-                for (MeshBuild.Geometry<?> geometry : geometries) {
-                    if (!hasEmitterMapping(instance.logical.primitiveEmitters(), geometry.firstIndex() / 3,
-                            geometry.triangleCount())) continue;
-                    bytes = Math.addExact(bytes, Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
-                }
+            List<? extends MeshBuild.Geometry<?>> geometries = mesh.logical.build().geometries();
+            for (MeshBuild.Geometry<?> geometry : geometries) {
+                if (!hasEmitterMapping(instance.primitiveEmitters(), geometry.firstIndex() / 3,
+                        geometry.triangleCount())) continue;
+                bytes = Math.addExact(bytes, Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
             }
             return bytes;
         }
@@ -749,15 +776,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 int geometryHighWater = 0;
                 int emitterHighWater = 0;
                 var pages = new ArrayList<List<FrameInstanceSnapshot>>();
+                var tlasPages = new ArrayList<List<LatchedInstance>>();
                 for (var page : currentInstances.get(scene)) {
                     pages.add(page.frame(history));
-                    geometryHighWater = Math.max(geometryHighWater,
-                            Math.addExact(page.range.geometryBase(), page.range.geometryCount()));
-                    emitterHighWater = Math.max(emitterHighWater,
-                            Math.addExact(page.range.emitterBase(), page.range.emitterBytes()));
+                    tlasPages.add(page.instances);
+                    geometryHighWater = Math.max(geometryHighWater, page.geometryHighWater);
+                    emitterHighWater = Math.max(emitterHighWater, page.emitterHighWater);
                 }
                 FrameSceneSnapshot created = new FrameSceneSnapshot(
-                        currentContent.get(scene), SnapshotList.ofPages(pages), retainedHistory,
+                        currentContent.get(scene), SnapshotList.ofPages(pages), SnapshotList.ofPages(tlasPages),
+                        currentInstances.get(scene), retainedHistory,
                         geometryHighWater, emitterHighWater);
                 retainedHistory = null;
                 scenes.put(scene, created);
@@ -818,16 +846,21 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private static final class FrameSceneSnapshot implements AutoCloseable {
         final SceneContent content;
         final List<FrameInstanceSnapshot> instances;
+        final List<LatchedInstance> tlasInstances;
+        final Object layout;
         final SharedResource<SceneMotionHistory> previousHistory;
         final int geometryHighWater;
         final int emitterHighWater;
         private boolean traced;
 
-        FrameSceneSnapshot(SceneContent content, List<FrameInstanceSnapshot> instances,
+        FrameSceneSnapshot(SceneContent content, List<FrameInstanceSnapshot> instances, List<LatchedInstance> tlasInstances,
+                           Object layout,
                            SharedResource<SceneMotionHistory> previousHistory,
                            int geometryHighWater, int emitterHighWater) {
             this.content = content;
             this.instances = instances;
+            this.tlasInstances = tlasInstances;
+            this.layout = layout;
             this.previousHistory = previousHistory;
             this.geometryHighWater = geometryHighWater;
             this.emitterHighWater = emitterHighWater;
@@ -842,49 +875,187 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    /** CPU plans follow immutable snapshot-page identity and borrow resources from the consuming frame. */
+    /** CPU plans follow instance revision identity and borrow resources from the consuming frame. */
     static final class TracePlanCache {
-        private IdentityHashMap<List<FrameInstanceSnapshot>, TracePagePlan> plans = new IdentityHashMap<>();
+        private IdentityHashMap<FrameInstanceSnapshot, TracePagePlan> plans = new IdentityHashMap<>();
+        private IdentityHashMap<List<FrameInstanceSnapshot>, TraceBatch> pagePlans = new IdentityHashMap<>();
+        private List<List<FrameInstanceSnapshot>> previousPages;
+        private TracePagePlan[] previousPlans;
+        private TraceBatch[] previousBatches;
+        private EmitterLayout emitterLayout;
 
-        TracePagePlan[] resolve(List<List<FrameInstanceSnapshot>> pages, RtFramePreparation preparation) {
-            TracePagePlan[] resolved = new TracePagePlan[pages.size()];
+        EmitterLayout emitterLayout() { return emitterLayout; }
+
+        TraceBatch[] resolveBatches(List<List<FrameInstanceSnapshot>> pages, RtFramePreparation preparation) {
+            if (previousPages != null && previousPages.size() == pages.size()) {
+                boolean unchanged = true;
+                for (int index = 0; index < pages.size(); index++) {
+                    if (previousPages.get(index) != pages.get(index)) { unchanged = false; break; }
+                }
+                if (unchanged) return previousBatches;
+            }
+            int count = 0;
+            TraceBatch[] resolved = new TraceBatch[pages.size()];
             var missing = new ArrayList<TracePlanRequest>();
-            for (int index = 0; index < pages.size(); index++) {
-                List<FrameInstanceSnapshot> page = pages.get(index);
-                TracePagePlan plan = plans.get(page);
-                if (plan == null) missing.add(new TracePlanRequest(index, page));
-                else resolved[index] = plan;
+            var changed = new ArrayList<TraceBatchRequest>();
+            for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
+                var page = pages.get(pageIndex);
+                count = Math.addExact(count, page.size());
+                var cached = pagePlans.get(page);
+                if (cached != null) {
+                    resolved[pageIndex] = cached;
+                    continue;
+                }
+                var pageValues = new TracePagePlan[page.size()];
+                changed.add(new TraceBatchRequest(pageIndex, page, pageValues));
+                for (int index = 0; index < page.size(); index++) {
+                    var instance = page.get(index);
+                    TracePagePlan plan = plans.get(instance);
+                    if (plan == null) missing.add(new TracePlanRequest(pageValues, index, instance));
+                    else pageValues[index] = plan;
+                }
             }
             if (!missing.isEmpty()) {
                 List<List<TracePlanRequest>> chunks = RtFramePreparation.chunks(missing, TracePlanRequest::work);
                 preparation.run("plan", chunks,
                         chunk -> chunk.stream().mapToInt(TracePlanRequest::work).sum(),
-                        chunk -> chunk.forEach(request -> resolved[request.index] =
-                                new TracePagePlan(request.instances)));
-                for (TracePlanRequest request : missing) plans.put(request.instances, resolved[request.index]);
+                        chunk -> chunk.forEach(request -> request.target[request.index] =
+                                new TracePagePlan(request.instance)));
+                for (TracePlanRequest request : missing) plans.put(request.instance, request.target[request.index]);
             }
-            if (plans.size() > pages.size() * 2 + 64) {
-                var retained = new IdentityHashMap<List<FrameInstanceSnapshot>, TracePagePlan>();
-                for (TracePagePlan plan : resolved) retained.put(plan.identity, plan);
+            for (var request : changed) {
+                var batch = new TraceBatch(request.plans);
+                resolved[request.index] = batch;
+                pagePlans.put(request.instances, batch);
+            }
+            if (pagePlans.size() > pages.size() * 2 + 64) {
+                var retained = new IdentityHashMap<List<FrameInstanceSnapshot>, TraceBatch>();
+                for (var page : pages) retained.put(page, pagePlans.get(page));
+                pagePlans = retained;
+            }
+            if (plans.size() > count * 2 + 64) {
+                var retained = new IdentityHashMap<FrameInstanceSnapshot, TracePagePlan>();
+                for (var batch : resolved) {
+                    for (var plan : batch.plans) retained.put(plan.identity, plan);
+                }
                 plans = retained;
             }
+            previousPages = List.copyOf(pages);
+            previousPlans = null;
+            previousBatches = resolved;
+            emitterLayout = EmitterLayout.resolve(emitterLayout, resolved);
             return resolved;
         }
-    }
 
-    private record TracePlanRequest(int index, List<FrameInstanceSnapshot> instances) {
-        int work() {
-            int work = 0;
-            for (FrameInstanceSnapshot instance : instances) {
-                work = Math.addExact(work, Math.max(1, instance.geometryRecords.size()));
+        TracePagePlan[] resolve(List<List<FrameInstanceSnapshot>> pages, RtFramePreparation preparation) {
+            var batches = resolveBatches(pages, preparation);
+            if (previousPlans == null) {
+                int count = 0;
+                for (var batch : batches) count = Math.addExact(count, batch.plans.length);
+                previousPlans = new TracePagePlan[count];
+                int offset = 0;
+                for (var batch : batches) {
+                    System.arraycopy(batch.plans, 0, previousPlans, offset, batch.plans.length);
+                    offset += batch.plans.length;
+                }
             }
-            return Math.max(1, work);
+            return previousPlans;
         }
     }
 
-    /** Immutable geometry, emitter layout, and pipeline SBT data for one motion-resolved page. */
+    private record TraceBatchRequest(int index, List<FrameInstanceSnapshot> instances, TracePagePlan[] plans) { }
+
+    /** Only emitter range membership and order affect the scene's linked-light layout. */
+    static final class EmitterLayout {
+        final List<RtStableTraceRanges.PageRange[]> groups;
+
+        private EmitterLayout(List<RtStableTraceRanges.PageRange[]> groups) { this.groups = groups; }
+
+        static EmitterLayout resolve(EmitterLayout previous, TraceBatch[] batches) {
+            var groups = new ArrayList<RtStableTraceRanges.PageRange[]>();
+            for (var batch : batches) {
+                if (batch.emitterRanges.length != 0) groups.add(batch.emitterRanges);
+            }
+            if (previous != null && previous.matches(groups)) return previous;
+            return new EmitterLayout(List.copyOf(groups));
+        }
+
+        private boolean matches(List<RtStableTraceRanges.PageRange[]> next) {
+            int groupIndex = 0, rangeIndex = 0;
+            for (var group : next) {
+                if (groupIndex == groups.size()) return false;
+                if (rangeIndex == 0 && group == groups.get(groupIndex)) {
+                    groupIndex++;
+                    continue;
+                }
+                for (var range : group) {
+                    if (groupIndex == groups.size() || range != groups.get(groupIndex)[rangeIndex]) return false;
+                    if (++rangeIndex == groups.get(groupIndex).length) {
+                        groupIndex++;
+                        rangeIndex = 0;
+                    }
+                }
+            }
+            return groupIndex == groups.size() && rangeIndex == 0;
+        }
+    }
+
+    /** Storage-page aggregates allow unchanged groups to skip per-instance residency checks. */
+    static final class TraceBatch {
+        final TracePagePlan[] plans;
+        final TracePagePlan[] emitters;
+        final RtStableTraceRanges.PageRange[] emitterRanges;
+        final int geometryCount;
+        final int emitterBytes;
+
+        TraceBatch(TracePagePlan[] plans) {
+            this.plans = plans;
+            var emitting = new ArrayList<TracePagePlan>();
+            int geometryCount = 0, emitterBytes = 0;
+            for (var plan : plans) {
+                geometryCount = Math.addExact(geometryCount, plan.records.size());
+                emitterBytes = Math.addExact(emitterBytes, plan.emitterBytes);
+                if (plan.emitterBytes != 0) emitting.add(plan);
+            }
+            this.geometryCount = geometryCount;
+            this.emitterBytes = emitterBytes;
+            emitters = emitting.toArray(TracePagePlan[]::new);
+            emitterRanges = new RtStableTraceRanges.PageRange[emitters.length];
+            for (int index = 0; index < emitters.length; index++) emitterRanges[index] = emitters[index].range;
+        }
+    }
+
+    static final class TraceBatchResidency {
+        final TraceBatch batch;
+        Object revision;
+        private SceneOrigin origin;
+        private Object pipeline;
+        private Object lightRevision;
+
+        TraceBatchResidency(TraceBatch batch) { this.batch = batch; }
+
+        boolean hasGeometry(SceneOrigin origin, Object pipeline) {
+            return origin.equals(this.origin) && this.pipeline == pipeline;
+        }
+
+        boolean hasEmitters(Object lightRevision) { return this.lightRevision == lightRevision; }
+
+        void written(SceneOrigin origin, Object pipeline, Object lightRevision) {
+            this.origin = origin;
+            this.pipeline = pipeline;
+            this.lightRevision = lightRevision;
+        }
+    }
+
+    private record TracePlanRequest(TracePagePlan[] target, int index, FrameInstanceSnapshot instance) {
+        int work() {
+            return Math.max(1, instance.geometryRecords.size());
+        }
+    }
+
+    /** Immutable geometry, emitter layout, and pipeline SBT data for one motion-resolved instance. */
     static final class TracePagePlan {
-        final List<FrameInstanceSnapshot> identity;
+        final FrameInstanceSnapshot identity;
         final List<FrameInstanceSnapshot> instances;
         final RtStableTraceRanges.PageRange range;
         final int geometryBase;
@@ -894,19 +1065,15 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         private final List<RtRetainedGeometryPlan.HitGroup> hitGroups;
         private final IdentityHashMap<RtPipeline, ByteBuffer> hitsByPipeline = new IdentityHashMap<>();
 
-        TracePagePlan(List<FrameInstanceSnapshot> instances) {
-            identity = instances;
-            this.instances = instances;
+        TracePagePlan(FrameInstanceSnapshot frame) {
+            identity = frame;
+            this.instances = List.of(frame);
             range = instances.getFirst().range;
             geometryBase = range.geometryBase();
-            int geometryCount = instances.getLast().geometryBase
-                    + instances.getLast().resolvedMesh.geometries().size() - geometryBase;
-            var pageRecords = new ArrayList<RtRetainedGeometryPlan.GeometryRecord>(geometryCount);
             var spans = new ArrayList<EmitterSpan>();
             int bytes = 0;
             for (FrameInstanceSnapshot frameInstance : instances) {
                 NativeInstance instance = frameInstance.nativeInstance;
-                pageRecords.addAll(frameInstance.geometryRecords);
                 List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
                 for (int index = 0; index < geometries.size(); index++) {
                     MeshBuild.Geometry<?> geometry = geometries.get(index);
@@ -917,7 +1084,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     bytes = Math.addExact(bytes, Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
                 }
             }
-            records = List.copyOf(pageRecords);
+            records = frame.geometryRecords;
             emitterSpans = List.copyOf(spans);
             emitterBytes = bytes;
             if (records.size() != range.geometryCount() || emitterBytes != range.emitterBytes()) {
@@ -964,6 +1131,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             target.put(0, source, source.position(), source.remaining());
         }
 
+    }
+
+    private static final class EmitterCaches {
+        final IdentityHashMap<RtStableTraceRanges.PageRange, EmitterPageCache> pages = new IdentityHashMap<>();
+        Object layout;
     }
 
     private static final class EmitterPageCache {
@@ -1065,6 +1237,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     /** Independent residency stamps keep light-index edits from invalidating geometry or the SBT. */
     static final class TracePageResidency {
+        private TraceBatchResidency batch;
         private Object geometryPage;
         private int geometryBase;
         private SceneOrigin geometryOrigin;
@@ -1141,48 +1314,64 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     record ResolvedFrameInput(RtRetainedGeometryPlan.ResolvedMesh mesh,
                               RtRetainedGeometryPlan.ResolvedPlacement placement) { }
 
-    /** Instances are ordered by placement ordinal and keep one trace range while the page remains present. */
+    /** Storage pages group iteration; each instance revision owns its own trace range generation. */
     static final class InstancePage {
         final Object contentIdentity;
-        final RtStableTraceRanges.PageRange range;
         final List<LatchedInstance> instances;
         final List<FrameInstanceSnapshot> stationary;
-        final int geometryBase;
-        final int geometryCount;
+        final int geometryHighWater;
+        final int emitterHighWater;
         final long lastOrdinal;
 
-        InstancePage(List<NativeInstance> values, RtStableTraceRanges.PageRange range,
-                     InstancePage previousPage) {
+        InstancePage(List<RetainedSceneSnapshot.Instance> values, RtStableTraceRanges ranges,
+                     Long2ObjectOpenHashMap<InstancePage> previousPages, Long2ObjectOpenHashMap<FrameMesh> meshes) {
             contentIdentity = new Object();
-            this.range = range;
-            this.geometryBase = range.geometryBase();
             var latched = new ArrayList<LatchedInstance>(values.size());
             var frames = new ArrayList<FrameInstanceSnapshot>(values.size());
-            int base = range.geometryBase();
-            for (var instance : values) {
-                LatchedInstance previous = previousPage == null ? null
-                        : previousPage.instance(instance.placementOrdinal, instance.logical.identity());
-                boolean unchanged = previous != null && previous.current == instance.logical
-                        && previous.nativeInstance.mesh == instance.mesh;
-                var placement = unchanged ? previous.resolvedPlacement : new RtRetainedGeometryPlan.ResolvedPlacement(
-                        instance.logical.transform(), instance.logical.instanceData().bits());
-                List<RtRetainedGeometryPlan.GeometryRecord> records = unchanged
-                        ? previous.stationaryGeometryRecords
-                        : RtRetainedGeometryPlan.records(instance.mesh.resolved, placement,
-                        instance.logical.transform(), instance.mesh.logical.build().positions());
+            for (var logical : values) {
+                var mesh = meshes.get(logical.meshIdentity());
+                var previousPage = previousPages.get(logical.placementOrdinal());
+                int previousIndex = previousPage == null ? -1
+                        : previousPage.index(logical.placementOrdinal(), logical.identity());
+                LatchedInstance previous = previousIndex < 0 ? null : previousPage.instances.get(previousIndex);
+                if (previous != null && previous.current == logical && previous.nativeInstance.mesh == mesh) {
+                    latched.add(previous);
+                    frames.add(previousPage.stationary.get(previousIndex));
+                    continue;
+                }
+                int count = mesh.logical.build().geometries().size();
+                int emitterBytes = FrameAssembly.emitterBytes(logical, mesh);
+                var range = previous == null ? ranges.reserve(count, emitterBytes)
+                        : ranges.replace(previous.range, count, emitterBytes);
+                int base = range.geometryBase();
+                var instance = new NativeInstance(logical, mesh, logical.placementOrdinal());
+                var placement = new RtRetainedGeometryPlan.ResolvedPlacement(
+                        logical.transform(), logical.instanceData().bits());
+                var records = RtRetainedGeometryPlan.records(mesh.resolved, placement,
+                        logical.transform(), mesh.logical.build().positions());
                 var value = new LatchedInstance(instance, instance.logical, instance.mesh.resolved, placement, range,
                         base, Math.multiplyExact(base, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), records);
                 latched.add(value);
                 frames.add(frame(value, null, null));
-                base += instance.mesh.logical.build().geometries().size();
             }
             instances = List.copyOf(latched);
             stationary = List.copyOf(frames);
-            geometryCount = range.geometryCount();
-            lastOrdinal = values.getLast().placementOrdinal;
+            int geometryEnd = 0, emitterEnd = 0;
+            for (var instance : instances) {
+                geometryEnd = Math.max(geometryEnd, Math.addExact(instance.range.geometryBase(), instance.range.geometryCount()));
+                emitterEnd = Math.max(emitterEnd, Math.addExact(instance.range.emitterBase(), instance.range.emitterBytes()));
+            }
+            geometryHighWater = geometryEnd;
+            emitterHighWater = emitterEnd;
+            lastOrdinal = values.getLast().placementOrdinal();
         }
 
         private LatchedInstance instance(long placementOrdinal, long identity) {
+            int index = index(placementOrdinal, identity);
+            return index < 0 ? null : instances.get(index);
+        }
+
+        private int index(long placementOrdinal, long identity) {
             int first = 0;
             int end = instances.size();
             while (first < end) {
@@ -1190,25 +1379,27 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 if (instances.get(middle).nativeInstance.placementOrdinal < placementOrdinal) first = middle + 1;
                 else end = middle;
             }
-            if (first == instances.size()) return null;
+            if (first == instances.size()) return -1;
             var instance = instances.get(first);
             return instance.nativeInstance.placementOrdinal == placementOrdinal && instance.current.identity() == identity
-                    ? instance : null;
+                    ? first : -1;
         }
 
         List<FrameInstanceSnapshot> frame(SceneMotionHistory history) {
             if (history == null) return stationary;
             var samePage = history.page(lastOrdinal);
             if (samePage != null && samePage.contentIdentity == contentIdentity) return stationary;
-            var values = new ArrayList<FrameInstanceSnapshot>(instances.size());
+            ArrayList<FrameInstanceSnapshot> values = null;
             for (int index = 0; index < instances.size(); index++) {
                 var instance = instances.get(index);
                 var page = history.page(instance.nativeInstance.placementOrdinal);
                 var prior = page == null ? null
                         : page.instance(instance.nativeInstance.placementOrdinal, instance.current.identity());
-                values.add(frame(instance, prior, stationary.get(index)));
+                var frame = frame(instance, prior, stationary.get(index));
+                if (frame != stationary.get(index) && values == null) values = new ArrayList<>(stationary);
+                if (values != null) values.set(index, frame);
             }
-            return List.copyOf(values);
+            return values == null ? stationary : List.copyOf(values);
         }
 
         private static FrameInstanceSnapshot frame(LatchedInstance current, LatchedInstance prior,
@@ -1351,6 +1542,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     static final class TraceSlot {
         List<ByteBuffer> lightPages = List.of();
+        private Object batchRevision;
+        private Object linkedLayout;
+        private Object linkedRevision;
+        private BitSet linked = new BitSet();
+        final IdentityHashMap<TraceBatch, TraceBatchResidency> batches = new IdentityHashMap<>();
         final IdentityHashMap<RtStableTraceRanges.PageRange, TracePageResidency> pages = new IdentityHashMap<>();
         final GpuBuffer geometry;
         final GpuBuffer hits;
@@ -1367,14 +1563,44 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             this.tlasDescriptor = tlasDescriptor;
         }
 
-        TracePageResidency page(RtStableTraceRanges.PageRange range) {
-            TracePageResidency residency = pages.get(range);
-            return residency == null ? new TracePageResidency() : residency;
+        TraceBatchResidency batch(TraceBatch batch, Object currentRevision) {
+            var residency = batches.computeIfAbsent(batch, TraceBatchResidency::new);
+            residency.revision = currentRevision;
+            return residency;
         }
 
-        void retainPages(IdentityHashMap<RtStableTraceRanges.PageRange, TracePageResidency> active) {
-            pages.clear();
-            pages.putAll(active);
+        TracePageResidency page(RtStableTraceRanges.PageRange range, TraceBatchResidency batch) {
+            TracePageResidency residency = pages.computeIfAbsent(range, ignored -> new TracePageResidency());
+            residency.batch = batch;
+            return residency;
+        }
+
+        void retainPages(Object currentRevision) {
+            if (batchRevision == currentRevision) return;
+            var iterator = batches.values().iterator();
+            while (iterator.hasNext()) {
+                var batch = iterator.next();
+                if (batch.revision == currentRevision) continue;
+                for (var plan : batch.batch.plans) {
+                    var residency = pages.get(plan.range);
+                    if (residency != null && residency.batch == batch) pages.remove(plan.range);
+                }
+                iterator.remove();
+            }
+            batchRevision = currentRevision;
+        }
+
+        BitSet linked(EmitterLayout currentLayout, Object lightRevision) {
+            if (linkedLayout != currentLayout || linkedRevision != lightRevision) {
+                var next = new BitSet();
+                for (var group : currentLayout.groups) {
+                    for (var range : group) pages.get(range).addLinkedEmittersTo(next);
+                }
+                linked = next;
+                linkedLayout = currentLayout;
+                linkedRevision = lightRevision;
+            }
+            return linked;
         }
 
         void destroy() {

@@ -281,6 +281,11 @@ final class RtNeeAtBackend {
         return Math.max(1, (value + divisor - 1) / divisor);
     }
 
+    static int lightCapacity(int current, int required) {
+        if (current >= required) return Math.max(1, current);
+        return Math.max(required, Math.max(1, Math.addExact(current, Math.max(1, current / 2))));
+    }
+
     static boolean historyValid(FrameInput input, boolean hasHistory, long lastFrameIndex,
                                 int historyWidth, int historyHeight) {
         return input.historyContinuous() && hasHistory
@@ -404,7 +409,7 @@ final class RtNeeAtBackend {
     }
 
     private final class SceneState {
-        final Frame[] frames = {new Frame(), new Frame()};
+        Frame[] frames = {new Frame(), new Frame()};
         int cursor;
         int width;
         int height;
@@ -421,14 +426,13 @@ final class RtNeeAtBackend {
         void ensure(int wantedWidth, int wantedHeight, int lights) {
             if (frames[0].state != null && width == wantedWidth && height == wantedHeight
                     && lightCapacity >= lights) return;
-            for (Frame frame : frames) {
-                context.graphics().graphicsUseWaiter().await(frame.use);
-                frame.destroy();
-            }
-            int capacity = Math.max(1, lights);
+            int capacity = lightCapacity(lightCapacity, lights);
             int tiles = Math.multiplyExact(divideRoundUp(wantedWidth, TILE_SIZE),
                     divideRoundUp(wantedHeight, TILE_SIZE));
-            for (Frame frame : frames) frame.allocate(capacity, wantedWidth, wantedHeight, tiles);
+            Frame[] replacement = {new Frame(), new Frame()};
+            for (Frame frame : replacement) frame.allocate(capacity, wantedWidth, wantedHeight, tiles);
+            retire();
+            frames = replacement;
             width = wantedWidth;
             height = wantedHeight;
             lightCapacity = capacity;
@@ -440,10 +444,17 @@ final class RtNeeAtBackend {
         void destroy() { for (Frame frame : frames) frame.destroy(); }
 
         void retire() {
-            AtomicInteger pending = new AtomicInteger(frames.length);
-            for (Frame frame : frames) {
+            Frame[] retired = frames;
+            // Each slot reads the other slot's feedback. Both completion values must retire before
+            // either slot is destroyed, and callbacks must retain this generation after replacement.
+            AtomicInteger pending = new AtomicInteger(retired.length);
+            for (Frame frame : retired) {
                 context.graphics().retireAfterGraphics(frame.use,
-                        () -> { if (pending.decrementAndGet() == 0) destroy(); });
+                        () -> {
+                            if (pending.decrementAndGet() == 0) {
+                                for (Frame completed : retired) completed.destroy();
+                            }
+                        });
             }
         }
     }

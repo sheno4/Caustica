@@ -7,6 +7,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Comparator;
+import java.util.PriorityQueue;
+import java.util.function.Predicate;
 
 /** State guarded by the terrain preparation lock. Request identity rejects results from superseded extraction groups. */
 final class TerrainUpdates<T> {
@@ -96,6 +99,20 @@ final class TerrainUpdates<T> {
     /** Only current requests awaiting extraction participate in dispatch selection. */
     Collection<Request<T>> pending() {
         return pending;
+    }
+
+    /** Selects the best available requests without probing availability for requests that cannot win. */
+    List<Request<T>> selectPending(int slots, Comparator<Request<T>> order, Predicate<Request<T>> available) {
+        var candidates = new PriorityQueue<Request<T>>(slots, order.reversed());
+        for (var request : pending) {
+            if (candidates.size() == slots && order.compare(request, candidates.peek()) >= 0) continue;
+            if (!available.test(request)) continue;
+            if (candidates.size() == slots) candidates.poll();
+            candidates.add(request);
+        }
+        var ordered = new ArrayList<>(candidates);
+        ordered.sort(order);
+        return ordered;
     }
 
     void dispatched(Request<T> request) {

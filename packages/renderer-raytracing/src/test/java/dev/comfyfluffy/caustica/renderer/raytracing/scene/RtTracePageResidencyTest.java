@@ -4,38 +4,28 @@ import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import org.junit.jupiter.api.Test;
 
 import java.util.BitSet;
-import java.util.IdentityHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtTracePageResidencyTest {
-    @Test void slotRetainsReorderedGenerationsAndDiscardsAnEqualNumericReplacement() {
-        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null);
-        var first = new RtStableTraceRanges.PageRange(0, 2, 0, 8);
-        var second = new RtStableTraceRanges.PageRange(2, 1, 8, 4);
-        var initial = new IdentityHashMap<RtStableTraceRanges.PageRange, RtRetainedSceneBackend.TracePageResidency>();
-        initial.put(first, slot.page(first));
-        initial.put(second, slot.page(second));
-        slot.retainPages(initial);
-        var reordered = new IdentityHashMap<RtStableTraceRanges.PageRange, RtRetainedSceneBackend.TracePageResidency>();
-        reordered.put(second, slot.page(second));
-        reordered.put(first, slot.page(first));
-        slot.retainPages(reordered);
-        org.junit.jupiter.api.Assertions.assertSame(initial.get(first), slot.page(first));
-        org.junit.jupiter.api.Assertions.assertSame(initial.get(second), slot.page(second));
-
-        var replacement = new RtStableTraceRanges.PageRange(0, 2, 0, 8);
-        var updated = new IdentityHashMap<RtStableTraceRanges.PageRange, RtRetainedSceneBackend.TracePageResidency>();
-        updated.put(second, slot.page(second));
-        updated.put(replacement, slot.page(replacement));
-        org.junit.jupiter.api.Assertions.assertNotSame(initial.get(first), updated.get(replacement));
-        slot.retainPages(updated);
-        assertEquals(2, slot.pages.size());
-        assertFalse(slot.pages.containsKey(first));
-        assertTrue(slot.pages.containsKey(replacement));
-        org.junit.jupiter.api.Assertions.assertSame(initial.get(second), slot.page(second));
+    @Test void batchValidationSeparatesGeometryAndEmitterRevisions() {
+        var batch = new RtRetainedSceneBackend.TraceBatch(new RtRetainedSceneBackend.TracePagePlan[0]);
+        var residency = new RtRetainedSceneBackend.TraceBatchResidency(batch);
+        var origin = new SceneOrigin(0, 0, 0);
+        Object pipeline = new Object(), lights = new Object();
+        assertFalse(residency.hasGeometry(origin, pipeline));
+        assertFalse(residency.hasEmitters(lights));
+        residency.written(origin, pipeline, lights);
+        assertTrue(residency.hasGeometry(new SceneOrigin(0, 0, 0), pipeline));
+        assertTrue(residency.hasEmitters(lights));
+        assertFalse(residency.hasGeometry(new SceneOrigin(1, 0, 0), pipeline));
+        assertFalse(residency.hasGeometry(origin, new Object()));
+        assertFalse(residency.hasEmitters(new Object()));
+        var nextSlot = new RtRetainedSceneBackend.TraceBatchResidency(batch);
+        assertFalse(nextSlot.hasGeometry(origin, pipeline));
+        assertFalse(nextSlot.hasEmitters(lights));
     }
 
     @Test

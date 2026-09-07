@@ -21,7 +21,6 @@ import jdk.jfr.*;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -378,31 +377,24 @@ public final class RtTerrain {
         Comparator<TerrainUpdates.Request<Build>> order = Comparator
                 .comparingInt((TerrainUpdates.Request<Build> request) -> request.section.ready ? 0 : 1)
                 .thenComparingLong(request -> distance(request.section.key, cx, cy, cz));
-        ArrayList<TerrainUpdates.Request<Build>> ordered;
+        List<TerrainUpdates.Request<Build>> ordered;
         synchronized (preparationLock) {
-            var candidates = new PriorityQueue<TerrainUpdates.Request<Build>>(slots, order.reversed());
             var readyColumns = new LongOpenHashSet();
             var blockedColumns = new LongOpenHashSet();
-            for (var request : updates.pending()) {
+            ordered = updates.selectPending(slots, order, request -> {
                 var section = request.section;
                 long key = section.key;
                 long column = columnKey(sectionX(key), sectionZ(key));
-                if (blockedColumns.contains(column)) continue;
+                if (blockedColumns.contains(column)) return false;
                 if (!readyColumns.contains(column)) {
                     if (!neighborsLoaded(world.getChunkSource(), sectionX(key), sectionZ(key))) {
                         blockedColumns.add(column);
-                        continue;
+                        return false;
                     }
                     readyColumns.add(column);
                 }
-                if (candidates.size() < slots) candidates.add(request);
-                else if (order.compare(request, candidates.peek()) < 0) {
-                    candidates.poll();
-                    candidates.add(request);
-                }
-            }
-            ordered = new ArrayList<>(candidates);
-            ordered.sort(order);
+                return true;
+            });
         }
         // Every selected request observes the invalidations queued before its selection.
         drainDirty();

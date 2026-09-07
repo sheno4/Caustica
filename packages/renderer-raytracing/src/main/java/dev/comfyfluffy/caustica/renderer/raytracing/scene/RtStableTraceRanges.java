@@ -26,6 +26,15 @@ final class RtStableTraceRanges {
         emitters.release(range.emitterBase, range.emitterBytes);
     }
 
+    /** A changed instance keeps compatible offsets but invalidates bytes from its prior revision. */
+    PageRange replace(PageRange previous, int geometryCount, int emitterBytes) {
+        if (previous.geometryCount == geometryCount && previous.emitterBytes == emitterBytes) {
+            return new PageRange(previous.geometryBase, geometryCount, previous.emitterBase, emitterBytes);
+        }
+        release(previous);
+        return reserve(geometryCount, emitterBytes);
+    }
+
     int geometryHighWater() { return geometry.highWater; }
     int emitterHighWater() { return emitters.highWater; }
 
