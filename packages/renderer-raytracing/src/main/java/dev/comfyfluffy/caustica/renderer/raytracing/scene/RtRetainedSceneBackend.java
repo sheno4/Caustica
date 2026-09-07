@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import it.unimi.dsi.fastutil.longs.Long2IntFunction;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
@@ -35,7 +37,6 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
 import java.util.IdentityHashMap;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -525,7 +526,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     /** Reuses CPU values by immutable page identity; consuming frames retain their own scene roots. */
     static final class FrameAssembly {
-        private final Map<Long, FrameMesh> previousFrameMeshes = new HashMap<>();
+        private final Long2ObjectOpenHashMap<FrameMesh> previousFrameMeshes = new Long2ObjectOpenHashMap<>();
         private Map<List<RetainedSceneSnapshot.Mesh>, Boolean> previousMeshPages = new IdentityHashMap<>();
         private Map<List<RetainedSceneSnapshot.Instance>, Map<SceneId, InstancePage>> previousInstancePages = new IdentityHashMap<>();
         private final Map<SceneId, RtStableTraceRanges> traceRanges = new IdentityHashMap<>();
@@ -554,7 +555,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             boolean replacedPrograms = false;
             if (assembledMeshes != snapshot.meshes()) {
                 var nextMeshPages = new IdentityHashMap<List<RetainedSceneSnapshot.Mesh>, Boolean>();
-                var refreshedMeshes = new java.util.HashSet<Long>();
+                var refreshedMeshes = new LongOpenHashSet();
                 for (var page : SnapshotList.pagesOf(snapshot.meshes())) {
                     nextMeshPages.put(page, Boolean.TRUE);
                     if (previousMeshPages.containsKey(page)) continue;
@@ -1145,7 +1146,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final Object contentIdentity;
         final RtStableTraceRanges.PageRange range;
         final List<LatchedInstance> instances;
-        final Map<Long, LatchedInstance> identities;
         final List<FrameInstanceSnapshot> stationary;
         final int geometryBase;
         final int geometryCount;
@@ -1157,12 +1157,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             this.range = range;
             this.geometryBase = range.geometryBase();
             var latched = new ArrayList<LatchedInstance>(values.size());
-            var byIdentity = new HashMap<Long, LatchedInstance>();
             var frames = new ArrayList<FrameInstanceSnapshot>(values.size());
             int base = range.geometryBase();
             for (var instance : values) {
                 LatchedInstance previous = previousPage == null ? null
-                        : previousPage.identities.get(instance.logical.identity());
+                        : previousPage.instance(instance.placementOrdinal, instance.logical.identity());
                 boolean unchanged = previous != null && previous.current == instance.logical
                         && previous.nativeInstance.mesh == instance.mesh;
                 var placement = unchanged ? previous.resolvedPlacement : new RtRetainedGeometryPlan.ResolvedPlacement(
@@ -1174,15 +1173,27 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 var value = new LatchedInstance(instance, instance.logical, instance.mesh.resolved, placement, range,
                         base, Math.multiplyExact(base, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), records);
                 latched.add(value);
-                byIdentity.put(instance.logical.identity(), value);
                 frames.add(frame(value, null, null));
                 base += instance.mesh.logical.build().geometries().size();
             }
             instances = List.copyOf(latched);
-            identities = Map.copyOf(byIdentity);
             stationary = List.copyOf(frames);
             geometryCount = range.geometryCount();
             lastOrdinal = values.getLast().placementOrdinal;
+        }
+
+        private LatchedInstance instance(long placementOrdinal, long identity) {
+            int first = 0;
+            int end = instances.size();
+            while (first < end) {
+                int middle = (first + end) >>> 1;
+                if (instances.get(middle).nativeInstance.placementOrdinal < placementOrdinal) first = middle + 1;
+                else end = middle;
+            }
+            if (first == instances.size()) return null;
+            var instance = instances.get(first);
+            return instance.nativeInstance.placementOrdinal == placementOrdinal && instance.current.identity() == identity
+                    ? instance : null;
         }
 
         List<FrameInstanceSnapshot> frame(SceneMotionHistory history) {
@@ -1193,7 +1204,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             for (int index = 0; index < instances.size(); index++) {
                 var instance = instances.get(index);
                 var page = history.page(instance.nativeInstance.placementOrdinal);
-                var prior = page == null ? null : page.identities.get(instance.current.identity());
+                var prior = page == null ? null
+                        : page.instance(instance.nativeInstance.placementOrdinal, instance.current.identity());
                 values.add(frame(instance, prior, stationary.get(index)));
             }
             return List.copyOf(values);

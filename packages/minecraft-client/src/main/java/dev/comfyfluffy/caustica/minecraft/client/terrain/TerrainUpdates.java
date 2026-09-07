@@ -8,7 +8,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 
-/** Render-thread state. Request identity rejects results from superseded extraction groups. */
+/** State guarded by the terrain preparation lock. Request identity rejects results from superseded extraction groups. */
 final class TerrainUpdates<T> {
     final Long2ObjectOpenHashMap<Section<T>> sections = new Long2ObjectOpenHashMap<>();
     private final LinkedHashSet<Group<T>> groups = new LinkedHashSet<>();
@@ -108,7 +108,7 @@ final class TerrainUpdates<T> {
         pending.add(request);
     }
 
-    /** Every complete group publishes at the next frame boundary; unfinished neighbors remain atomic. */
+    /** Complete groups are available for worker publication; unfinished neighbors remain atomic. */
     List<Group<T>> ready() {
         return List.copyOf(ready);
     }

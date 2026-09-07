@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.WORKER_TESS;
@@ -31,11 +32,13 @@ import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.
 
 /**
  * Retains the previous section revisions until a complete neighboring-section group can replace them.
- * World capture and publication run on the render thread; workers read immutable region snapshots.
+ * The render thread captures immutable world snapshots; workers prepare and publish complete groups.
  */
 public final class RtTerrain {
     private static final EventType TERRAIN_STATE_EVENT = EventType.getEventType(TerrainStateEvent.class);
     private static final EventType TERRAIN_JOB_EVENT = EventType.getEventType(TerrainJobEvent.class);
+    private static final EventType TERRAIN_PUBLICATION_EVENT = EventType.getEventType(TerrainPublicationEvent.class);
+    private static final java.lang.management.ThreadMXBean THREAD_METRICS = java.lang.management.ManagementFactory.getThreadMXBean();
     private static final long FRAME_FALLBACK_NANOS = 200_000_000L;
 
     private final RtWorkerPool workers;
@@ -44,14 +47,17 @@ public final class RtTerrain {
     private final TerrainUpdates<Build> updates = new TerrainUpdates<>(this::discardBuild);
     private final LongOpenHashSet columns = new LongOpenHashSet();
     private final ConcurrentLinkedQueue<List<Long>> dirty = new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<Build> completed = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Build> discarded = new ConcurrentLinkedQueue<>();
+    private final AtomicBoolean publicationScheduled = new AtomicBoolean();
     private final AtomicInteger outstandingBuilds = new AtomicInteger();
-    private MinecraftTerrainGeometry geometry;
+    private volatile MinecraftTerrainGeometry geometry;
+    private volatile Throwable workerFailure;
     private volatile MinecraftMaterialLookup materials;
     private volatile boolean clearRequested;
     private volatile long epoch;
     private ClientLevel world;
     private final Object preparationLock = new Object();
+    private final Object publicationLock = new Object();
     private int lowY;
     private int highY;
     private long lastFrame;
@@ -70,8 +76,10 @@ public final class RtTerrain {
 
     public boolean isSectionReady(BlockPos position) {
         long key = sectionKey(position.getX() >> 4, position.getY() >> 4, position.getZ() >> 4);
-        var section = updates.sections.get(key);
-        return world != null && section != null && section.ready;
+        synchronized (preparationLock) {
+            var section = updates.sections.get(key);
+            return world != null && section != null && section.ready;
+        }
     }
 
     public SceneOrigin sceneOrigin() { return new SceneOrigin(blockX, blockY, blockZ); }
@@ -87,13 +95,22 @@ public final class RtTerrain {
     }
 
     public void publishMaterialLookup(MinecraftMaterialLookup lookup) {
-        materials = lookup;
-        clearRequested = true;
+        synchronized (preparationLock) {
+            materials = lookup;
+            clearRequested = true;
+        }
     }
 
-    public void clearMaterialLookup() { materials = null; }
+    public void clearMaterialLookup() {
+        synchronized (preparationLock) {
+            materials = null;
+            clearRequested = true;
+        }
+    }
 
-    public void requestFullClear() { clearRequested = true; }
+    public void requestFullClear() {
+        synchronized (preparationLock) { clearRequested = true; }
+    }
 
     /** Border culling and fluid heights depend on the block immediately across a section boundary. */
     public void markBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
@@ -105,7 +122,11 @@ public final class RtTerrain {
                 }
             }
         }
-        dirty.add(keys);
+        synchronized (preparationLock) {
+            updates.dirty(keys);
+            dirty.add(keys);
+        }
+        schedulePublication();
     }
 
     public void update() {
@@ -128,67 +149,69 @@ public final class RtTerrain {
 
     private void recordState(Minecraft mc) {
         if (!TERRAIN_STATE_EVENT.isEnabled()) return;
-        TerrainStateEvent event = new TerrainStateEvent();
-        event.observedFrameId = instrumentation.frameSerial();
-        event.worldPresent = world != null;
-        event.materialsPresent = materials != null;
-        event.geometryBound = geometry != null;
-        event.epoch = epoch;
-        event.lastDispatchedRevision = revision;
-        if (mc.player != null) {
-            event.playerBlockX = mc.player.getBlockX();
-            event.playerBlockY = mc.player.getBlockY();
-            event.playerBlockZ = mc.player.getBlockZ();
-        }
-        event.windowCenterChunkX = event.playerBlockX >> 4;
-        event.windowCenterChunkZ = event.playerBlockZ >> 4;
-        event.renderDistanceChunks = mc.options.getEffectiveRenderDistance();
-        event.minSectionY = lowY;
-        event.maxSectionY = highY;
-        event.originBlockX = blockX;
-        event.originBlockY = blockY;
-        event.originBlockZ = blockZ;
-        event.loadedWindowColumns = columns.size();
-        event.trackedSections = updates.sections.size();
-        event.residentGeometrySections = geometry == null ? 0 : geometry.sectionKeys().size();
-        var groups = java.util.Collections.newSetFromMap(
-                new java.util.IdentityHashMap<TerrainUpdates.Group<Build>, Boolean>());
-        var blockedColumns = new LongOpenHashSet();
-        var checkedColumns = new LongOpenHashSet();
-        for (var section : updates.sections.values()) {
-            if (section.wanted) event.wantedSections++;
-            else event.removingSections++;
-            if (section.ready) event.publishedSections++;
-            var request = section.request;
-            if (request == null) continue;
-            event.requests++;
-            groups.add(request.group);
-            if (request.complete) event.completedRequests++;
-            else if (request.dispatched) event.dispatchedRequests++;
-            else {
-                event.undispatchedRequests++;
-                long column = columnKey(sectionX(section.key), sectionZ(section.key));
-                if (world != null && checkedColumns.add(column)
-                        && !neighborsLoaded(world.getChunkSource(), sectionX(section.key), sectionZ(section.key))) {
-                    blockedColumns.add(column);
-                }
-                if (blockedColumns.contains(column)) event.neighborBlockedRequests++;
+        synchronized (preparationLock) {
+            TerrainStateEvent event = new TerrainStateEvent();
+            event.observedFrameId = instrumentation.frameSerial();
+            event.worldPresent = world != null;
+            event.materialsPresent = materials != null;
+            event.geometryBound = geometry != null;
+            event.epoch = epoch;
+            event.lastDispatchedRevision = revision;
+            if (mc.player != null) {
+                event.playerBlockX = mc.player.getBlockX();
+                event.playerBlockY = mc.player.getBlockY();
+                event.playerBlockZ = mc.player.getBlockZ();
             }
+            event.windowCenterChunkX = event.playerBlockX >> 4;
+            event.windowCenterChunkZ = event.playerBlockZ >> 4;
+            event.renderDistanceChunks = mc.options.getEffectiveRenderDistance();
+            event.minSectionY = lowY;
+            event.maxSectionY = highY;
+            event.originBlockX = blockX;
+            event.originBlockY = blockY;
+            event.originBlockZ = blockZ;
+            event.loadedWindowColumns = columns.size();
+            event.trackedSections = updates.sections.size();
+            event.residentGeometrySections = geometry == null ? 0 : geometry.sectionKeys().size();
+            var groups = java.util.Collections.newSetFromMap(
+                    new java.util.IdentityHashMap<TerrainUpdates.Group<Build>, Boolean>());
+            var blockedColumns = new LongOpenHashSet();
+            var checkedColumns = new LongOpenHashSet();
+            for (var section : updates.sections.values()) {
+                if (section.wanted) event.wantedSections++;
+                else event.removingSections++;
+                if (section.ready) event.publishedSections++;
+                var request = section.request;
+                if (request == null) continue;
+                event.requests++;
+                groups.add(request.group);
+                if (request.complete) event.completedRequests++;
+                else if (request.dispatched) event.dispatchedRequests++;
+                else {
+                    event.undispatchedRequests++;
+                    long column = columnKey(sectionX(section.key), sectionZ(section.key));
+                    if (world != null && checkedColumns.add(column)
+                            && !neighborsLoaded(world.getChunkSource(), sectionX(section.key), sectionZ(section.key))) {
+                        blockedColumns.add(column);
+                    }
+                    if (blockedColumns.contains(column)) event.neighborBlockedRequests++;
+                }
+            }
+            event.pendingGroups = groups.size();
+            for (var group : groups) {
+                if (group.remaining == 0) event.readyGroups++;
+            }
+            event.neighborBlockedColumns = blockedColumns.size();
+            var workerState = workers.state();
+            event.workerThreads = workerState.threads();
+            event.activeWorkers = workerState.active();
+            event.queuedWorkerTasks = workerState.queued();
+            event.outstandingBuilds = outstandingBuilds.get();
+            event.discardedQueue = discarded.size();
+            event.publicationScheduled = publicationScheduled.get();
+            event.dirtyGroupsQueue = dirty.size();
+            event.commit();
         }
-        event.pendingGroups = groups.size();
-        for (var group : groups) {
-            if (group.remaining == 0) event.readyGroups++;
-        }
-        event.neighborBlockedColumns = blockedColumns.size();
-        var workerState = workers.state();
-        event.workerThreads = workerState.threads();
-        event.activeWorkers = workerState.active();
-        event.queuedWorkerTasks = workerState.queued();
-        event.outstandingBuilds = outstandingBuilds.get();
-        event.cpuCompletedQueue = 0;
-        event.preparedQueue = completed.size();
-        event.dirtyGroupsQueue = dirty.size();
-        event.commit();
     }
 
     private void recordJob(Build build, String action) {
@@ -197,7 +220,7 @@ public final class RtTerrain {
 
     private void discardBuild(Build build) {
         recordJob(build, "discarded");
-        build.close();
+        discarded.add(build);
     }
 
     private void recordJob(TerrainUpdates.Request<Build> request, long jobEpoch, long jobRevision,
@@ -226,6 +249,24 @@ public final class RtTerrain {
         public boolean failed;
     }
 
+    @Name("dev.comfyfluffy.caustica.TerrainPublication")
+    @Label("Terrain worker publication") @Category({"Caustica", "Terrain"}) @StackTrace(false) @Enabled(false)
+    static final class TerrainPublicationEvent extends Event {
+        public long observedFrameId, epoch;
+        public int groups, sections;
+        public boolean published, failed;
+        public long cpuNanos, allocatedBytes;
+    }
+
+    private static long threadCpuNanos() {
+        return THREAD_METRICS.isThreadCpuTimeEnabled() ? THREAD_METRICS.getCurrentThreadCpuTime() : -1;
+    }
+
+    private static long threadAllocatedBytes() {
+        return THREAD_METRICS instanceof com.sun.management.ThreadMXBean metrics
+                && metrics.isThreadAllocatedMemoryEnabled() ? metrics.getCurrentThreadAllocatedBytes() : -1;
+    }
+
     @Name("dev.comfyfluffy.caustica.TerrainState")
     @Label("Terrain state at client tick") @Category({"Caustica", "Terrain"}) @StackTrace(false) @Enabled(false)
     static final class TerrainStateEvent extends Event {
@@ -243,11 +284,12 @@ public final class RtTerrain {
         public int residentGeometrySections;
         public int requests, undispatchedRequests, dispatchedRequests, completedRequests;
         public int pendingGroups, readyGroups, neighborBlockedRequests, neighborBlockedColumns;
-        @Description("Outstanding CPU work, undrained CPU results, and GPU preparations across epochs")
+        @Description("Outstanding CPU extraction, upload, and GPU preparation across epochs")
         public int outstandingBuilds;
         @Description("Concurrent queue sizes are individually sampled, not an atomic worker snapshot")
-        public int cpuCompletedQueue;
-        public int preparedQueue, dirtyGroupsQueue;
+        public int discardedQueue;
+        public int dirtyGroupsQueue;
+        public boolean publicationScheduled;
         public int workerThreads, activeWorkers, queuedWorkerTasks;
     }
 
@@ -278,17 +320,20 @@ public final class RtTerrain {
             for (int y = lowY; y <= highY; y++) {
                 long key = sectionKey((int) (column >> 32), y, (int) column);
                 snapshots.invalidate(key);
-                updates.remove(key);
+                synchronized (preparationLock) { updates.remove(key); }
             }
         }
         for (long column : loaded) {
             if (!heightChanged && columns.contains(column)) continue;
             for (int y = minY; y <= maxY; y++) {
-                updates.want(sectionKey((int) (column >> 32), y, (int) column));
+                synchronized (preparationLock) {
+                    updates.want(sectionKey((int) (column >> 32), y, (int) column));
+                }
             }
         }
         columns.clear();
         columns.addAll(loaded);
+        schedulePublication();
         lowY = minY;
         highY = maxY;
         int distance = CausticaConfig.get(MinecraftOptions.Rt.Terrain.REBASE_DISTANCE_BLOCKS);
@@ -303,28 +348,14 @@ public final class RtTerrain {
 
     private void drainDirty() {
         List<Long> changed;
-        while ((changed = dirty.poll()) != null) {
-            changed.forEach(snapshots::invalidate);
-            updates.dirty(changed);
-        }
+        while ((changed = dirty.poll()) != null) changed.forEach(snapshots::invalidate);
     }
 
     private void stream(Minecraft mc) {
         if (geometry == null) return;
         MinecraftMaterialLookup lookup = materials;
         var settings = CausticaConfig.snapshot();
-        long drainStarted = instrumentation.startStage();
-        try {
-            drainCompleted(lookup.epoch());
-        } finally {
-            instrumentation.endStage("terrain.drainCompletion", drainStarted);
-        }
-        long publishStarted = instrumentation.startStage();
-        try {
-            publishReady();
-        } finally {
-            instrumentation.endStage("terrain.publish", publishStarted);
-        }
+        checkWorkerFailure();
         long dispatchStarted = instrumentation.startStage();
         try {
             dispatch(mc, lookup, settings);
@@ -333,53 +364,48 @@ public final class RtTerrain {
         }
     }
 
-    void drainCompleted(ResourcePackEpoch materialEpoch) {
-        Build build;
-        while ((build = completed.poll()) != null) {
-            outstandingBuilds.decrementAndGet();
-            if (build.epoch != epoch || !build.materialEpoch.equals(materialEpoch)
-                    || build.request.section.request != build.request) {
-                recordJob(build, "prepared-result-stale");
-                discardBuild(build);
-                continue;
-            }
-            if (build.failure != null) throw new IllegalStateException("Terrain mesh preparation failed", build.failure);
-            updates.complete(build.request, build);
-        }
+    private void checkWorkerFailure() {
+        Throwable failure = workerFailure;
+        if (failure != null) throw new IllegalStateException("Terrain preparation/publication failed", failure);
     }
 
     private void dispatch(Minecraft mc, MinecraftMaterialLookup lookup,
                           OptionValues settings) {
         int slots = Math.min(settings.get(MinecraftOptions.Rt.Terrain.ASYNC_DISPATCH_PER_PASS),
                 settings.get(MinecraftOptions.Rt.Terrain.MAX_INFLIGHT_SECTIONS) - outstandingBuilds.get());
-        if (slots <= 0 || updates.pending().isEmpty()) return;
+        if (slots <= 0) return;
         int cx = mc.player.getBlockX() >> 4, cy = mc.player.getBlockY() >> 4, cz = mc.player.getBlockZ() >> 4;
         Comparator<TerrainUpdates.Request<Build>> order = Comparator
                 .comparingInt((TerrainUpdates.Request<Build> request) -> request.section.ready ? 0 : 1)
                 .thenComparingLong(request -> distance(request.section.key, cx, cy, cz));
-        var candidates = new PriorityQueue<TerrainUpdates.Request<Build>>(slots, order.reversed());
-        var readyColumns = new LongOpenHashSet();
-        var blockedColumns = new LongOpenHashSet();
-        for (var request : updates.pending()) {
-            var section = request.section;
-            long key = section.key;
-            long column = columnKey(sectionX(key), sectionZ(key));
-            if (blockedColumns.contains(column)) continue;
-            if (!readyColumns.contains(column)) {
-                if (!neighborsLoaded(world.getChunkSource(), sectionX(key), sectionZ(key))) {
-                    blockedColumns.add(column);
-                    continue;
+        ArrayList<TerrainUpdates.Request<Build>> ordered;
+        synchronized (preparationLock) {
+            var candidates = new PriorityQueue<TerrainUpdates.Request<Build>>(slots, order.reversed());
+            var readyColumns = new LongOpenHashSet();
+            var blockedColumns = new LongOpenHashSet();
+            for (var request : updates.pending()) {
+                var section = request.section;
+                long key = section.key;
+                long column = columnKey(sectionX(key), sectionZ(key));
+                if (blockedColumns.contains(column)) continue;
+                if (!readyColumns.contains(column)) {
+                    if (!neighborsLoaded(world.getChunkSource(), sectionX(key), sectionZ(key))) {
+                        blockedColumns.add(column);
+                        continue;
+                    }
+                    readyColumns.add(column);
                 }
-                readyColumns.add(column);
+                if (candidates.size() < slots) candidates.add(request);
+                else if (order.compare(request, candidates.peek()) < 0) {
+                    candidates.poll();
+                    candidates.add(request);
+                }
             }
-            if (candidates.size() < slots) candidates.add(request);
-            else if (order.compare(request, candidates.peek()) < 0) {
-                candidates.poll();
-                candidates.add(request);
-            }
+            ordered = new ArrayList<>(candidates);
+            ordered.sort(order);
         }
-        var ordered = new ArrayList<>(candidates);
-        ordered.sort(order);
+        // Every selected request observes the invalidations queued before its selection.
+        drainDirty();
         for (var request : ordered) dispatch(request, lookup, mc);
     }
 
@@ -393,7 +419,10 @@ public final class RtTerrain {
         long taskEpoch = epoch;
         long taskRevision = ++revision;
         Object extraction = instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1);
-        updates.dispatched(request);
+        synchronized (preparationLock) {
+            if (request.section.request != request || taskEpoch != epoch) return;
+            updates.dispatched(request);
+        }
         instrumentation.count("sectionsSnapshotted", 1);
         recordJob(request, taskEpoch, taskRevision, "dispatch", false);
         var build = new Build(request, taskEpoch, lookup.epoch(), taskRevision, null, extraction, null, null);
@@ -405,7 +434,9 @@ public final class RtTerrain {
                         state.capture, fluids, state.fluidCapture, state.mesh, state.pos, lookup, x, y, z);
             });
         } catch (RuntimeException | Error failure) {
-            updates.retry(request);
+            synchronized (preparationLock) {
+                if (request.section.request == request) updates.retry(request);
+            }
             throw failure;
         }
     }
@@ -456,62 +487,130 @@ public final class RtTerrain {
 
     private void completeBuild(Build build) {
         synchronized (preparationLock) {
-            if (build.epoch != epoch) {
-                outstandingBuilds.decrementAndGet();
+            outstandingBuilds.decrementAndGet();
+            var lookup = materials;
+            if (build.epoch != epoch || (lookup != null && !build.materialEpoch.equals(lookup.epoch()))
+                    || build.request.section.request != build.request) {
+                recordJob(build, "prepared-result-stale");
                 discardBuild(build);
-            } else completed.add(build);
+            } else if (build.failure != null) {
+                workerFailure = build.failure;
+                discardBuild(build);
+            } else updates.complete(build.request, build);
+        }
+        if (geometry == null) {
+            synchronized (publicationLock) { drainDiscardedBuilds(); }
+        } else schedulePublication();
+    }
+
+    private void schedulePublication() {
+        synchronized (preparationLock) {
+            if (geometry == null || clearRequested || (updates.ready().isEmpty() && discarded.isEmpty())
+                    || !publicationScheduled.compareAndSet(false, true)) return;
+            workers.submitPublication(this::publishReady, () -> publicationScheduled.set(false));
         }
     }
 
     private void publishReady() {
-        if (geometry == null) return;
-        var groups = updates.ready();
-        if (groups.isEmpty()) return;
-        var changes = new ArrayList<MinecraftTerrainGeometry.ReadyChange>();
-        for (var group : groups) {
-            for (var request : group.requests) {
-                Build build = request.result;
-                if (build != null && build.prepared != null) changes.add(build.prepared);
-                else if (geometry.hasSection(request.section.key))
-                    changes.add(new MinecraftTerrainGeometry.Drop(request.section.key));
-            }
+        TerrainPublicationEvent event = TERRAIN_PUBLICATION_EVENT.isEnabled() ? new TerrainPublicationEvent() : null;
+        long cpuStarted = event == null ? -1 : threadCpuNanos();
+        long allocatedStarted = event == null ? -1 : threadAllocatedBytes();
+        if (event != null) {
+            event.observedFrameId = instrumentation.frameSerial();
+            event.begin();
         }
-        if (!changes.isEmpty()) geometry.edit(changes);
-        for (var group : groups) {
-            for (var request : group.requests) {
-                if (request.result != null) {
-                    recordJob(request.result, "published");
-                    instrumentation.published(request.result.extraction);
-                    instrumentation.published(request.result.ready);
+        synchronized (publicationLock) {
+            try {
+                List<TerrainUpdates.Group<Build>> groups;
+                MinecraftTerrainGeometry target;
+                long publishingEpoch;
+                synchronized (preparationLock) {
+                    groups = updates.ready();
+                    target = geometry;
+                    publishingEpoch = epoch;
                 }
+                if (event != null) {
+                    event.epoch = publishingEpoch;
+                    event.groups = groups.size();
+                    event.sections = groups.stream().mapToInt(group -> group.requests.size()).sum();
+                }
+                if (target == null || groups.isEmpty()) return;
+                var changes = new ArrayList<MinecraftTerrainGeometry.ReadyChange>();
+                for (var group : groups) {
+                    for (var request : group.requests) {
+                        Build build = request.result;
+                        if (build != null && build.prepared != null) changes.add(build.prepared);
+                        else changes.add(new MinecraftTerrainGeometry.Drop(request.section.key));
+                    }
+                }
+                try (var edit = target.prepareEdit(changes)) {
+                    synchronized (preparationLock) {
+                        if (epoch != publishingEpoch || geometry != target || clearRequested) return;
+                        for (var group : groups) {
+                            for (var request : group.requests) {
+                                if (request.section.request != request) return;
+                            }
+                        }
+                        edit.publish();
+                        updates.published(groups);
+                        if (event != null) event.published = true;
+                    }
+                }
+                for (var group : groups) {
+                    for (var request : group.requests) {
+                        if (request.result != null) {
+                            recordJob(request.result, "published");
+                            instrumentation.published(request.result.extraction);
+                            instrumentation.published(request.result.ready);
+                        }
+                    }
+                }
+            } catch (Throwable failure) {
+                if (event != null) event.failed = true;
+                workerFailure = failure;
+            } finally {
+                drainDiscardedBuilds();
+                if (event != null) {
+                    event.cpuNanos = cpuStarted < 0 ? -1 : threadCpuNanos() - cpuStarted;
+                    event.allocatedBytes = allocatedStarted < 0 ? -1 : threadAllocatedBytes() - allocatedStarted;
+                    event.commit();
+                }
+                publicationScheduled.set(false);
+                if (workerFailure == null) schedulePublication();
             }
         }
-        updates.published(groups);
     }
 
     private void reset() {
-        synchronized (preparationLock) {
-            epoch++;
+        synchronized (publicationLock) {
+            synchronized (preparationLock) {
+                epoch++;
+                updates.clear();
+                workerFailure = null;
+            }
             drainDiscardedBuilds();
+            if (geometry != null) {
+                var drops = geometry.sectionKeys().stream()
+                        .map(key -> (MinecraftTerrainGeometry.ReadyChange) new MinecraftTerrainGeometry.Drop(key)).toList();
+                if (!drops.isEmpty()) geometry.edit(drops);
+            }
         }
-        updates.clear();
         snapshots.clear();
         columns.clear();
         dirty.clear();
-        if (geometry != null) {
-            var drops = geometry.sectionKeys().stream()
-                    .map(key -> (MinecraftTerrainGeometry.ReadyChange) new MinecraftTerrainGeometry.Drop(key)).toList();
-            if (!drops.isEmpty()) geometry.edit(drops);
-        }
     }
 
     public void shutdown() {
-        synchronized (preparationLock) {
-            epoch++;
+        synchronized (publicationLock) {
+            synchronized (preparationLock) {
+                epoch++;
+                geometry = null;
+                updates.clear();
+            }
             drainDiscardedBuilds();
         }
         workers.shutdown();
-        updates.clear();
+        synchronized (publicationLock) { drainDiscardedBuilds(); }
         dirty.clear();
         snapshots.clear();
         columns.clear();
@@ -520,10 +619,7 @@ public final class RtTerrain {
 
     private void drainDiscardedBuilds() {
         Build build;
-        while ((build = completed.poll()) != null) {
-            outstandingBuilds.decrementAndGet();
-            discardBuild(build);
-        }
+        while ((build = discarded.poll()) != null) build.close();
     }
 
     private static boolean neighborsLoaded(ClientChunkCache chunks, int x, int z) {

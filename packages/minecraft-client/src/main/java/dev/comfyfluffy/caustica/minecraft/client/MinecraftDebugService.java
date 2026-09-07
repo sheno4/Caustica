@@ -205,7 +205,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                 } else {
                     events.addAll(List.of("Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
                             "GeometryBuildReadyLatency", "BlasCommandRecord", "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
-                            "GpuStage", "NeeFrame", "TerrainState", "TerrainJob"));
+                            "GpuStage", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication"));
                 }
                 for (String name : events)
                     recording.enable("dev.comfyfluffy.caustica." + name).withThreshold(java.time.Duration.ZERO);

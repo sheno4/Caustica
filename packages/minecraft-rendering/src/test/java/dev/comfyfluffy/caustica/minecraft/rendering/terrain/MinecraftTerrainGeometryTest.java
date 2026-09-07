@@ -29,6 +29,153 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftTerrainGeometryTest {
+    @Test void equivalentEmittersKeepTheirIdentitiesAcrossMeshRevisionsAndRangeChanges() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        var descriptor = emitterBatch(7, 1).emitters().getFirst().descriptor();
+        var initial = prepared(terrain, scene, new MinecraftTerrainLightBatch(7, 1,
+                List.of(new MinecraftTerrainEmitter(descriptor, 0, 1),
+                        new MinecraftTerrainEmitter(descriptor, 1, 1))));
+        terrain.edit(List.of(initial));
+        var oldPlacement = (SceneEdit.SetInstance<?>) scene.edits.getFirst().getLast();
+        var equivalent = emitterBatch(7, 2).emitters().getFirst().descriptor();
+        var replacement = prepared(terrain, scene, new MinecraftTerrainLightBatch(7, 2,
+                List.of(new MinecraftTerrainEmitter(equivalent, 4, 2),
+                        new MinecraftTerrainEmitter(equivalent, 8, 1))));
+
+        terrain.edit(List.of(replacement));
+
+        assertEquals(1, scene.edits.getLast().size());
+        var placement = (SceneEdit.SetInstance<?>) scene.edits.getLast().getFirst();
+        assertSame(oldPlacement.instance(), placement.instance());
+        for (int i = 0; i < 2; i++) {
+            assertSame(oldPlacement.primitiveLights().ranges().get(i).light(),
+                    placement.primitiveLights().ranges().get(i).light());
+        }
+        assertNotSame(placement.primitiveLights().ranges().get(0).light(),
+                placement.primitiveLights().ranges().get(1).light());
+        assertEquals(4, placement.primitiveLights().ranges().getFirst().firstPrimitive());
+        assertEquals(2, placement.primitiveLights().ranges().getFirst().primitiveCount());
+        assertEquals(0, oldPlacement.primitiveLights().ranges().getFirst().firstPrimitive());
+        terrain.close();
+    }
+
+    @Test void reorderedEmittersAndUnrelatedPublicationDoNotInvalidatePreparedEdit() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        var first = emitterBatch(7, 1).emitters().getFirst().descriptor();
+        var second = new LightDescriptor.Parallelogram(1, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 4, 3, 2);
+        terrain.edit(List.of(prepared(terrain, scene, new MinecraftTerrainLightBatch(7, 1,
+                List.of(new MinecraftTerrainEmitter(first, 0, 1), new MinecraftTerrainEmitter(second, 1, 1))))));
+        var original = (SceneEdit.SetInstance<?>) scene.edits.getFirst().getLast();
+        var replacement = prepared(terrain, scene, new MinecraftTerrainLightBatch(7, 2,
+                List.of(new MinecraftTerrainEmitter(second, 0, 1), new MinecraftTerrainEmitter(first, 1, 1))));
+        try (var edit = terrain.prepareEdit(List.of(replacement))) {
+            terrain.edit(List.of(prepared(terrain, scene, 8)));
+            edit.publish();
+        }
+        assertEquals(1, scene.edits.getLast().size());
+        var placement = (SceneEdit.SetInstance<?>) scene.edits.getLast().getFirst();
+        assertSame(original.primitiveLights().ranges().get(0).light(), placement.primitiveLights().ranges().get(1).light());
+        assertSame(original.primitiveLights().ranges().get(1).light(), placement.primitiveLights().ranges().get(0).light());
+        terrain.close();
+    }
+
+    @Test void descriptorChangesAndRemovedDuplicatesPublishWithTheirMeshAndSurviveRejection() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        var descriptor = emitterBatch(7, 1).emitters().getFirst().descriptor();
+        var changed = new LightDescriptor.Parallelogram(0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 8, 3, 2);
+        terrain.edit(List.of(prepared(terrain, scene, new MinecraftTerrainLightBatch(7, 1,
+                List.of(new MinecraftTerrainEmitter(descriptor, 0, 1),
+                        new MinecraftTerrainEmitter(descriptor, 1, 1))))));
+        var original = (SceneEdit.SetInstance<?>) scene.edits.getFirst().getLast();
+        var replacement = prepared(terrain, scene, new MinecraftTerrainLightBatch(7, 2,
+                List.of(new MinecraftTerrainEmitter(changed, 0, 1),
+                        new MinecraftTerrainEmitter(descriptor, 1, 1))));
+        try (var edit = terrain.prepareEdit(List.of(replacement))) {
+            assertEquals(1, scene.edits.size());
+            scene.reject = true;
+            assertThrows(IllegalStateException.class, edit::publish);
+            assertEquals(0, scene.jobs.getFirst().releases);
+            edit.publish();
+        }
+        var edits = scene.edits.getLast();
+        assertEquals(3, edits.size());
+        var set = assertInstanceOf(SceneEdit.SetLight.class, edits.get(0));
+        var drop = assertInstanceOf(SceneEdit.DropLight.class, edits.get(1));
+        var placement = assertInstanceOf(SceneEdit.SetInstance.class, edits.get(2));
+        assertEquals(changed, set.descriptor());
+        assertSame(original.primitiveLights().ranges().get(1).light(), drop.light());
+        assertSame(set.light(), placement.primitiveLights().ranges().get(0).light());
+        assertSame(original.primitiveLights().ranges().get(0).light(),
+                placement.primitiveLights().ranges().get(1).light());
+        terrain.close();
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+    }
+
+    @Test void stagedEditCannotRestoreASectionRemovedDuringPreparation() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        terrain.edit(List.of(prepared(terrain, scene, 7)));
+        var replacement = prepared(terrain, scene, 7);
+        try (var edit = terrain.prepareEdit(List.of(replacement))) {
+            terrain.edit(List.of(new MinecraftTerrainGeometry.Drop(7)));
+            assertThrows(IllegalStateException.class, edit::publish);
+        }
+        assertFalse(terrain.hasSection(7));
+        assertEquals(2, scene.edits.size());
+        assertEquals(0, scene.jobs.getLast().releases);
+        replacement.close();
+        terrain.close();
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+    }
+
+    @Test void successfulPublicationDefersDisplacedCleanupUntilEditClosesExactlyOnce() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        terrain.edit(List.of(prepared(terrain, scene, 7)));
+        var replacement = prepared(terrain, scene, 7);
+        var edit = terrain.prepareEdit(List.of(replacement));
+
+        edit.publish();
+
+        assertEquals(2, scene.edits.size());
+        assertEquals(0, scene.jobs.getFirst().releases);
+        assertEquals(0, scene.jobs.getLast().releases);
+        edit.close();
+        assertEquals(1, scene.jobs.getFirst().releases);
+        edit.close();
+        assertEquals(1, scene.jobs.getFirst().releases);
+        assertEquals(0, scene.jobs.getLast().releases);
+        terrain.close();
+        assertEquals(1, scene.jobs.getLast().releases);
+    }
+
+    @Test void discardingAnUnpublishedEditLeavesEveryResourceWithItsCurrentOwner() {
+        var scene = new PreparedScene();
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
+        terrain.edit(List.of(prepared(terrain, scene, 7)));
+        var replacement = prepared(terrain, scene, 7);
+        var edit = terrain.prepareEdit(List.of(replacement));
+        edit.close();
+        edit.close();
+        assertThrows(IllegalStateException.class, edit::publish);
+        scene.jobs.forEach(job -> assertEquals(0, job.releases));
+        replacement.close();
+        assertEquals(1, scene.jobs.getLast().releases);
+        assertEquals(0, scene.jobs.getFirst().releases);
+        terrain.close();
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+    }
+
+    private static MinecraftTerrainGeometry.Prepared prepared(MinecraftTerrainGeometry terrain,
+                                                               PreparedScene scene, MinecraftTerrainLightBatch lights) {
+        var future = terrain.prepare(new MinecraftTerrainGeometry.Put(lights.sectionKey(), 0, 0, 0, mesh(), lights));
+        scene.jobs.getLast().complete();
+        return future.join();
+    }
+
     @Test void waitsForBothNeighborsAndPublishesLightsInTheSameEdit() {
         var scene = new PreparedScene();
         var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));

@@ -547,3 +547,42 @@ these jobs overlap and must not be summed into frame cost. Terrain workers have
 1,201 samples, led by palette reads (261), tessellation (108) and face culling (81).
 These identify remaining work, but do not establish that replacing generated struct
 assignment with hand-written stores would improve end-to-end performance.
+
+## Worker publication candidate — awaiting runtime measurement
+
+The preceding mean-FPS result did not establish smooth flight. Reanalysis of the
+fresh flight found 59 CPU envelopes over 16.7 ms. These averaged 4.831 ms in terrain
+publication, 4.922 ms in scene assembly and 6.135 ms in geometry preparation, with
+14.935 MB of render-thread allocation. A 54.321 ms frame spent 22.705 ms preparing
+geometry, 9.431 ms assembling scenes, 7.337 ms publishing terrain and 4.052 ms
+capturing scenes. These stage measurements identify publication/update bursts as
+remaining work even after the allocation stalls were removed.
+
+The candidate moves ready terrain publication onto a dedicated worker, independent
+of the meshing queue. Minecraft region capture stays on the render thread. Upload
+and GPU-ready completion hand off directly to publication without requiring a render
+pass to drain them. Edit construction and equivalent-light matching run outside the
+terrain state lock; final generation validation and the atomic database edit share
+the lock so dirty, removed, reset or superseded work cannot restore obsolete data.
+Discarded resources remain alive through staging and are released outside the state
+lock. Unbind and shutdown join the worker lifecycles.
+
+Equivalent emitter descriptors retain light identities across replacement meshes,
+including primitive-range reordering and duplicate descriptors. Only unmatched old
+and new emitters generate light edits. Renderer page assembly uses ordered placement
+lookup instead of constructing boxed identity maps, and its mesh lookup uses primitive
+keys. These changes preserve immutable frame roots and fresh range generations.
+
+The candidate does not yet eliminate page-wide packing invalidation or the scene
+database lock shared with frame capture. Their remaining costs must be measured,
+along with worker publication queue latency, before choosing the next delta layout.
+The `TerrainPublication` JFR event records worker duration, CPU/allocation deltas and
+group/section counts. No new FPS or smoothness claim is made: the user requested a
+pause before launching the client.
+
+Validation: 429 tests pass across engine (81), ray-tracing renderer (127), Minecraft
+rendering (69), and Minecraft client (152). Coverage includes publication without a
+render pass, publication while meshing is blocked, immediate dirty supersession and
+removal during staging, shutdown/late completion ownership, equivalent and duplicate
+light mappings, deferred resource release, and motion history across page changes.
+The client has not been launched with this candidate.

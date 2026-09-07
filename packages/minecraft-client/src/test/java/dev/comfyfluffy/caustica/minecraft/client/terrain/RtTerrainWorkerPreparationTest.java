@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.*;
+import dev.comfyfluffy.caustica.api.scene.*;
+import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
@@ -16,17 +18,40 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class RtTerrainWorkerPreparationTest {
-    @Test void uploadsWithoutARenderPassAndDiscardsReadyResultAtUnbind() throws Exception {
+    @Test void uploadsAndPublishesWithoutARenderPass() throws Exception {
         try (var fixture = new Fixture()) {
             fixture.submit();
             assertTrue(fixture.submitted.await(5, TimeUnit.SECONDS));
             assertTrue(fixture.uploadThread.get().startsWith("rt-worker-"));
             assertEquals(1, fixture.outstanding());
             fixture.ready.complete(fixture.mesh);
+            assertTrue(fixture.published.await(5, TimeUnit.SECONDS));
+            assertTrue(fixture.publishThread.get().equals("rt-terrain-publication"));
             fixture.terrain.unbindGeometry(fixture.geometry);
+            fixture.geometry.close();
             assertEquals(1, fixture.meshClosed.get());
             assertEquals(1, fixture.uploadClosed.get());
             assertEquals(0, fixture.outstanding());
+        }
+    }
+
+    @Test void publicationDoesNotWaitForMeshingBacklog() throws Exception {
+        try (var fixture = new Fixture()) {
+            fixture.submit();
+            assertTrue(fixture.submitted.await(5, TimeUnit.SECONDS));
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            fixture.workers.submit(() -> {
+                entered.countDown();
+                try { release.await(); }
+                catch (InterruptedException failure) { Thread.currentThread().interrupt(); }
+            });
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                fixture.ready.complete(fixture.mesh);
+                assertTrue(fixture.published.await(5, TimeUnit.SECONDS));
+                assertEquals("rt-terrain-publication", fixture.publishThread.get());
+            } finally { release.countDown(); }
         }
     }
 
@@ -79,19 +104,51 @@ final class RtTerrainWorkerPreparationTest {
         }
     }
 
-    @Test void oneBoundaryDrainsAllCompletedWork() throws Exception {
+    @Test void completedEmptySectionsPublishWithoutARenderPass() throws Exception {
         try (var fixture = new Fixture()) {
-            for (int i = 0; i < 192; i++) {
-                fixture.terrain.submitBuild(fixture.build(), fixture.geometry,
-                        () -> new RtTerrainMesher.CpuSection(null, new float[0]));
-            }
-            var finished = new CountDownLatch(1);
-            fixture.workers.submit(finished::countDown);
-            assertTrue(finished.await(5, TimeUnit.SECONDS));
-            assertEquals(192, fixture.outstanding());
-            fixture.terrain.drainCompleted(new ResourcePackEpoch(0));
+            var builds = new java.util.ArrayList<RtTerrain.Build>();
+            for (int i = 0; i < 192; i++) builds.add(fixture.build());
+            for (var build : builds) fixture.terrain.submitBuild(build, fixture.geometry,
+                    () -> new RtTerrainMesher.CpuSection(null, new float[0]));
+            fixture.awaitPublication();
             assertEquals(0, fixture.outstanding());
-            assertEquals(192, fixture.updates().ready().size());
+            assertTrue(fixture.updates().ready().isEmpty());
+            assertTrue(fixture.updates().sections.values().stream().allMatch(section -> section.ready));
+        }
+    }
+
+    @Test void removalDuringEditPreparationRejectsThePreparedReplacement() throws Exception {
+        rejectsChangedRequestDuringPublication(true);
+    }
+
+    @Test void dirtyDuringEditPreparationRejectsThePreparedReplacement() throws Exception {
+        rejectsChangedRequestDuringPublication(false);
+    }
+
+    private void rejectsChangedRequestDuringPublication(boolean remove) throws Exception {
+        try (var fixture = new Fixture()) {
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            fixture.beforeInstanceData = () -> {
+                entered.countDown();
+                try { release.await(); }
+                catch (InterruptedException failure) { throw new AssertionError(failure); }
+            };
+            fixture.submit();
+            assertTrue(fixture.submitted.await(5, TimeUnit.SECONDS));
+            fixture.ready.complete(fixture.mesh);
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                synchronized (fixture.preparationLock()) {
+                    if (remove) fixture.updates().remove(0L);
+                    else fixture.terrain.markBlocksDirty(1, 1, 1, 1, 1, 1);
+                }
+            } finally { release.countDown(); }
+            fixture.awaitPublication();
+            assertNull(fixture.publishThread.get());
+            assertFalse(fixture.geometry.hasSection(0));
+            assertEquals(1, fixture.meshClosed.get());
+            assertEquals(1, fixture.uploadClosed.get());
         }
     }
 
@@ -100,9 +157,12 @@ final class RtTerrainWorkerPreparationTest {
         final RtTerrain terrain = new RtTerrain(workers, MinecraftTelemetry.disabled());
         final CountDownLatch submitted = new CountDownLatch(1);
         final AtomicReference<String> uploadThread = new AtomicReference<>();
+        final AtomicReference<String> publishThread = new AtomicReference<>();
+        final CountDownLatch published = new CountDownLatch(1);
         final AtomicInteger uploadClosed = new AtomicInteger(), meshClosed = new AtomicInteger();
         final CompletableFuture<ReadyMesh<MinecraftProgramTypes.InstanceData>> ready = new CompletableFuture<>();
         Runnable beforeUpload = () -> {};
+        Runnable beforeInstanceData = () -> {};
         final ReadyMesh<MinecraftProgramTypes.InstanceData> mesh = new ReadyMesh<>() {
             @Override public ShaderDataType<MinecraftProgramTypes.InstanceData> instanceDataType() {
                 return MinecraftProgramTypes.INSTANCE_DATA;
@@ -117,13 +177,21 @@ final class RtTerrainWorkerPreparationTest {
                 submitted.countDown();
                 return (CompletableFuture<ReadyMesh<N>>) (CompletableFuture<?>) ready;
             }
-        }, null, null, source -> {
+        }, new SceneChannel() {
+            @Override public InstanceId newInstance() { return new InstanceId() {}; }
+            @Override public LightId newLight() { return new LightId() {}; }
+            @Override public void edit(List<? extends SceneEdit> edits) {
+                publishThread.set(Thread.currentThread().getName());
+                published.countDown();
+            }
+        }, new SceneId() {}, source -> {
             uploadThread.set(Thread.currentThread().getName());
             beforeUpload.run();
             return new MinecraftTerrainUploader.UploadedSection() {
                 @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() { return null; }
                 @Override public dev.comfyfluffy.caustica.api.program.ShaderData<MinecraftProgramTypes.InstanceData>
-                        instanceData() { throw new AssertionError(); }
+                        instanceData() { beforeInstanceData.run(); return new dev.comfyfluffy.caustica.api.program.ShaderData<>(
+                            MinecraftProgramTypes.INSTANCE_DATA, 0, dev.comfyfluffy.caustica.api.resource.ResourceOwner.none()); }
                 @Override public void close() { uploadClosed.incrementAndGet(); }
             };
         });
@@ -159,6 +227,21 @@ final class RtTerrainWorkerPreparationTest {
             field.setAccessible(true);
             return ((AtomicInteger) field.get(terrain)).get();
         }
-        @Override public void close() { terrain.shutdown(); }
+        Object preparationLock() throws Exception {
+            var field = RtTerrain.class.getDeclaredField("preparationLock");
+            field.setAccessible(true);
+            return field.get(terrain);
+        }
+        void awaitPublication() throws Exception {
+            var extracted = new CountDownLatch(1);
+            workers.submit(extracted::countDown);
+            assertTrue(extracted.await(5, TimeUnit.SECONDS));
+            for (int i = 0; i < 2; i++) {
+                var finished = new CountDownLatch(1);
+                workers.submitPublication(finished::countDown, () -> {});
+                assertTrue(finished.await(5, TimeUnit.SECONDS));
+            }
+        }
+        @Override public void close() { terrain.shutdown(); geometry.close(); }
     }
 }

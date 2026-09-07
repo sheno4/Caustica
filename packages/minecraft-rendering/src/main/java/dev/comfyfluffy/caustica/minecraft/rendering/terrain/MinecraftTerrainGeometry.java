@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.rendering.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.*;
 import dev.comfyfluffy.caustica.api.light.LightId;
+import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.scene.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
@@ -43,16 +44,29 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     }
 
     /** Consumes prepared resources only after the entire direct scene edit succeeds. */
-    public void edit(List<? extends ReadyChange> changes) {
+    public synchronized void edit(List<? extends ReadyChange> changes) {
+        try (var edit = prepareEdit(changes)) {
+            edit.publish();
+        }
+    }
+
+    /**
+     * Builds edits without holding the publication lock. The caller keeps prepared inputs alive until
+     * publication succeeds or the edit is discarded, and excludes publication after this geometry closes.
+     */
+    public PreparedEdit prepareEdit(List<? extends ReadyChange> changes) {
+        var base = new HashMap<Long, Section>();
+        synchronized (this) {
+            for (var change : changes) base.put(change.sectionKey(), sections.get(change.sectionKey()));
+        }
         // Null stages removal; removing a staged key places its final replacement last.
         var next = new LinkedHashMap<Long, Section>();
         var edits = new ArrayList<SceneEdit>();
         var displaced = new ArrayList<Prepared>();
         for (var change : changes) {
             long key = change.sectionKey();
-            var previous = next.containsKey(key) ? next.remove(key) : sections.get(key);
+            var previous = next.containsKey(key) ? next.remove(key) : base.get(key);
             if (previous != null) {
-                previous.lights.forEach(light -> edits.add(new SceneEdit.DropLight(light)));
                 displaced.add(previous.prepared);
             }
             if (change instanceof Prepared prepared) {
@@ -60,33 +74,97 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                 InstanceId instance = previous == null ? channel.newInstance() : previous.instance;
                 var lightIds = new ArrayList<LightId>();
                 var ranges = new ArrayList<PrimitiveLightMap.Range>();
+                // Descriptors identify equivalent emitters independently of mesh primitive ordering.
+                // Queues preserve distinct light identities when descriptors occur more than once.
+                var available = new HashMap<LightDescriptor.Parallelogram, ArrayDeque<LightId>>();
+                if (previous != null) {
+                    var emitters = previous.prepared.placement.lights().emitters();
+                    for (int i = 0; i < emitters.size(); i++) {
+                        available.computeIfAbsent(emitters.get(i).descriptor(), ignored -> new ArrayDeque<>())
+                                .addLast(previous.lights.get(i));
+                    }
+                }
                 for (var emitter : placement.lights().emitters()) {
-                    var light = channel.newLight();
+                    var matches = available.get(emitter.descriptor());
+                    var light = matches == null || matches.isEmpty() ? null : matches.removeFirst();
+                    if (light == null) {
+                        light = channel.newLight();
+                        edits.add(new SceneEdit.SetLight(light, scene, emitter.descriptor()));
+                    }
                     lightIds.add(light);
-                    edits.add(new SceneEdit.SetLight(light, scene, emitter.descriptor()));
                     ranges.add(new PrimitiveLightMap.Range(emitter.firstPrimitive(), emitter.primitiveCount(), light));
                 }
+                available.values().forEach(lights -> lights.forEach(light -> edits.add(new SceneEdit.DropLight(light))));
                 edits.add(new SceneEdit.SetInstance<>(instance, scene, prepared.mesh,
                         GeometryTransform.translation(placement.originX(), placement.originY(), placement.originZ()),
                         0xff, prepared.uploaded.instanceData(), new PrimitiveLightMap(ranges)));
                 next.put(placement.sectionKey(), new Section(instance, List.copyOf(lightIds), prepared));
             } else {
                 next.put(key, null);
-                if (previous != null) edits.add(new SceneEdit.DropInstance(previous.instance));
+                if (previous != null) {
+                    previous.lights.forEach(light -> edits.add(new SceneEdit.DropLight(light)));
+                    edits.add(new SceneEdit.DropInstance(previous.instance));
+                }
             }
         }
-        if (!edits.isEmpty()) channel.edit(edits);
-        next.forEach((key, section) -> {
-            sections.remove(key);
-            if (section != null) sections.put(key, section);
-        });
-        displaced.forEach(Prepared::close);
+        return new PreparedEdit(base, next, edits, displaced);
     }
 
-    public boolean hasSection(long key) { return sections.containsKey(key); }
-    public List<Long> sectionKeys() { return List.copyOf(sections.keySet()); }
+    /**
+     * Discarding an edit leaves all prepared inputs owned by the caller. Publication rejects changes
+     * to any section used as its base; edits to unrelated sections do not invalidate it. Closing a
+     * successfully published edit releases displaced resources, allowing callers to retire them
+     * after leaving their publication lock.
+     */
+    public final class PreparedEdit implements AutoCloseable {
+        private final Map<Long, Section> base;
+        private final Map<Long, Section> next;
+        private final List<SceneEdit> edits;
+        private final List<Prepared> displaced;
+        private boolean finished;
+        private boolean published;
 
-    @Override public void close() {
+        private PreparedEdit(Map<Long, Section> base, Map<Long, Section> next,
+                             List<SceneEdit> edits, List<Prepared> displaced) {
+            this.base = base;
+            this.next = next;
+            this.edits = edits;
+            this.displaced = displaced;
+        }
+
+        public void publish() {
+            synchronized (MinecraftTerrainGeometry.this) {
+                if (finished) throw new IllegalStateException("terrain edit is already consumed");
+                for (var entry : base.entrySet()) {
+                    if (sections.get(entry.getKey()) != entry.getValue()) {
+                        throw new IllegalStateException("terrain section changed during edit preparation");
+                    }
+                }
+                if (!edits.isEmpty()) channel.edit(edits);
+                next.forEach((key, section) -> {
+                    sections.remove(key);
+                    if (section != null) sections.put(key, section);
+                });
+                finished = true;
+                published = true;
+            }
+        }
+
+        @Override public void close() {
+            boolean release;
+            synchronized (MinecraftTerrainGeometry.this) {
+                finished = true;
+                release = published;
+                published = false;
+            }
+            if (release) displaced.forEach(Prepared::close);
+        }
+    }
+
+    public synchronized boolean hasSection(long key) { return sections.containsKey(key); }
+    public synchronized List<Long> sectionKeys() { return List.copyOf(sections.keySet()); }
+
+    @Override public synchronized void close() {
         edit(sectionKeys().stream().map(Drop::new).toList());
         uploader.close();
     }

@@ -74,6 +74,45 @@ class RtFramePageAssemblyTest {
         }
     }
 
+    @Test void sparseOrdinalsMatchHistoryAndReuseRecordsIndependentlyOfIdentityOrder() {
+        var mesh = mesh(1, 0x1000, 1);
+        var stable = instance(50, 30, mesh, 3);
+        var original = snapshot(List.of(mesh), List.of(List.of(
+                instance(90, 10, mesh, 1), stable, instance(10, 50, mesh, 5))));
+        var previous = assembly.resolve(original).get(scene).getFirst();
+        var current = assembly.resolve(snapshot(List.of(mesh), List.of(List.of(
+                instance(100, 5, mesh, 7), instance(90, 10, mesh, 11),
+                instance(80, 20, mesh, 8), stable, instance(10, 50, mesh, 15),
+                instance(5, 60, mesh, 9))))).get(scene).getFirst();
+
+        assertSame(previous.stationary.get(1).geometryRecords(), current.stationary.get(3).geometryRecords());
+        try (var history = new RtRetainedSceneBackend.SceneMotionHistory(List.of(previous),
+                SharedResource.owned(original, ignored -> { }))) {
+            var motion = current.frame(history);
+            assertSame(current.stationary.get(0), motion.get(0));
+            assertSame(current.stationary.get(2), motion.get(2));
+            assertSame(current.stationary.get(3), motion.get(3));
+            assertSame(current.stationary.get(5), motion.get(5));
+            assertEquals(GeometryTransform.translation(1, 0, 0), motion.get(1).previousTransform());
+            assertEquals(GeometryTransform.translation(5, 0, 0), motion.get(4).previousTransform());
+        }
+    }
+
+    @Test void changedPageBoundariesResolveMotionAgainstEachPreviousPage() {
+        var mesh = mesh(1, 0x1000, 1);
+        var original = snapshot(List.of(mesh), List.of(List.of(instance(20, 10, mesh, 1)),
+                List.of(instance(10, 30, mesh, 3))));
+        var previous = assembly.resolve(original).get(scene);
+        var current = assembly.resolve(snapshot(List.of(mesh), List.of(List.of(
+                instance(20, 10, mesh, 11), instance(10, 30, mesh, 13))))).get(scene).getFirst();
+        try (var history = new RtRetainedSceneBackend.SceneMotionHistory(previous,
+                SharedResource.owned(original, ignored -> { }))) {
+            var motion = current.frame(history);
+            assertEquals(GeometryTransform.translation(1, 0, 0), motion.getFirst().previousTransform());
+            assertEquals(GeometryTransform.translation(3, 0, 0), motion.getLast().previousTransform());
+        }
+    }
+
     @Test void tracePlansUseMotionResolvedPageIdentity() {
         var mesh = mesh(1, 0x1000, 1);
         var source = snapshot(List.of(mesh), List.of(List.of(instance(1, 1, mesh, 0))));
