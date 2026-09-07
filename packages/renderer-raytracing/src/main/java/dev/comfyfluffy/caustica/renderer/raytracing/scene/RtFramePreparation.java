@@ -123,6 +123,28 @@ final class RtFramePreparation implements AutoCloseable {
             event.commit();
         }
     }
+    static void traceRanges(int geometryRecords, int geometryHighWater, int emitterBytes,
+                            int emitterHighWater, int pageCount) {
+        TraceRangesEvent event = new TraceRangesEvent();
+        if (!event.isEnabled()) return;
+        event.geometryRecords = geometryRecords;
+        event.geometryHighWater = geometryHighWater;
+        event.emitterBytes = emitterBytes;
+        event.emitterHighWater = emitterHighWater;
+        event.pageCount = pageCount;
+        event.commit();
+    }
+
+    @Name("dev.comfyfluffy.caustica.TraceRanges")
+    @Label("Trace range occupancy") @Category({"Caustica", "Frame"}) @StackTrace(false) @Enabled(false)
+    static final class TraceRangesEvent extends Event {
+        public int geometryRecords;
+        public int geometryHighWater;
+        public int emitterBytes;
+        public int emitterHighWater;
+        public int pageCount;
+    }
+
     @Name("dev.comfyfluffy.caustica.FramePreparation")
     @Label("Frame preparation chunk") @Category({"Caustica", "Frame"}) @StackTrace(false) @Enabled(false)
     static final class FramePreparationEvent extends Event {

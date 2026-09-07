@@ -260,3 +260,52 @@ In the repeat flight, all 21,565 matched entity-ready publication observations a
 This verifies publication, not pixels. Flight still misses 100 CPU FPS. Scene assembly
 remains approximately 5 ms and combined geometry preparation approximately 12.6 ms;
 reducing unchanged-page reconstruction and repacking is the next substantial task.
+
+## Stable geometry and emitter ranges
+
+Each retained instance page now owns stable geometry and emitter offsets. Removed
+pages release their numeric ranges; first-fit allocation coalesces adjacent gaps and
+shrinks unused tails. A new occupant has a fresh range identity, and completed trace
+slots cache by that identity. Captured frames retain their own layout and resources,
+so numeric reuse does not change an in-flight frame. The geometry/SBT tables may
+contain holes; only explicitly addressed TLAS records are consumed. Light tables and
+their dense indices remain unchanged. The allocator enforces the stricter 24-bit SBT
+offset limit and checks emitter range capacity.
+
+Renderer/runtime tests pass: prefix insertion/removal preserves surviving offsets
+and cached plans, reused ranges receive new generations, history remains immutable,
+and 3,000 randomized allocation/release operations maintain nonoverlapping ranges.
+The opt-in `TraceRanges` event reports active counts and highest addressed ends.
+
+At 854×480, two same-process routes (`goal-stable-ranges-default` and its `repeat`)
+completed without GPU errors and stopped cleanly at the benchmark start:
+
+| Mean per frame | Static runs | Fast-flight runs |
+| --- | --- | --- |
+| Render-thread CPU | 6.019 / 6.520 ms | 18.818 / 16.983 ms |
+| CPU envelope including waits | 6.656 / 7.358 ms | 30.179 / 27.678 ms |
+| Render-thread allocation | 5.712 / 6.272 MB | 14.084 / 13.371 MB |
+| Combined geometry preparation | 1.313 / 1.590 ms | 10.043 / 9.626 ms |
+| Packing-worker allocation | 0.359 / 0.747 MB | 6.689 / 6.338 MB |
+
+Flight range capacity peaked at 1.220/1.206 times active geometry and 1.206/1.181
+times active emitter bytes. Actual Vulkan buffers can retain larger rounded capacity.
+An above-ground screenshot showed the terrain scene after the first route; it is
+saved as `goal-stable-ranges-visual.json` locally. The earlier GPU fault remains
+unexplained; successful runs do not establish its cause. The first launch hit the
+known precipitation exception before recording. Future test launches use the same
+benchmark-start camera; the original camera is retained in `goal-initial.json` for
+restoration after the optimization work.
+
+The repeat flight has 23,979 matched entity-ready and 19,999 terrain-ready publication
+observations, all within one observed frame. Publication-to-assembly adds zero frames
+for all 23,937 matched entity and 54,083 terrain-ready observations. These events
+measure engine assembly, not pixel presentation. Flight still misses 100 CPU FPS.
+
+The preceding raw JFR also attributes substantial allocation to vanilla block/sky
+light map clones. A bytecode audit found no redundant updates: the client already
+batches queued packets and skips snapshots with no changes. Structural sharing of
+that snapshot index would be a separate compatibility change, not a safe whole-engine
+off-thread move. Another remaining renderer issue is that NEE type-count telemetry
+is recomputed for changed light lists even when its event is disabled; this scan is
+visible in the render-thread JFR samples and should be gated by demand.

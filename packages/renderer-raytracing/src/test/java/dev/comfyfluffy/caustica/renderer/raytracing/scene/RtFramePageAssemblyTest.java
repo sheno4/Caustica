@@ -82,7 +82,7 @@ class RtFramePageAssemblyTest {
         assertEquals(1, first.get(scene).getFirst().stationary.getFirst().geometryRecords().getFirst().surfaceImplementation());
     }
 
-    @Test void removingEarlierPageRebasesOffsetsAndPreservesPreviousMeshStream() {
+    @Test void replacedPagePreservesPreviousMeshStreamAfterEarlierPageRemoval() {
         var oldMesh = mesh(1, 0x1000, 1);
         var newMesh = mesh(2, 0x2000, 1);
         var first = snapshot(List.of(oldMesh), List.of(List.of(instance(1, 1, oldMesh, 0)),
@@ -114,7 +114,7 @@ class RtFramePageAssemblyTest {
         }
     }
 
-    @Test void scenePrefixesAreIndependentAndRebasingKeepsStationaryGeometryRecords() {
+    @Test void sceneRangesAreIndependentAndRemovalKeepsStationaryGeometryRecords() {
         var other = new SceneId() { };
         var mesh = mesh(1, 0x1000, 1);
         var source = List.of(instance(1, 1, mesh, 0),
@@ -131,13 +131,50 @@ class RtFramePageAssemblyTest {
                 SnapshotList.ofPages(List.of(stable)), List.of()));
         assertTrue(next.get(other).isEmpty());
         var rebased = next.get(scene).getFirst();
-        assertEquals(0, rebased.geometryBase);
+        assertEquals(1, rebased.geometryBase);
+        assertSame(previous.get(scene).getLast(), rebased);
         assertSame(previous.get(scene).getLast().stationary.getFirst().geometryRecords(),
                 rebased.stationary.getFirst().geometryRecords());
         try (var history = new RtRetainedSceneBackend.SceneMotionHistory(previous.get(scene),
                 SharedResource.owned(old, ignored -> { }))) {
             assertSame(rebased.stationary, rebased.frame(history));
         }
+    }
+
+    @Test void insertingAnEarlierPageKeepsGeometryAndEmitterOffsetsAndCachedPlan() {
+        var mesh = mesh(1, 0x1000, 1);
+        var emitter = new RetainedSceneSnapshot.Instance(2, 200, scene, mesh.identity(),
+                GeometryTransform.translation(0, 0, 0), 255, DATA.data(0),
+                List.of(new RetainedSceneSnapshot.PrimitiveEmitter(0, 1, 42)));
+        var stable = List.of(emitter);
+        var initial = assembly.resolve(snapshot(List.of(mesh), List.of(stable))).get(scene).getFirst();
+        var cache = new RtRetainedSceneBackend.TracePlanCache();
+        try (var preparation = new RtFramePreparation()) {
+            var before = cache.resolve(List.of(initial.stationary), preparation)[0];
+            var changed = assembly.resolve(snapshot(List.of(mesh),
+                    List.of(List.of(instance(1, 1, mesh, 0)), stable))).get(scene);
+            assertSame(initial, changed.getLast());
+            assertEquals(0, initial.range.geometryBase());
+            assertEquals(0, initial.range.emitterBase());
+            assertEquals(4, initial.range.emitterBytes());
+            assertEquals(1, changed.getFirst().geometryBase);
+            var after = cache.resolve(changed.stream().map(page -> page.stationary).toList(), preparation);
+            assertSame(before, after[1]);
+            assertSame(initial.range, after[1].range);
+        }
+    }
+
+    @Test void removedNumericRangeCanBeReusedWithoutChangingTheCapturedPage() {
+        var mesh = mesh(1, 0x1000, 1);
+        var first = assembly.resolve(snapshot(List.of(mesh), List.of(List.of(instance(1, 1, mesh, 0)))))
+                .get(scene).getFirst();
+        assembly.resolve(snapshot(List.of(mesh), List.of()));
+        var second = assembly.resolve(snapshot(List.of(mesh), List.of(List.of(instance(2, 200, mesh, 5)))))
+                .get(scene).getFirst();
+        assertEquals(first.range, second.range);
+        assertNotSame(first.range, second.range);
+        assertEquals(0, first.stationary.getFirst().current().transform().translationX());
+        assertEquals(5, second.stationary.getFirst().current().transform().translationX());
     }
 
     private RetainedSceneSnapshot snapshot(List<RetainedSceneSnapshot.Mesh> meshes,
