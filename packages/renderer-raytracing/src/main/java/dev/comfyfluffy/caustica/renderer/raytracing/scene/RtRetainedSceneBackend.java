@@ -2,6 +2,8 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
 
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
@@ -255,7 +257,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (flushEmitters && emitterBytes > 0) slot.emitters.flush(0L, emitterBytes);
         writes.forEach(TracePageWork::commit);
         BitSet linked = new BitSet(sceneLights.size());
-        for (int index = 0; index < pages.length; index++) linked.or(slot.page(index).linkedEmitters);
+        for (int index = 0; index < pages.length; index++) slot.page(index).addLinkedEmittersTo(linked);
         List<ByteBuffer> lightPages = packedLightsByScene.computeIfAbsent(scene, ignored -> new RtPackedLightPages())
                 .resolve(sceneLights, origin, linked, framePreparation);
         List<ByteBuffer> previousLightPages = slot.lightPages;
@@ -826,7 +828,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
 
         void packEmitters(TraceSlot slot, int emitterBase, Long2IntMap lightIndices,
-                          BitSet linkedEmitters) {
+                          IntSet linkedEmitters) {
             linkedEmitters.clear();
             if (emitterBytes == 0) return;
             ByteBuffer target = MemoryUtil.memByteBuffer(slot.emitters.mapped() + emitterBase, emitterBytes)
@@ -834,7 +836,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             for (EmitterSpan span : emitterSpans) {
                 target.position(span.byteOffset);
                 putEmitterIndices(target, span.firstPrimitive, span.primitiveCount,
-                        span.ranges, lightIndices, linkedEmitters::set);
+                        span.ranges, lightIndices, linkedEmitters::add);
             }
         }
     }
@@ -856,7 +858,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final LightIndexRevision lightIndexRevision;
         final Long2IntMap lightIndices;
         final int flags;
-        final BitSet linkedEmitters;
+        final IntSet linkedEmitters;
 
         TracePageWork(TracePagePlan page, TracePageResidency residency, TraceSlot slot, SceneOrigin origin,
                       int emitterBase, RtPipeline pipeline, LightIndexRevision lightIndexRevision,
@@ -870,7 +872,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             this.lightIndexRevision = lightIndexRevision;
             this.lightIndices = lightIndices;
             this.flags = flags;
-            linkedEmitters = (flags & EMITTERS) == 0 ? null : new BitSet();
+            linkedEmitters = (flags & EMITTERS) == 0 ? null : new IntOpenHashSet();
         }
 
         void pack() {
@@ -895,8 +897,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 residency.hitsWritten(page.identity, page.hitBase(pipeline), pipeline);
             }
             if ((flags & EMITTERS) != 0) {
-                residency.linkedEmitters.clear();
-                residency.linkedEmitters.or(linkedEmitters);
+                residency.linkedEmittersWritten(linkedEmitters);
                 residency.emittersWritten(page.identity, emitterBase, lightIndexRevision);
             }
         }
@@ -919,7 +920,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         private Object emitterPage;
         private int emitterBase;
         private Object lightIndexRevision;
-        final BitSet linkedEmitters = new BitSet();
+        // Dense indices can be far apart even when this page links only a handful of lights.
+        int[] linkedEmitters = new int[0];
+
+        void linkedEmittersWritten(IntSet indices) {
+            linkedEmitters = indices.toIntArray();
+        }
+
+        void addLinkedEmittersTo(BitSet target) {
+            for (int index : linkedEmitters) target.set(index);
+        }
 
         boolean hasGeometry(Object page, int base, SceneOrigin origin, long emitterAddress) {
             return geometryPage == page && geometryBase == base && origin.equals(geometryOrigin)

@@ -2,7 +2,11 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import org.junit.jupiter.api.Test;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 
+import java.util.BitSet;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -65,4 +69,45 @@ final class RtTracePageResidencyTest {
         assertFalse(residency.hasHits(page, 128, pipeline));
         assertFalse(residency.hasHits(page, 64, new Object()));
     }
+    @Test
+    void sparseHighIndicesMergeAcrossPagesWithoutStoringTheirUnusedRange() {
+        var first = new RtRetainedSceneBackend.TracePageResidency();
+        var second = new RtRetainedSceneBackend.TracePageResidency();
+        var firstIndices = new IntOpenHashSet();
+        firstIndices.add(2);
+        firstIndices.add(1_000_000);
+        firstIndices.add(1_000_000);
+        first.linkedEmittersWritten(firstIndices);
+        second.linkedEmittersWritten(new IntOpenHashSet(new int[]{1_000_000, 500_000}));
+        firstIndices.clear();
+
+        assertEquals(2, first.linkedEmitters.length);
+        assertEquals(2, second.linkedEmitters.length);
+        var scene = new BitSet();
+        first.addLinkedEmittersTo(scene);
+        second.addLinkedEmittersTo(scene);
+        assertEquals(3, scene.cardinality());
+        assertTrue(scene.get(2));
+        assertTrue(scene.get(500_000));
+        assertTrue(scene.get(1_000_000));
+    }
+
+    @Test
+    void replacedPageLinksDoNotKeepRemovedLightsInTheSceneUnion() {
+        var residency = new RtRetainedSceneBackend.TracePageResidency();
+        residency.linkedEmittersWritten(new IntOpenHashSet(new int[]{1, 1_000_000}));
+        residency.linkedEmittersWritten(new IntOpenHashSet(new int[]{7}));
+        var scene = new BitSet();
+        residency.addLinkedEmittersTo(scene);
+        assertEquals(1, scene.cardinality());
+        assertTrue(scene.get(7));
+        assertFalse(scene.get(1));
+        assertFalse(scene.get(1_000_000));
+
+        residency.linkedEmittersWritten(new IntOpenHashSet());
+        scene.clear();
+        residency.addLinkedEmittersTo(scene);
+        assertTrue(scene.isEmpty());
+    }
+
 }

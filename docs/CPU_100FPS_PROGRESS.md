@@ -134,3 +134,49 @@ Local manifests and exports: `tmp/cpu-optimization/goal-current*`,
 `goal-incremental-fast*`. Analysis scripts: `tmp/cpu-goal-flight.py`,
 `tmp/cpu-goal-metrics.py`, `tmp/cpu-export.ps1`. Raw recordings stay under
 `run/caustica-debug`; these large artifacts are excluded from Git.
+
+## Latest measured checkpoint
+
+The `a75f7803` asynchronous entity candidate's completed `goal-entity-async` route
+produced the following JFR means at 3840×2054 in New World (2):
+
+| Metric per frame | Static | Fast flight |
+| --- | ---: | ---: |
+| CPU envelope, including waits | 8.883 ms | 37.615 ms |
+| Render-thread CPU | 8.203 ms | 27.431 ms |
+| Render-thread allocation | 9.216 MB | 20.607 MB |
+| Frame-preparation worker allocation | 0.814 MB | 17.800 MB |
+| Entity-upload worker allocation | 9.899 MB | 3.612 MB |
+
+The static recording contains 2,059 frames; flight contains 757. Entity-upload
+queue/work means were 0.791/0.045 ms per job static and 0.109/0.064 ms flying.
+Thread CPU measurements on this Windows JVM have 15.625 ms resolution, so individual
+short-job CPU percentiles cannot resolve their cost. The static result is promising;
+flight fails the 100 CPU FPS target and the subsequent GPU fault remains unresolved.
+
+In flight, 24,402 matched entity-ready publication observations and 17,976 matched
+terrain-ready publication observations were all at most one observed frame. This
+measures publication, not pixel visibility or extraction-to-ready latency.
+
+The largest sampled preparation-worker allocation origin was emitter-link marking:
+`Arrays.copyOf -> BitSet.ensureCapacity -> BitSet.expandTo -> BitSet.set`.
+Every page expands its own bitmap to the highest scene-wide dense light index.
+After excluding each thread's first allocation sample, this origin accounts for
+49.8% of preparation-worker sampled allocation weight. This evidence concerns bitmap
+growth; it does not justify replacing generated struct writers with direct stores.
+
+The earlier `f2bce1e9` checkpoint completed two separate static/flight recordings
+without device loss. The second process subsequently exited cleanly. These runs do
+not yet isolate the candidate's GPU fault, which has often required a second route
+within the same process. The working branch was restored to `rewrite` after exit.
+Narrow local reports are `goal-entity-async-{static,fast}-hotspot-report.txt` and
+`goal-entity-async-fast-latency-report.txt` under `tmp/cpu-optimization`.
+
+The next change uses a primitive set while packing each page and retains only its
+unique linked indices in an array. The scene combines those arrays into one bitmap.
+Renderer tests pass, including sparse high indices, duplicates, and replaced links;
+runtime allocation and timing effects remain to be measured. The user subsequently
+requested default resolution, so the 3840×2054 warmup was stopped before recording
+and both window overrides were restored to zero. Subsequent measurements must report
+the actual default window dimensions and must not attribute resolution differences
+to the emitter change.
