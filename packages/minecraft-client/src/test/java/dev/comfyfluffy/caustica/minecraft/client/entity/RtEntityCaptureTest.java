@@ -137,6 +137,31 @@ final class RtEntityCaptureTest {
     }
 
     @Test
+    void surfaceFingerprintPreservesValuesAcrossSharedAndDistinctTriangleIdentities() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.currentMaterial = material("entity");
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
+        MinecraftEntityMesh.Triangle surface = capture.surfaces.getFirst();
+        assertSame(surface, capture.surfaces.get(1));
+        RtEntities.MeshFingerprint shared = RtEntities.meshFingerprint(capture);
+
+        MinecraftEntityMesh.Triangle equalSurface = new MinecraftEntityMesh.Triangle(
+                surface.material(), surface.coverage(), surface.normalX(), surface.normalY(),
+                surface.normalZ(), surface.emission());
+        assertNotSame(surface, equalSurface);
+        assertEquals(surface, equalSurface);
+        capture.surfaces.set(1, equalSurface);
+        assertEquals(shared, RtEntities.meshFingerprint(capture));
+
+        capture.surfaces.set(1, new MinecraftEntityMesh.Triangle(
+                surface.material(), surface.coverage(), surface.normalX(), surface.normalY(),
+                surface.normalZ(), surface.emission() + 1f));
+        RtEntities.MeshFingerprint changed = RtEntities.meshFingerprint(capture);
+        assertNotEquals(shared.contentHash(), changed.contentHash());
+        assertEquals(shared.topologyRevision(), changed.topologyRevision());
+    }
+
+    @Test
     void particleCorrespondenceRequiresIdentityOrderAndPerParticleSpans() {
         Object first = new Object();
         Object second = new Object();

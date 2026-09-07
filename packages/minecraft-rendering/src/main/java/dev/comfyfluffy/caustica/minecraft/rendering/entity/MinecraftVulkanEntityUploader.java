@@ -67,11 +67,14 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         VmaMappedBuffer position = null, index = null, primitive = null, instance = null;
         try {
             var materialIndices = new HashMap<MinecraftEntityMesh.Material, Integer>();
+            MinecraftEntityMesh.Material previousMaterial = null;
             for (var triangle : source.triangles()) {
                 var material = triangle.material();
+                if (material == previousMaterial) continue;
                 if (!materialIndices.containsKey(material)) {
                     materialIndices.put(material, materials.resolveEntityOrFallback(materialKey(material)).materialIndex());
                 }
+                previousMaterial = material;
             }
             position = VmaMappedBuffer.createAsync(gpu, (long) source.vertexCount() * 12,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity positions");

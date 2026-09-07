@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2IntMap;
+import it.unimi.dsi.fastutil.longs.Long2IntFunction;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 
@@ -227,7 +226,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                                               RtPipeline pipeline, GraphicsUse graphicsUse) {
         List<SceneLight> sceneLights = current.content.lights();
         LightIndexRevision indexed = lightIndicesByScene.get(scene);
-        boolean rebuildLightIndices = indexed == null || indexed.lights != sceneLights;
+        boolean rebuildLightIndices = indexed == null || indexed.lights != sceneLights
+                || !indexed.indices.matches(sceneLights);
         int geometryCount = current.geometryHighWater;
         List<List<FrameInstanceSnapshot>> pageInputs = SnapshotList.pagesOf(current.instances);
         LightIndexRevision[] preparedIndex = {indexed};
@@ -235,14 +235,19 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         try (var batch = framePreparation.batch()) {
             if (rebuildLightIndices) {
                 batch.submit(RtFramePreparation.measured("light-index", 0, sceneLights.size(),
-                        () -> preparedIndex[0] = indexLights(sceneLights)));
+                        () -> {
+                            RtDenseLightIndex<SceneLight> indices = indexed == null
+                                    ? new RtDenseLightIndex<>(sceneLights.size(), SceneLight::identity) : indexed.indices;
+                            indices.update(sceneLights);
+                            preparedIndex[0] = new LightIndexRevision(sceneLights, indices);
+                        }));
             }
             pages = tracePlansByScene.computeIfAbsent(scene, ignored -> new TracePlanCache())
                     .resolve(pageInputs, framePreparation);
         }
         LightIndexRevision lightIndexRevision = preparedIndex[0];
         if (rebuildLightIndices) lightIndicesByScene.put(scene, lightIndexRevision);
-        Long2IntMap lightIndices = lightIndexRevision.indices;
+        Long2IntFunction lightIndices = lightIndexRevision.indices;
         int emitterBytes = current.emitterHighWater;
         int geometryBytes = Math.multiplyExact(geometryCount, RtRetainedGeometryPlan.RECORD_BYTES);
         int hitBytes = Math.multiplyExact(Math.multiplyExact(geometryCount,
@@ -345,7 +350,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     static int emitterIndex(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                            int primitive, Long2IntMap lightIndices) {
+                            int primitive, Long2IntFunction lightIndices) {
         for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
             if (primitive < range.firstPrimitive()) break;
             if (primitive < range.firstPrimitive() + range.primitiveCount()) {
@@ -377,14 +382,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     /** Packs a consecutive primitive range in one forward pass over the sorted, disjoint emitter ranges. */
     static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
                                   List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                                  Long2IntMap lightIndices, boolean[] linkedEmitters) {
+                                  Long2IntFunction lightIndices, boolean[] linkedEmitters) {
         putEmitterIndices(output, firstPrimitive, primitiveCount, ranges, lightIndices,
                 index -> linkedEmitters[index] = true);
     }
 
     static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
                                   List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                                  Long2IntMap lightIndices, IntConsumer markLinked) {
+                                  Long2IntFunction lightIndices, IntConsumer markLinked) {
         int primitive = firstPrimitive;
         int end = Math.addExact(firstPrimitive, primitiveCount);
         for (int index = firstEmitterRange(ranges, firstPrimitive); index < ranges.size(); index++) {
@@ -574,6 +579,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             if (!replacedPrograms && assembledInstances == snapshot.instances() && assembledScenes == snapshot.scenes()) {
                 return assembledPages;
             }
+            Map<SceneId, List<InstancePage>> reusablePages = replacedPrograms ? null : assembledPages;
             List<List<RetainedSceneSnapshot.Instance>> sourcePages = SnapshotList.pagesOf(snapshot.instances());
             var retainedSources = new IdentityHashMap<List<RetainedSceneSnapshot.Instance>, Boolean>();
             for (var source : sourcePages) retainedSources.put(source, Boolean.TRUE);
@@ -609,7 +615,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                         int geometryCount = geometryCount(values);
                         int emitterBytes = emitterBytes(values);
                         var ranges = traceRanges.computeIfAbsent(scene, ignored -> new RtStableTraceRanges());
-                        var page = new InstancePage(values, ranges.reserve(geometryCount, emitterBytes));
+                        List<InstancePage> previousPages = reusablePages == null ? null : reusablePages.get(scene);
+                        InstancePage previousPage = previousPages == null ? null
+                                : page(previousPages, values.getFirst().placementOrdinal);
+                        var page = new InstancePage(values, ranges.reserve(geometryCount, emitterBytes), previousPage);
                         translated.put(scene, page);
                         resolved.get(scene).add(page);
                     });
@@ -644,6 +653,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 }
             }
             return bytes;
+        }
+
+        private static InstancePage page(List<InstancePage> pages, long placementOrdinal) {
+            int first = 0;
+            int end = pages.size();
+            while (first < end) {
+                int middle = (first + end) >>> 1;
+                if (pages.get(middle).lastOrdinal < placementOrdinal) first = middle + 1;
+                else end = middle;
+            }
+            return first == pages.size() ? null : pages.get(first);
         }
 
     }
@@ -937,7 +957,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             target.put(0, source, source.position(), source.remaining());
         }
 
-        void packEmitters(TraceSlot slot, int emitterBase, Long2IntMap lightIndices,
+        void packEmitters(TraceSlot slot, int emitterBase, Long2IntFunction lightIndices,
                           IntSet linkedEmitters) {
             linkedEmitters.clear();
             if (emitterBytes == 0) return;
@@ -966,13 +986,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final int emitterBase;
         final RtPipeline pipeline;
         final LightIndexRevision lightIndexRevision;
-        final Long2IntMap lightIndices;
+        final Long2IntFunction lightIndices;
         final int flags;
         final IntSet linkedEmitters;
 
         TracePageWork(TracePagePlan page, TracePageResidency residency, TraceSlot slot, SceneOrigin origin,
                       int emitterBase, RtPipeline pipeline, LightIndexRevision lightIndexRevision,
-                      Long2IntMap lightIndices, int flags) {
+                      Long2IntFunction lightIndices, int flags) {
             this.page = page;
             this.residency = residency;
             this.slot = slot;
@@ -1089,7 +1109,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                                    RtRetainedGeometryPlan.ResolvedMesh resolvedMesh,
                                    RtRetainedGeometryPlan.ResolvedPlacement resolvedPlacement,
                                    RtStableTraceRanges.PageRange range,
-                                   int geometryBase, int sbtRecordOffset) {
+                                   int geometryBase, int sbtRecordOffset,
+                                   List<RtRetainedGeometryPlan.GeometryRecord> stationaryGeometryRecords) {
     }
 
     record ResolvedFrameInput(RtRetainedGeometryPlan.ResolvedMesh mesh,
@@ -1106,7 +1127,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final int geometryCount;
         final long lastOrdinal;
 
-        InstancePage(List<NativeInstance> values, RtStableTraceRanges.PageRange range) {
+        InstancePage(List<NativeInstance> values, RtStableTraceRanges.PageRange range,
+                     InstancePage previousPage) {
             contentIdentity = new Object();
             this.range = range;
             this.geometryBase = range.geometryBase();
@@ -1115,10 +1137,18 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             var frames = new ArrayList<FrameInstanceSnapshot>(values.size());
             int base = range.geometryBase();
             for (var instance : values) {
-                var placement = new RtRetainedGeometryPlan.ResolvedPlacement(
+                LatchedInstance previous = previousPage == null ? null
+                        : previousPage.identities.get(instance.logical.identity());
+                boolean unchanged = previous != null && previous.current == instance.logical
+                        && previous.nativeInstance.mesh == instance.mesh;
+                var placement = unchanged ? previous.resolvedPlacement : new RtRetainedGeometryPlan.ResolvedPlacement(
                         instance.logical.transform(), instance.logical.instanceData().bits());
+                List<RtRetainedGeometryPlan.GeometryRecord> records = unchanged
+                        ? previous.stationaryGeometryRecords
+                        : RtRetainedGeometryPlan.records(instance.mesh.resolved, placement,
+                        instance.logical.transform(), instance.mesh.logical.build().positions());
                 var value = new LatchedInstance(instance, instance.logical, instance.mesh.resolved, placement, range,
-                        base, Math.multiplyExact(base, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY));
+                        base, Math.multiplyExact(base, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), records);
                 latched.add(value);
                 byIdentity.put(instance.logical.identity(), value);
                 frames.add(frame(value, null));
@@ -1158,7 +1188,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             }
             return new FrameInstanceSnapshot(instance, current.current, current.resolvedMesh, current.resolvedPlacement,
                     previousTransform, previousPositions, current.range, current.geometryBase, current.sbtRecordOffset,
-                    RtRetainedGeometryPlan.records(current.resolvedMesh, current.resolvedPlacement,
+                    previousTransform.equals(current.current.transform())
+                            && previousPositions == instance.mesh.logical.build().positions()
+                            ? current.stationaryGeometryRecords
+                            : RtRetainedGeometryPlan.records(current.resolvedMesh, current.resolvedPlacement,
                             previousTransform, previousPositions));
         }
     }
@@ -1174,14 +1207,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
 
         InstancePage page(long placementOrdinal) {
-            int first = 0;
-            int end = pages.size();
-            while (first < end) {
-                int middle = (first + end) >>> 1;
-                if (pages.get(middle).lastOrdinal < placementOrdinal) first = middle + 1;
-                else end = middle;
-            }
-            return first == pages.size() ? null : pages.get(first);
+            return FrameAssembly.page(pages, placementOrdinal);
         }
 
         @Override public void close() { root.close(); }
@@ -1322,15 +1348,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     static LightIndexRevision indexLights(List<SceneLight> lights) {
-        Long2IntMap indices = new Long2IntOpenHashMap(lights.size());
-        int index = 0;
-        for (List<SceneLight> page : SnapshotList.pagesOf(lights)) {
-            for (SceneLight light : page) indices.put(light.identity(), index++);
-        }
+        var indices = new RtDenseLightIndex<SceneLight>(lights.size(), SceneLight::identity);
+        indices.update(lights);
         return new LightIndexRevision(lights, indices);
     }
 
-    record LightIndexRevision(List<SceneLight> lights, Long2IntMap indices) { }
+    record LightIndexRevision(List<SceneLight> lights, RtDenseLightIndex<SceneLight> indices) { }
 
     record NativeInstance(RetainedSceneSnapshot.Instance logical, FrameMesh mesh,
                                   long placementOrdinal) { }

@@ -362,3 +362,60 @@ observations, all within one observed frame. Publication-to-assembly adds at mos
 one frame in both recordings. This does not prove pixel presentation latency.
 The client stopped cleanly at the benchmark start. The 100 CPU FPS goal remains
 unmet, and the earlier intermittent GPU fault is still unexplained.
+
+## Incremental light lookup and stationary records
+
+The dense light lookup now retains a primitive identity-to-page/local-offset hash.
+Only replaced pages update those entries; shared pages update one dense base each.
+Lookup readers finish before the next mutation. This preserves the dense GPU index
+contract and replaces full hash-table allocation with page metadata and changed-page
+work. Retained hash values grow from four to eight bytes per occupied slot.
+
+Instance pages reuse stationary geometry records for unchanged snapshot-instance and
+resolved-mesh identities, while retaining fresh range generations and frame wrappers.
+Motion selects those records only with an equal transform and the identical current
+position-stream object. Equal-address but different stream objects still rebuild.
+Entity fingerprint and upload scans skip recursive hashes for consecutive identical
+surface/material objects, preserving value-based behavior for distinct objects.
+
+Renderer, runtime, Minecraft client, and Minecraft rendering tests pass. Added checks
+cover light-page reorder/removal/migration, changed-page identity-read counts, motion
+and stream generations, and shared versus distinct-equal fingerprint records.
+
+Two same-process 854×480 routes (`goal-incremental-records-default` and `repeat`)
+completed and the client stopped cleanly:
+
+| Mean per frame | Static runs | Fast-flight runs |
+| --- | --- | --- |
+| Render-thread CPU | 5.915 / 6.755 ms | 12.925 / 12.889 ms |
+| CPU envelope including waits | 5.891 / 6.968 ms | 21.730 / 21.600 ms |
+| Render-thread allocation | 5.131 / 5.725 MB | 9.528 / 9.697 MB |
+| Entity capture | 2.928 / 3.454 ms | 3.008 / 2.881 ms |
+| Scene assembly | 0.239 / 0.441 ms | 3.630 / 3.732 ms |
+| Combined geometry preparation | 0.602 / 0.868 ms | 7.133 / 7.232 ms |
+| Light-index allocation | <0.001 MB | 0.050 / 0.065 MB |
+| Packing-worker allocation | 0.214 / 0.681 MB | 6.044 / 5.943 MB |
+
+Flight light-index jobs now average 0.247/0.320 ms, versus 2.720/3.413 ms before;
+previous light-index allocation was 2.796/3.113 MB/frame. The previous flight render
+CPU means were 18.464/18.729 ms. Live populations differ, so these are repeated route
+measurements rather than isolated microbenchmark estimates for each change.
+
+The repeat's 30,605 matched entity and 21,333 terrain ready-to-publication observations
+are all within one observed frame. Publication-to-assembly adds zero frames for
+entities and at most one for terrain. These observations do not establish pixel
+presentation latency. Flight envelope p95 is still 54.208 ms; 100 CPU FPS is not met.
+
+Hotspot exports now explicitly request `--stack-depth 64`: `jfr print` defaults to
+five displayed frames. Earlier inclusive sample counts in this report consequently
+underestimated deeper callers; raw timing/allocation counters and recorded stacks
+were unaffected. The previous static recording's full stacks show sampler hashing
+in 903/2,248 render samples, including 615 fingerprint and 288 uploader samples.
+The new static repeat has 196/1,973 samples in fingerprinting and none naming sampler
+hashing. This is sampled evidence, not proof of zero hashing cost.
+
+Current full-depth flight stacks still show emitter-table work as the dominant worker
+cost: `putEmitterIndices` has 385 leaf samples, the light lookup hash 364, and linked
+index set insertion 204 (1,574 worker samples total). Reducing primitive-table rewrites
+when dense light indices change is the next architectural target. NEE plan arrays,
+frame wrappers, and vanilla light-map copying also remain render allocation sources.

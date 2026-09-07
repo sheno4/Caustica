@@ -49,6 +49,29 @@ class RtFramePageAssemblyTest {
         }
     }
 
+    @Test void editedPageReusesUnchangedRecordsButBuildsTrueMotionRecords() {
+        var mesh = mesh(1, 0x1000, 1);
+        var stable = instance(1, 1, mesh, 0);
+        var original = snapshot(List.of(mesh), List.of(List.of(stable, instance(2, 2, mesh, 0))));
+        var previous = assembly.resolve(original).get(scene).getFirst();
+        var current = assembly.resolve(snapshot(List.of(mesh),
+                List.of(List.of(stable, instance(2, 2, mesh, 5))))).get(scene).getFirst();
+
+        assertNotSame(previous.range, current.range);
+        assertSame(previous.stationary.getFirst().geometryRecords(),
+                current.stationary.getFirst().geometryRecords());
+        assertNotSame(previous.stationary.getLast().geometryRecords(),
+                current.stationary.getLast().geometryRecords());
+        try (var history = new RtRetainedSceneBackend.SceneMotionHistory(List.of(previous),
+                SharedResource.owned(original, ignored -> { }))) {
+            var motion = current.frame(history);
+            assertSame(current.stationary.getFirst().geometryRecords(), motion.getFirst().geometryRecords());
+            assertNotSame(current.stationary.getLast().geometryRecords(), motion.getLast().geometryRecords());
+            assertEquals(GeometryTransform.translation(0, 0, 0), motion.getLast().previousTransform());
+            assertEquals(GeometryTransform.translation(5, 0, 0), motion.getLast().current().transform());
+        }
+    }
+
     @Test void tracePlansUseMotionResolvedPageIdentity() {
         var mesh = mesh(1, 0x1000, 1);
         var source = snapshot(List.of(mesh), List.of(List.of(instance(1, 1, mesh, 0))));
@@ -78,13 +101,15 @@ class RtFramePageAssemblyTest {
         var third = assembly.resolve(snapshot(List.of(republished, newMesh),
                 List.of(stable, List.of(instance(2, 200, newMesh, 0)))));
         assertNotSame(second.get(scene).getFirst(), third.get(scene).getFirst());
+        assertNotSame(second.get(scene).getFirst().stationary.getFirst().geometryRecords(),
+                third.get(scene).getFirst().stationary.getFirst().geometryRecords());
         assertEquals(7, third.get(scene).getFirst().stationary.getFirst().geometryRecords().getFirst().surfaceImplementation());
         assertEquals(1, first.get(scene).getFirst().stationary.getFirst().geometryRecords().getFirst().surfaceImplementation());
     }
 
     @Test void replacedPagePreservesPreviousMeshStreamAfterEarlierPageRemoval() {
         var oldMesh = mesh(1, 0x1000, 1);
-        var newMesh = mesh(2, 0x2000, 1);
+        var newMesh = mesh(2, 0x1000, 1);
         var first = snapshot(List.of(oldMesh), List.of(List.of(instance(1, 1, oldMesh, 0)),
                 List.of(instance(2, 200, oldMesh, 0))));
         var pages = assembly.resolve(first).get(scene);
@@ -93,11 +118,14 @@ class RtFramePageAssemblyTest {
         var root = SharedResource.owned(first, ignored -> release.incrementAndGet());
         var history = new RtRetainedSceneBackend.SceneMotionHistory(pages, root.retain());
         root.close();
-        var current = assembly.resolve(snapshot(List.of(newMesh), List.of(List.of(instance(2, 200, newMesh, 5)))))
-                .get(scene).getFirst().frame(history).getFirst();
+        var currentPage = assembly.resolve(snapshot(List.of(newMesh),
+                List.of(List.of(instance(2, 200, newMesh, 5))))).get(scene).getFirst();
+        var current = currentPage.frame(history).getFirst();
         assertEquals(0, current.geometryBase());
         assertEquals(0, current.sbtRecordOffset());
         assertSame(oldMesh.build().positions(), current.previousPositions());
+        assertNotSame(newMesh.build().positions(), current.previousPositions());
+        assertNotSame(currentPage.stationary.getFirst().geometryRecords(), current.geometryRecords());
         assertEquals(0, release.get());
         history.close();
         assertEquals(1, release.get());

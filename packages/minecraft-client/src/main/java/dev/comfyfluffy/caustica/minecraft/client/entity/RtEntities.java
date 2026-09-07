@@ -925,9 +925,14 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             long value = Float.floatToRawIntBits(colors[i]) & 0xffffffffL;
             content = (content ^ value) * 1099511628211L;
         }
+        MinecraftEntityMesh.Triangle previousSurface = null;
+        long surfaceHash = 0L;
         for (MinecraftEntityMesh.Triangle surface : capture.surfaces) {
-            long value = surface.hashCode() & 0xffffffffL;
-            content = (content ^ value) * 1099511628211L;
+            if (surface != previousSurface) {
+                surfaceHash = surface.hashCode() & 0xffffffffL;
+                previousSurface = surface;
+            }
+            content = (content ^ surfaceHash) * 1099511628211L;
         }
         return new MeshFingerprint(content, topology);
     }
