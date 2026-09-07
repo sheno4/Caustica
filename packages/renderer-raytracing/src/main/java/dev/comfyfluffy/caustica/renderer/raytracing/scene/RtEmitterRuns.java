@@ -1,0 +1,117 @@
+package dev.comfyfluffy.caustica.renderer.raytracing.scene;
+
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.longs.Long2IntFunction;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.List;
+
+/** Stable primitive runs resolve their unique light identities once per light revision. */
+final class RtEmitterRuns {
+    private static final int RUN_BYTE_OFFSET = 0;
+    private static final int RUN_PRIMITIVE_COUNT = 1;
+    private static final int RUN_LIGHT_ORDINAL = 2;
+    private static final int RUN_INTS = 3;
+    private final int[] runs;
+    private final long[] identities;
+    private final int[] dense;
+    private Object revision;
+    private Object generation;
+    private int[] linked = new int[0];
+
+    private RtEmitterRuns(int[] runs, long[] identities) {
+        this.runs = runs;
+        this.identities = identities;
+        dense = new int[identities.length];
+        Arrays.fill(dense, -1);
+    }
+
+    static RtEmitterRuns empty() { return new RtEmitterRuns(new int[0], new long[0]); }
+
+    boolean hasRevision(Object revision) { return generation != null && this.revision == revision; }
+    Object generation() { return generation; }
+    /** Immutable by ownership: later resolutions replace this array instead of modifying it. */
+    int[] linked() { return linked; }
+
+    /** One joined worker updates this vector; completed slots retain only the stamp and immutable linked array. */
+    void resolve(Object revision, Long2IntFunction indices) {
+        if (hasRevision(revision)) return;
+        boolean changed = generation == null;
+        for (int index = 0; index < identities.length; index++) {
+            int value = indices.getOrDefault(identities[index], -1);
+            changed |= dense[index] != value;
+            dense[index] = value;
+        }
+        if (changed) {
+            int count = 0;
+            for (int value : dense) if (value >= 0) count++;
+            linked = new int[count];
+            int index = 0;
+            for (int value : dense) if (value >= 0) linked[index++] = value;
+            generation = new Object();
+        }
+        this.revision = revision;
+    }
+
+    void pack(ByteBuffer target) {
+        for (int run = 0; run < runs.length; run += RUN_INTS) {
+            target.position(runs[run + RUN_BYTE_OFFSET]);
+            int ordinal = runs[run + RUN_LIGHT_ORDINAL];
+            int value = ordinal < 0 ? -1 : dense[ordinal];
+            int count = runs[run + RUN_PRIMITIVE_COUNT];
+            for (int index = 0; index < count; index++) target.putInt(value);
+        }
+    }
+
+    /** Reusable worker scratch contains primitive values only; builds copy their own topology arrays. */
+    static final class Builder {
+        private final IntArrayList runs = new IntArrayList();
+        private final Long2IntOpenHashMap ordinals = new Long2IntOpenHashMap();
+        private final LongArrayList identities = new LongArrayList();
+
+        Builder() { ordinals.defaultReturnValue(-1); }
+
+        void reset() {
+            runs.clear();
+            ordinals.clear();
+            identities.clear();
+        }
+
+        private void addRun(int byteOffset, int count, int ordinal) {
+            runs.add(byteOffset);
+            runs.add(count);
+            runs.add(ordinal);
+        }
+
+        void addSpan(int byteOffset, int firstPrimitive, int primitiveCount,
+                     List<RetainedSceneSnapshot.PrimitiveEmitter> ranges) {
+            int primitive = firstPrimitive;
+            int end = Math.addExact(firstPrimitive, primitiveCount);
+            for (int index = RtRetainedSceneBackend.firstEmitterRange(ranges, firstPrimitive); index < ranges.size(); index++) {
+                var range = ranges.get(index);
+                if (range.firstPrimitive() >= end) break;
+                int rangeEnd = (int) Math.min((long) end, (long) range.firstPrimitive() + range.primitiveCount());
+                if (rangeEnd <= primitive) continue;
+                int start = Math.max(primitive, range.firstPrimitive());
+                if (start > primitive) addRun(byteOffset + (primitive - firstPrimitive) * Integer.BYTES,
+                        start - primitive, -1);
+                int ordinal = ordinals.get(range.lightIdentity());
+                if (ordinal < 0) {
+                    ordinal = identities.size();
+                    identities.add(range.lightIdentity());
+                    ordinals.put(range.lightIdentity(), ordinal);
+                }
+                addRun(byteOffset + (start - firstPrimitive) * Integer.BYTES, rangeEnd - start, ordinal);
+                primitive = rangeEnd;
+            }
+            if (primitive < end) addRun(byteOffset + (primitive - firstPrimitive) * Integer.BYTES,
+                    end - primitive, -1);
+        }
+
+        RtEmitterRuns build() { return new RtEmitterRuns(runs.toIntArray(), identities.toLongArray()); }
+    }
+}

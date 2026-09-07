@@ -1,8 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import it.unimi.dsi.fastutil.longs.Long2IntFunction;
-import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
-import it.unimi.dsi.fastutil.ints.IntSet;
 
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
@@ -62,6 +60,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final RtLightPageAssembly lightAssembly = new RtLightPageAssembly();
     private final Map<SceneId, LightIndexRevision> lightIndicesByScene = new IdentityHashMap<>();
     private final Map<SceneId, TracePlanCache> tracePlansByScene = new IdentityHashMap<>();
+    private final Map<SceneId, IdentityHashMap<RtStableTraceRanges.PageRange, EmitterPageCache>> emitterPagesByScene = new IdentityHashMap<>();
     private final Map<SceneId, RtPackedLightPages> packedLightsByScene = new IdentityHashMap<>();
     private final Map<SceneId, RtPackedTlasPages> packedTlasByScene = new IdentityHashMap<>();
     private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
@@ -256,8 +255,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         TraceSlot slot = acquireTraceSlot(geometryBytes, hitBytes, lightBytes, emitterBytes,
                 pipeline, graphicsUse);
         var activeResidencies = new IdentityHashMap<RtStableTraceRanges.PageRange, TracePageResidency>();
+        var emitterPages = emitterPagesByScene.computeIfAbsent(scene, ignored -> new IdentityHashMap<>());
         List<TracePageWork> writes = new ArrayList<>();
-        boolean flushGeometry = false, flushHits = false, flushEmitters = false;
+        boolean flushGeometry = false, flushHits = false;
         int activeGeometryRecords = 0;
         int activeEmitterBytes = 0;
         for (int index = 0; index < pages.length; index++) {
@@ -277,12 +277,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 flags |= TracePageWork.HITS;
                 flushHits = true;
             }
-            if (!residency.hasEmitters(page.identity, emitterBase, lightIndexRevision)) {
+            EmitterPageCache emitterPage = emitterPages.computeIfAbsent(page.range, ignored -> new EmitterPageCache());
+            if (emitterPage.runs == null || !emitterPage.runs.hasRevision(lightIndexRevision)
+                    || !residency.hasEmitters(page.range, emitterBase, emitterPage.runs.generation())) {
                 flags |= TracePageWork.EMITTERS;
-                flushEmitters |= page.emitterBytes > 0;
             }
             if (flags != 0) writes.add(new TracePageWork(page, residency, slot, origin,
-                    emitterBase, pipeline, lightIndexRevision, lightIndices, flags));
+                    emitterBase, pipeline, lightIndexRevision, lightIndices, emitterPage, flags));
         }
         RtFramePreparation.traceRanges(activeGeometryRecords, geometryCount,
                 activeEmitterBytes, emitterBytes, pages.length);
@@ -294,8 +295,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         if (flushGeometry && geometryBytes > 0) slot.geometry.flush(0L, geometryBytes);
         if (flushHits && hitBytes > 0) slot.hits.flush(0L, hitBytes);
-        if (flushEmitters && emitterBytes > 0) slot.emitters.flush(0L, emitterBytes);
+        boolean flushEmitters = false;
+        for (TracePageWork write : writes) flushEmitters |= write.emittersWritten;
+        if (flushEmitters) slot.emitters.flush(0L, emitterBytes);
         writes.forEach(TracePageWork::commit);
+        emitterPages.keySet().retainAll(activeResidencies.keySet());
         BitSet linked = new BitSet(sceneLights.size());
         for (TracePageResidency residency : activeResidencies.values()) residency.addLinkedEmittersTo(linked);
         List<ByteBuffer> lightPages = packedLightsByScene.computeIfAbsent(scene, ignored -> new RtPackedLightPages())
@@ -368,7 +372,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     /** Sorted, disjoint ranges allow skipping every emitter before this geometry in logarithmic time. */
-    private static int firstEmitterRange(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges, int primitive) {
+    static int firstEmitterRange(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges, int primitive) {
         int low = 0, high = ranges.size();
         while (low < high) {
             int middle = (low + high) >>> 1;
@@ -433,6 +437,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         lightAssembly.clear();
         lightIndicesByScene.clear();
         tracePlansByScene.clear();
+        emitterPagesByScene.clear();
         packedLightsByScene.clear();
         packedTlasByScene.clear();
         releaseTerminalFrameRoots(inFlightFrames, motionHistoryByScene);
@@ -456,6 +461,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private void retainRenderedScenes(java.util.Set<SceneId> retained) {
         lightIndicesByScene.keySet().retainAll(retained);
         tracePlansByScene.keySet().retainAll(retained);
+        emitterPagesByScene.keySet().retainAll(retained);
         packedLightsByScene.keySet().retainAll(retained);
         packedTlasByScene.keySet().retainAll(retained);
         List<SharedResource<SceneMotionHistory>> removed = new ArrayList<>();
@@ -957,17 +963,27 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             target.put(0, source, source.position(), source.remaining());
         }
 
-        void packEmitters(TraceSlot slot, int emitterBase, Long2IntFunction lightIndices,
-                          IntSet linkedEmitters) {
-            linkedEmitters.clear();
-            if (emitterBytes == 0) return;
-            ByteBuffer target = MemoryUtil.memByteBuffer(slot.emitters.mapped() + emitterBase, emitterBytes)
-                    .order(ByteOrder.nativeOrder());
-            for (EmitterSpan span : emitterSpans) {
-                target.position(span.byteOffset);
-                putEmitterIndices(target, span.firstPrimitive, span.primitiveCount,
-                        span.ranges, lightIndices, linkedEmitters::add);
+    }
+
+    private static final class EmitterPageCache {
+        private static final ThreadLocal<RtEmitterRuns.Builder> BUILDERS =
+                ThreadLocal.withInitial(RtEmitterRuns.Builder::new);
+        RtEmitterRuns runs;
+
+        void resolve(TracePagePlan page, LightIndexRevision revision, Long2IntFunction indices) {
+            if (runs == null) {
+                if (page.emitterSpans.isEmpty()) {
+                    runs = RtEmitterRuns.empty();
+                } else {
+                    var builder = BUILDERS.get();
+                    builder.reset();
+                    for (EmitterSpan span : page.emitterSpans) {
+                        builder.addSpan(span.byteOffset, span.firstPrimitive, span.primitiveCount, span.ranges);
+                    }
+                    runs = builder.build();
+                }
             }
+            runs.resolve(revision, indices);
         }
     }
 
@@ -988,11 +1004,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final LightIndexRevision lightIndexRevision;
         final Long2IntFunction lightIndices;
         final int flags;
-        final IntSet linkedEmitters;
+        final EmitterPageCache emitterPage;
+        boolean emittersWritten;
 
         TracePageWork(TracePagePlan page, TracePageResidency residency, TraceSlot slot, SceneOrigin origin,
                       int emitterBase, RtPipeline pipeline, LightIndexRevision lightIndexRevision,
-                      Long2IntFunction lightIndices, int flags) {
+                      Long2IntFunction lightIndices, EmitterPageCache emitterPage, int flags) {
             this.page = page;
             this.residency = residency;
             this.slot = slot;
@@ -1002,7 +1019,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             this.lightIndexRevision = lightIndexRevision;
             this.lightIndices = lightIndices;
             this.flags = flags;
-            linkedEmitters = (flags & EMITTERS) == 0 ? null : new IntOpenHashSet();
+            this.emitterPage = emitterPage;
         }
 
         void pack() {
@@ -1013,7 +1030,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 page.packHits(slot, pipeline);
             }
             if ((flags & EMITTERS) != 0) {
-                page.packEmitters(slot, emitterBase, lightIndices, linkedEmitters);
+                emitterPage.resolve(page, lightIndexRevision, lightIndices);
+                if (!residency.hasEmitters(page.range, emitterBase, emitterPage.runs.generation())
+                        && page.emitterBytes > 0) {
+                    ByteBuffer target = MemoryUtil.memByteBuffer(slot.emitters.mapped() + emitterBase, page.emitterBytes)
+                            .order(ByteOrder.nativeOrder());
+                    emitterPage.runs.pack(target);
+                    emittersWritten = true;
+                }
             }
         }
 
@@ -1027,8 +1051,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 residency.hitsWritten(page.identity, page.hitBase(pipeline), pipeline);
             }
             if ((flags & EMITTERS) != 0) {
-                residency.linkedEmittersWritten(linkedEmitters);
-                residency.emittersWritten(page.identity, emitterBase, lightIndexRevision);
+                residency.linkedEmittersWritten(emitterPage.runs.linked());
+                residency.emittersWritten(page.range, emitterBase, emitterPage.runs.generation());
             }
         }
 
@@ -1049,12 +1073,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         private Object hitPipeline;
         private Object emitterPage;
         private int emitterBase;
-        private Object lightIndexRevision;
+        private Object emitterGeneration;
         // Dense indices can be far apart even when this page links only a handful of lights.
         int[] linkedEmitters = new int[0];
 
-        void linkedEmittersWritten(IntSet indices) {
-            linkedEmitters = indices.toIntArray();
+        void linkedEmittersWritten(int[] indices) {
+            linkedEmitters = indices;
         }
 
         void addLinkedEmittersTo(BitSet target) {
@@ -1084,13 +1108,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
 
         boolean hasEmitters(Object page, int base, Object revision) {
-            return emitterPage == page && emitterBase == base && lightIndexRevision == revision;
+            return emitterPage == page && emitterBase == base && emitterGeneration == revision;
         }
 
         void emittersWritten(Object page, int base, Object revision) {
             emitterPage = page;
             emitterBase = base;
-            lightIndexRevision = revision;
+            emitterGeneration = revision;
         }
     }
 
@@ -1151,7 +1175,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                         base, Math.multiplyExact(base, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), records);
                 latched.add(value);
                 byIdentity.put(instance.logical.identity(), value);
-                frames.add(frame(value, null));
+                frames.add(frame(value, null, null));
                 base += instance.mesh.logical.build().geometries().size();
             }
             instances = List.copyOf(latched);
@@ -1166,15 +1190,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             var samePage = history.page(lastOrdinal);
             if (samePage != null && samePage.contentIdentity == contentIdentity) return stationary;
             var values = new ArrayList<FrameInstanceSnapshot>(instances.size());
-            for (var instance : instances) {
+            for (int index = 0; index < instances.size(); index++) {
+                var instance = instances.get(index);
                 var page = history.page(instance.nativeInstance.placementOrdinal);
                 var prior = page == null ? null : page.identities.get(instance.current.identity());
-                values.add(frame(instance, prior));
+                values.add(frame(instance, prior, stationary.get(index)));
             }
             return List.copyOf(values);
         }
 
-        private static FrameInstanceSnapshot frame(LatchedInstance current, LatchedInstance prior) {
+        private static FrameInstanceSnapshot frame(LatchedInstance current, LatchedInstance prior,
+                                                    FrameInstanceSnapshot stationary) {
             NativeInstance instance = current.nativeInstance;
             GeometryTransform previousTransform = current.current.transform();
             MeshBuild.Stream previousPositions = instance.mesh.logical.build().positions();
@@ -1186,11 +1212,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     previousPositions = previousBuild.positions();
                 }
             }
+            boolean stationaryMotion = previousTransform.equals(current.current.transform())
+                    && previousPositions == instance.mesh.logical.build().positions();
+            if (stationaryMotion && stationary != null) return stationary;
             return new FrameInstanceSnapshot(instance, current.current, current.resolvedMesh, current.resolvedPlacement,
                     previousTransform, previousPositions, current.range, current.geometryBase, current.sbtRecordOffset,
-                    previousTransform.equals(current.current.transform())
-                            && previousPositions == instance.mesh.logical.build().positions()
-                            ? current.stationaryGeometryRecords
+                    stationaryMotion ? current.stationaryGeometryRecords
                             : RtRetainedGeometryPlan.records(current.resolvedMesh, current.resolvedPlacement,
                             previousTransform, previousPositions));
         }

@@ -419,3 +419,68 @@ cost: `putEmitterIndices` has 385 leaf samples, the light lookup hash 364, and l
 index set insertion 204 (1,574 worker samples total). Reducing primitive-table rewrites
 when dense light indices change is the next architectural target. NEE plan arrays,
 frame wrappers, and vanilla light-map copying also remain render allocation sources.
+
+## Cached emitter runs and stationary frame wrappers
+
+Emitter topology is retained by stable range generation. Compact runs reference
+page-local light ordinals; each distinct light is resolved once when the scene light
+revision changes. Only changed dense values advance the emitter generation. Completed
+GPU slots reuse matching generations, and workers write runs directly into the existing
+emitter buffer when required. Linked indices are immutable arrays shared by ownership,
+replacing per-frame hash sets and render-thread conversion. Flushes follow actual writes.
+Stationary members of an edited page also reuse their current-page frame wrappers.
+
+The first run-cache version improved flight packing time to 1.538/1.436 ms but allocated
+7.381/6.399 MB/frame in packing workers. JFR attributed 39.4% of worker allocation
+weight to run construction and another 4.9% to finishing topology. The final version
+uses primitive run triples and reusable worker-local builder scratch; cached pages copy
+their own arrays. Empty pages bypass the builder. Struct writers and shader layouts
+are unchanged. This representation change follows measured allocation evidence.
+
+Renderer/runtime tests pass, including clipped ranges, gaps, missing lights, repeated
+identities, equivalence with the prior index writer, unchanged-generation reuse, old
+slot/linked-array preservation, and builder-reset ownership. Two final same-process
+routes (`goal-compact-emitter-runs-default` and `repeat`) completed at 854×480:
+
+| Mean per frame | Static runs | Fast-flight runs |
+| --- | --- | --- |
+| Render-thread CPU | 5.369 / 5.698 ms | 10.404 / 9.362 ms |
+| CPU envelope including waits | 5.323 / 5.744 ms | 16.734 / 15.875 ms |
+| Render-thread allocation | 5.336 / 5.602 MB | 7.460 / 7.193 MB |
+| Scene assembly | 0.232 / 0.319 ms | 3.077 / 3.063 ms |
+| Combined geometry preparation | 0.500 / 0.579 ms | 4.016 / 3.808 ms |
+| Packing-worker elapsed per job | 0.073 / 0.070 ms | 1.116 / 0.986 ms |
+| Packing-worker allocation | 0.429 / 0.512 MB | 4.507 / 4.194 MB |
+
+The preceding checkpoint's flight envelope was 21.730/21.600 ms, with packing at
+3.341/3.380 ms and 6.044/5.943 MB/frame. Final repeat capture ran without concurrent
+hotspot analysis. Live populations and JVM compilation still vary between recordings.
+The client stopped cleanly at the benchmark start; the earlier intermittent GPU fault
+remains unexplained. No hand-written native struct stores were introduced.
+
+In the final repeat, all 33,692 matched entity ready-to-publication samples are within
+one observed frame. Of 21,700 terrain samples, 21,697 are within one frame and three
+span two frames. Publication-to-assembly adds zero entity frames and at most one terrain
+frame. These are engine observations, not pixel presentation guarantees. The flight
+envelope median is 9.410 ms, but p95 is 45.970 ms and mean is 15.875 ms; the full
+100 CPU FPS target remains unmet despite one render-CPU mean falling below 10 ms.
+
+Full-depth JFR now shows 668 preparation-worker execution samples: light lookup has
+113 leaf samples, geometry packing 89, emitter-vector resolution 59, and emitter run
+writes 48. Worker allocation is now led by geometry packing/row objects, SBT records,
+and cached topology arrays. Render allocation is led by vanilla light-map clones,
+instance-page construction, and NEE plan arrays. Scene assembly still costs about 3 ms.
+
+A further raw-JFR check exposes substantial allocation stalls with the configured
+8 GiB ZGC heap: 3,063 `ZAllocationStall` events in the final repeat. The render thread
+has 281 stalls totaling 5,499.600 ms (maximum 337.098 ms); preparation workers have
+156 totaling 2,271.467 ms; terrain workers have 921 totaling 13,855.937 ms. These sums
+cover whole-recording thread waits and overlap across threads; do not add them as
+frame time. ZGC pause durations are much shorter and do not describe these stalls.
+After major collections, reported heap usage ranges from 7.301 to 7.939 GiB, averaging
+7.662 GiB against the 8 GiB cap. This establishes heap pressure, not its retained-object
+cause. The next investigation should inspect retained heap and allocation sources,
+then distinguish required world residency from avoidable retention before choosing
+further representation changes or heap sizing. No graphics-timeline wait events were
+recorded in this final flight; other driver/presentation waits are not covered by that
+observation.

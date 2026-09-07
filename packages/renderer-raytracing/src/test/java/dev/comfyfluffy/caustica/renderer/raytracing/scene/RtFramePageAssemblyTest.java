@@ -65,6 +65,8 @@ class RtFramePageAssemblyTest {
         try (var history = new RtRetainedSceneBackend.SceneMotionHistory(List.of(previous),
                 SharedResource.owned(original, ignored -> { }))) {
             var motion = current.frame(history);
+            assertSame(current.stationary.getFirst(), motion.getFirst());
+            assertNotSame(current.stationary.getLast(), motion.getLast());
             assertSame(current.stationary.getFirst().geometryRecords(), motion.getFirst().geometryRecords());
             assertNotSame(current.stationary.getLast().geometryRecords(), motion.getLast().geometryRecords());
             assertEquals(GeometryTransform.translation(0, 0, 0), motion.getLast().previousTransform());

@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import org.junit.jupiter.api.Test;
-import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 
 import java.util.BitSet;
 import java.util.IdentityHashMap;
@@ -57,7 +56,7 @@ final class RtTracePageResidencyTest {
     }
 
     @Test
-    void lightIndexRevisionInvalidatesOnlyEmitterIndices() {
+    void emitterGenerationInvalidatesOnlyEmitterIndices() {
         var residency = new RtRetainedSceneBackend.TracePageResidency();
         Object page = new Object();
         Object pipeline = new Object();
@@ -101,13 +100,8 @@ final class RtTracePageResidencyTest {
     void sparseHighIndicesMergeAcrossPagesWithoutStoringTheirUnusedRange() {
         var first = new RtRetainedSceneBackend.TracePageResidency();
         var second = new RtRetainedSceneBackend.TracePageResidency();
-        var firstIndices = new IntOpenHashSet();
-        firstIndices.add(2);
-        firstIndices.add(1_000_000);
-        firstIndices.add(1_000_000);
-        first.linkedEmittersWritten(firstIndices);
-        second.linkedEmittersWritten(new IntOpenHashSet(new int[]{1_000_000, 500_000}));
-        firstIndices.clear();
+        first.linkedEmittersWritten(new int[]{2, 1_000_000});
+        second.linkedEmittersWritten(new int[]{1_000_000, 500_000});
 
         assertEquals(2, first.linkedEmitters.length);
         assertEquals(2, second.linkedEmitters.length);
@@ -123,8 +117,8 @@ final class RtTracePageResidencyTest {
     @Test
     void replacedPageLinksDoNotKeepRemovedLightsInTheSceneUnion() {
         var residency = new RtRetainedSceneBackend.TracePageResidency();
-        residency.linkedEmittersWritten(new IntOpenHashSet(new int[]{1, 1_000_000}));
-        residency.linkedEmittersWritten(new IntOpenHashSet(new int[]{7}));
+        residency.linkedEmittersWritten(new int[]{1, 1_000_000});
+        residency.linkedEmittersWritten(new int[]{7});
         var scene = new BitSet();
         residency.addLinkedEmittersTo(scene);
         assertEquals(1, scene.cardinality());
@@ -132,7 +126,7 @@ final class RtTracePageResidencyTest {
         assertFalse(scene.get(1));
         assertFalse(scene.get(1_000_000));
 
-        residency.linkedEmittersWritten(new IntOpenHashSet());
+        residency.linkedEmittersWritten(new int[0]);
         scene.clear();
         residency.addLinkedEmittersTo(scene);
         assertTrue(scene.isEmpty());
