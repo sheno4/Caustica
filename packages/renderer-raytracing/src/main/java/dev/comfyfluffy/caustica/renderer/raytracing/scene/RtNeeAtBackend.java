@@ -76,11 +76,12 @@ final class RtNeeAtBackend {
                 state.width, state.height);
         if (state.metadataLights != lights) {
             state.metadataLights = lights;
-            state.telemetry = telemetry(lights, false);
+            state.telemetry = null;
             state.environmentEmitters = lights.stream().anyMatch(light ->
                     light.descriptor() instanceof LightDescriptor.Distant distant && distant.environmentEmitter());
         }
         if (NEE_FRAME_EVENT.isEnabled()) {
+            if (state.telemetry == null) state.telemetry = telemetry(lights, false);
             Telemetry telemetry = state.telemetry;
             NeeFrameEvent event = new NeeFrameEvent();
             event.rendererFrameId = input.frameIndex();

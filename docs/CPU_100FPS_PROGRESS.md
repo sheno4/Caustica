@@ -309,3 +309,18 @@ that snapshot index would be a separate compatibility change, not a safe whole-e
 off-thread move. Another remaining renderer issue is that NEE type-count telemetry
 is recomputed for changed light lists even when its event is disabled; this scan is
 visible in the render-thread JFR samples and should be gated by demand.
+
+## Lazy NEE telemetry
+
+Light-type totals are now computed only when `NeeFrame` is enabled. Rendering still
+updates the required environment-light flag. Starting a recording after ordinary
+frames correctly produced 105 events with populated totals (79,805 parallelograms,
+one distant light, 79,806 retained lights in the first event).
+
+Two default-resolution routes (`goal-lazy-nee-default` and `repeat`) measured lighting
+preparation at 0.887/1.094 ms in flight, compared with 2.377/2.327 ms before the gate.
+Flight render-thread CPU was 17.308/18.335 ms and the CPU envelope 28.972/32.889 ms.
+Static render-thread CPU was 5.934/6.406 ms. Resident workloads vary; these runs show
+less telemetry work, not a demonstrated overall flight speedup. The client stopped
+cleanly. Renderer tests passed before the recordings. The 100 CPU FPS flight target
+remains unmet.
