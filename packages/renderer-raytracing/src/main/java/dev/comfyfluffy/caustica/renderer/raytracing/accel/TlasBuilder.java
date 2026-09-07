@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildGeometryInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildRangeInfoKHR;
@@ -22,6 +23,7 @@ import org.lwjgl.vulkan.VkDevice;
 
 import java.util.Arrays;
 import java.util.List;
+import java.nio.ByteBuffer;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
@@ -161,6 +163,21 @@ public final class TlasBuilder {
      */
     public static <T> Prepared pack(Reserved reserved, List<T> instances, InstanceWriter<T> writer) {
         writeInstances(instances, reserved.slot.instanceBuffer.mapped(), writer);
+        return finish(reserved.slot, reserved.count);
+    }
+
+    /**
+     * Copies exactly the reserved instance count from ordered CPU pages into fresh frame-owned input.
+     * The caller must join this copy and flush before recording or ending the owning graphics use.
+     */
+    public static Prepared packPages(Reserved reserved, List<ByteBuffer> pages) {
+        ByteBuffer target = MemoryUtil.memByteBuffer(reserved.slot.instanceBuffer.mapped(),
+                Math.multiplyExact(reserved.count, VkAccelerationStructureInstanceKHR.SIZEOF));
+        int offset = 0;
+        for (ByteBuffer page : pages) {
+            target.put(offset, page, page.position(), page.remaining());
+            offset += page.remaining();
+        }
         return finish(reserved.slot, reserved.count);
     }
 

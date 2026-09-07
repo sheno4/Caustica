@@ -324,3 +324,41 @@ Static render-thread CPU was 5.934/6.406 ms. Resident workloads vary; these runs
 less telemetry work, not a demonstrated overall flight speedup. The client stopped
 cleanly. Renderer tests passed before the recordings. The 100 CPU FPS flight target
 remains unmet.
+
+## Cached CPU TLAS pages
+
+Unchanged range generations now retain packed CPU TLAS bytes at the same scene
+origin. Cache misses use the existing LWJGL struct writer into reusable scratch;
+ordered byte copies populate fresh frame-owned GPU input. GPU TLAS and scratch
+allocation/build behavior is unchanged. Previous-motion-only changes do not invalidate
+current TLAS fields. The joined packing worker owns cache mutation and pruning.
+
+Renderer/runtime tests pass, including generation and origin invalidation, eviction,
+and byte equivalence against sequential struct packing. Two same-process default
+routes (`goal-cached-tlas-default` and `repeat`) completed without GPU errors.
+
+| Mean per frame | Static runs | Fast-flight runs |
+| --- | --- | --- |
+| Render-thread CPU | 10.341 / 10.247 ms | 18.464 / 18.729 ms |
+| CPU envelope including waits | 10.330 / 10.463 ms | 29.092 / 32.253 ms |
+| Render-thread allocation | 5.773 / 6.334 MB | 13.760 / 14.725 MB |
+| TLAS packing-worker elapsed | 0.164 / 0.191 ms | 1.280 / 1.412 ms |
+| TLAS packing-worker allocation | 0.087 / 0.154 MB | 0.735 / 0.764 MB |
+
+The prior flight repeat spent 4.724 ms and allocated 2.783 MB/frame in TLAS packing.
+The targeted cost fell, but total frame performance did not establish an overall
+improvement: static entity capture rose to 6.2 ms in this launch and flight capture
+to 4.6–4.9 ms. Static JFR attributes 295 of 2,248 render samples to texture sampler
+hashing and 320 to indexed cuboid capture. This remains under investigation.
+
+Current flight JFR has 1,514 render samples, including `InstancePage.frame` (263),
+`records` (143), and `appendRecords` (136). Of 1,361 preparation-worker samples,
+903 include emitter packing and 892 include `putEmitterIndices`. These are inclusive
+counts, not additive timings. Full-frame counters still show 6.6–6.9 MB/frame of
+packing allocation and 2.8–3.1 MB/frame of light-index allocation on workers.
+
+The first flight has 28,397 matched entity and 19,686 terrain ready-to-publication
+observations, all within one observed frame. Publication-to-assembly adds at most
+one frame in both recordings. This does not prove pixel presentation latency.
+The client stopped cleanly at the benchmark start. The 100 CPU FPS goal remains
+unmet, and the earlier intermittent GPU fault is still unexplained.

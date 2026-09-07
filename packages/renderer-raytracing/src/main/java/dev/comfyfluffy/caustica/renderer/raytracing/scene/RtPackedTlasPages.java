@@ -1,0 +1,50 @@
+package dev.comfyfluffy.caustica.renderer.raytracing.scene;
+
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
+import dev.comfyfluffy.caustica.renderer.raytracing.accel.TlasBuilder;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.function.Function;
+
+/** Range generations fix current TLAS fields; cached bytes borrow BLAS addresses owned by the frame. */
+final class RtPackedTlasPages {
+    private IdentityHashMap<RtStableTraceRanges.PageRange, Page> cached = new IdentityHashMap<>();
+    private ByteBuffer scratch = ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder());
+
+    /** One joined packing worker owns this cache and its scratch; previous motion does not affect TLAS fields. */
+    <T> List<ByteBuffer> resolve(List<T> instances, Function<T, RtStableTraceRanges.PageRange> range,
+                               SceneOrigin origin, TlasBuilder.InstanceWriter<T> writer) {
+        var result = new ArrayList<ByteBuffer>();
+        var next = new IdentityHashMap<RtStableTraceRanges.PageRange, Page>();
+        for (List<T> input : SnapshotList.pagesOf(instances)) {
+            if (input.isEmpty()) continue;
+            var identity = range.apply(input.getFirst());
+            Page page = cached.get(identity);
+            if (page == null || !page.origin.equals(origin)) {
+                int bytes = Math.multiplyExact(input.size(), VkAccelerationStructureInstanceKHR.SIZEOF);
+                if (scratch.capacity() < bytes) {
+                    scratch = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder());
+                }
+                var records = VkAccelerationStructureInstanceKHR.create(MemoryUtil.memAddress(scratch), input.size());
+                int index = 0;
+                for (T instance : input) writer.write(instance, records.get(index++));
+                ByteBuffer packed = ByteBuffer.allocate(bytes).order(ByteOrder.nativeOrder());
+                packed.put(0, scratch, 0, bytes);
+                page = new Page(origin, packed.asReadOnlyBuffer().order(ByteOrder.nativeOrder()));
+            }
+            result.add(page.bytes);
+            next.put(identity, page);
+        }
+        cached = next;
+        return List.copyOf(result);
+    }
+
+    private record Page(SceneOrigin origin, ByteBuffer bytes) {}
+}

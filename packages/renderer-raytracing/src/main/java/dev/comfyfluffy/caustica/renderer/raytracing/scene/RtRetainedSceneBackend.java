@@ -64,6 +64,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final Map<SceneId, LightIndexRevision> lightIndicesByScene = new IdentityHashMap<>();
     private final Map<SceneId, TracePlanCache> tracePlansByScene = new IdentityHashMap<>();
     private final Map<SceneId, RtPackedLightPages> packedLightsByScene = new IdentityHashMap<>();
+    private final Map<SceneId, RtPackedTlasPages> packedTlasByScene = new IdentityHashMap<>();
     private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
     private boolean closed;
     private boolean sessionClosing;
@@ -170,10 +171,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         TlasBuilder.Reserved reserved = RtFramePreparation.measure("tlas-reserve", current.instances.size(), 0,
                 () -> TlasBuilder.reserve(ctx, current.instances.size(), graphicsUse));
         TlasBuilder.Prepared[] tlas = new TlasBuilder.Prepared[1];
+        RtPackedTlasPages packedTlas = packedTlasByScene.computeIfAbsent(scene, ignored -> new RtPackedTlasPages());
         PendingTrace trace;
         try (var batch = framePreparation.batch()) {
             batch.submit(RtFramePreparation.measured("tlas-pack", current.instances.size(), 0,
-                    () -> tlas[0] = TlasBuilder.pack(reserved, current.instances, tlasWriter(origin))));
+                    () -> tlas[0] = TlasBuilder.packPages(reserved, packedTlas.resolve(current.instances,
+                            FrameInstanceSnapshot::range, origin, tlasWriter(origin)))));
             trace = prepareTraceGeometry(scene, current, origin, pipeline, graphicsUse);
         }
         return new PreparedWorldGeometry(tlas[0], trace);
@@ -426,6 +429,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         lightIndicesByScene.clear();
         tracePlansByScene.clear();
         packedLightsByScene.clear();
+        packedTlasByScene.clear();
         releaseTerminalFrameRoots(inFlightFrames, motionHistoryByScene);
     }
 
@@ -448,6 +452,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         lightIndicesByScene.keySet().retainAll(retained);
         tracePlansByScene.keySet().retainAll(retained);
         packedLightsByScene.keySet().retainAll(retained);
+        packedTlasByScene.keySet().retainAll(retained);
         List<SharedResource<SceneMotionHistory>> removed = new ArrayList<>();
         motionHistoryByScene.entrySet().removeIf(entry -> {
             if (retained.contains(entry.getKey())) return false;
