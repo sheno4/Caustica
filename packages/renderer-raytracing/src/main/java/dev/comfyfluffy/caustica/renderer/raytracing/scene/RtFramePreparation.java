@@ -54,26 +54,39 @@ final class RtFramePreparation implements AutoCloseable {
     }
 
     <T> void run(List<T> chunks, Consumer<T> operation) {
-        List<CompletableFuture<Void>> tasks = new ArrayList<>(chunks.size());
-        Throwable failure = null;
-        try {
-            for (T chunk : chunks) tasks.add(CompletableFuture.runAsync(() -> operation.accept(chunk), executor));
-        } catch (Throwable dispatchFailure) {
-            failure = dispatchFailure;
+        try (var batch = batch()) {
+            for (T chunk : chunks) batch.submit(() -> operation.accept(chunk));
         }
-        // Joining each accepted task, without cancellation, keeps mapped buffers alive on every exit path.
-        for (CompletableFuture<Void> task : tasks) {
-            try {
-                task.join();
-            } catch (CompletionException taskFailure) {
-                Throwable cause = taskFailure.getCause();
-                if (failure == null) failure = cause;
-                else if (failure != cause) failure.addSuppressed(cause);
+    }
+
+    Batch batch() {
+        return new Batch();
+    }
+
+    /** Caller-owned scope for leaf tasks borrowing inputs until close has joined every accepted task. */
+    final class Batch implements AutoCloseable {
+        private final List<CompletableFuture<Void>> tasks = new ArrayList<>(WORKERS);
+
+        void submit(Runnable operation) {
+            tasks.add(CompletableFuture.runAsync(operation, executor));
+        }
+
+        @Override public void close() {
+            Throwable failure = null;
+            // Never cancel: other tasks may still be writing into borrowed mapped buffers.
+            for (CompletableFuture<Void> task : tasks) {
+                try {
+                    task.join();
+                } catch (CompletionException taskFailure) {
+                    Throwable cause = taskFailure.getCause();
+                    if (failure == null) failure = cause;
+                    else if (failure != cause) failure.addSuppressed(cause);
+                }
             }
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+            if (failure != null) throw new IllegalStateException("frame preparation failed", failure);
         }
-        if (failure instanceof RuntimeException runtime) throw runtime;
-        if (failure instanceof Error error) throw error;
-        if (failure != null) throw new IllegalStateException("frame preparation failed", failure);
     }
 
     <T> void run(String phase, List<T> chunks, ToIntFunction<T> instanceCount, Consumer<T> operation) {

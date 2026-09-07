@@ -39,6 +39,25 @@ class RtLightPageAssemblyTest {
         assertEquals(List.of(1L, 2L, 3L), next.lights().stream().map(RtRetainedSceneBackend.SceneLight::identity).toList());
     }
 
+    @Test void lightIndicesFollowDensePageOrderAfterRemoval() {
+        var scene = new SceneId() { };
+        var scenes = List.of(new RetainedSceneSnapshot.Scene(scene, null));
+        var firstPage = List.of(light(scene, 80, 1), light(scene, 12, 2));
+        var lastPage = List.of(light(scene, 99, 3));
+        var assembly = new RtLightPageAssembly();
+        var initial = assembly.resolve(scenes, SnapshotList.ofPages(List.of(firstPage, lastPage))).get(scene);
+        var old = RtRetainedSceneBackend.indexLights(initial.lights());
+        assertEquals(0, old.indices().get(80));
+        assertEquals(1, old.indices().get(12));
+        assertEquals(2, old.indices().get(99));
+
+        var changed = assembly.resolve(scenes, SnapshotList.ofPages(List.of(lastPage))).get(scene);
+        var next = RtRetainedSceneBackend.indexLights(changed.lights());
+        assertEquals(0, next.indices().get(99));
+        assertFalse(next.indices().containsKey(80));
+        assertEquals(2, old.indices().get(99));
+    }
+
     private static RetainedSceneSnapshot.Light light(SceneId scene, long identity, double red) {
         return new RetainedSceneSnapshot.Light(identity, scene, new LightDescriptor.Distant(0, 1, 0, red, 1, 1, 0, false));
     }

@@ -180,3 +180,44 @@ requested default resolution, so the 3840×2054 warmup was stopped before record
 and both window overrides were restored to zero. Subsequent measurements must report
 the actual default window dimensions and must not attribute resolution differences
 to the emitter change.
+
+At default 854×480 output, `805a4a10` completed two static/flight routes in the same
+process and shut down cleanly. Static render CPU means were 9.367/9.120 ms; flight
+means were 29.633/27.948 ms. Flight preparation-worker allocation was
+13.298/11.843 MB per frame. The former bitmap-growth allocation origin is absent;
+primitive-set growth appears instead. These are not a same-resolution A/B timing
+comparison with the preceding checkpoint. Static CPU envelopes were 9.519/9.206 ms;
+flight envelopes were 39.356/36.814 ms. Flight still fails the acceptance target.
+
+The repeated flight's light-index rebuild averaged 3.781 ms on the render thread,
+despite being reported as a `FramePreparation` phase. It ran synchronously. This
+identifies a concrete next scheduling change: build the identity map on a worker
+alongside trace planning, traverse light pages directly, and join before packing.
+
+The parallel-index change implements that split using a caller-owned batch scope.
+The identity map is allocated and built by a leaf worker while the render thread
+dispatches missing trace plans. Every accepted task is joined before its borrowed
+inputs can be released, including on caller, submission, or worker failure. Renderer
+tests pass, including latch-controlled draining and page-order index replacement.
+
+Two default-resolution routes (`goal-parallel-index-default` and its `repeat`)
+completed in one process without GPU errors and shut down cleanly. JFR attributes
+all light-index jobs to preparation workers; their mean work was 2.597/2.469 ms.
+Flight render CPU was 25.393/24.392 ms, render allocation 17.943/18.065 MB per frame,
+and trace preparation 10.496/9.717 ms. The map's approximately 3.1 MB allocation per
+flight frame moved to workers; it was not eliminated. Static render CPU was
+8.142/8.369 ms. CPU envelopes were 8.301/8.518 ms static and 36.945/35.464 ms flying.
+The workloads share the route and settings, but live scene populations can differ.
+Flight still fails the target.
+
+In the repeat flight, all 19,969 matched entity-ready publication observations and
+18,982 terrain-ready publication observations were within one observed frame.
+The first launch before these successful recordings failed with the known server
+precipitation exception and supplied no benchmark result. The cache audit found no
+concrete GPU address/lifetime defect; if device loss returns, forcing trace-slot
+bytes to be rewritten while retaining the same slot lifetimes is the next controlled
+isolation. No GPU fault fix is claimed.
+
+`tmp/CpuJfrMetrics.java` streams raw JFR events directly and reports thread names for
+preparation phases. Its output matches the JSON-based means on the prior repeat
+flight and avoids large JSON exports for routine timing/allocation checks.

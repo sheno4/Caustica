@@ -119,16 +119,23 @@ final class RtFramePreparationTest {
         int[] written = {0};
         RuntimeException expected = new IllegalStateException("planning failure");
         try (var preparation = new RtFramePreparation(); var caller = Executors.newSingleThreadExecutor()) {
-            var result = caller.submit(() -> preparation.run(List.of(0, 1), index -> {
-                if (index == 0) {
-                    await(writerStarted);
-                    failureStarted.countDown();
-                    throw expected;
+            var result = caller.submit(() -> {
+                Thread callingThread = Thread.currentThread();
+                try (var batch = preparation.batch()) {
+                    batch.submit(() -> {
+                        assertNotSame(callingThread, Thread.currentThread());
+                        await(writerStarted);
+                        failureStarted.countDown();
+                        throw expected;
+                    });
+                    batch.submit(() -> {
+                        assertNotSame(callingThread, Thread.currentThread());
+                        writerStarted.countDown();
+                        await(releaseWriter);
+                        written[0] = 73;
+                    });
                 }
-                writerStarted.countDown();
-                await(releaseWriter);
-                written[0] = 73;
-            }));
+            });
             try {
                 assertTrue(failureStarted.await(5, TimeUnit.SECONDS));
                 assertThrows(TimeoutException.class, () -> result.get(100, TimeUnit.MILLISECONDS));
@@ -138,6 +145,61 @@ final class RtFramePreparationTest {
             ExecutionException failure = assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS));
             assertSame(expected, failure.getCause());
             assertEquals(73, written[0]);
+        }
+    }
+
+    @Test
+    void batchPreservesCallerFailureAndAggregatesWorkerFailures() {
+        RuntimeException callerFailure = new IllegalStateException("planning failure");
+        RuntimeException firstWorkerFailure = new IllegalArgumentException("first worker failure");
+        Error secondWorkerFailure = new AssertionError("second worker failure");
+        try (var preparation = new RtFramePreparation()) {
+            RuntimeException failure = assertThrows(RuntimeException.class, () -> {
+                try (var batch = preparation.batch()) {
+                    batch.submit(() -> { throw firstWorkerFailure; });
+                    batch.submit(() -> { throw secondWorkerFailure; });
+                    throw callerFailure;
+                }
+            });
+            assertSame(callerFailure, failure);
+            assertArrayEquals(new Throwable[]{firstWorkerFailure}, failure.getSuppressed());
+            assertArrayEquals(new Throwable[]{secondWorkerFailure}, firstWorkerFailure.getSuppressed());
+        }
+    }
+
+    @Test
+    void failedSubmissionStillDrainsAcceptedTasks() throws Exception {
+        CountDownLatch writerStarted = new CountDownLatch(1);
+        CountDownLatch submissionFailed = new CountDownLatch(1);
+        CountDownLatch releaseWriter = new CountDownLatch(1);
+        int[] written = {0};
+        try (var preparation = new RtFramePreparation(); var caller = Executors.newSingleThreadExecutor()) {
+            var result = caller.submit(() -> {
+                try (var batch = preparation.batch()) {
+                    batch.submit(() -> {
+                        writerStarted.countDown();
+                        await(releaseWriter);
+                        written[0] = 91;
+                    });
+                    await(writerStarted);
+                    try {
+                        batch.submit(null);
+                    } catch (NullPointerException failure) {
+                        submissionFailed.countDown();
+                        throw failure;
+                    }
+                }
+            });
+            try {
+                assertTrue(submissionFailed.await(5, TimeUnit.SECONDS));
+                assertThrows(TimeoutException.class, () -> result.get(100, TimeUnit.MILLISECONDS));
+            } finally {
+                releaseWriter.countDown();
+            }
+            ExecutionException failure = assertThrows(ExecutionException.class,
+                    () -> result.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(NullPointerException.class, failure.getCause());
+            assertEquals(91, written[0]);
         }
     }
 

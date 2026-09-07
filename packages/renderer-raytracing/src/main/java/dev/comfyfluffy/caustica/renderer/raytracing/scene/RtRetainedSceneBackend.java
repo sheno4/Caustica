@@ -193,22 +193,22 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         List<SceneLight> sceneLights = current.content.lights();
         LightIndexRevision indexed = lightIndicesByScene.get(scene);
         boolean rebuildLightIndices = indexed == null || indexed.lights != sceneLights;
-        Long2IntMap lightIndices = rebuildLightIndices
-                ? new Long2IntOpenHashMap(sceneLights.size()) : indexed.indices;
         int geometryCount = current.instances.isEmpty() ? 0 : current.instances.getLast().geometryBase
                 + current.instances.getLast().resolvedMesh.geometries().size();
-        if (rebuildLightIndices) {
-            RtFramePreparation.measured("light-index", 0, sceneLights.size(), () -> {
-                for (int index = 0; index < sceneLights.size(); index++) {
-                    lightIndices.put(sceneLights.get(index).identity(), index);
-                }
-            }).run();
-        }
-        if (rebuildLightIndices) lightIndicesByScene.put(scene, new LightIndexRevision(sceneLights, lightIndices));
-        LightIndexRevision lightIndexRevision = lightIndicesByScene.get(scene);
         List<List<FrameInstanceSnapshot>> pageInputs = SnapshotList.pagesOf(current.instances);
-        TracePagePlan[] pages = tracePlansByScene.computeIfAbsent(scene, ignored -> new TracePlanCache())
-                .resolve(pageInputs, framePreparation);
+        LightIndexRevision[] preparedIndex = {indexed};
+        TracePagePlan[] pages;
+        try (var batch = framePreparation.batch()) {
+            if (rebuildLightIndices) {
+                batch.submit(RtFramePreparation.measured("light-index", 0, sceneLights.size(),
+                        () -> preparedIndex[0] = indexLights(sceneLights)));
+            }
+            pages = tracePlansByScene.computeIfAbsent(scene, ignored -> new TracePlanCache())
+                    .resolve(pageInputs, framePreparation);
+        }
+        LightIndexRevision lightIndexRevision = preparedIndex[0];
+        if (rebuildLightIndices) lightIndicesByScene.put(scene, lightIndexRevision);
+        Long2IntMap lightIndices = lightIndexRevision.indices;
         int emitterBytes = 0;
         int[] emitterBases = new int[pages.length];
         for (int index = 0; index < pages.length; index++) {
@@ -1232,7 +1232,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    private record LightIndexRevision(List<SceneLight> lights, Long2IntMap indices) { }
+    static LightIndexRevision indexLights(List<SceneLight> lights) {
+        Long2IntMap indices = new Long2IntOpenHashMap(lights.size());
+        int index = 0;
+        for (List<SceneLight> page : SnapshotList.pagesOf(lights)) {
+            for (SceneLight light : page) indices.put(light.identity(), index++);
+        }
+        return new LightIndexRevision(lights, indices);
+    }
+
+    record LightIndexRevision(List<SceneLight> lights, Long2IntMap indices) { }
 
     record NativeInstance(RetainedSceneSnapshot.Instance logical, FrameMesh mesh,
                                   long placementOrdinal) { }
