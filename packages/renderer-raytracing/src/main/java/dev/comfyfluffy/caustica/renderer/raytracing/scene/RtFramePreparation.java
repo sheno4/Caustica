@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.function.ToIntFunction;
+import java.util.function.Supplier;
 
 /** Bounded CPU phases whose borrowed frame inputs remain owned until every accepted task finishes. */
 final class RtFramePreparation implements AutoCloseable {
@@ -95,32 +96,33 @@ final class RtFramePreparation implements AutoCloseable {
     }
 
     static Runnable measured(String phase, int instanceCount, int lightCount, Runnable operation) {
-        return () -> {
-            FramePreparationEvent event = new FramePreparationEvent();
-            if (!event.isEnabled()) {
-                operation.run();
-                return;
-            }
-            event.phase = phase;
-            event.instanceCount = instanceCount;
-            event.lightCount = lightCount;
-            event.begin();
-            long started = System.nanoTime();
-            event.startedNanos = started;
-            long cpuStarted = THREADS.getCurrentThreadCpuTime();
-            long allocatedStarted = THREADS.getCurrentThreadAllocatedBytes();
-            try {
-                operation.run();
-            } finally {
-                event.elapsedNanos = System.nanoTime() - started;
-                event.threadCpuNanos = THREADS.getCurrentThreadCpuTime() - cpuStarted;
-                event.allocatedBytes = THREADS.getCurrentThreadAllocatedBytes() - allocatedStarted;
-                event.end();
-                event.commit();
-            }
-        };
+        return () -> measure(phase, instanceCount, lightCount, () -> {
+            operation.run();
+            return null;
+        });
     }
 
+    static <T> T measure(String phase, int instanceCount, int lightCount, Supplier<T> operation) {
+        FramePreparationEvent event = new FramePreparationEvent();
+        if (!event.isEnabled()) return operation.get();
+        event.phase = phase;
+        event.instanceCount = instanceCount;
+        event.lightCount = lightCount;
+        event.begin();
+        long started = System.nanoTime();
+        event.startedNanos = started;
+        long cpuStarted = THREADS.getCurrentThreadCpuTime();
+        long allocatedStarted = THREADS.getCurrentThreadAllocatedBytes();
+        try {
+            return operation.get();
+        } finally {
+            event.elapsedNanos = System.nanoTime() - started;
+            event.threadCpuNanos = THREADS.getCurrentThreadCpuTime() - cpuStarted;
+            event.allocatedBytes = THREADS.getCurrentThreadAllocatedBytes() - allocatedStarted;
+            event.end();
+            event.commit();
+        }
+    }
     @Name("dev.comfyfluffy.caustica.FramePreparation")
     @Label("Frame preparation chunk") @Category({"Caustica", "Frame"}) @StackTrace(false) @Enabled(false)
     static final class FramePreparationEvent extends Event {

@@ -221,3 +221,42 @@ isolation. No GPU fault fix is claimed.
 `tmp/CpuJfrMetrics.java` streams raw JFR events directly and reports thread names for
 preparation phases. Its output matches the JSON-based means on the prior repeat
 flight and avoids large JSON exports for routine timing/allocation checks.
+
+## Same-frame TLAS packing overlap
+
+TLAS reservation retains fresh Vulkan resources on the render thread. A leaf worker
+then packs and flushes the existing LWJGL instance records while trace preparation
+runs. The joined world-geometry token is finalized only after lighting preparation;
+TLAS build, barrier, lighting, and tracing command order is preserved. Allocation,
+descriptor updates, command recording, and GraphicsUse registration remain on the
+render thread. No TLAS pooling or handwritten struct stores were introduced.
+
+Renderer and runtime tests pass, including native paged packing with a trailing
+canary and a real-JFR stage test. Live testing exposed missing registration for the
+new timing stages; this was fixed before the successful recordings. An earlier
+launch also hit the known precipitation exception. Neither supplied performance data.
+
+Two default-resolution routes, `goal-overlap-tlas-default` and its `repeat`, completed
+in one process without GPU errors and shut down cleanly:
+
+| Mean per frame | Static runs | Fast-flight runs |
+| --- | --- | --- |
+| Render-thread CPU | 6.992 / 7.112 ms | 20.763 / 19.869 ms |
+| CPU envelope including waits | 7.946 / 8.007 ms | 34.739 / 34.251 ms |
+| Render-thread allocation | 5.730 / 6.344 MB | 15.072 / 15.371 MB |
+| TLAS packing worker elapsed | 1.642 / 1.530 ms | 4.453 / 4.473 ms |
+| TLAS reservation on render | 0.023 / 0.016 ms | 0.090 / 0.044 ms |
+
+JFR attributes every `tlas-pack` job to preparation workers. In flight, 97.13/96.60%
+of TLAS packing elapsed time overlaps the union of other preparation-job intervals.
+The approximately 2.6–2.7 MB of TLAS packing allocation moved to workers; it was not
+eliminated. Static and flight scene populations are live and can vary between runs.
+The new `frame.prepareWorldGeometry` stage includes joined TLAS and trace preparation;
+it replaces the separate runtime TLAS/trace preparation scopes. `frame.finishTrace`
+measures final descriptor and light-table binding.
+
+In the repeat flight, all 21,565 matched entity-ready publication observations and
+19,669 matched terrain-ready publication observations were within one observed frame.
+This verifies publication, not pixels. Flight still misses 100 CPU FPS. Scene assembly
+remains approximately 5 ms and combined geometry preparation approximately 12.6 ms;
+reducing unchanged-page reconstruction and repacking is the next substantial task.

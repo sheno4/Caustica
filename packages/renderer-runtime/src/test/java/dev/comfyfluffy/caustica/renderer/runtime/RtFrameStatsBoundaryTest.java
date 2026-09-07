@@ -24,9 +24,9 @@ final class RtFrameStatsBoundaryTest {
             stats.configureFrameMetrics(new MetricSchema(List.of(), List.of("testCounter")));
             assertTrue(RtFrameStats.enabled());
             stats.frame().beginIfInactive();
-            stats.frame().endStage("frame.nrd", stats.frame().startStage());
+            stats.frame().endStage("frame.prepareWorldGeometry", stats.frame().startStage());
             stats.beginRenderFrame();
-            stats.frame().endStage("frame.nrd", stats.frame().startStage());
+            stats.frame().endStage("frame.finishTrace", stats.frame().startStage());
             stats.frame().set("testCounter", 3);
             stats.frame().count("testCounter", 2);
             stats.endFrame();
@@ -42,6 +42,8 @@ final class RtFrameStatsBoundaryTest {
         assertTrue(frames.stream().allMatch(e -> e.getLong("elapsedNanos") >= 0));
         List<RecordedEvent> stages = events.stream().filter(e -> e.getEventType().getName().equals("dev.comfyfluffy.caustica.CpuStage")).toList();
         assertEquals(2, stages.size());
+        assertEquals(List.of("frame.prepareWorldGeometry", "frame.finishTrace"),
+                stages.stream().map(e -> e.getString("stage")).toList());
         assertTrue(stages.stream().allMatch(e -> e.getLong("frameId") == 1L));
         assertEquals(List.of(5L, 0L), events.stream()
                 .filter(e -> e.getEventType().getName().equals("dev.comfyfluffy.caustica.FrameCounter"))

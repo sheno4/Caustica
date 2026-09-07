@@ -139,17 +139,43 @@ public final class TlasBuilder {
         void write(T instance, VkAccelerationStructureInstanceKHR target);
     }
 
+    /** Fresh frame-owned resources whose instance buffer has not yet been packed or flushed. */
+    public static final class Reserved {
+        private final Slot slot;
+        private final int count;
+
+        private Reserved(Slot slot, int count) {
+            this.slot = slot;
+            this.count = count;
+        }
+    }
+
+    /** Allocates resources and registers their ownership on the graphics-use calling thread. */
+    public static Reserved reserve(VulkanDeviceContext ctx, int count, GraphicsUse graphicsUse) {
+        return new Reserved(createSlot(ctx, count, graphicsUse), count);
+    }
+
+    /**
+     * Packs exactly the reserved instance count and flushes borrowed resources. The caller must join
+     * this work before recording the build or ending the graphics use that owns the reservation.
+     */
+    public static <T> Prepared pack(Reserved reserved, List<T> instances, InstanceWriter<T> writer) {
+        writeInstances(instances, reserved.slot.instanceBuffer.mapped(), writer);
+        return finish(reserved.slot, reserved.count);
+    }
+
     /** Packs every instance into fresh frame-owned input, acceleration-structure, and scratch storage. */
     public static <T> Prepared prepare(VulkanDeviceContext ctx, List<T> instances,
                                        InstanceWriter<T> writer, GraphicsUse graphicsUse) {
-        int count = instances.size();
-        Slot slot = createSlot(ctx, count, graphicsUse);
-        var records = VkAccelerationStructureInstanceKHR.create(slot.instanceBuffer.mapped(), count);
+        return pack(reserve(ctx, instances.size(), graphicsUse), instances, writer);
+    }
+
+    static <T> void writeInstances(List<T> instances, long mapped, InstanceWriter<T> writer) {
+        var records = VkAccelerationStructureInstanceKHR.create(mapped, instances.size());
         int index = 0;
         for (var page : SnapshotList.pagesOf(instances)) {
             for (T instance : page) writer.write(instance, records.get(index++));
         }
-        return finish(slot, count);
     }
 
     /** Pack two instance ranges into a TLAS allocated for this frame. */

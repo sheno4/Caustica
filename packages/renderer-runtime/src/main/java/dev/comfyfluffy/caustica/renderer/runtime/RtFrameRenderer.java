@@ -506,12 +506,12 @@ public final class RtFrameRenderer {
                 environmentState.implementation()
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
-        TlasBuilder.Prepared frameTlas;
-        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareTlas")) {
-            frameTlas = scenes.prepareTlas(entryScene, sceneOrigin, graphicsUse);
+        RtRetainedSceneBackend.PreparedWorldGeometry geometry;
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareWorldGeometry")) {
+            geometry = scenes.prepareWorldGeometry(entryScene, sceneOrigin, program.pipeline(), graphicsUse);
         }
         try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.recordTlas")) {
-            TlasBuilder.record(ctx, cmd, frameTlas);
+            TlasBuilder.record(ctx, cmd, geometry.tlas());
         }
         VulkanBarriers.memoryBarrier(cmd, stack);
         RtRetainedSceneBackend.PreparedLighting lighting;
@@ -524,9 +524,8 @@ public final class RtFrameRenderer {
         boolean lightingFinished = false;
         try {
             RtRetainedSceneBackend.PreparedTrace trace;
-            try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareTrace")) {
-                trace = scenes.prepareTrace(entryScene, sceneOrigin,
-                        program.pipeline(), frameTlas.accel.handle, graphicsUse);
+            try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.finishTrace")) {
+                trace = scenes.finishTrace(geometry, lighting);
             }
             execution.trace = trace;
             ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());

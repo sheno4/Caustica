@@ -149,14 +149,38 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(origin, "origin");
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
-        return TlasBuilder.prepare(ctx, current.instances, (instance, target) -> {
+        return TlasBuilder.prepare(ctx, current.instances, tlasWriter(origin), graphicsUse);
+    }
+
+    private static TlasBuilder.InstanceWriter<FrameInstanceSnapshot> tlasWriter(SceneOrigin origin) {
+        return (instance, target) -> {
             target.transform().matrix().put(instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z()));
             target.instanceCustomIndex(instance.geometryBase)
                     .mask(instance.current.mask())
                     .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset)
                     .flags(org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
                     .accelerationStructureReference(instance.nativeInstance.mesh.blas().accel.deviceAddress.value());
-        }, graphicsUse);
+        };
+    }
+
+    /** Joins TLAS packing and trace preparation before exposing frame-owned geometry for recording. */
+    public synchronized PreparedWorldGeometry prepareWorldGeometry(SceneId scene, SceneOrigin origin,
+                                                                    RtPipeline pipeline, GraphicsUse graphicsUse) {
+        FrameSceneSnapshot current = frameScene(scene, graphicsUse);
+        TlasBuilder.Reserved reserved = RtFramePreparation.measure("tlas-reserve", current.instances.size(), 0,
+                () -> TlasBuilder.reserve(ctx, current.instances.size(), graphicsUse));
+        TlasBuilder.Prepared[] tlas = new TlasBuilder.Prepared[1];
+        PendingTrace trace;
+        try (var batch = framePreparation.batch()) {
+            batch.submit(RtFramePreparation.measured("tlas-pack", current.instances.size(), 0,
+                    () -> tlas[0] = TlasBuilder.pack(reserved, current.instances, tlasWriter(origin))));
+            trace = prepareTraceGeometry(scene, current, origin, pipeline, graphicsUse);
+        }
+        return new PreparedWorldGeometry(tlas[0], trace);
+    }
+
+    public synchronized PreparedTrace finishTrace(PreparedWorldGeometry geometry, PreparedLighting lighting) {
+        return finishTrace(geometry.trace, geometry.tlas.accel.handle, lighting.delegate);
     }
 
     /** Packs the GeometryIndex-addressed records for one scene in the same order as its TLAS hit bases. */
@@ -190,6 +214,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(pipeline, "pipeline");
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         FrameSceneSnapshot current = frameScene(scene, graphicsUse);
+        PendingTrace trace = prepareTraceGeometry(scene, current, origin, pipeline, graphicsUse);
+        RtNeeAtBackend.Prepared lighting = neeAt.active(scene);
+        if (lighting == null) throw new IllegalStateException("prepareLighting must precede prepareTrace");
+        return finishTrace(trace, tlasHandle, lighting);
+    }
+
+    private PendingTrace prepareTraceGeometry(SceneId scene, FrameSceneSnapshot current, SceneOrigin origin,
+                                              RtPipeline pipeline, GraphicsUse graphicsUse) {
         List<SceneLight> sceneLights = current.content.lights();
         LightIndexRevision indexed = lightIndicesByScene.get(scene);
         boolean rebuildLightIndices = indexed == null || indexed.lights != sceneLights;
@@ -277,17 +309,35 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
         if (copiedLights) slot.lights.flush(0L, lightBytes);
         slot.lightPages = lightPages;
-        ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
         RtPipeline.HitTable hitTable = hitBytes > 0 ? new RtPipeline.HitTable(
                 new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hitBytes),
                 pipeline.retainedHitRecordStride()) : null;
-        RtNeeAtBackend.Prepared lighting = neeAt.active(scene);
-        if (lighting == null) throw new IllegalStateException("prepareLighting must precede prepareTrace");
+        return new PendingTrace(current, slot, hitTable);
+    }
+
+    private PreparedTrace finishTrace(PendingTrace trace, long tlasHandle, RtNeeAtBackend.Prepared lighting) {
+        TraceSlot slot = trace.slot;
+        ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
         lighting.bindLightTable(slot.lights.deviceAddress());
         PreparedTrace prepared = new PreparedTrace(slot.geometry.deviceAddress(), lighting.stateAddress(),
-                slot.tlasDescriptor.firstIndex().value(), hitTable);
-        current.markTraced();
+                slot.tlasDescriptor.firstIndex().value(), trace.hitTable);
+        trace.current.markTraced();
         return prepared;
+    }
+
+    private record PendingTrace(FrameSceneSnapshot current, TraceSlot slot, RtPipeline.HitTable hitTable) {}
+
+    /** Borrowed geometry ready for TLAS recording, with trace bindings finalized after lighting preparation. */
+    public static final class PreparedWorldGeometry {
+        private final TlasBuilder.Prepared tlas;
+        private final PendingTrace trace;
+
+        private PreparedWorldGeometry(TlasBuilder.Prepared tlas, PendingTrace trace) {
+            this.tlas = tlas;
+            this.trace = trace;
+        }
+
+        public TlasBuilder.Prepared tlas() { return tlas; }
     }
 
     static int emitterIndex(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
