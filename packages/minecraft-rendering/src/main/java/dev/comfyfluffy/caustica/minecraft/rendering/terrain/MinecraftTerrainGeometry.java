@@ -25,6 +25,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     }
 
     public CompletableFuture<Prepared> prepare(Put put) {
+        var placement = new Placement(put.sectionKey(), put.originX(), put.originY(), put.originZ(), put.lights());
         var uploaded = uploader.upload(put.mesh());
         try {
             return meshes.prepare(MinecraftProgramTypes.INSTANCE_DATA, uploaded.build())
@@ -33,7 +34,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                             uploaded.close();
                             throw new java.util.concurrent.CompletionException(failure);
                         }
-                        return new Prepared(put, uploaded, mesh);
+                        return new Prepared(placement, uploaded, mesh);
                     });
         } catch (RuntimeException | Error failure) {
             uploaded.close();
@@ -55,20 +56,20 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                 displaced.add(previous.prepared);
             }
             if (change instanceof Prepared prepared) {
-                Put put = prepared.put;
+                Placement placement = prepared.placement;
                 InstanceId instance = previous == null ? channel.newInstance() : previous.instance;
                 var lightIds = new ArrayList<LightId>();
                 var ranges = new ArrayList<PrimitiveLightMap.Range>();
-                for (var emitter : put.lights().emitters()) {
+                for (var emitter : placement.lights().emitters()) {
                     var light = channel.newLight();
                     lightIds.add(light);
                     edits.add(new SceneEdit.SetLight(light, scene, emitter.descriptor()));
                     ranges.add(new PrimitiveLightMap.Range(emitter.firstPrimitive(), emitter.primitiveCount(), light));
                 }
                 edits.add(new SceneEdit.SetInstance<>(instance, scene, prepared.mesh,
-                        GeometryTransform.translation(put.originX(), put.originY(), put.originZ()),
+                        GeometryTransform.translation(placement.originX(), placement.originY(), placement.originZ()),
                         0xff, prepared.uploaded.instanceData(), new PrimitiveLightMap(ranges)));
-                next.put(put.sectionKey(), new Section(instance, List.copyOf(lightIds), prepared));
+                next.put(placement.sectionKey(), new Section(instance, List.copyOf(lightIds), prepared));
             } else {
                 next.put(key, null);
                 if (previous != null) edits.add(new SceneEdit.DropInstance(previous.instance));
@@ -92,17 +93,20 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
 
     public sealed interface ReadyChange permits Prepared, Drop { long sectionKey(); }
 
+    private record Placement(long sectionKey, int originX, int originY, int originZ,
+                             MinecraftTerrainLightBatch lights) { }
+
     public static final class Prepared implements ReadyChange, AutoCloseable {
-        private final Put put;
+        private final Placement placement;
         private final MinecraftTerrainUploader.UploadedSection uploaded;
         private final ReadyMesh<MinecraftProgramTypes.InstanceData> mesh;
-        private Prepared(Put put, MinecraftTerrainUploader.UploadedSection uploaded,
+        private Prepared(Placement placement, MinecraftTerrainUploader.UploadedSection uploaded,
                          ReadyMesh<MinecraftProgramTypes.InstanceData> mesh) {
-            this.put = put;
+            this.placement = placement;
             this.uploaded = uploaded;
             this.mesh = mesh;
         }
-        @Override public long sectionKey() { return put.sectionKey(); }
+        @Override public long sectionKey() { return placement.sectionKey(); }
         @Override public void close() { mesh.close(); uploaded.close(); }
     }
 

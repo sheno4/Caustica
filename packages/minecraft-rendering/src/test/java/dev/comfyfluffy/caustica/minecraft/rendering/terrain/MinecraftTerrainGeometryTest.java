@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
+import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
@@ -31,18 +32,25 @@ final class MinecraftTerrainGeometryTest {
     @Test void waitsForBothNeighborsAndPublishesLightsInTheSameEdit() {
         var scene = new PreparedScene();
         var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
-        var first = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 16, 0, 0, mesh(), emitterBatch(7, 1)));
+        var lights = emitterBatch(7, 1);
+        var first = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 16, -32, 48, mesh(), lights));
         var second = terrain.prepare(new MinecraftTerrainGeometry.Put(8, 32, 0, 0, mesh()));
         scene.jobs.get(1).complete();
         assertFalse(first.isDone());
         assertTrue(scene.edits.isEmpty());
         scene.jobs.get(0).complete();
+        assertEquals(7L, first.join().sectionKey());
+        assertEquals(8L, second.join().sectionKey());
         terrain.edit(List.of(first.join(), second.join()));
         assertEquals(1, scene.edits.size());
         var placement = (SceneEdit.SetInstance<?>) scene.edits.getFirst().stream()
                 .filter(SceneEdit.SetInstance.class::isInstance).findFirst().orElseThrow();
         var light = (SceneEdit.SetLight) scene.edits.getFirst().getFirst();
+        assertEquals(GeometryTransform.translation(16, -32, 48), placement.transform());
+        assertSame(lights.emitters().getFirst().descriptor(), light.descriptor());
         assertSame(light.light(), placement.primitiveLights().ranges().getFirst().light());
+        assertEquals(0, placement.primitiveLights().ranges().getFirst().firstPrimitive());
+        assertEquals(1, placement.primitiveLights().ranges().getFirst().primitiveCount());
         assertTrue(terrain.hasSection(7));
         terrain.close();
         assertEquals(1, scene.jobs.get(0).releases);

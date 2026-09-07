@@ -484,3 +484,66 @@ then distinguish required world residency from avoidable retention before choosi
 further representation changes or heap sizing. No graphics-timeline wait events were
 recorded in this final flight; other driver/presentation waits are not covered by that
 observation.
+
+## Release uploaded terrain CPU sources
+
+Live-object histograms identified the retained owner chain:
+`MinecraftTerrainGeometry.sections -> Section.prepared -> Prepared.put -> Put.mesh`.
+All 26,318 prepared sections still held their CPU mesh arrays after upload. The GPU
+upload result already owns the buffers and resource leases needed by prepared meshes.
+Prepared terrain now retains only section placement and light metadata alongside
+those GPU resources; the asynchronous completion closure also excludes the source.
+The delayed-neighbor publication test checks preserved keys, transforms, light
+descriptor identity and primitive ranges. Minecraft rendering and client tests pass.
+
+At the same 26,318 prepared sections, live object bytes fell from 5,836,665,224 to
+2,207,287,544. After flight, they fell from 7,174,409,256 to 2,368,689,504. The Java
+heap limit remains 8 GiB with ZGC. Histograms force collection and were taken outside
+the performance recordings. Source mesh instances disappeared from the static live
+histogram; GPU resource ownership and generated struct writers are unchanged.
+
+Two default-resolution (854×480) routes in New World (2), with forward+sprint
+spectator flight and the same instrumentation, produced:
+
+| Mean per frame | Static runs | Fast-flight runs |
+| --- | --- | --- |
+| CPU envelope including waits | 5.316 / 6.486 ms | 7.504 / 6.932 ms |
+| Render-thread CPU | 5.373 / 6.339 ms | 6.144 / 5.764 ms |
+| Render-thread allocation | 4.984 / 5.691 MB | 6.077 / 5.773 MB |
+| Scene assembly | 0.226 / 0.440 ms | 1.405 / 1.322 ms |
+| Combined geometry preparation | 0.521 / 0.774 ms | 1.997 / 1.872 ms |
+| Packing-worker elapsed per job | 0.072 / 0.146 ms | 0.645 / 0.612 ms |
+| Packing-worker allocation | 0.282 / 1.089 MB | 4.464 / 4.294 MB |
+
+These are approximately 154–188 static and 133–144 flight CPU FPS by mean envelope,
+not GPU/display FPS. Repeat flight p95 is 11.965 ms, p99 20.255 ms and maximum
+42.312 ms: this is not a guarantee that every frame finishes within 10 ms.
+Neither repeat recording contains a ZAllocationStall event, versus 3,063 in the
+preceding checkpoint's flight. All 74,828 matched entity and 22,801 prepared terrain
+ready-to-publication samples in repeat flight are within one observed frame.
+Publication-to-assembly adds zero observed frames in that recording. Static terrain
+has one two-frame publication among 35 samples. These engine observations do not
+measure final pixel presentation.
+
+Raw recordings and analysis remain local under `run/caustica-debug` and
+`tmp/cpu-optimization/goal-release-terrain-source-default*`.
+
+A fresh client, without a histogram collection before its recordings, confirms
+5.907 ms static and 7.332 ms flight mean envelopes (169 / 136 CPU FPS), with
+5.897 / 6.114 ms render-thread CPU. Both recordings contain zero allocation stalls.
+Flight p95 is 12.520 ms, p99 25.277 ms and maximum 72.435 ms. All 107,650 matched
+entity and 23,303 prepared terrain publication samples are within one observed
+frame after readiness. A post-recording screenshot confirms rendered terrain at
+854×480. Original camera coordinates were restored, held flight input released,
+debug view disabled and the client stopped cleanly; resolution overrides remain zero.
+
+The fresh flight JFR has 1,732 render-thread execution samples. Leading leaf methods
+include entity quad capture (113) and instance-page frame construction (92).
+Instance-page construction accounts for 19.1% and assembly resolution 12.4% of
+sampled render allocation weight. Among 1,127 preparation-worker samples, leading
+leaves are long-map lookup (206), geometry packing (183), emitter writes (99) and
+emitter resolution (82). Packing averages 0.640 ms/job and TLAS packing 0.414 ms/job;
+these jobs overlap and must not be summed into frame cost. Terrain workers have
+1,201 samples, led by palette reads (261), tessellation (108) and face culling (81).
+These identify remaining work, but do not establish that replacing generated struct
+assignment with hand-written stores would improve end-to-end performance.
