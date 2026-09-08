@@ -100,6 +100,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         java.util.Objects.requireNonNull(terrain, "terrain");
         java.util.Objects.requireNonNull(options, "options");
         java.util.Objects.requireNonNull(instrumentation, "instrumentation");
+        entityTextures.reset();
         MinecraftProgramResources resources = new MinecraftProgramResources(
                 context.renderSession().gpu(), context.renderSession().compute(),
                 context.renderSession().resources());

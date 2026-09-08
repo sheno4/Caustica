@@ -85,9 +85,7 @@ public final class RtEntityTextures implements EntityTextureResolver {
         }
         reference = MinecraftEntityMesh.Texture.atlas(
                 ResourceId.of(atlasLocation.getNamespace(), atlasLocation.getPath()), sampler);
-        if (!contributions.containsKey(reference)) {
-            contribute(reference, view);
-        }
+        contribute(reference, view);
         return reference;
     }
 
