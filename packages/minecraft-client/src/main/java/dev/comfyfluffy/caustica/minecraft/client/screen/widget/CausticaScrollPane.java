@@ -13,14 +13,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The content pane: a vertical stack of rows that scrolls and clips.
+ * A scrolling, clipped stack of settings rows. Vanilla supplies scrolling and focus routing.
  *
- * <p>Extends {@link AbstractContainerWidget} for the scroll machinery — wheel, scrollbar drag, scroll
- * clamping and focus routing — rather than {@code AbstractSelectionList}, whose entry-selection model and
- * vanilla separators fight a bespoke layout, and which would turn every collapse into a list rebuild.
- *
- * <p>A collapsed row is hidden <em>and</em> excluded from {@link #children()}, so it takes no focus and no
- * input rather than merely painting nothing.
+ * <p>Collapsed rows are excluded from {@link #children()}. Reflow releases focus and drag state when their
+ * target leaves the visible layout.
  */
 public final class CausticaScrollPane extends AbstractContainerWidget {
     /** A row and the gap that precedes it, which is how groups are separated without spacer widgets. */
@@ -74,6 +70,11 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
             y += widget.getHeight();
         }
         contentHeight = y;
+        GuiEventListener focused = getFocused();
+        if (focused != null && placed.stream().noneMatch(row -> row.widget() == focused)) {
+            setFocused(null);
+            setDragging(false);
+        }
         refreshScrollAmount();
         applyScroll();
     }

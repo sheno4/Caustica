@@ -192,3 +192,9 @@ Use named debug operations for repeatable state checks and computer use for actu
 - Two interaction regressions reproduced stale widget state on 8a33bc88: after changing a preference from 5 to 8 outside the widget, a right-arrow edit used the old position instead of producing 9; clicking the old knob position failed to restore 5. Both tests failed before the fix (`tmp/aesthetic-slider-current-value-before.log`).
 - The slider now refreshes its normalized position from the preference before input and drawing and after a quantized write. Pointer and painting geometry share the same track calculation. The base widget continues to own focus and keyboard-edit mode. This fixes demonstrated stale-state behavior; it does not establish the cause of the earlier live keyboard-input result.
 - Full root checks passed (187 tasks, 40 seconds), `tmp/aesthetic-slider-current-value-check.log`. After consolidating track geometry and tightening comments, the final slider test run passed, `tmp/aesthetic-slider-current-value-final.log`. No live client was launched for this change, so its visual and full keyboard-delivery verification remain open.
+
+## Scroll-pane input ownership
+
+- On a1ae4082, two regressions showed that replacing rows or hiding the focused row left the pane's focus attached to that old control. A third case confirmed that ordinary reflow preserves focus for a row that remains visible. Evidence: `tmp/aesthetic-pane-focus-before.log` (three tests, two failures).
+- Reflow now releases focus and drag state when the target is absent from the visible layout. The tests also verify that subsequent keyboard input does not reach the removed/hidden row, while a retained visible row continues to receive it. This covers container input ownership directly; the full live keyboard-delivery path remains a separate check.
+- Full root checks passed (187 tasks, 40 seconds), `tmp/aesthetic-pane-focus-check.log`. No live client was launched for this change.
