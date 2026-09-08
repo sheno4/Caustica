@@ -3,6 +3,7 @@
 .DS_Store
 /build/
 run/
+/run-gltf-viewer/
 *.log
 *.class
 __pycache__/

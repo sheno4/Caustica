@@ -8,6 +8,25 @@ import numpy as np
 import bake_display_lut as baker
 
 
+class BakedDisplayResourceTest(unittest.TestCase):
+    def test_all_display_outputs_have_valid_texels(self):
+        for spec in baker.LUTS:
+            path = baker.OUT_DIR / f"{spec['name']}.bin"
+            with self.subTest(resource=path.name):
+                data = path.read_bytes()
+                magic, version, size, lo_stops, hi_stops = struct.unpack_from("<4sIIff", data)
+                self.assertEqual((magic, version, size), (b"CLUT", 1, baker.LUT_SIZE))
+                self.assertEqual((lo_stops, hi_stops),
+                                 (baker.SHAPER_LO_STOPS, baker.SHAPER_HI_STOPS))
+                self.assertEqual(len(data), 20 + size ** 3 * 4 * 2)
+                rgba = np.frombuffer(data, dtype="<f2", offset=20).reshape(size, size, size, 4)
+                self.assertTrue(np.isfinite(rgba).all())
+                self.assertGreaterEqual(float(rgba[..., :3].min()), 0.0)
+                self.assertLessEqual(float(rgba[..., :3].max()), 1.0)
+                np.testing.assert_array_equal(rgba[..., 3], 1.0)
+                self.assertGreater(float(np.ptp(rgba[..., :3])), 0.0)
+
+
 class BakedLookResourceTest(unittest.TestCase):
     def test_lmt_has_expected_header_and_finite_payload(self):
         path = baker.OUT_DIR / "lmt.bin"
