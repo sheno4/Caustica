@@ -35,8 +35,7 @@ import java.util.WeakHashMap;
  * <p>The view is obtained through the <b>public</b> {@code RenderType.prepare()} → {@link
  * PreparedRenderType#textures()} API (a list of {@code Texture(name, GpuTextureView, sampler)}), keyed by
  * the material sampler named {@code "Sampler0"} ({@code "Sampler1"}/{@code "Sampler2"} are auxiliary
- * bindings). Resolution is cached per {@code
- * RenderType} (they are stable singletons), so the prepare() cost is paid once per distinct texture.
+ * bindings). Weak render-type keys retain cached bindings while each render type remains in use.
  */
 public final class RtEntityTextures implements EntityTextureResolver {
 
@@ -117,11 +116,11 @@ public final class RtEntityTextures implements EntityTextureResolver {
 
     private void ensureWhiteTexture() {
         if (whiteRegistered) return;
-        whiteRegistered = true;
         NativeImage image = new NativeImage(1, 1, false);
         image.setPixel(0, 0, 0xFFFFFFFF);
         Minecraft.getInstance().getTextureManager()
                 .register(WHITE_LOCATION, new DynamicTexture(() -> "caustica RT white", image));
+        whiteRegistered = true;
     }
 
     /** Drop resource-pack-owned view identities after the renderer has detached their descriptor epoch. */
@@ -166,12 +165,6 @@ public final class RtEntityTextures implements EntityTextureResolver {
         }
     }
 
-    /** The Vulkan image-view handle of {@code renderType}'s primary texture, or null if unresolved. */
-    public VulkanGpuTextureView resolveView(RenderType renderType) {
-        CapturedBinding binding = resolveBinding(renderType);
-        return binding == null ? null : binding.view();
-    }
-
     private CapturedBinding resolveBinding(RenderType renderType) {
         if (renderType == null) {
             return null;
@@ -183,31 +176,21 @@ public final class RtEntityTextures implements EntityTextureResolver {
         CapturedBinding handle = null;
         try {
             PreparedRenderType prepared = renderType.prepare();
-            String wanted = "Sampler0";
-            GpuTextureView chosen = null;
-            GpuSampler chosenSampler = null;
-            GpuTextureView firstNonAux = null;
-            GpuSampler firstNonAuxSampler = null;
-            for (PreparedRenderType.Texture t : prepared.textures()) {
-                String name = t.name();
-                if (wanted.equals(name)) {
-                    chosen = t.textureView();
-                    chosenSampler = t.sampler();
+            PreparedRenderType.Texture chosen = null;
+            for (PreparedRenderType.Texture texture : prepared.textures()) {
+                String name = texture.name();
+                if ("Sampler0".equals(name)) {
+                    chosen = texture;
                     break;
                 }
-                if (firstNonAux == null && !"Sampler1".equals(name) && !"Sampler2".equals(name)) {
-                    firstNonAux = t.textureView();
-                    firstNonAuxSampler = t.sampler();
+                if (chosen == null && !"Sampler1".equals(name) && !"Sampler2".equals(name)) {
+                    chosen = texture;
                 }
             }
-            if (chosen == null) {
-                chosen = firstNonAux;
-                chosenSampler = firstNonAuxSampler;
-            }
             if (chosen != null) {
-                VulkanGpuTextureView view = vkView(chosen);
-                if (view != null && chosenSampler != null) {
-                    handle = new CapturedBinding(view, sampler(chosenSampler));
+                VulkanGpuTextureView view = vkView(chosen.textureView());
+                if (view != null && chosen.sampler() != null) {
+                    handle = new CapturedBinding(view, sampler(chosen.sampler()));
                 }
             }
         } catch (Throwable t) {
