@@ -201,7 +201,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
      * (identity submit pose), so an unchanged resident can reuse its BLAS across placement updates.
      */
     private static final class BeEntry {
-        int bx, by, bz;                          // block position used to remove the retained resident
         long meshHash;                           // hash of the captured mesh — rebuild only when it changes
         long lastSeen;                           // last frame this BE was in the scan window — for eviction
     }
@@ -366,6 +365,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private void beginFrame(MinecraftEntityGeometry geometry, SceneOrigin origin,
                            double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation,
                            long frameIndex) {
+        clearOverlays();
         FrameBuild build = new FrameBuild(geometry, origin, frameIndex, instrumentation);
         int rbx = (int) origin.x();
         int rby = (int) origin.y();
@@ -439,8 +439,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         // still appear in reflections / shadows / GI (so the player sees themselves in water as others would).
         // In F5 third person it renders fully, like any other entity.
         boolean firstPerson = mc.options.getCameraType().isFirstPerson();
-        glowBatches.clear();
-        nameTagBatches.clear();
         boolean glow = build.settings.glow();
         boolean nameTags = build.settings.nameTags();
         glowCamOffsetX = (float) (cameraState.pos.x - rbx);
@@ -821,9 +819,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         beBuildsThisFrame++;
 
         BeEntry e = entry != null ? entry : new BeEntry();
-        e.bx = p.getX();
-        e.by = p.getY();
-        e.bz = p.getZ();
         e.meshHash = fingerprint.contentHash();
         long key = p.asLong();
         MinecraftEntityGeometry.Key geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
@@ -896,12 +891,12 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         long now = build.frameIndex;
         Iterator<Map.Entry<Long, BeEntry>> it = beCache.entrySet().iterator();
         while (it.hasNext()) {
-            BeEntry e = it.next().getValue();
+            Map.Entry<Long, BeEntry> entry = it.next();
+            BeEntry e = entry.getValue();
             if (now - e.lastSeen < KEEP_FRAMES) {
                 continue;
             }
-            long key = BlockPos.asLong(e.bx, e.by, e.bz);
-            MinecraftEntityGeometry.Key geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
+            MinecraftEntityGeometry.Key geometryKey = key(BLOCK_ENTITY_GEOMETRY, entry.getKey());
             build.drop(geometryKey, null);
             it.remove();
         }
@@ -978,6 +973,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
 
     /** Remove every retained resident when this capture path is disabled. */
     private void clearResidents(FrameBuild build) {
+        clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         for (int id : entityStates.keySet()) {
             MinecraftEntityGeometry.Key key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
@@ -1020,12 +1016,14 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
 
     /** Prevent deferred profiling callbacks from outliving this contribution's retained-scene ownership. */
     public void onSourceStopped() {
+        clearOverlays();
         clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
     }
 
     /** Clears CPU capture state before entity IDs can be reused by a new world. */
     public void resetWorldState() {
+        clearOverlays();
         meshRevisionEpoch++;
         clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
@@ -1037,16 +1035,20 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
 
     /** Clear capture state; the bound geometry contribution tears down all GPU residents. */
     public void shutdown() {
+        clearOverlays();
         clearParticleHistory();
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();
         beCache.clear();
-        glowBatches.clear();
-        nameTagBatches.clear();
         resetPoseStack(blockEntityPoseStack);
         beCandidates.clear();
         beCandidatePool.clear();
         pendingDrops.clear();
         collector.clearCaches();
+    }
+
+    private void clearOverlays() {
+        glowBatches.clear();
+        nameTagBatches.clear();
     }
 }
