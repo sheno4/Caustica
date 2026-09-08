@@ -8,6 +8,28 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class RtCompletionSlotPoolTest {
+    @Test void failedRetirementStillDrainsEveryCompletedSlotOnce() {
+        var retired = new ArrayList<Integer>();
+        var failure = new IllegalStateException("retirement failed");
+        var pool = new RtCompletionSlotPool<Integer>(slot -> {
+            retired.add(slot);
+            if (slot < 3) throw failure;
+        });
+        var first = pool.acquire(slot -> true, () -> 1);
+        var second = pool.acquire(slot -> true, () -> 2);
+        var third = pool.acquire(slot -> true, () -> 3);
+        var pending = pool.acquire(slot -> true, () -> 4);
+        pool.release(first);
+        pool.release(second);
+        pool.release(third);
+
+        assertSame(failure, assertThrows(IllegalStateException.class, pool::close));
+        assertEquals(List.of(1, 2, 3), retired);
+        assertDoesNotThrow(pool::close);
+        pool.release(pending);
+        assertEquals(List.of(1, 2, 3, 4), retired);
+    }
+
     @Test void completionCallbacksReturnReservationsAndLateReturnsRetireAfterClose() {
         var completions = new ArrayList<Runnable>();
         var retired = new ArrayList<Object>();

@@ -1,11 +1,13 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.resource;
 
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
+
 import java.util.ArrayList;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
-/** Slots become writable only after their graphics completion callback returns them to this pool. */
+/** Slots become writable only after their owner returns them following all GPU uses. */
 public final class RtCompletionSlotPool<T> implements AutoCloseable {
     private final ArrayList<T> available = new ArrayList<>();
     private final Consumer<T> retire;
@@ -43,8 +45,10 @@ public final class RtCompletionSlotPool<T> implements AutoCloseable {
 
     @Override public synchronized void close() {
         closed = true;
-        available.forEach(retire);
+        Runnable[] releases = available.stream().<Runnable>map(slot -> () -> retire.accept(slot))
+                .toArray(Runnable[]::new);
         available.clear();
+        new ResourceLifetime(releases).close();
     }
 
     public static long capacity(int bytes) {
