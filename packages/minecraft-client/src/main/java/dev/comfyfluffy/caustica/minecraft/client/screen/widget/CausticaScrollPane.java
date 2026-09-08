@@ -79,9 +79,7 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
     }
 
     /**
-     * Moves the measured rows to where the current scroll puts them. Separate from {@link #reflow()} because
-     * scrolling changes only this: folding the two together meant a scroll updated the amount while the rows
-     * stayed where they were, until something unrelated forced a re-measure.
+     * Applies the scroll offset to measured row positions without recalculating the stack layout.
      */
     private void applyScroll() {
         int top = getY() - (int) scrollAmount();

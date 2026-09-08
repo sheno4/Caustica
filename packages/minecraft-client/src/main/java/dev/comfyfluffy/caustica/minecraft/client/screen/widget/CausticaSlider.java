@@ -62,7 +62,8 @@ public final class CausticaSlider extends AbstractSliderButton {
      */
     @Override
     public boolean keyPressed(KeyEvent event) {
-        if (control.step() > 0.0 && (event.isLeft() || event.isRight())) {
+        if (!active || !visible || !control.enabled()) return false;
+        if (canChangeValue && control.step() > 0.0 && (event.isLeft() || event.isRight())) {
             double span = control.sliderMaximum() - control.sliderMinimum();
             double delta = control.step() / span * (event.isLeft() ? -1.0 : 1.0);
             setValue(value + delta);
@@ -107,12 +108,6 @@ public final class CausticaSlider extends AbstractSliderButton {
     }
 
     @Override
-    public void onRelease(MouseButtonEvent event) {
-        super.onRelease(event);
-        // The value was already applied during the drag; nothing is written to disk until the screen closes.
-    }
-
-    @Override
     public void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         boolean enabled = control.enabled();
         int trackRight = getX() + getWidth();
@@ -135,8 +130,7 @@ public final class CausticaSlider extends AbstractSliderButton {
         graphics.fill(trackLeft, trackY, trackLeft + CausticaTheme.SLIDER_WIDTH,
                 trackY + CausticaTheme.TRACK_HEIGHT, CausticaTheme.TRACK);
         int filled = (int) Math.round(value * (CausticaTheme.SLIDER_WIDTH - CausticaTheme.KNOB_WIDTH));
-        // canChangeValue is the base class's "currently being manipulated" latch, set on press and cleared
-        // on release — the slider's equivalent of a drag flag.
+        // The base class tracks keyboard editing separately from focus and pointer dragging.
         int fillColour = enabled
                 ? (canChangeValue ? CausticaTheme.active(accent) : accent)
                 : CausticaTheme.dimmed(accent);
