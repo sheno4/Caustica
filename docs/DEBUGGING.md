@@ -2,6 +2,8 @@
 
 Launch a development client with `./gradlew :packages:minecraft-client:runClient -PdebugAgent=true -PquickPlayWorld=YOUR_WORLD` (`gradlew.bat` on Windows). For an installed build use `-Dcaustica.debug.enabled=true`. Prefer a copy of a world for experiments that change it.
 
+Add `-PvulkanValidation=true` to enable Minecraft's Vulkan validation option for a development run. Check startup logs for `VK_LAYER_KHRONOS_validation`; the host reports when the requested layer is unavailable. Validation changes execution overhead, so keep it out of performance comparisons.
+
 Use the repository uv environment for packages and execution: `uv sync --locked`, then `uv run python ...`. Add dependencies with `uv add`; NumPy, OpenEXR and Pillow are declared in the workspace.
 
 The opt-in HTTP service binds to loopback. Connection details are in `run/caustica-debug/session.json`; do not share this file or its token. Run scripts from the repository root, or pass `--session` with an absolute path.

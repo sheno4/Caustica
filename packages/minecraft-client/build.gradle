@@ -73,6 +73,9 @@ if (loader == "neoforge") {
 
 // The renderer only attaches to the Vulkan backend, so every dev client run needs these.
 def CLIENT_PROGRAM_ARGUMENTS = ["--renderDebugLabels", "--graphicsBackend", "VULKAN"]
+if (findProperty("vulkanValidation")?.toString()?.toBoolean()) {
+	CLIENT_PROGRAM_ARGUMENTS.add("--vulkanValidation")
+}
 def quickPlayWorld = findProperty("quickPlayWorld")?.toString()
 if (quickPlayWorld) {
 	CLIENT_PROGRAM_ARGUMENTS.addAll("--quickPlaySingleplayer", quickPlayWorld)
