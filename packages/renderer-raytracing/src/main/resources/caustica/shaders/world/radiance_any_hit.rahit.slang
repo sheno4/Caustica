@@ -9,7 +9,7 @@ public void runRadianceAnyHit<TComposition : IComposition>(inout WorldPayload pa
         in BuiltInTriangleIntersectionAttributes attributes) {
     TComposition.Coverages coverages = {};
     var record = worldGeometryRecord();
-    if ((record.flags & 2u) != 0u) return;
+    if ((record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u) return;
     float coverage = clamp(coverages.evaluateCoverage(record.coverageImplementation,
             worldCoverageInput(attributes)), 0.0, 1.0);
     bool stochastic = (record.flags & RETAINED_GEOMETRY_STOCHASTIC) != 0u

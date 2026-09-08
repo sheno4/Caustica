@@ -41,7 +41,7 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
                 ray.TMin = max(traceEpsilon(), path.hitDistance * 0.99);
                 ray.TMax = path.hitDistance * 1.01 + traceEpsilon();
                 uint mask = path.depth == 0u ? WORLD_RAY_MASK_PRIMARY : WORLD_RAY_MASK_SECONDARY;
-                TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, hit);
+                TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, hit);
             } else {
                 tracer.trace(hit, ray, path.depth > frame.maxBounces ? 1u : 0u);
             }

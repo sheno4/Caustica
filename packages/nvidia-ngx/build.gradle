@@ -153,27 +153,12 @@ def verifyNvidiaNgxJar = tasks.register("verifyNvidiaNgxJar") {
     }
 }
 
-def verifyNvidiaNgxOwnership = tasks.register("verifyNvidiaNgxOwnership") {
-    doLast {
-        def legacySources = [rootProject.file("src/main/java/dev/comfyfluffy/caustica/ngx"),
-                             rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt/pipeline/RtDlssRr.java"),
-                             rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt/pipeline/RtDlssFg.java")]
-        def legacyFiles = legacySources.findAll { it.isFile() || it.isDirectory() && !fileTree(it).files.empty }
-        def legacyNativeFiles = [rootProject.file("native/ngx_shim/CMakeLists.txt"),
-                                 rootProject.file("native/ngx_shim/ngx_shim.cpp")].findAll { it.isFile() }
-        if (!legacyFiles.empty || !legacyNativeFiles.empty) {
-            throw new GradleException("legacy NGX ownership remains: sources=${legacyFiles}, natives=${legacyNativeFiles}")
-        }
-    }
-}
-
 tasks.named("test", Test) {
     useJUnitPlatform()
     jvmArgs "--enable-native-access=ALL-UNNAMED"
 }
 tasks.named("check") {
-    dependsOn verifyNvidiaNgxDependencies, verifyNvidiaNgxJar,
-            verifyNvidiaNgxOwnership
+    dependsOn verifyNvidiaNgxDependencies, verifyNvidiaNgxJar
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 java {

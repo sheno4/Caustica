@@ -1,19 +1,23 @@
 {
   "$comment": [
-    "Search paths for the Slang language server. Every module resolves as <name>.slang on one of these",
-    "roots, so `import foo` and the file foo.slang always correspond. Keep this list in sync with",
-    "WorldShaderCompiler's WORLD_MODULES/API_MODULES and each feature's ShaderSource roots — those are",
-    "what the compiler actually uses at runtime; this only teaches the editor the same layout."
+    "Search roots for runtime shader modules and packaged stage imports.",
+    "Keep these paths aligned with package shader resources and build include directories."
   ],
   "searchPaths": [
-    "src/main/resources/caustica/shaders/api",
-    "src/main/resources/caustica/shaders/world",
-    "src/main/resources/caustica/shaders/builtin/sky",
-    "src/main/resources/caustica/shaders/builtin/surface",
-    "src/main/resources/caustica/shaders/builtin/bloom",
-    "src/main/resources/caustica/shaders/builtin/common",
-    "shaders/common",
-    "shaders/pipelines"
+    "packages/shader-api/src/main/resources/caustica/shaders/api",
+    "packages/renderer-raytracing/src/main/resources/caustica/shaders/world",
+    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/sky",
+    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/surface",
+    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/bloom",
+    "packages/minecraft-rendering/src/main/resources/caustica/shaders/minecraft/sky",
+    "packages/minecraft-rendering/src/main/resources/caustica/shaders/minecraft/surface",
+    "packages/minecraft-client/shaders/common",
+    "packages/minecraft-client/shaders/pipelines/world",
+    "packages/renderer-presentation/shaders/common",
+    "packages/examples/api-showcase/src/main/resources/api_showcase/shaders",
+    "packages/examples/api-showcase/src/main/resources/api_showcase/shaders/passes",
+    "packages/examples/api-showcase/src/main/resources/api_showcase/shaders/world",
+    "packages/examples/gltf-content/src/main/resources/caustica_gltf_viewer/shaders"
   ],
   "predefinedMacros": [],
   "inlayHints": {

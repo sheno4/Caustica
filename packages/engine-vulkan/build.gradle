@@ -57,24 +57,9 @@ def verifyEngineVulkanDependencies = tasks.register("verifyEngineVulkanDependenc
     }
 }
 
-def verifyEngineVulkanRuntimeNamespace = tasks.register("verifyEngineVulkanRuntimeNamespace") {
-    group = "verification"
-    description = "Verifies that owned Vulkan resources do not leak back into the root RT namespace."
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def legacy = sourceSets.main.allJava.files.findAll { file ->
-            file.toPath().toString().replace('\\', '/').contains(
-                    '/dev/comfyfluffy/caustica/renderer/runtime/')
-        }
-        if (!legacy.empty) {
-            throw new GradleException("engine-vulkan runtime classes use the legacy RT namespace: ${legacy}")
-        }
-    }
-}
-
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
-    dependsOn(verifyEngineVulkanDependencies, verifyEngineVulkanRuntimeNamespace)
+    dependsOn(verifyEngineVulkanDependencies)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 

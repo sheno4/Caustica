@@ -6,10 +6,10 @@ import world_minimal;
 
 public struct RetainedReorderedTrace : IRetainedRadianceTrace {
     public void trace(inout WorldPayload payload, RayDesc ray, uint pathPhaseHint) {
-        HitObject hit = HitObject::TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE,
+        HitObject hit = HitObject::TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE,
                 WORLD_RAY_MASK_SECONDARY, 0u, 2u, 0u, ray, payload);
         uint coherenceHint = (pathPhaseHint << 1u) | (hit.GetShaderTableIndex() & 1u);
         ReorderThread(hit, coherenceHint, 4u);
-        HitObject::Invoke(worldAccelerationStructure(worldBindings), hit, payload);
+        HitObject::Invoke(worldAccelerationStructure(), hit, payload);
     }
 };

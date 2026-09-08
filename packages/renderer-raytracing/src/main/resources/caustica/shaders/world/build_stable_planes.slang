@@ -78,7 +78,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             hit.pathFlags = WORLD_PATH_GUIDE;
             RayDesc ray = traceRay(branch.path);
             uint mask = branch.path.depth == 0u ? WORLD_RAY_MASK_PRIMARY : WORLD_RAY_MASK_SECONDARY;
-            TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, hit);
+            TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, hit);
             bool sky = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
             float distance = sky ? TRACE_MAX_DISTANCE : hit.hitDistance;
             float3 transmission = exp(-branch.path.absorption * distance);

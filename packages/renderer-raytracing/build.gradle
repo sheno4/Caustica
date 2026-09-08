@@ -218,9 +218,7 @@ def verifyRendererRayTracingResources = tasks.register("verifyRendererRayTracing
     group = "verification"
     description = "Verifies that the package owns the complete world Slang resource set."
     def resourceRoot = file("src/main/resources")
-    def legacyWorldRoot = rootProject.file("src/main/resources/caustica/shaders/world")
     inputs.dir(resourceRoot)
-    inputs.files(fileTree(legacyWorldRoot))
     doLast {
         def actual = fileTree(new File(resourceRoot, "caustica/shaders/world")) {
             include "**/*"
@@ -228,11 +226,10 @@ def verifyRendererRayTracingResources = tasks.register("verifyRendererRayTracing
         def foreign = fileTree(resourceRoot).files.findAll { file ->
             !file.toPath().toString().replace('\\', '/').contains("/caustica/shaders/world/")
         }
-        def duplicateRootResources = fileTree(legacyWorldRoot).files
-        if (actual != worldShaderNames || !foreign.empty || !duplicateRootResources.empty) {
+        if (actual != worldShaderNames || !foreign.empty) {
             throw new GradleException("renderer-raytracing resource mismatch; missing="
                     + "${worldShaderNames - actual}, unexpected=${actual - worldShaderNames}, "
-                    + "foreign=${foreign}, duplicateRootResources=${duplicateRootResources}")
+                    + "foreign=${foreign}")
         }
     }
 }

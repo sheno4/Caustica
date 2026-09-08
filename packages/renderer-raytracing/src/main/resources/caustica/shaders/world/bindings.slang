@@ -51,7 +51,7 @@ public struct WorldBindingRoots {
     public uint64_t stablePlaneBufferAddress;
 };
 
-public RaytracingAccelerationStructure worldAccelerationStructure(WorldBindingRoots roots) {
+public RaytracingAccelerationStructure worldAccelerationStructure() {
     return worldTopLevelAS;
 }
 
