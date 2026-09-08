@@ -72,13 +72,11 @@ if (loader == "fabric") {
         }
         mods {
             caustica {
-                sourceSet(project(":packages:minecraft-client").sourceSets.main)
-                sourceSet(project(":packages:api").sourceSets.main)
-                sourceSet(project(":packages:minecraft-api").sourceSets.main)
-                sourceSet(project(":packages:settings-api").sourceSets.main)
+                modSourceSets.addAll(project(":packages:minecraft-client").neoForge.mods.caustica.modSourceSets)
             }
             caustica_gltf_viewer {
                 sourceSet(sourceSets.main)
+                sourceSet(project(":packages:examples:gltf-content").sourceSets.main)
             }
         }
     }
