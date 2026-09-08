@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProf
 import dev.comfyfluffy.caustica.minecraft.client.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh.Coverage;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
@@ -20,32 +21,19 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.longs.LongArrayList;
-import it.unimi.dsi.fastutil.longs.LongIterator;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import it.unimi.dsi.fastutil.longs.LongSet;
-import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.color.block.BlockTintSource;
-import net.minecraft.client.multiplayer.ClientChunkCache;
-import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
 import net.minecraft.client.renderer.block.BlockStateModelSet;
 import net.minecraft.client.renderer.block.FluidStateModelSet;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.SectionPos;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Block;
@@ -56,7 +44,6 @@ import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -65,10 +52,8 @@ import java.util.Map;
 final class RtTerrainMesher {
     private static final Direction[] DIRECTIONS = Direction.values();
     /**
-     * Reusable per-worker-thread meshing state. The mesh + captures are reset between tasks so their
-     * backing arrays amortize across sections instead of re-growing per task. Each completed mesh is copied
-     * before the next task reuses the accumulators. The fluid renderer stays per-task because it captures the
-     * dispatch context's model set.
+     * Per-worker capture state and reusable accumulators. Each job resets the captures and copies its
+     * finished streams before another job reuses their backing arrays.
      */
     static final class WorkerTessState {
         final QuadCapture capture = new QuadCapture();
@@ -89,10 +74,8 @@ final class RtTerrainMesher {
     static final ThreadLocal<WorkerTessState> WORKER_TESS = ThreadLocal.withInitial(WorkerTessState::new);
 
     /**
-     * Tessellate one section to a section-local CPU mesh and CPU light metadata. <b>Pure CPU + lookup reads only</b>
-     * — no Vulkan, no shared mutable state — so this is the unit a worker thread runs. The task captures one
-     * immutable material lookup, so geometry ordinals and light extraction belong to the same resource epoch.
-     * Returns the mesh (possibly empty — caller checks {@code idx}).
+     * Tessellates and packs a section on its worker using one captured material lookup. Mesh ordinals
+     * and light extraction therefore use the same resource epoch. Empty sections return a null mesh.
      */
     static CpuSection buildCpuSection(BlockAndTintGetter region, BlockStateModelSet modelSet,
                                               RandomSource blockRandom, List<BlockStateModelPart> modelParts,
@@ -127,15 +110,10 @@ final class RtTerrainMesher {
         ArrayList<TriangleRouting> routing = new ArrayList<>(geom.surfaces.size());
         for (int triangle = 0; triangle < geom.surfaces.size(); triangle++) {
             TerrainSurface surface = geom.surfaces.get(triangle);
-            var coverage = switch (surface.coverage()) {
-                case OPAQUE -> MinecraftTerrainMesh.Coverage.OPAQUE;
-                case CUTOUT -> MinecraftTerrainMesh.Coverage.CUTOUT;
-                case STOCHASTIC -> MinecraftTerrainMesh.Coverage.STOCHASTIC;
-            };
             var program = surface.material().material().equals(MinecraftMaterialIds.WATER)
                     ? MinecraftTerrainMesh.ProgramCategory.WATER
                     : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
-            routing.add(new TriangleRouting(program, coverage, 0.5f));
+            routing.add(new TriangleRouting(program, surface.coverage(), 0.5f));
         }
         var packed = bucketTriangles(
                 java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size()),
@@ -294,9 +272,7 @@ final class RtTerrainMesher {
         }
     }
 
-    private enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
-
-    private record TerrainMaterial(int materialIndex, ResourceId material, ResourceId texture) { }
+    private record TerrainMaterial(int materialIndex, ResourceId material, boolean textured) { }
 
     private record TerrainSurface(TerrainMaterial material, Coverage coverage) { }
 
@@ -363,7 +339,6 @@ final class RtTerrainMesher {
         private static final int RESOLVE_CAP = 128;          // skip the O(n^2) resolve for pathological blocks
         private final List<PendingQuad> pending = new ArrayList<>(8);
         private final Map<BlockState, MinecraftMaterialClassification> classifications = new IdentityHashMap<>();
-        private final Map<TextureAtlasSprite, SpriteMaterial> spriteMaterials = new IdentityHashMap<>();
         private int pendingCount;
         private int[] gidScratch = new int[0];
 
@@ -418,12 +393,9 @@ final class RtTerrainMesher {
                     MinecraftResourceIds.material(sprite), classification.geometry(), classification.profile(),
                     q.translucent ? MinecraftMaterialTopology.MEDIUM_BOUNDARY
                             : MinecraftMaterialTopology.SURFACE);
-            SpriteMaterial spriteMaterial = spriteMaterials.computeIfAbsent(sprite, current ->
-                    new SpriteMaterial(MinecraftResourceIds.material(current), ResourceId.of(
-                            current.atlasLocation().getNamespace(), current.atlasLocation().getPath())));
             MinecraftMaterialResolution terrainMaterial = materials.resolve(key);
             q.material = new TerrainMaterial(terrainMaterial.materialIndex(), terrainMaterial.material(),
-                    spriteMaterial.texture());
+                    true);
             q.coverage = q.translucent ? Coverage.STOCHASTIC
                     : q.cutout ? Coverage.CUTOUT : Coverage.OPAQUE;
             q.materialEmission = terrainMaterial.emission();
@@ -450,15 +422,11 @@ final class RtTerrainMesher {
         void reset() {
             discardBlock();
             classifications.clear();
-            spriteMaterials.clear();
         }
 
         /** Drop the current block's buffered quads without emitting. */
         void discardBlock() {
             pendingCount = 0;
-        }
-
-        private record SpriteMaterial(ResourceId material, ResourceId texture) {
         }
 
         /** Resolve coplanar ties among the current block's quads, then emit them into the section classes. */
@@ -592,7 +560,7 @@ final class RtTerrainMesher {
                 prim.add(q.tb);
                 prim.add(0f);
                 prim.add(q.material.materialIndex());
-                prim.add(q.material.texture() != null ? 1f : 0f);
+                prim.add(q.material.textured() ? 1f : 0f);
                 prim.add(0f); // aux0
                 prim.add(0f); // aux1
                 g.lightSprites.add(q.sprite);
@@ -649,9 +617,6 @@ final class RtTerrainMesher {
      * Topology and appearance come from the resolved named material rather than a primitive semantic bit.
      */
     static final class FluidCapture implements VertexConsumer, RtFluidMesher.Output {
-        private static final ResourceId BLOCK_ATLAS = ResourceId.of(
-                TextureAtlas.LOCATION_BLOCKS.getNamespace(), TextureAtlas.LOCATION_BLOCKS.getPath());
-
         SectionMesh cur;     // set before each section
         MinecraftMaterialLookup materials;
         MinecraftMaterialResolution faceMaterial;
@@ -689,7 +654,7 @@ final class RtTerrainMesher {
         private void emitQuad() {
             Geom g = cur.geometry();
             TerrainMaterial material = new TerrainMaterial(faceMaterial.materialIndex(),
-                    faceMaterial.material(), water ? null : BLOCK_ATLAS);
+                    faceMaterial.material(), !water);
             MinecraftMaterialEmission materialEmission = faceMaterial.emission();
             FloatArrayList verts = g.verts;
             IntArrayList idx = g.idx;
@@ -747,7 +712,7 @@ final class RtTerrainMesher {
                 prim.add(tb);
                 prim.add(0f);
                 prim.add(material.materialIndex());
-                prim.add(material.texture() != null ? 1f : 0f);
+                prim.add(material.textured() ? 1f : 0f);
                 prim.add(0f);
                 prim.add(0f);
                 g.lightSprites.add(null);
