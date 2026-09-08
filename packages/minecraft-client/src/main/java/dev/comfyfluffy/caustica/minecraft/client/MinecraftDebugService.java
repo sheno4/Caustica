@@ -136,7 +136,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames(),
                     "operations", List.of("schema", "status",
-                    "settings.get", "settings.set", "runtime.set", "resources.reload", "view.set", "screen.close", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
+                    "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
             case "status" -> future.complete(status());
             case "settings.get" -> future.complete(settings());
             case "runtime.set" -> {
@@ -179,6 +179,12 @@ public final class MinecraftDebugService implements AutoCloseable {
                     throw new IllegalArgumentException("Specify positive frames or ticks");
                 requireWorld();
                 waits.add(new FrameWait(Math.addExact(frames, frameCount), Math.addExact(ticks, tickCount), future));
+            }
+            case "world.leave" -> {
+                requireWorld();
+                int pending = CausticaClientComposition.current().terrain().outstandingBuilds();
+                client.disconnectFromWorld(net.minecraft.network.chat.Component.translatable("menu.disconnect"));
+                future.complete(Map.of("left", true, "terrainBuildsBeforeDisconnect", pending));
             }
             case "screen.close" -> {
                 var screen = client.gui.screen();
@@ -311,6 +317,7 @@ public final class MinecraftDebugService implements AutoCloseable {
         result.put("ticks", ticks);
         result.put("frameActive", CausticaClientComposition.current().runtime().frameActive());
         result.put("runtime", runtimeStatus());
+        result.put("terrainOutstandingBuilds", CausticaClientComposition.current().terrain().outstandingBuilds());
         if (client.level != null) result.put("world", Map.of("dimension", client.level.dimension().toString(),
                 "gameTime", client.level.getGameTime()));
         if (client.player != null) result.put("player", Map.of("x", client.player.getX(), "y", client.player.getY(),

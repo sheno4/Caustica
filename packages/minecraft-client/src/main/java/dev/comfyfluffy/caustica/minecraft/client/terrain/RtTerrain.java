@@ -112,6 +112,11 @@ public final class RtTerrain {
         clearRequested = true;
     }
 
+    /** Outstanding extraction, upload and GPU preparation across epochs; sampled without waiting for workers. */
+    public int outstandingBuilds() {
+        return outstandingBuilds.get();
+    }
+
     /** Border culling and fluid heights depend on the block immediately across a section boundary. */
     public void markBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
         var keys = new ArrayList<Long>();
