@@ -426,3 +426,11 @@ Removed the constant epoch from MinecraftEntityGeometry.MeshRevision and the dup
 Inspected all repository callers: the only production constructor supplied epoch zero. MinecraftProgramSession activation stops displaced scene producers and creates a fresh MinecraftEntityGeometry and capture lease, so revision identity is local to that owner. The record's comment states this scope. Updated existing capture, publication and shutdown tests for the simpler contract; no speculative compatibility adapter was retained.
 
 Full root check passed: 187 tasks in 44 seconds, terminal exit 0 (`tmp/aesthetic-entity-revision-check.log`). Existing tests cover content versus topology changes, material value equality, publication and teardown. No client was launched and no performance or new GPU lifecycle pass is claimed.
+
+## Live revision-refactor lifecycle validation at c5e14c17 (2026-09-09)
+
+Ran the current client on World of worlds 4.2 - Copy with REBLUR/SR at 854x480. Repeated actual End-portal entry and the corrected restoration sequence: End arrival, active RT and 100 composites completed; return loaded the original chunk before removing the temporary portal. Exact original player/settings and air block assertions passed without recovery. Inspected the End capture (frame 200): violet sky, terrain silhouettes and hand were present.
+
+In the same process, completed five RT disable/enable cycles and a same-pack resource reload. Inspected all five city captures: RT before (6591), vanilla (6608), RT re-enabled (7267), RT after reload (10446), and normals (10506). Geometry, expected lighting transitions and populated normal output were present. Settings were restored. The portal and reload observers both exited 0; graceful client shutdown exited 0 after 2m49s, with no device-loss or entity-publication-failure matches.
+
+Evidence: `tmp/aesthetic-revision-portal.{py,json,log}`, `tmp/aesthetic-revision-reload.{py,json,log}` and `tmp/aesthetic-revision-lifecycle-runtime.log`. This validates the simplified entity revision contract through bounded live owner replacement. It does not establish RR stability, actual Nether/End-exit portal coverage, or the pending Computer Use keyboard/visual checks. No additional production change was required.
