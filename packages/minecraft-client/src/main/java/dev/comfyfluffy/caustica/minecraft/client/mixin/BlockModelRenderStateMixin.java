@@ -16,14 +16,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Lets the RT entity capture pick up a contained block-model display (the sulfur cube's swallowed block,
- * item-frame map blocks, …). These resolve through {@code BlockModelResolver} into the <em>display</em>
- * block-model set, which can wrap a block in a {@code SpecialBlockModelWrapper} (special renderer) — a path
- * {@link RtEntityCollector} doesn't capture, so the block submitted nothing. We record the resolved
- * blockState ({@link ContainedBlockSource}, set by {@code BlockModelResolverMixin}); then, only when {@code
- * submit} is driven by our collector (i.e. an RT entity capture), we re-mesh that block from the world
- * model set through the collector and cancel the original (broken) submit. Normal rendering is untouched —
- * the collector check fails for the vanilla submit collector.
+ * Captures resolved block displays from the world model set when submission targets the RT collector.
+ * The display model set can use unsupported submission paths, including Fabric's extra mesh input.
+ * The resolved display transform still applies to the replacement geometry. The source state is
+ * cleared with the display state so a reused render state cannot capture a previous block.
  */
 @Mixin(BlockModelRenderState.class)
 public abstract class BlockModelRenderStateMixin implements ContainedBlockSource {
@@ -31,11 +27,6 @@ public abstract class BlockModelRenderStateMixin implements ContainedBlockSource
     @Shadow @Nullable private Matrix4fc specialRendererTransformation;
 
     @Unique private BlockState caustica$containedState;
-
-    @Override
-    public @Nullable BlockState caustica$containedBlock() {
-        return this.caustica$containedState;
-    }
 
     @Override
     public void caustica$setContainedBlock(@Nullable BlockState state) {
@@ -53,9 +44,7 @@ public abstract class BlockModelRenderStateMixin implements ContainedBlockSource
         if (this.caustica$containedState == null || !(submitNodeCollector instanceof RtEntityCollector rt)) {
             return;
         }
-        // Apply whichever display transform the resolve set (normal vs special path), then re-emit the
-        // world model through the shared vanilla baked-model capture. Replaces only the RT-capture
-        // submission.
+        // Both display paths normalize an identity transform to null.
         Matrix4fc transform = this.transformation != null ? this.transformation : this.specialRendererTransformation;
         rt.captureBlockState(this.caustica$containedState, transform, poseStack);
         ci.cancel();

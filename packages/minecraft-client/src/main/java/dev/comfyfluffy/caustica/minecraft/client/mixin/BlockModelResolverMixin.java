@@ -11,9 +11,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Records the blockState each {@code BlockModelResolver.update} resolves onto the render state ({@link
- * ContainedBlockSource}), so the RT entity capture can re-mesh a contained block display that the display
- * model set hands to a special renderer (see {@link BlockModelRenderStateMixin}).
+ * Attaches the resolved block after update has cleared and populated the display render state.
+ * {@link BlockModelRenderStateMixin} uses it to capture geometry from the world model set.
  */
 @Mixin(BlockModelResolver.class)
 public class BlockModelResolverMixin {
