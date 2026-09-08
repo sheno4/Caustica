@@ -34,10 +34,24 @@ def currentPlatform = {
     def os = org.gradle.internal.os.OperatingSystem.current()
     def arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT)
     if (!(arch in ["x86_64", "amd64"])) return null
-    if (os.windows) return [name: "windows-x64", library: "nrdshim.dll"]
-    if (os.linux) return [name: "linux-x64", library: "libnrdshim.so"]
+    if (os.windows) return [name: "windows-x64", library: "nrdshim.dll", dxc: "bin/x64/dxc.exe"]
+    if (os.linux) return [name: "linux-x64", library: "libnrdshim.so", dxc: "bin/dxc"]
     null
 }()
+
+tasks.register("prepareNrdNativeDependencies", Exec) {
+    group = "build"
+    description = "Downloads the pinned NRD build dependencies, reusing existing local checkouts."
+    commandLine "cmake", "-S", file("native/nrd_shim/dependencies"),
+            "-B", layout.buildDirectory.dir("native/nrd_dependencies").get().asFile,
+            "-DCAUSTICA_DEPENDENCY_ROOT=${nativeDependencyRoot.get().asFile.absolutePath}",
+            "-DCAUSTICA_NRI_REVISION=${nriRevision}",
+            "-DCAUSTICA_SHADERMAKE_REVISION=${shaderMakeRevision}",
+            "-DCAUSTICA_MATHLIB_REVISION=${mathLibRevision}",
+            "-DCAUSTICA_VULKAN_HEADERS_REVISION=${vulkanHeadersRevision}",
+            "-DCAUSTICA_VMA_REVISION=${vmaRevision}",
+            "-DFETCHCONTENT_FULLY_DISCONNECTED=${gradle.startParameter.offline ? 'ON' : 'OFF'}"
+}
 
 tasks.register("configureNrdNative", Exec) {
     group = "build"
@@ -73,8 +87,9 @@ tasks.register("configureNrdNative", Exec) {
             "-DFETCHCONTENT_SOURCE_DIR_VULKAN_HEADERS=${nativeDependencyRoot.get().file('vulkan-headers').asFile.absolutePath}",
             "-DFETCHCONTENT_SOURCE_DIR_VMA=${nativeDependencyRoot.get().file('vma').asFile.absolutePath}",
             "-DFETCHCONTENT_SOURCE_DIR_DXC=${nativeDependencyRoot.get().file('dxc').asFile.absolutePath}",
-            "-DSHADERMAKE_DXC_VK_PATH=${nativeDependencyRoot.get().file('dxc/bin/x64/dxc.exe').asFile.absolutePath}",
+            "-DSHADERMAKE_DXC_VK_PATH=${nativeDependencyRoot.get().file("dxc/${currentPlatform?.dxc}").asFile.absolutePath}",
             "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
+            "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
             "-DNRD_EMBEDS_DXBC_SHADERS=OFF", "-DNRD_EMBEDS_DXIL_SHADERS=OFF",
             "-DNRD_EMBEDS_SPIRV_SHADERS=ON", "-DNRD_NRI=ON", "-DNRD_STATIC_LIBRARY=ON"
 }
@@ -93,6 +108,7 @@ def bundleNrdNative = tasks.register("bundleNrdNative") {
     inputs.property("platform", providers.provider { currentPlatform?.name ?: "unsupported" })
     inputs.file(providers.provider { new File(nativeArtifactRoot.get().asFile, "release/${currentPlatform?.library ?: '__unsupported__'}") })
     inputs.file(nrdSdk.map { file(it).toPath().resolve("LICENSE.txt").toFile() })
+    inputs.file(nativeDependencyRoot.map { it.file("nri/LICENSE.txt") })
     outputs.dir(nativeResourceRoot)
     doLast {
         if (currentPlatform == null) throw new GradleException("NRD native packaging supports Windows/Linux x64")

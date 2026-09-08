@@ -9,6 +9,16 @@ git submodule update --init third_party/NRD
 The Gradle native build uses `third_party/NRD` by default and verifies its exact revision. `-PnrdSdk` or
 `NRD_SDK` may point at another checkout for local integration testing, but the same pinned revision is required.
 
+With CMake 3.30 or newer installed, prepare NRD's pinned native build dependencies once:
+
+```bash
+./gradlew :packages:nvidia-nrd:prepareNrdNativeDependencies
+```
+
+Use `gradlew.bat` in PowerShell. Preparation downloads the exact dependency revisions and DXC archive;
+existing checkouts are reused and revision-checked. Pass `--offline` to require populated local
+dependencies. Native configuration and compilation remain offline and do not run preparation implicitly.
+
 ## Windows
 
 1. Install the Vulkan SDK from <https://vulkan.lunarg.com/sdk/home>.
@@ -94,15 +104,15 @@ cmake --build build/cmake/slang_shim
 
 ## Native Bundling
 
-Gradle bundles NGX natives and the Slang shared-library compiler runtime for the
-current host platform by default:
+Gradle builds the NRD shim and bundles it with NGX natives and the Slang shared-library compiler
+runtime for the current host platform by default:
 
 ```bash
 ./gradlew -Ploader=fabric build
 ```
 
 Select NeoForge with `-Ploader=neoforge`. The build emits a loader-specific
-classifier (`-fabric` or `-neoforge`) so both jars can be installed side by side.
+classifier (`-fabric` or `-neoforge`); install the jar matching the instance's loader.
 
 Release builds that already have both platform shims available can request a
 cross-platform native bundle:

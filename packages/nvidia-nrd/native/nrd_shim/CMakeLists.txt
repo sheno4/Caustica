@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.30)
 project(nrdshim LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -53,11 +53,26 @@ require_git_revision("${FETCHCONTENT_SOURCE_DIR_MATHLIB}" "${CAUSTICA_MATHLIB_RE
 require_git_revision("${FETCHCONTENT_SOURCE_DIR_VULKAN_HEADERS}" "${CAUSTICA_VULKAN_HEADERS_REVISION}" "Vulkan-Headers")
 require_git_revision("${FETCHCONTENT_SOURCE_DIR_VMA}" "${CAUSTICA_VMA_REVISION}" "Vulkan Memory Allocator")
 
+function(require_file_sha256 source expected)
+    file(SHA256 "${source}" actual)
+    if(NOT actual STREQUAL expected)
+        message(FATAL_ERROR "DXC v1.8.2505 file mismatch: ${source}")
+    endif()
+endfunction()
+
+# The official Windows and Linux binaries report different version formats.
+if(WIN32)
+    require_file_sha256("${SHADERMAKE_DXC_VK_PATH}" "52a3aa8150bdd49071fef302f6556c99a697f9a85770940c7edd92f8c7fd7e1f")
+    require_file_sha256("${FETCHCONTENT_SOURCE_DIR_DXC}/bin/x64/dxcompiler.dll" "75c019e3541980eea8ae661d81998d06f99627e3004c800532475a1c3551c6fb")
+else()
+    require_file_sha256("${SHADERMAKE_DXC_VK_PATH}" "25927f0c2eb2eb22ebdf72ecf4798345a53b997ef1b05fea0280410d220427bb")
+    require_file_sha256("${FETCHCONTENT_SOURCE_DIR_DXC}/lib/libdxcompiler.so" "19d03419d8cd45cd3c15bf23b0e1bc5346095106187c2f3f75d8f5aab40e0fc7")
+endif()
 execute_process(COMMAND "${SHADERMAKE_DXC_VK_PATH}" --version
     OUTPUT_VARIABLE DXC_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE
     RESULT_VARIABLE DXC_RESULT)
-if(NOT DXC_RESULT EQUAL 0 OR NOT DXC_VERSION MATCHES "1\\.8\\.2505\\.28")
-    message(FATAL_ERROR "ShaderMake requires DXC 1.8.2505.28; found '${DXC_VERSION}'")
+if(NOT DXC_RESULT EQUAL 0)
+    message(FATAL_ERROR "Pinned DXC cannot run: '${DXC_VERSION}'")
 endif()
 
 # NRD and NRI remain static implementation details. The build has no network fallback.

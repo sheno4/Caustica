@@ -283,6 +283,9 @@ jobs:
           path: build/slang-runtime-input
           merge-multiple: true
 
+      - name: Prepare NRD build dependencies
+        run: bash ./gradlew :packages:nvidia-nrd:prepareNrdNativeDependencies
+
       - name: Build Fabric jar
         env:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
