@@ -1,9 +1,8 @@
 package dev.comfyfluffy.caustica.settings;
 
-
 import java.util.Collection;
-import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -40,6 +39,6 @@ public final class SettingsRegistry {
 
     /** Declaration order, which is the order a settings screen shows features within a category. */
     public synchronized Collection<FeatureSettings> all() {
-        return Collections.unmodifiableCollection(new LinkedHashMap<>(features).values());
+        return List.copyOf(features.values());
     }
 }

@@ -86,6 +86,34 @@ final class CausticaOptionsTest {
     }
 
     @Test
+    void dottedFeatureAndOptionIdsKeepTheirOwnValues() {
+        ResourceId feature = ResourceId.of("test", "feature");
+        ResourceId nestedFeature = ResourceId.of("test", "feature.group");
+        Option<Float> grouped = Option.range("group.value", 0, 1, 0.25f);
+        Option<Float> plain = Option.range("value", 0, 1, 0.75f);
+        SettingsRegistry registry = new SettingsRegistry();
+        registry.feature(feature).option(grouped).register();
+        registry.feature(nestedFeature).option(plain).register();
+        Path path = configDir.resolve("caustica.toml");
+        CausticaOptions options = CausticaOptions.load(path, registry);
+        var before = options.snapshot();
+
+        options.set(feature, grouped, 0.5f);
+
+        assertEquals(0.25f, before.options(feature).get(grouped));
+        assertEquals(0.5f, options.options(feature).get(grouped));
+        assertEquals(0.75f, options.options(nestedFeature).get(plain));
+        assertEquals(0.75f, options.preference(nestedFeature, plain));
+        CausticaOptions reloaded = CausticaOptions.load(path, registry);
+        assertEquals(0.5f, reloaded.options(feature).get(grouped));
+        assertEquals(0.75f, reloaded.options(nestedFeature).get(plain));
+        reloaded.set(nestedFeature, plain, 0.9f);
+        CausticaOptions bothSaved = CausticaOptions.load(path, registry);
+        assertEquals(0.5f, bothSaved.options(feature).get(grouped));
+        assertEquals(0.9f, bothSaved.options(nestedFeature).get(plain));
+    }
+
+    @Test
     void aSystemPropertyOverridesTheFile() throws IOException {
         String property = "caustica.option.test.options.alpha";
         System.setProperty(property, "0.9");

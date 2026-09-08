@@ -164,10 +164,6 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
         return (T) normalized;
     }
 
-    public T parse(String raw) {
-        return normalize(raw);
-    }
-
     /** Empty optional strings remove the key; every present value is directly serializable as TOML. */
     public Optional<Object> encode(Object value) {
         T normalized = normalize(value);

@@ -8,14 +8,16 @@ import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.settings.ResourceId;
-import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import dev.comfyfluffy.caustica.settings.SettingsAccess;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -24,13 +26,18 @@ import java.util.Optional;
 public final class CausticaOptions implements SettingsAccess {
     private static final Logger LOGGER = LoggerFactory.getLogger("Caustica");
     private final CommentedFileConfig file;
-    private final Map<String, Object> preferences = new LinkedHashMap<>();
-    private final Map<String, Object> overrides = new LinkedHashMap<>();
-    private final Map<String, Optional<Object>> pending = new LinkedHashMap<>();
+    private final Map<Key, Object> preferences = new LinkedHashMap<>();
+    private final Map<Key, Object> overrides = new LinkedHashMap<>();
+    private final Map<List<String>, Optional<Object>> pending = new LinkedHashMap<>();
     private volatile State state = new State(Map.of(), Map.of());
 
-    private record State(Map<ResourceId, Map<String, Option<?>>> declared, Map<String, Object> values) {
-        private OptionValues view(ResourceId feature) {
+    private record Key(ResourceId feature, String option) { }
+
+    /** Declarations and effective values are published together so every snapshot is self-contained. */
+    private record State(Map<ResourceId, Map<String, Option<?>>> declared, Map<Key, Object> values)
+            implements OptionLookup {
+        @Override
+        public OptionValues options(ResourceId feature) {
             Map<String, Option<?>> options = Objects.requireNonNull(declared.get(feature),
                     () -> "unknown feature " + feature);
             return new View(feature, options, values);
@@ -74,8 +81,8 @@ public final class CausticaOptions implements SettingsAccess {
         Map<ResourceId, Map<String, Option<?>>> declared = new LinkedHashMap<>(state.declared());
         declared.put(feature.id(), Map.copyOf(options));
         for (Option<?> option : feature.options()) {
-            String key = key(feature.id(), option.id());
-            String path = tomlPath(feature.id(), option);
+            Key key = new Key(feature.id(), option.id());
+            List<String> path = tomlPath(feature.id(), option);
             Object preference = option.defaultValue();
             if (file.contains(path)) preference = decode(option, file.get(path)).orElse(preference);
             preferences.put(key, preference);
@@ -95,20 +102,19 @@ public final class CausticaOptions implements SettingsAccess {
     }
 
     private void publish(Map<ResourceId, Map<String, Option<?>>> declared) {
-        Map<String, Object> effective = new LinkedHashMap<>(preferences);
+        Map<Key, Object> effective = new LinkedHashMap<>(preferences);
         effective.putAll(overrides);
         state = new State(Map.copyOf(declared), Map.copyOf(effective));
     }
 
     @Override
     public OptionValues options(ResourceId featureId) {
-        return state.view(featureId);
+        return state.options(featureId);
     }
 
     @Override
     public OptionLookup snapshot() {
-        State snapshot = state;
-        return snapshot::view;
+        return state;
     }
 
     /** Changes the preference; a process override remains effective until process restart. */
@@ -116,7 +122,7 @@ public final class CausticaOptions implements SettingsAccess {
     public synchronized void apply(ResourceId featureId, Option<?> option, Object rawValue) {
         requireOption(featureId, option);
         Object value = option.normalize(rawValue);
-        preferences.put(key(featureId, option.id()), value);
+        preferences.put(new Key(featureId, option.id()), value);
         pending.put(tomlPath(featureId, option), option.encode(value));
         publish(state.declared());
     }
@@ -140,13 +146,13 @@ public final class CausticaOptions implements SettingsAccess {
 
     public synchronized boolean overridden(ResourceId featureId, Option<?> option) {
         requireOption(featureId, option);
-        return overrides.containsKey(key(featureId, option.id()));
+        return overrides.containsKey(new Key(featureId, option.id()));
     }
 
     @SuppressWarnings("unchecked")
     public synchronized <T> T preference(ResourceId featureId, Option<T> option) {
         requireOption(featureId, option);
-        return (T) preferences.get(key(featureId, option.id()));
+        return (T) preferences.get(new Key(featureId, option.id()));
     }
 
     /** Imports missing extension preferences without replacing canonical values or unsaved edits. */
@@ -154,7 +160,7 @@ public final class CausticaOptions implements SettingsAccess {
         if (!Files.exists(path)) return;
         try (CommentedFileConfig legacy = open(path)) {
             state.declared().forEach((feature, options) -> options.values().forEach(option -> {
-                String destination = tomlPath(feature, option);
+                List<String> destination = tomlPath(feature, option);
                 String source = feature + "." + option.id();
                 if (!file.contains(destination) && !pending.containsKey(destination) && legacy.contains(source)) {
                     decode(option, legacy.get(source)).ifPresent(value -> apply(feature, option, value));
@@ -176,22 +182,23 @@ public final class CausticaOptions implements SettingsAccess {
         if (!found.equals(option)) throw new IllegalArgumentException(feature + " declared a different option '" + option.id() + "'");
     }
 
-    private record View(ResourceId feature, Map<String, Option<?>> declared, Map<String, Object> values)
+    private record View(ResourceId feature, Map<String, Option<?>> declared, Map<Key, Object> values)
             implements OptionValues {
         @Override
         @SuppressWarnings("unchecked")
         public <T> T get(Option<T> option) {
             requireToken(feature, declared, option);
-            return (T) values.get(key(feature, option.id()));
+            return (T) values.get(new Key(feature, option.id()));
         }
     }
 
-    private static String key(ResourceId feature, String option) {
-        return feature + "." + option;
-    }
-
-    private static String tomlPath(ResourceId feature, Option<?> option) {
-        return option.tomlPath() != null ? option.tomlPath() : feature + "." + option.id();
+    private static List<String> tomlPath(ResourceId feature, Option<?> option) {
+        if (option.tomlPath() != null) return List.of(option.tomlPath().split("\\."));
+        // Feature ids are literal table names; dots in option ids create tables within that feature.
+        List<String> path = new ArrayList<>();
+        path.add(feature.toString());
+        path.addAll(List.of(option.id().split("\\.")));
+        return List.copyOf(path);
     }
 
     private static String systemPropertyKey(ResourceId feature, Option<?> option) {

@@ -9,33 +9,20 @@ public record ResourceId(String namespace, String path) implements Comparable<Re
     public ResourceId {
         Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(path, "path");
-        if (!validNamespace(namespace)) {
+        if (!validComponent(namespace, false)) {
             throw new IllegalArgumentException("invalid resource namespace: " + namespace);
         }
-        if (!validPath(path)) {
+        if (!validComponent(path, true)) {
             throw new IllegalArgumentException("invalid resource path: " + path);
         }
     }
 
-    private static boolean validNamespace(String value) {
+    private static boolean validComponent(String value, boolean allowSlash) {
         if (value.isEmpty()) return false;
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
             if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                    || c == '_' || c == '.' || c == '-') {
-                continue;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    private static boolean validPath(String value) {
-        if (value.isEmpty()) return false;
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                    || c == '/' || c == '_' || c == '.' || c == '-') {
+                    || c == '_' || c == '.' || c == '-' || (allowSlash && c == '/')) {
                 continue;
             }
             return false;
@@ -68,17 +55,6 @@ public record ResourceId(String namespace, String path) implements Comparable<Re
         } catch (IllegalArgumentException ignored) {
             return null;
         }
-    }
-
-    @Override
-    public final boolean equals(Object other) {
-        return this == other || other instanceof ResourceId id
-                && path.equals(id.path) && namespace.equals(id.namespace);
-    }
-
-    @Override
-    public final int hashCode() {
-        return 31 * namespace.hashCode() + path.hashCode();
     }
 
     @Override
