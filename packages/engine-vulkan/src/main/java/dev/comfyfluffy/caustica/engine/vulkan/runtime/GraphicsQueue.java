@@ -68,6 +68,8 @@ public final class GraphicsQueue {
     }
 
     private void pollRetirement() {
+        // Stop normal retirement after failure; cleanup drains separately after device idle.
+        if (executorFailure != null) return;
         try { processRetirement(queryTimeline(graphicsTimeline)); }
         catch (Throwable failure) { latchFailure(failure); }
     }
