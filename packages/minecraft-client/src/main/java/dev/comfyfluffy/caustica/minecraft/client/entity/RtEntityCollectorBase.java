@@ -303,36 +303,24 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
                 MinecraftEntityMesh.Program.MATERIAL);
     }
 
-    /** Whether a render type is alpha-blended (translucent) — its pipeline's color target has a blend
-     *  function. Cutout/solid have none. Drives stochastic entity transparency in world.rahit. */
+    /** Blended submissions use stochastic surface coverage. */
     private static boolean isTranslucent(RenderType renderType) {
         if (renderType == null) {
             return false;
         }
-        // RenderSetup is final, so the accessor cast goes through Object (the interface is mixed in at
-        // runtime), mirroring RtEntityTextures#textureLocation.
-        Object setup = ((RenderTypeAccessor) renderType).caustica$state();
-        RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
-        ColorTargetState cts = pipeline.getColorTargetState();
+        ColorTargetState cts = pipeline(renderType).getColorTargetState();
         return cts != null && cts.blendFunction().isPresent();
     }
 
     /**
-     * True when a render type's pipeline carries the vanilla {@code ALPHA_CUTOUT} shader define — a
-     * genuinely masked (alpha-tested) submission, as opposed to blended (stochastic) or fully opaque.
-     * Matching the define is more robust than matching pipeline names and also works for mod-provided
-     * RenderPipelines. Together with blend state, it selects the source coverage mode.
-     *
-     * <p>A submission with no render type to inspect is treated as masked: coverage now has to be asked
-     * for, and an unknown submission losing its alpha test shows up as solid quads, while a redundant
-     * alpha test only costs an any-hit.
+     * The pipeline's ALPHA_CUTOUT define selects masked coverage, including for mod-provided pipelines.
+     * Unknown render types retain alpha testing so transparent texels do not become solid geometry.
      */
     private static boolean hasCutoutDefine(RenderType renderType) {
         if (renderType == null) {
             return true;
         }
-        Object setup = ((RenderTypeAccessor) renderType).caustica$state();
-        RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
+        RenderPipeline pipeline = pipeline(renderType);
         return pipeline.getShaderDefines().values().containsKey("ALPHA_CUTOUT")
                 || pipeline.getShaderDefines().flags().contains("ALPHA_CUTOUT");
     }
@@ -342,17 +330,20 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
         if (renderType == null) {
             return null;
         }
-        Object setup = ((RenderTypeAccessor) renderType).caustica$state();
-        return ((RenderSetupAccessor) setup).caustica$pipeline().getPrimitiveTopology();
+        return pipeline(renderType).getPrimitiveTopology();
     }
 
     private static boolean isBannerPattern(RenderType renderType) {
         if (renderType == null) {
             return false;
         }
+        return "minecraft:pipeline/banner_pattern".equals(pipeline(renderType).getLocation().toString());
+    }
+
+    private static RenderPipeline pipeline(RenderType renderType) {
+        // RenderSetup is final; Object permits the accessor cast supplied by the runtime mixin.
         Object setup = ((RenderTypeAccessor) renderType).caustica$state();
-        RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
-        return "minecraft:pipeline/banner_pattern".equals(pipeline.getLocation().toString());
+        return ((RenderSetupAccessor) setup).caustica$pipeline();
     }
 
     /** Resolve a quad's tint colour from its tint index + the submission's tint layers (white if untinted). */
@@ -617,8 +608,7 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
         }
     }
 
-    // FallingBlockEntity renders its block model here. Capture every part's quads (direction-independent
-    // + all six cullface lists), block-atlas textured (slot 0).
+    // Falling blocks contribute every part's unculled and directional quads with their source materials.
     public void submitBlockModel(PoseStack poseStack, RenderType renderType, List<BlockStateModelPart> parts,
                                  int[] tintLayers, int lightCoords, int overlayCoords, int outlineColor) {
         if (capture == null) {
@@ -644,8 +634,7 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
                                    float width, boolean afterTerrain) {
     }
 
-    // Held weapons/tools (via the in-hand layer) + dropped items (ItemEntity) render here as baked
-    // quads on the block atlas. Capture them block-atlas textured (slot 0).
+    // Item submissions retain each baked quad's atlas sprite, material layer and tint.
     public void submitItem(PoseStack poseStack, ItemDisplayContext displayContext, int lightCoords, int overlayCoords,
                            int outlineColor, int[] tintLayers, List<BakedQuad> quads, ItemStackRenderState.FoilType foilType) {
         if (capture == null) {
@@ -670,8 +659,7 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
         boolean stochasticAlpha = isTranslucent(renderType);
-        // Lines are untextured: bind the white texture so base color is exactly the vertex colour (index 0 is
-        // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
+        // A white texture preserves the vertex color of untextured line ribbons.
         if (lines) {
             capture.currentMaterial = new MinecraftEntityMesh.Material(
                     MinecraftMaterialIds.VERTEX_COLOR, textures.whiteTexture(),
