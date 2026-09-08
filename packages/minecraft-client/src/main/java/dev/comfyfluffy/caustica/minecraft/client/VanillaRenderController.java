@@ -1,12 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
-import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 
 public final class VanillaRenderController {
 	private final RtTerrain terrain;
+	private final VanillaTerrainSuspension vanillaTerrain = new VanillaTerrainSuspension();
 	private boolean frameStarted;
 	private boolean baseReady;
 	private boolean projectionCaptured;
@@ -17,7 +16,6 @@ public final class VanillaRenderController {
 	private boolean loggedRtPlayerSectionReady;
 	private boolean rtActive = true;
 	private Boolean lastLoggedRtActive;
-	private String inactiveReason;
 	private String lastLoggedInactiveReason;
 
 	public VanillaRenderController(RtTerrain terrain) {
@@ -29,7 +27,6 @@ public final class VanillaRenderController {
 		this.projectionCaptured = false;
 		this.worldSkipped = false;
 		this.baseReady = false;
-		this.inactiveReason = null;
 		this.rtActive = CausticaClientComposition.current().runtime().frameActive();
 
 		if (!Boolean.valueOf(this.rtActive).equals(this.lastLoggedRtActive)) {
@@ -41,15 +38,15 @@ public final class VanillaRenderController {
 			return;
 		}
 
-		this.inactiveReason = findInactiveReason(mainTarget);
-		this.baseReady = this.inactiveReason == null;
+		String inactiveReason = findInactiveReason(mainTarget);
+		this.baseReady = inactiveReason == null;
 		if (this.baseReady) {
 			if (!this.loggedActive) {
 				this.loggedActive = true;
 				CausticaMod.LOGGER.info("Vanilla world rendering cancellation active; using existing RT composite seam");
 			}
 		} else {
-			logInactive(this.inactiveReason);
+			logInactive(inactiveReason);
 		}
 	}
 
@@ -101,11 +98,9 @@ public final class VanillaRenderController {
 	/**
 	 * Whether RT replaced vanilla's world in the most recently rendered frame.
 	 *
-	 * <p>{@code LevelExtractor.extract} runs before {@link #beginFrame} clears the latch, so callers there
-	 * read the previous frame's outcome. That lag is deliberate: extraction work is dropped only once a
-	 * frame has actually proven the vanilla world was cancelled, so a fallback to vanilla (failure latch,
-	 * resource epoch boundary) costs one frame of missing entities rather than losing them for as long as
-	 * the fallback lasts.</p>
+	 * <p>Extraction runs before {@link #beginFrame} clears this latch and therefore reads the previous
+	 * rendered outcome. Current runtime activity and the failure latch also gate ownership, so a known
+	 * fallback resumes extraction and rebuilds vanilla terrain before rendering.</p>
 	 */
 	public boolean replacedVanillaWorldLastFrame() {
 		return this.worldSkipped;
@@ -125,8 +120,15 @@ public final class VanillaRenderController {
 	 * mixins, including the loader-specific ones whose injection points differ.
 	 */
 	public boolean rtOwnsWorldRendering() {
-		return CausticaClientComposition.current().runtime().active() && replacedVanillaWorldLastFrame();
+		var runtime = CausticaClientComposition.current().runtime();
+		return runtime.active() && !runtime.requiresSourceWorldFallback()
+				&& !failureLatched && replacedVanillaWorldLastFrame();
 	}
+
+	public void suspendVanillaTerrain(Runnable settleGraph) { vanillaTerrain.suspend(settleGraph); }
+	public void resumeVanillaTerrain(Runnable rebuild) { vanillaTerrain.resume(rtOwnsWorldRendering(), rebuild); }
+	public boolean vanillaTerrainSuspended() { return vanillaTerrain.suspended(); }
+	public void resetVanillaTerrain() { vanillaTerrain.reset(); }
 
 	public void markRtFrameResult(boolean success) {
 		if (this.worldSkipped && !success) {
@@ -144,7 +146,6 @@ public final class VanillaRenderController {
 	public void resetFailureLatch() {
 		this.failureLatched = false;
 		this.baseReady = false;
-		this.inactiveReason = null;
 		this.lastLoggedInactiveReason = null;
 	}
 
@@ -177,7 +178,6 @@ public final class VanillaRenderController {
 		}
 		this.failureLatched = true;
 		this.baseReady = false;
-		this.inactiveReason = reason;
 	}
 
 	private void logInactive(String reason) {

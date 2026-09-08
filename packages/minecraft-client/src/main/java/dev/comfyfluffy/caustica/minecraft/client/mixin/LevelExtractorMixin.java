@@ -5,81 +5,115 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientBootstrap;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
+import it.unimi.dsi.fastutil.longs.LongCollection;
+import it.unimi.dsi.fastutil.longs.LongSets;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.SectionUpdateTracker;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.ParticleEngine;
 import net.minecraft.client.renderer.WeatherEffectRenderer;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.extract.LevelExtractor;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.client.renderer.state.level.ParticlesRenderState;
 import net.minecraft.client.renderer.state.level.WeatherRenderState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Forwards vanilla's block-dirty signal to the RT renderer so edited sections (and their boundary
- * neighbours) re-extract. In 26.2 the dirty methods live on {@link LevelExtractor}. We hook the
- * <em>block-change</em> entry points and let {@link RtTerrain#markBlocksDirty} expand to sections:
- *
- * <ul>
- *   <li>{@code blockChanged(BlockPos, int)} — packet/prediction block changes.</li>
- *   <li>{@code setBlocksDirty(int×6)} — multi-block changes (explosions, etc.) and the
- *       {@code setBlockDirty(pos, old, new)} render-shape path.</li>
- * </ul>
- *
- * <p>We deliberately do <em>not</em> hook {@code setSectionDirty}: lighting-only invalidations
- * ({@code ClientChunkCache.onLightUpdate}) route straight through it, and we ray-trace lighting, so a
- * light change never alters our geometry. Hooking the block entry points keeps us off that churn.
+ * Forwards block edits to RT and suspends vanilla extraction while RT owns the world.
+ * Block-change entry points let RtTerrain include neighboring section boundaries. Lighting-only
+ * section invalidations do not change ray-traced geometry and therefore need no extraction.
  */
 @Mixin(LevelExtractor.class)
 public class LevelExtractorMixin {
+    @Unique private boolean caustica$rebuildingVanillaTerrain;
+
+    @Inject(method = "setLevel", at = @At("HEAD"))
+    private void caustica$resetTerrainSuspension(ClientLevel level, CallbackInfo ci) {
+        CausticaClientComposition.current().renderController().resetVanillaTerrain();
+    }
+
+    @Inject(method = "extract", at = @At("HEAD"))
+    private void caustica$resumeVanillaTerrain(DeltaTracker deltaTracker, Camera camera,
+                                              float deltaPartialTick, CallbackInfo ci) {
+        CausticaClientComposition.current().renderController().resumeVanillaTerrain(() -> {
+            try (var ignored = CausticaClientComposition.current().runtime().profileStage("host.worldMaintenance")) {
+                caustica$rebuildingVanillaTerrain = true;
+                try { ((LevelExtractor) (Object) this).allChanged(); }
+                finally { caustica$rebuildingVanillaTerrain = false; }
+            }
+        });
+    }
+
     @Inject(method = "allChanged", at = @At("HEAD"))
     private void caustica$invalidateRenderState(CallbackInfo ci) {
-        CausticaClientBootstrap.invalidateRenderState();
-        CausticaClientComposition.current().terrain().requestFullClear();
+        if (caustica$rebuildingVanillaTerrain) return;
+        try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
+            CausticaClientBootstrap.invalidateRenderState();
+            CausticaClientComposition.current().terrain().requestFullClear();
+        }
     }
 
     @Inject(method = "blockChanged(Lnet/minecraft/core/BlockPos;I)V", at = @At("HEAD"))
     private void caustica$rtBlockChanged(BlockPos pos, int updateFlags, CallbackInfo ci) {
-        if (CausticaClientComposition.current().runtime().hasSession()) {
-            CausticaClientComposition.current().terrain().markBlocksDirty(
-                    pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+        try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
+            if (CausticaClientComposition.current().runtime().hasSession()) {
+                CausticaClientComposition.current().terrain().markBlocksDirty(
+                        pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+            }
         }
     }
 
     @Inject(method = "setBlocksDirty(IIIIII)V", at = @At("HEAD"))
     private void caustica$rtBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ, CallbackInfo ci) {
-        if (CausticaClientComposition.current().runtime().hasSession()) {
-            CausticaClientComposition.current().terrain().markBlocksDirty(minX, minY, minZ, maxX, maxY, maxZ);
+        try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
+            if (CausticaClientComposition.current().runtime().hasSession()) {
+                CausticaClientComposition.current().terrain().markBlocksDirty(minX, minY, minZ, maxX, maxY, maxZ);
+            }
         }
     }
 
-    /**
-     * Hide vanilla's dirty sections from {@code extract} while RT owns world rendering.
-     *
-     * <p>Reporting a section dirty here is destructive: {@code extract} immediately calls
-     * {@code setNotDirty()} and hands the rebuild request to {@code LevelRenderer.compileSections}, which
-     * {@link LevelRendererMixin} cancels. Left alone, that loses the dirty bit for every section touched
-     * while RT is on, so those sections would still be showing pre-RT geometry when vanilla comes back.
-     * Reporting nothing keeps {@link SectionUpdateTracker} accumulating dirtiness instead, so switching RT
-     * off recompiles exactly the sections that changed — and vanilla does zero meshing work in the
-     * meantime. The tracker's own camera repositioning still runs, and view-area rotation resets the
-     * sections it recycles, so vanilla's terrain memory drains as the player moves.
-     */
+    /** Suspended vanilla terrain rebuilds at the current camera when world replacement ends. */
+    @WrapOperation(method = "extract", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/SectionUpdateTracker;repositionCamera(Lnet/minecraft/core/SectionPos;)V"))
+    private void caustica$skipSuspendedTrackerRotation(SectionUpdateTracker tracker, SectionPos position,
+                                                      Operation<Void> original) {
+        if (!CausticaClientComposition.current().renderController().vanillaTerrainSuspended()) {
+            original.call(tracker, position);
+        }
+    }
+
+    @Inject(method = "applyFrustum", at = @At("HEAD"), cancellable = true)
+    private void caustica$skipSuspendedFrustum(Frustum frustum, CallbackInfo ci) {
+        if (CausticaClientComposition.current().renderController().vanillaTerrainSuspended()) ci.cancel();
+    }
+
+    @WrapOperation(method = "extract", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/renderer/LevelRenderer;expectedChunks()Lit/unimi/dsi/fastutil/longs/LongCollection;"))
+    private LongCollection caustica$skipSuspendedExpectedChunks(LevelRenderer renderer,
+                                                               Operation<LongCollection> original) {
+        return CausticaClientComposition.current().renderController().vanillaTerrainSuspended()
+                ? LongSets.EMPTY_SET : original.call(renderer);
+    }
+
+    /** No vanilla terrain extraction is submitted while RT owns rendering. */
     @WrapOperation(method = "extract",
             at = @At(value = "INVOKE",
                     target = "Lnet/minecraft/client/SectionUpdateTracker;getDirtyState(J)"
                             + "Lnet/minecraft/client/SectionUpdateTracker$SectionDirtyState;"))
     private SectionUpdateTracker.SectionDirtyState caustica$hideDirtySectionsFromVanilla(
             SectionUpdateTracker tracker, long sectionNode, Operation<SectionUpdateTracker.SectionDirtyState> original) {
-        return CausticaClientComposition.current().runtime().active() ? null : original.call(tracker, sectionNode);
+        return CausticaClientComposition.current().renderController().rtOwnsWorldRendering()
+                ? null : original.call(tracker, sectionNode);
     }
 
     /**

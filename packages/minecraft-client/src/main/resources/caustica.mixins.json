@@ -23,6 +23,7 @@
 		"RenderSetupAccessor",
 		"RenderTypeAccessor",
 		"ScreenshotMixin",
+		"SectionOcclusionGraphAccessor",
 		"TextureAtlasAccessor",
 		"ParticleGroupAccessor",
 		"SpriteContentsAccessor",
