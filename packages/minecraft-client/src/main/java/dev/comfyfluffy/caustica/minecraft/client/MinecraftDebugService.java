@@ -223,7 +223,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                 else future.complete(Map.of("reloaded", true));
             });
             case "screenshot", "image.capture" -> {
-                requireWorld();
+                if (op.equals("image.capture")) requireWorld();
                 captures.add(() -> {
                     if (future.isDone()) return;
                     try {
@@ -355,7 +355,6 @@ public final class MinecraftDebugService implements AutoCloseable {
     }
 
     private void screenshot(CompletableFuture<Object> future) throws IOException {
-        requireWorld();
         String name = "caustica-debug-" + UUID.randomUUID() + ".png";
         Path output = client.gameDirectory.toPath().resolve("screenshots").resolve(name).toAbsolutePath();
         long frameId = CausticaClientComposition.current().runtime().telemetry().frameSerial();
