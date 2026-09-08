@@ -384,3 +384,11 @@ Sixteen production files changed since b01abc31. Their complete diffs were revie
 The native evidence supersedes the older inventory's Linux-build gap: direct Linux CMake/CTest and Windows-host packaging of both real platform libraries have passed, while Linux-host Gradle, hosted CI and Linux GPU execution remain unverified. The subsequent sky sweep covers discrete directions; particle isolation identifies the square artifacts as particles, without establishing their lighting cause. Continuous sky/reflection inspection and the other remaining interactive checks are still open. The independent intermittent RR device-loss issue remains unresolved.
 
 No build or client was launched for this documentation and inventory reconciliation. The most recent production check remains the successful 187-task run recorded for 15027cbc; no new test pass is claimed.
+
+## Python tooling CI coverage (2026-09-09)
+
+The authored-artifact review found that neither the native/package CI workflow nor root Gradle check ran the existing Python regressions. Added a separate Python tools workflow with Windows/Linux runners and path triggers for debug tools, presentation tools, LUT binaries and the Python environment files. Both commands use `uv run --locked` and the repository Python selection. The setup action is pinned to the commit documented by its maintainer: https://github.com/astral-sh/setup-uv.
+
+Executed the exact workflow commands locally on Windows: debug tools 6/6 passed, display LUT tools/resources 3/3 passed. These exercise debug job polling, lifecycle restoration on report failure, disconnect evidence retention, recording statistics and time units, cube import constraints, and the actual LMT binary payload. Parsed the YAML and inspected the event paths and two-OS matrix. Hosted Windows/Linux execution remains unverified; this is not a new Minecraft or GPU test pass.
+
+Also read the current native/package CI workflow, Gradle properties, Python project metadata, shader editor configurations, NRD submodule/patch metadata, both loaders' mod manifests and the common mixin manifest. No additional defect was established in those artifacts. Other static assets and documentation have not been recertified by this bounded review.

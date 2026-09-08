@@ -1,0 +1,37 @@
+name: Python tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/python-tools.yml"
+      - ".python-version"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "tools/debug/**"
+      - "packages/renderer-presentation/tools/**"
+      - "packages/renderer-presentation/src/main/resources/caustica/color/luts/**"
+  pull_request:
+    paths:
+      - ".github/workflows/python-tools.yml"
+      - ".python-version"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "tools/debug/**"
+      - "packages/renderer-presentation/tools/**"
+      - "packages/renderer-presentation/src/main/resources/caustica/color/luts/**"
+
+jobs:
+  test:
+    name: Test Python tools (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Test debug tools
+        run: uv run --locked python -m unittest discover -s tools/debug -p "test_*.py" -v
+      - name: Test display LUT tools and resources
+        run: uv run --locked python -m unittest discover -s packages/renderer-presentation/tools -p "test_*.py" -v
