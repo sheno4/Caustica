@@ -30,6 +30,9 @@ public final class MinecraftTelemetry {
         void published(Object stamp);
 
         void afterPublicationVisible(LongConsumer action);
+
+        /** Coalesces one identity's accepted publications at the prepared frame's publication cutoff. */
+        void afterPublicationVisible(Object identity, LongConsumer action);
     }
 
     private MinecraftTelemetry() {
@@ -68,6 +71,9 @@ public final class MinecraftTelemetry {
         @Override public void afterPublicationVisible(LongConsumer action) {
             telemetry.afterPublicationVisible(action);
         }
+        @Override public void afterPublicationVisible(Object identity, LongConsumer action) {
+            telemetry.afterPublicationVisible(identity, action);
+        }
     }
 
     private enum Disabled implements Instrumentation {
@@ -82,5 +88,6 @@ public final class MinecraftTelemetry {
         @Override public Object extraction(GeometrySource source, int geometryCount) { return null; }
         @Override public void published(Object stamp) { }
         @Override public void afterPublicationVisible(LongConsumer action) { }
+        @Override public void afterPublicationVisible(Object identity, LongConsumer action) { }
     }
 }

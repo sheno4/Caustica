@@ -12,7 +12,6 @@ import org.joml.Vector3f;
 import org.joml.Vector3fc;
 
 import java.util.ArrayList;
-import java.util.List;
 
 /**
  * A {@link VertexConsumer} that records the posed entity geometry vanilla emits — exactly the same bulk
@@ -24,8 +23,7 @@ import java.util.List;
  */
 public final class RtEntityCapture implements VertexConsumer {
     private static final int DEFAULT_VERTEX_CAPACITY = 1024;
-    // Same magnitude as RtTerrain.QuadCapture.OFFSET (2e-4 blocks) — proven large enough to break a BVH
-    // depth tie without a visible gap at terrain/entity scale.
+    // Separate coincident decal layers without a visible gap at terrain/entity scale, in blocks.
     private static final float ORDER_OFFSET = 2.0e-4f;
 
     final FloatArrayList verts = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 3);   // 3 floats/vertex (capture-space position)
@@ -49,7 +47,7 @@ public final class RtEntityCapture implements VertexConsumer {
     private int n; // quad vertex accumulator (0..3)
     private final float[] qx = new float[4], qy = new float[4], qz = new float[4];
     private final float[] qu = new float[4], qv = new float[4];
-    private final float[] qnx = new float[4], qny = new float[4], qnz = new float[4];
+    private float qnx, qny, qnz; // flat face normal from the first vertex
     private final int[] qcol = new int[4];
     private final Vector3f scratch = new Vector3f(); // baked-quad position transform scratch
 
@@ -67,22 +65,14 @@ public final class RtEntityCapture implements VertexConsumer {
         uvRemap = false;
     }
 
-    private void ensureVertexCapacity(int vertexCount) {
-        if (vertexCount <= 0) {
-            return;
-        }
+    /** Reserve room for an upcoming direct-model submission without changing any logical sizes. */
+    void ensureAdditionalVertexCapacity(int additionalVertices) {
+        int vertexCount = verts.size() / 3 + additionalVertices;
         verts.ensureCapacity(vertexCount * 3);
         idx.ensureCapacity(indexCapacity(vertexCount));
         uvList.ensureCapacity(vertexCount * 2);
         colorList.ensureCapacity(vertexCount * 4);
         surfaces.ensureCapacity(indexCapacity(vertexCount) / 3);
-    }
-
-    /** Reserve room for an upcoming direct-model submission without changing any logical sizes. */
-    void ensureAdditionalVertexCapacity(int additionalVertices) {
-        if (additionalVertices > 0) {
-            ensureVertexCapacity(verts.size() / 3 + additionalVertices);
-        }
     }
 
     private static int indexCapacity(int vertexCount) {
@@ -113,10 +103,8 @@ public final class RtEntityCapture implements VertexConsumer {
     }
 
     MinecraftEntityMesh entityMesh(long indexRevision) {
-        return new MinecraftEntityMesh(java.util.Arrays.copyOf(verts.elements(), verts.size()),
-                java.util.Arrays.copyOf(idx.elements(), idx.size()),
-                java.util.Arrays.copyOf(uvList.elements(), uvList.size()),
-                java.util.Arrays.copyOf(colorList.elements(), colorList.size()), surfaces, indexRevision);
+        return MinecraftEntityMesh.copyOfRanges(verts.elements(), idx.elements(), uvList.elements(),
+                colorList.elements(), verts.size() / 3, idx.size(), surfaces, indexRevision);
     }
 
     @Override
@@ -128,7 +116,9 @@ public final class RtEntityCapture implements VertexConsumer {
         }
         qx[n] = x; qy[n] = y; qz[n] = z;
         qu[n] = u; qv[n] = v;
-        qnx[n] = nx; qny[n] = ny; qnz[n] = nz;
+        if (n == 0) {
+            qnx = nx; qny = ny; qnz = nz;
+        }
         qcol[n] = color;
         if (++n == 4) {
             emitQuad();
@@ -150,7 +140,9 @@ public final class RtEntityCapture implements VertexConsumer {
             qx[n] = scratch.x; qy[n] = scratch.y; qz[n] = scratch.z;
             qu[n] = Float.intBitsToFloat((int) (uv >>> 32));
             qv[n] = Float.intBitsToFloat((int) uv);
-            qnx[n] = 0f; qny[n] = 0f; qnz[n] = 0f; // no authored normal → emitQuad falls back to geometric
+            if (n == 0) {
+                qnx = 0f; qny = 0f; qnz = 0f; // no authored normal; derive it from the edges
+            }
             qcol[n] = color;
             if (++n == 4) {
                 emitQuad();
@@ -160,7 +152,7 @@ public final class RtEntityCapture implements VertexConsumer {
     }
 
     private void emitQuad() {
-        appendQuad(qx, qy, qz, null, qu, qv, qnx[0], qny[0], qnz[0], qcol, 0, false, 0f);
+        appendQuad(qx, qy, qz, null, qu, qv, qnx, qny, qnz, qcol, 0, false, 0f);
     }
 
     /**
@@ -218,11 +210,8 @@ public final class RtEntityCapture implements VertexConsumer {
             ny /= len;
             nz /= len;
         }
-        // Stacked decal layers (banner/shield patterns: base cloth + per-pattern cutout layers, all the
-        // SAME coplanar mesh submitted repeatedly via SubmitNodeCollector#order) tie exactly in the BVH —
-        // push each later layer outward along the face normal by rank, same fix as terrain's coincident
-        // grass-overlay resolution (RtTerrain.QuadCapture), so any-hit cutout lets the ray fall through a
-        // discarded pattern texel to the layer behind instead of a random BVH pick.
+        // Offset each coplanar banner/shield layer along its face normal by submission rank.
+        // Cutout rays then reach the layer behind discarded texels without an ambiguous BVH tie.
         boolean offset = currentOrder != 0 && len > 1.0e-6f;
         float off = offset ? ORDER_OFFSET * currentOrder : 0f;
 

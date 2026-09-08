@@ -46,7 +46,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -60,8 +59,7 @@ import java.util.UUID;
  * {@link MinecraftEntityGeometry} owns their retained mesh and instance identities while the uploader
  * owns each current uploaded generation until its replacement becomes visible. This producer retains Minecraft
  * capture state, mesh change detection, and stale-entry eviction state.
- * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
- * ignores) are skipped.
+ * Render submissions without supported capture geometry are skipped.
  *
  * <p>Entity, block-entity, and particle capture each have a frame-local configured cap. Stable index
  * revisions allow the retained backend to derive compatible acceleration updates.
@@ -72,7 +70,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private static final long PARTICLE_GEOMETRY = 3L;
     private static final long PARTICLE_KEY = 0L;
 
-    // TLAS visibility-mask bits, ANDed against the per-ray cull mask in world.rgen. Bit 0 = secondary rays
+    // TLAS visibility-mask bits, ANDed against the per-ray cull mask. Bit 0 = secondary rays
     // (shadows / GI / reflections, CULL_SECONDARY); bit 1 = the primary camera ray (CULL_PRIMARY).
     private static final int MASK_SECONDARY = 0x01;
     private static final int MASK_PRIMARY = 0x02;
@@ -107,10 +105,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
 
     // Stale-cache eviction horizon.
     private static final int KEEP_FRAMES = 4;
-
-    // Identity 3x4 row-major. Particles are captured in rebased space while ordinary entity geometry is
-    // captured around its anchor and placed by a translation instance transform.
-    private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
 
     // Reusable capture pipeline (single-threaded on the render thread).
     private final RtEntityTextures textures;
@@ -190,13 +184,9 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         collector = new RtEntityCollector(textures, instrumentation);
     }
 
-    public synchronized void bindGeometry(MinecraftEntityGeometry geometry) {
+    @Override public synchronized Lease install(MinecraftEntityGeometry geometry) {
         if (this.geometry != null) throw new IllegalStateException("entity geometry is already bound");
         this.geometry = java.util.Objects.requireNonNull(geometry, "geometry");
-    }
-
-    @Override public synchronized Lease install(MinecraftEntityGeometry geometry) {
-        bindGeometry(geometry);
         return () -> uninstall(geometry);
     }
 
@@ -204,10 +194,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         if (geometry != installed) return;
         geometry = null;
         shutdown();
-    }
-
-    public synchronized void unbindGeometry(MinecraftEntityGeometry geometry) {
-        if (this.geometry == geometry) this.geometry = null;
     }
 
     /**
@@ -246,28 +232,18 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         long meshVisibilityCount;
         long lastMeshVisibilityFrame = -1L;
         long visibleMeshSourceFrame = -1L;
-        long pendingVisibleMeshVersion;
-        long pendingVisibleMeshSourceFrame;
-        long meshVisibilityToken;
-        long pendingMeshVisibilityToken;
-        boolean meshVisibilityQueued;
+        volatile long meshVisibilityToken;
         EntityState(UUID identity) {
             this.identity = identity;
         }
 
         boolean requiresPut(long capturedMeshHash) {
-            return meshHash != capturedMeshHash;
+            return !initialSubmitted || meshHash != capturedMeshHash;
         }
 
         void meshSubmitted(long capturedMeshHash) {
             meshHash = capturedMeshHash;
             initialSubmitted = true;
-        }
-
-        boolean beginInitialSubmission(long capturedMeshHash) {
-            if (initialSubmitted) return false;
-            meshSubmitted(capturedMeshHash);
-            return true;
         }
 
         long profileMeshSubmission() {
@@ -277,25 +253,16 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         void meshPublicationAccepted(long version, long sourceFrame, long token,
                                      MinecraftTelemetry.Instrumentation telemetry) {
             if (token != meshVisibilityToken) return;
-            pendingVisibleMeshVersion = version;
-            pendingVisibleMeshSourceFrame = sourceFrame;
-            if (!meshVisibilityQueued) {
-                meshVisibilityQueued = true;
-                pendingMeshVisibilityToken = token;
-                telemetry.afterPublicationVisible(frame -> meshFrameVisible(frame, token, telemetry));
-            }
+            telemetry.afterPublicationVisible(this,
+                    frame -> meshFrameVisible(frame, token, version, sourceFrame));
         }
 
         void invalidateMeshVisibility() {
             meshVisibilityToken++;
-            meshVisibilityQueued = false;
         }
 
-        void meshFrameVisible(long frame, long token, MinecraftTelemetry.Instrumentation telemetry) {
-            if (!meshVisibilityQueued || token != meshVisibilityToken || token != pendingMeshVisibilityToken) return;
-            meshVisibilityQueued = false;
-            long version = pendingVisibleMeshVersion;
-            long sourceFrame = pendingVisibleMeshSourceFrame;
+        void meshFrameVisible(long frame, long token, long version, long sourceFrame) {
+            if (token != meshVisibilityToken) return;
             EntityMeshFrameEvent event = new EntityMeshFrameEvent();
             if (event.isEnabled()) {
                 event.entityId = identity.toString();
@@ -373,8 +340,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         void transform(MinecraftEntityGeometry.Key key, GeometryTransform transform, int mask) {
             pendingDrops.remove(key);
             Object extraction = telemetry.extraction(MinecraftTelemetry.GeometrySource.ENTITY_PLACEMENT, 1);
-            geometry.transform(key, transform, mask);
-            telemetry.published(extraction);
+            geometry.transform(key, transform, mask, () -> telemetry.published(extraction));
         }
 
         void drop(MinecraftEntityGeometry.Key key, Runnable acknowledgment) {
@@ -408,7 +374,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
                 clearResidents(build);
                 finishFrame(build);
-                finishUpdateGroup(updates);
+                updates.submit();
             }
             return;
         }
@@ -417,7 +383,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         if (level == null) {
             try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
                 finishFrame(build);
-                finishUpdateGroup(updates);
+                updates.submit();
             }
             return;
         }
@@ -446,15 +412,11 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             evictStaleAccels(build);
             evictStaleBes(build);
             finishFrame(build);
-            finishUpdateGroup(updates);
+            updates.submit();
         } catch (RuntimeException | Error t) {
             shutdown();
             throw t;
         }
-    }
-
-    static void finishUpdateGroup(MinecraftEntityGeometry.UpdateGroup updates) {
-        updates.submit();
     }
 
     private void finishFrame(FrameBuild build) {
@@ -495,9 +457,9 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             }
             boolean firstPersonSelf = entity == cameraEntity && firstPerson;
             int mask = firstPersonSelf ? MASK_SECONDARY : MASK_ALL;
-            float ix;
-            float iy;
-            float iz;
+            double ix;
+            double iy;
+            double iz;
             int id = entity.getId();
             capture.reset();
             try {
@@ -510,9 +472,9 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                 }
                 // Derive placement from the extracted state so the submitted pose and TLAS anchor use the
                 // same interpolation result.
-                ix = (float) state.x;
-                iy = (float) state.y;
-                iz = (float) state.z;
+                ix = state.x;
+                iy = state.y;
+                iz = state.z;
                 // extractEntity already ran EntityRenderer.extractNameTags (shouldShowName, crosshair-look,
                 // distance cutoff, the attachment point) as a normal part of building the render state — no
                 // need to reimplement any of that here, just read the result. Name tags billboard to face
@@ -524,7 +486,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                 collector.begin(capture, true);
                 resetPoseStack(entityPoseStack);
                 // Capture around the entity anchor. Per-frame placement moves into the TLAS instance,
-                // so ordinary world translation no longer changes the mesh or its float precision.
+                // so world translation preserves the captured mesh and its local float precision.
                 long submitStart = build.telemetry.startStage();
                 try {
                     dispatcher.submit(state, cameraState, 0.0, 0.0, 0.0, entityPoseStack, collector);
@@ -532,9 +494,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                     build.telemetry.endStage("entity.capture.submit", submitStart);
                 }
             } catch (Throwable t) {
-                // Fail loud instead of skip-and-limp: a capture throw here is almost always our bug, and
-                // swallowing it leaves the entity invisible every frame plus a per-frame MC CrashReport.
-                // Propagate to composite(), which logs the full trace, disables RT, and reverts to vanilla.
                 throw new RuntimeException("RT entity capture failed", t);
             } finally {
                 collector.begin(null, false);
@@ -551,11 +510,11 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
                 int glowColor = collector.outlineColor();
                 if (glowColor != 0) {
                     glowBatches.add(new GlowEntity(copyTranslatedVertices(capture.verts,
-                            ix - rbx, iy - rby, iz - rbz), capture.idx.toIntArray(), glowColor));
+                            (float) (ix - rbx), (float) (iy - rby), (float) (iz - rbz)), capture.idx.toIntArray(), glowColor));
                 }
             }
             appendCapture(build, id, entity.getUUID(), mask,
-                    translationTransform(ix - rbx, iy - rby, iz - rbz));
+                    GeometryTransform.translation(ix, iy, iz));
             build.telemetry.count("entitiesCaptured", 1);
             capturedThisFrame++;
         }
@@ -585,12 +544,9 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
      * together in {@code EntityRenderer.extractNameTags}). Positions are world-space (unrebased) until the
      * very end, matching {@code level.clip}'s coordinate space; the rebase subtraction happens last.
      *
-     * <p>Vanilla draws a translucent "ghost" copy of the tag through walls (see {@code
-     * SubmitNodeCollection.submitNameTag}'s {@code seeThroughNameTags} phase) instead of hiding it — v1
-     * here just hides occluded tags, a simplification to avoid a second draw/blend mode; revisit if that
-     * turns out to look wrong in practice.
+     * Occluded tags are omitted; this pass draws only the visible label.
      */
-    private void captureNameTag(ClientLevel level, EntityRenderState state, float ix, float iy, float iz,
+    private void captureNameTag(ClientLevel level, EntityRenderState state, double ix, double iy, double iz,
                                  int rbx, int rby, int rbz) {
         Vec3 attach = state.nameTagAttachment;
         if (attach == null) {
@@ -608,7 +564,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             return; // a block is between the camera and the tag
         }
         nameTagBatches.add(new NameTagEntity(state.nameTag,
-                (float) wx - rbx, (float) wy - rby, (float) wz - rbz));
+                (float) (wx - rbx), (float) (wy - rby), (float) (wz - rbz)));
     }
 
     /**
@@ -698,13 +654,9 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             }
         } catch (Throwable t) {
             capture.reset();
-            throw new RuntimeException("RT particle capture failed", t); // propagate to composite() (see entity path)
+            throw new RuntimeException("RT particle capture failed", t);
         }
         build.telemetry.count("particlesCaptured", particlesCaptured);
-        if (capture.isEmpty()) {
-            submitParticles(build);
-            return;
-        }
         submitParticles(build);
     }
 
@@ -725,7 +677,8 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             previousParticleBaseTopology = captured.topologyRevision();
             previousParticleMembers = List.copyOf(particleMembers);
             build.put(particleKey, capture.entityMesh(fingerprint.topologyRevision()),
-                    transform(IDENTITY, build.origin), revision(fingerprint), PARTICLE_MASK, null);
+                    GeometryTransform.translation(build.origin.x(), build.origin.y(), build.origin.z()),
+                    revision(fingerprint), PARTICLE_MASK, null);
         }
     }
 
@@ -768,15 +721,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         out[2] = cz / vc;
     }
 
-    /**
-     * Capture block entities (chests, signs, …). Each BE keeps a cached mesh keyed by BlockPos.
-     * Every frame the BE is re-meshed (cheap) and its mesh hashed; the owner replaces its resident only when
-     * the mesh actually changed — so static BEs cost no GPU work while animating ones (chest lid, spawner,
-     * …) rebuild every frame and stay smooth. New/changed rebuilds are capped at {@link
-     * #BE_BUILDS_PER_FRAME} per frame so a burst of newly loaded chunks can't stall; over-budget BEs keep
-     * their last geometry / pop in over later frames. Captured block-local → placed by a translate-only
-     * instance transform; static, so the MV is 0.
-     */
+    /** Capture nearby block-local meshes; changed residents share this frame's configured rebuild budget. */
     private void captureBlockEntities(FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
         beBuildsThisFrame = 0;
         BlockEntityRenderDispatcher beDispatcher = mc.getBlockEntityRenderDispatcher();
@@ -837,7 +782,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
             resetPoseStack(blockEntityPoseStack);
             beDispatcher.submit(state, blockEntityPoseStack, collector, cameraState);
         } catch (Throwable t) {
-            throw new RuntimeException("RT block-entity capture failed", t); // propagate to composite() (see entity path)
+            throw new RuntimeException("RT block-entity capture failed", t);
         } finally {
             resetPoseStack(blockEntityPoseStack);
             collector.begin(null, false);
@@ -962,10 +907,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         }
     }
 
-    private static float[] translationTransform(float x, float y, float z) {
-        return new float[] {1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z};
-    }
-
     private static MinecraftEntityGeometry.Key key(long domain, long value) {
         return new MinecraftEntityGeometry.Key(domain, value);
     }
@@ -980,14 +921,8 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         return MinecraftTelemetry.GeometrySource.ENTITY;
     }
 
-    private static GeometryTransform transform(float[] relative, SceneOrigin origin) {
-        return new GeometryTransform(relative[0], relative[1], relative[2],
-                relative[4], relative[5], relative[6], relative[8], relative[9], relative[10],
-                origin.x() + relative[3], origin.y() + relative[7], origin.z() + relative[11]);
-    }
-
     private void appendCapture(FrameBuild build, int entityId, UUID identity, int mask,
-                               float[] instanceTransform) {
+                               GeometryTransform transform) {
         MinecraftEntityGeometry.Key key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(entityId));
         EntityState state = entityStates.get(entityId);
         if (state != null && !state.identity.equals(identity)) {
@@ -1000,45 +935,26 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         }
         state.lastSeen = build.frameIndex;
         pendingDrops.remove(key);
-        GeometryTransform transform = transform(instanceTransform, build.origin);
         MeshFingerprint fingerprint = meshFingerprint(capture);
         long capturedMeshHash = fingerprint.contentHash();
-        if (state.beginInitialSubmission(capturedMeshHash)) {
-            build.telemetry.count("entityPlacementInitialSubmissions", 1);
+        boolean initial = !state.initialSubmitted;
+        build.telemetry.count(initial ? "entityPlacementInitialSubmissions" : "entityPlacementFreshnessEligible", 1);
+        if (state.requiresPut(capturedMeshHash)) {
+            if (!initial) build.telemetry.count("entityMeshOnlyUpdates", 1);
             EntityState submitted = state;
+            Runnable acknowledgment = null;
             if (build.telemetry.enabled()) {
                 long version = state.profileMeshSubmission();
                 long sourceFrame = build.telemetry.frameSerial();
                 long visibilityToken = state.meshVisibilityToken;
-                MinecraftTelemetry.Instrumentation telemetry = build.telemetry;
-                build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform,
-                        revision(fingerprint), mask,
-                        () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken, telemetry));
-            } else {
-                build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform,
-                        revision(fingerprint), mask, null);
+                acknowledgment = () -> submitted.meshPublicationAccepted(
+                        version, sourceFrame, visibilityToken, build.telemetry);
             }
+            build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform,
+                    revision(fingerprint), mask, acknowledgment);
+            state.meshSubmitted(capturedMeshHash);
         } else {
-            build.telemetry.count("entityPlacementFreshnessEligible", 1);
-            if (state.requiresPut(capturedMeshHash)) {
-                state.meshSubmitted(capturedMeshHash);
-                build.telemetry.count("entityMeshOnlyUpdates", 1);
-                if (build.telemetry.enabled()) {
-                    long version = state.profileMeshSubmission();
-                    long sourceFrame = build.telemetry.frameSerial();
-                    long visibilityToken = state.meshVisibilityToken;
-                    EntityState submitted = state;
-                    MinecraftTelemetry.Instrumentation telemetry = build.telemetry;
-                    build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform,
-                            revision(fingerprint), mask,
-                            () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken, telemetry));
-                } else {
-                    build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform,
-                            revision(fingerprint), mask, null);
-                }
-            } else {
-                build.transform(key, transform, mask);
-            }
+            build.transform(key, transform, mask);
         }
         build.count++;
     }
@@ -1084,12 +1000,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         cameraState.pos = new Vec3(camX, camY, camZ);
         cameraState.projectionMatrix.set(projection);
         cameraState.viewRotationMatrix.set(viewRotation);
-        // viewRotation is the world->view rotation (mvCurProjView = frameProjection * frameViewRotation);
-        // vanilla's Camera.rotation() (what CameraRenderState.orientation actually holds, per Camera.java
-        // "cameraState.orientation.set(this.rotation())") is the INVERSE of that — view->world, i.e. the
-        // camera's own facing direction, used to billboard world-space quads (name tags) to face the
-        // camera. A pure rotation's inverse is its conjugate. Nothing consumed this field before
-        // NameTagFeature; a plain setFromUnnormalized(viewRotation) here would billboard backwards.
+        // Name-tag billboards need view-to-world orientation, the inverse of the supplied view rotation.
         cameraState.orientation.setFromUnnormalized(viewRotation).conjugate();
         cameraState.initialized = true;
     }

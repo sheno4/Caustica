@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -181,6 +182,42 @@ final class RtEntityCaptureTest {
         assertFalse(RtEntities.sameParticleLayout(
                 List.of(firstSpan), List.of(new RtEntities.ParticleMember(first, 4, 6, 2))));
         assertFalse(RtEntities.sameParticleLayout(List.of(firstSpan), List.of(firstSpan, secondSpan)));
+    }
+
+    @Test
+    void bufferReuseCannotChangeAPublishedMesh() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.currentMaterial = material("first");
+        capture.currentCoverage = MinecraftEntityMesh.Coverage.STOCHASTIC;
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
+        MinecraftEntityMesh mesh = capture.entityMesh(31L);
+        float[] positions = mesh.positions();
+        int[] indices = mesh.indices();
+        float[] uvs = mesh.uvs();
+        float[] colors = mesh.vertexColors();
+        var triangles = mesh.triangles();
+
+        capture.reset();
+        capture.currentMaterial = material("second");
+        capture.addDirectQuad(new float[]{4, 5, 5, 4}, Y, Z,
+                new float[]{.25f, .75f, .75f, .25f}, V, 0f, 1f, 0f, 0xFF123456);
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 1f, 0f, 0xFF654321);
+        assertEquals(8, capture.entityMesh().vertexCount());
+
+        assertEquals(4, mesh.vertexCount());
+        assertEquals(2, mesh.triangleCount());
+        assertEquals(12, mesh.positions().length);
+        assertEquals(6, mesh.indices().length);
+        assertEquals(8, mesh.uvs().length);
+        assertEquals(16, mesh.vertexColors().length);
+        assertEquals(31L, mesh.indexRevision());
+        assertArrayEquals(positions, mesh.positions());
+        assertArrayEquals(indices, mesh.indices());
+        assertArrayEquals(uvs, mesh.uvs());
+        assertArrayEquals(colors, mesh.vertexColors());
+        assertEquals(triangles, mesh.triangles());
+        assertEquals(material("first"), mesh.triangles().getFirst().material());
+        assertEquals(MinecraftEntityMesh.Coverage.STOCHASTIC, mesh.triangles().getFirst().coverage());
     }
 
     @Test

@@ -202,6 +202,7 @@ final class MinecraftProgramSessionTest {
         }
         @Override public void published(Object stamp) { }
         @Override public void afterPublicationVisible(LongConsumer action) { }
+        @Override public void afterPublicationVisible(Object identity, LongConsumer action) { }
     }
 
 }

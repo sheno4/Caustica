@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.client.entity;
 
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
+import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetryImpl;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayDeque;
 import java.util.UUID;
 import java.util.function.LongConsumer;
 
@@ -25,12 +25,12 @@ final class RtEntitiesPublicationStateTest {
     }
 
     @Test
-    void initialResidentIsSubmittedOnlyOnce() {
+    void initialResidentRequiresSubmissionEvenWhenItsHashIsZero() {
         RtEntities.EntityState state = state();
 
-        assertTrue(state.beginInitialSubmission(10L));
-        assertFalse(state.beginInitialSubmission(20L));
-        assertFalse(state.requiresPut(10L));
+        assertTrue(state.requiresPut(0L));
+        state.meshSubmitted(0L);
+        assertFalse(state.requiresPut(0L));
         assertTrue(state.requiresPut(20L));
     }
 
@@ -112,7 +112,6 @@ final class RtEntitiesPublicationStateTest {
 
         assertEquals(0L, state.visibleMeshVersion);
         assertEquals(0L, state.meshVisibilityCount);
-        assertFalse(state.meshVisibilityQueued);
         telemetry.reset();
     }
 
@@ -144,7 +143,6 @@ final class RtEntitiesPublicationStateTest {
 
         assertEquals(version, state.visibleMeshVersion);
         assertEquals(1L, state.meshVisibilityCount);
-        assertFalse(state.meshVisibilityQueued);
         telemetry.reset();
     }
 
@@ -160,7 +158,6 @@ final class RtEntitiesPublicationStateTest {
         telemetry.publishVisible();
 
         assertEquals(0L, state.meshVisibilityCount);
-        assertFalse(state.meshVisibilityQueued);
         telemetry.reset();
     }
 
@@ -171,14 +168,9 @@ final class RtEntitiesPublicationStateTest {
         state.meshVisibilityCount = 1L;
         state.lastMeshVisibilityFrame = 100L;
         state.visibleMeshSourceFrame = 98L;
-        state.pendingVisibleMeshVersion = 4L;
-        state.pendingVisibleMeshSourceFrame = 101L;
-        state.pendingMeshVisibilityToken = state.meshVisibilityToken;
-        state.meshVisibilityQueued = true;
-
-        state.meshFrameVisible(104L, state.meshVisibilityToken, telemetry);
+        state.meshFrameVisible(104L, state.meshVisibilityToken, 4L, 101L);
         assertEquals(104L, state.lastMeshVisibilityFrame);
-        assertEquals(state.pendingVisibleMeshSourceFrame, state.visibleMeshSourceFrame);
+        assertEquals(101L, state.visibleMeshSourceFrame);
 
     }
 
@@ -189,15 +181,31 @@ final class RtEntitiesPublicationStateTest {
         state.meshVisibilityCount = 1L;
         state.lastMeshVisibilityFrame = 101L;
         state.visibleMeshSourceFrame = 100L;
-        state.pendingVisibleMeshVersion = 2L;
-        state.pendingVisibleMeshSourceFrame = 101L;
-        state.pendingMeshVisibilityToken = state.meshVisibilityToken;
-        state.meshVisibilityQueued = true;
-
-        state.meshFrameVisible(102L, state.meshVisibilityToken, telemetry);
+        state.meshFrameVisible(102L, state.meshVisibilityToken, 2L, 101L);
         assertEquals(102L, state.lastMeshVisibilityFrame);
-        assertEquals(state.pendingVisibleMeshVersion, state.visibleMeshVersion);
+        assertEquals(2L, state.visibleMeshVersion);
 
+    }
+
+    @Test
+    void newerAcceptedMeshWaitsForThePreparedRevisionThatContainsIt() {
+        var state = state();
+        long first = state.profileMeshSubmission();
+        state.meshPublicationAccepted(first, 100L, state.meshVisibilityToken, telemetry);
+        long cutoff = telemetry.renderer.publicationCutoff();
+        long second = state.profileMeshSubmission();
+        state.meshPublicationAccepted(second, 101L, state.meshVisibilityToken, telemetry);
+
+        telemetry.renderer.beginRenderFrame();
+        telemetry.renderer.frameAssembled(cutoff);
+        assertEquals(first, state.visibleMeshVersion);
+        assertEquals(100L, state.visibleMeshSourceFrame);
+        assertEquals(1L, state.meshVisibilityCount);
+
+        telemetry.advanceVisibleFrame();
+        assertEquals(second, state.visibleMeshVersion);
+        assertEquals(101L, state.visibleMeshSourceFrame);
+        assertEquals(2L, state.meshVisibilityCount);
     }
 
     private static RtEntities.EntityState state() {
@@ -205,31 +213,33 @@ final class RtEntitiesPublicationStateTest {
     }
 
     private static final class TestTelemetry implements MinecraftTelemetry.Instrumentation {
-        private final ArrayDeque<LongConsumer> visibilityActions = new ArrayDeque<>();
-        private long frameSerial;
+        private final RtTelemetryImpl renderer = new RtTelemetryImpl();
 
         @Override public boolean enabled() { return true; }
-        @Override public long frameSerial() { return frameSerial; }
+        @Override public long frameSerial() { return renderer.frameSerial(); }
         @Override public long startStage() { return 0L; }
         @Override public void endStage(String name, long startedNanos) { }
         @Override public void count(String name, long delta) { }
         @Override public void set(String name, long value) { }
         @Override public Object extraction(MinecraftTelemetry.GeometrySource source, int geometryCount) { return null; }
         @Override public void published(Object stamp) { }
-        @Override public void afterPublicationVisible(LongConsumer action) { visibilityActions.add(action); }
+        @Override public void afterPublicationVisible(LongConsumer action) { renderer.afterPublicationVisible(action); }
+        @Override public void afterPublicationVisible(Object identity, LongConsumer action) {
+            renderer.afterPublicationVisible(identity, action);
+        }
 
         void advanceVisibleFrame() {
-            frameSerial++;
+            renderer.endFrame();
+            renderer.beginRenderFrame();
             publishVisible();
         }
 
         void publishVisible() {
-            LongConsumer action;
-            while ((action = visibilityActions.poll()) != null) action.accept(frameSerial);
+            renderer.frameAssembled(renderer.publicationCutoff());
         }
 
         void reset() {
-            visibilityActions.clear();
+            renderer.resetPublications();
         }
     }
 
