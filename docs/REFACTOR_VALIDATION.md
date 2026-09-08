@@ -442,3 +442,9 @@ Removed the unused synchronous upload entry point from MinecraftEntityUploader a
 Moved the simple synchronous fixture adapter into TestEntityUploader under test sources. Tests that implement staged capture now implement the production interface without dummy throwing upload methods. Existing deferral, publication, cancellation, failure and shutdown regressions retain their assertions.
 
 The first compile exposed three direct fixture lambdas needing the test adapter; these were updated. An intermediate full check failed at minecraft-client:jar with Gradle's `Valued object is in an unexpected state`. A serial retry with --stacktrace passed all 187 tasks in 40 seconds, terminal exit 0, including JAR creation. The packaging error did not recur; its cause was not established. Final log: `tmp/aesthetic-staged-uploader-check-retry.log`. No client or new GPU validation was run for this interface-only simplification.
+
+## Uploader packing and ownership review (2026-09-09)
+
+Reviewed primitive packing, indexed tangent construction, texture capture/allocation, uploaded claims and ResourceLifetime cleanup. Retained the separate rollback handles: each begins as a raw allocation release and switches to the shared owner after creation succeeds. Shader data owns additional claims that must be released before the uploader's original buffer claims. Added the current ownership-transition invariant at the rollback handles and made writePrimitives static because its buffer writes depend only on explicit arguments.
+
+Inspected existing tests for packed field offsets, tangent gradients, descriptor/lease release ordering, aggregate cleanup failures and repeated close. The minecraft-rendering test task passed (25 tasks, 2 seconds, exit 0; `tmp/aesthetic-uploader-ownership-check.log`). No runtime behavior or GPU performance change is claimed. This review does not justify collapsing resource ownership into fewer claims.

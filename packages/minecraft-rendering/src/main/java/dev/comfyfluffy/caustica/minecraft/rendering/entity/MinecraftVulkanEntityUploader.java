@@ -134,6 +134,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                                     VmaMappedBuffer indices, VmaMappedBuffer primitive,
                                     VmaMappedBuffer instance, TextureSet textureSet) {
         ResourceLifetime bindingLifetime = new ResourceLifetime(textureSet::close, primitive::close);
+        // Each cleanup handle switches from the raw allocation to its shared owner only after creation succeeds.
         Runnable releasePositions = positions::close;
         Runnable releaseIndices = indices::close;
         Runnable releaseBinding = bindingLifetime::close;
@@ -210,7 +211,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         return a.material().program() == b.material().program() && a.coverage() == b.coverage();
     }
 
-    private void writePrimitives(ByteBuffer bytes, MinecraftEntityMesh source, float[] positions,
+    private static void writePrimitives(ByteBuffer bytes, MinecraftEntityMesh source, float[] positions,
                                  int[] indices, float[] uvs, float[] colors,
                                  TextureSet textureSet, Map<MinecraftEntityMesh.Material, Integer> materialIndices) {
         for (int t = 0; t < source.triangleCount(); t++) {
