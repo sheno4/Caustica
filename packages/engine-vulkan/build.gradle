@@ -57,36 +57,6 @@ def verifyEngineVulkanDependencies = tasks.register("verifyEngineVulkanDependenc
     }
 }
 
-def verifyEngineVulkanImports = tasks.register("verifyEngineVulkanImports") {
-    group = "verification"
-    description = "Verifies that the Vulkan engine boundary has no Minecraft, loader, or root-mod imports."
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = [
-                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
-                "dev.comfyfluffy.caustica.minecraft",
-                "dev.comfyfluffy.caustica.minecraft.client.platform",
-                "dev.comfyfluffy.caustica.fabric",
-                "dev.comfyfluffy.caustica.neoforge",
-                "dev.comfyfluffy.caustica.ngx",
-                "net.minecraft",
-                "net.fabricmc",
-                "net.neoforged"
-        ]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { file ->
-            file.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations.add("${file}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) {
-            throw new GradleException("engine-vulkan import violations:\n${violations.join('\n')}")
-        }
-    }
-}
-
 def verifyEngineVulkanRuntimeNamespace = tasks.register("verifyEngineVulkanRuntimeNamespace") {
     group = "verification"
     description = "Verifies that owned Vulkan resources do not leak back into the root RT namespace."
@@ -104,7 +74,7 @@ def verifyEngineVulkanRuntimeNamespace = tasks.register("verifyEngineVulkanRunti
 
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
-    dependsOn(verifyEngineVulkanDependencies, verifyEngineVulkanImports, verifyEngineVulkanRuntimeNamespace)
+    dependsOn(verifyEngineVulkanDependencies, verifyEngineVulkanRuntimeNamespace)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 

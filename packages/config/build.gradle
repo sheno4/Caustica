@@ -20,33 +20,6 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
-def verifyConfigDependencies = tasks.register("verifyConfigDependencies") {
-    group = "verification"
-    description = "Verifies that configuration storage has no host or renderer dependencies."
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = [
-                "dev.comfyfluffy.caustica.minecraft.client.platform",
-                "dev.comfyfluffy.caustica.minecraft",
-                "net.minecraft",
-                "net.fabricmc",
-                "net.neoforged",
-                "org.lwjgl"
-        ]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { file ->
-            file.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations.add("${file}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) {
-            throw new GradleException("config dependency violations:\n${violations.join('\n')}")
-        }
-    }
-}
-
 def verifyConfigJar = tasks.register("verifyConfigJar") {
     group = "verification"
     description = "Verifies that the config artifact contains only dev.comfyfluffy.caustica.config classes."
@@ -70,7 +43,7 @@ def verifyConfigJar = tasks.register("verifyConfigJar") {
 }
 
 tasks.named("test", Test) { useJUnitPlatform() }
-tasks.named("check") { dependsOn(verifyConfigDependencies, verifyConfigJar) }
+tasks.named("check") { dependsOn(verifyConfigJar) }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 
 java {

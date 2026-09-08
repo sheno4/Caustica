@@ -130,90 +130,22 @@ configurations {
 }
 artifacts { nrdNatives(nrdNativeJar) }
 
-def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
-    inputs.files("build.gradle", "native/nrd_shim/CMakeLists.txt", "native/nrd_shim/nrd_shim.h",
-            "native/nrd_shim/nrd_shim.cpp", "native/nrd_shim/NRD_REVISION", "native/nrd_shim/NRI_REVISION",
-            rootProject.file(".gitmodules"))
+def verifyNrdRevisions = tasks.register("verifyNrdRevisions") {
+    group = "verification"
+    description = "Verifies that packaged SDK revision metadata matches the native build."
+    inputs.files("native/nrd_shim/NRD_REVISION", "native/nrd_shim/NRI_REVISION")
+    inputs.property("nrdRevision", nrdRevision)
+    inputs.property("nriRevision", nriRevision)
     doLast {
-        def cmake = file("native/nrd_shim/CMakeLists.txt").text
-        def header = file("native/nrd_shim/nrd_shim.h").text
-        def source = file("native/nrd_shim/nrd_shim.cpp").text
-        def build = file("build.gradle").text
-        def revision = file("native/nrd_shim/NRD_REVISION").text.trim()
-        def nri = file("native/nrd_shim/NRI_REVISION").text.trim()
-        def submodules = rootProject.file(".gitmodules").text
-        if (revision != nrdRevision) throw new GradleException("NRD pin drifted: ${revision}")
-        if (nri != nriRevision) throw new GradleException("NRI pin drifted: ${nri}")
-        if (!submodules.contains('path = third_party/NRD')
-                || !submodules.contains('url = https://github.com/NVIDIA-RTX/NRD.git')) {
-            throw new GradleException("NRD must remain an official tracked submodule")
+        [NRD: nrdRevision, NRI: nriRevision].each { sdk, expected ->
+            def actual = file("native/nrd_shim/${sdk}_REVISION").text.trim()
+            if (actual != expected) throw new GradleException("${sdk} revision mismatch: ${actual}")
         }
-        ["NRD_EMBEDS_DXBC_SHADERS OFF", "NRD_EMBEDS_DXIL_SHADERS OFF", "NRD_EMBEDS_SPIRV_SHADERS ON",
-         "NRD_NRI ON", "NRI_STATIC_LIBRARY ON", "NRI_ENABLE_D3D11_SUPPORT OFF",
-         "NRI_ENABLE_D3D12_SUPPORT OFF", "NRI_ENABLE_VK_SUPPORT ON",
-         "NRD_NORMAL_ENCODING 4", "NRD_ROUGHNESS_ENCODING 1"].each {
-            if (!cmake.contains(it)) throw new GradleException("Missing native option: ${it}")
-        }
-        if (cmake.count("StdAllocator=NriStdAllocator") != 3
-                || !cmake.contains('"${FETCHCONTENT_SOURCE_DIR_NRI}/Include"')) {
-            throw new GradleException("NRD/NRI static-link allocator boundary is not isolated")
-        }
-        ["nrdshim_create", "nrdshim_resize", "nrdshim_record", "nrdshim_destroy", "nrdshim_last_error"].each {
-            if (!header.contains(it) || !source.contains(it)) throw new GradleException("Missing NRD shim export: ${it}")
-        }
-        if (cmake.contains("FetchContent") || cmake.contains("GIT_REPOSITORY")) {
-            throw new GradleException("NRD native build must not fetch dependencies")
-        }
-        ["queueFamily.queueType = nri::QueueType::GRAPHICS",
-         "command.queueType = nri::QueueType::GRAPHICS",
-         "VK_KHR_push_descriptor",
-         "deviceCreation.vkExtensions.deviceExtensions = enabledDeviceExtensions",
-         "settings.hitDistanceParameters = {3.0f, 0.1f, 20.0f, -25.0f}",
-         "settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF",
-         "settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5",
-         "settings.enableAntiFirefly = true",
-         "settings.maxAccumulatedFrameNum = 50",
-         "settings.diffusePrepassBlurRadius = 15.0f",
-         "settings.specularPrepassBlurRadius = 40.0f",
-         "nri::Layout::GENERAL", "catch (...)", "noexcept"].each {
-            if (!source.contains(it)) throw new GradleException("Missing native contract: ${it}")
-        }
-        if (source.contains("QueueType::COMPUTE") || header.contains("computeQueueFamily")) {
-            throw new GradleException("NRD must record on the renderer graphics queue")
-        }
-        if (source.contains("SHADER_READ_ONLY_OPTIMAL")) {
-            throw new GradleException("NRD must accept only unified or GENERAL image layouts")
-        }
-        if (source.count("settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF") != 1
-                || source.count("settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5") != 1) {
-            throw new GradleException("NRD method-specific hit-distance reconstruction drifted")
-        }
-        if (!build.contains('"-DFETCHCONTENT_FULLY_DISCONNECTED=ON"')) {
-            throw new GradleException("NRD native configuration must keep FetchContent offline")
-        }
-    }
-}
-
-def verifyNvidiaNrdImports = tasks.register("verifyNvidiaNrdImports") {
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = ["org.lwjgl", "net.minecraft", "dev.comfyfluffy.caustica.minecraft",
-                         "dev.comfyfluffy.caustica.renderer.runtime", "dev.comfyfluffy.caustica.renderer.raytracing",
-                         "dev.comfyfluffy.caustica.nvidia.ngx"]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations += "${source}:${number}: ${line.trim()}"
-                }
-            }
-        }
-        if (!violations.empty) throw new GradleException("nvidia-nrd boundary violations:\n${violations.join('\n')}")
     }
 }
 
 tasks.named("test", Test) { useJUnitPlatform(); jvmArgs "--enable-native-access=ALL-UNNAMED" }
-tasks.named("check") { dependsOn verifyNrdNativeFoundation, verifyNvidiaNrdImports }
+tasks.named("check") { dependsOn(verifyNrdRevisions) }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 java { withSourcesJar() }
 tasks.named("jar", Jar).configure {

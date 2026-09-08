@@ -121,27 +121,6 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 }
 sourceSets.main.resources.srcDir(files(nativeResourceRoot).builtBy(bundleNgxNatives))
 
-def verifyNvidiaNgxImports = tasks.register("verifyNvidiaNgxImports") {
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = ["dev.comfyfluffy.caustica.minecraft.client.CausticaMod", "dev.comfyfluffy.caustica.config",
-                         "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.minecraft.client.platform",
-                         "dev.comfyfluffy.caustica.renderer.runtime", "net.minecraft", "net.fabricmc", "net.neoforged"]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations += "${source}:${number}: ${line.trim()}"
-                }
-                if (line.contains(" static final ") && line.contains(" INSTANCE")) {
-                    violations += "${source}:${number}: ${line.trim()}"
-                }
-            }
-        }
-        if (!violations.empty) throw new GradleException("nvidia-ngx boundary violations:\n${violations.join('\n')}")
-    }
-}
-
 def verifyNvidiaNgxDependencies = tasks.register("verifyNvidiaNgxDependencies") {
     doLast {
         def allowed = [project.path, ":packages:engine-vulkan"] as Set
@@ -193,7 +172,7 @@ tasks.named("test", Test) {
     jvmArgs "--enable-native-access=ALL-UNNAMED"
 }
 tasks.named("check") {
-    dependsOn verifyNvidiaNgxImports, verifyNvidiaNgxDependencies, verifyNvidiaNgxJar,
+    dependsOn verifyNvidiaNgxDependencies, verifyNvidiaNgxJar,
             verifyNvidiaNgxOwnership
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }

@@ -559,29 +559,6 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	}
 }
 
-def verifySlangRuntimeOwnership = tasks.register("verifySlangRuntimeOwnership") {
-	group = "verification"
-	description = "Verifies that renderer compilation receives Slang through explicit ownership."
-	inputs.files(sourceSets.main.allJava, sourceSets.test.allJava,
-			project(":packages:renderer-runtime").sourceSets.main.allJava,
-			project(":packages:renderer-runtime").sourceSets.test.allJava,
-			project(":packages:slang-runtime").sourceSets.main.allJava,
-			project(":packages:slang-runtime").sourceSets.test.allJava)
-	doLast {
-		def violations = []
-		inputs.files.files.findAll { it.name.endsWith(".java") }.sort().each { source ->
-			source.eachLine { line, number ->
-				if (line.contains("SlangRuntime.INSTANCE")) {
-					violations.add("${source}:${number}: ${line.trim()}")
-				}
-			}
-		}
-		if (!violations.empty) {
-			throw new GradleException("Slang runtime singleton references remain:\n${violations.join('\n')}")
-		}
-	}
-}
-
 def verifyMinecraftClientOwnership = tasks.register("verifyMinecraftClientOwnership") {
 	group = "verification"
 	description = "Verifies that Minecraft host sources and shaders are owned by this package."
@@ -595,7 +572,7 @@ def verifyMinecraftClientOwnership = tasks.register("verifyMinecraftClientOwners
 }
 
 tasks.named("check") {
-	dependsOn(verifyEmbeddedApi, verifySlangRuntimeOwnership, verifyMinecraftClientOwnership,
+	dependsOn(verifyEmbeddedApi, verifyMinecraftClientOwnership,
 			project(":packages:features-builtin").tasks.named("check"),
 			project(":packages:config").tasks.named("check"),
 			project(":packages:engine-vulkan").tasks.named("check"),

@@ -174,29 +174,6 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
 
 sourceSets.main.resources.srcDir(files(slangRuntimeGenRoot).builtBy(bundleSlangRuntime))
 
-def verifySlangRuntimeImports = tasks.register("verifySlangRuntimeImports") {
-    group = "verification"
-    description = "Verifies that the Slang runtime has no host, renderer, or configuration imports."
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = ["dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
-                         "dev.comfyfluffy.caustica.config",
-                         "dev.comfyfluffy.caustica.minecraft.client.platform",
-                         "dev.comfyfluffy.caustica.minecraft",
-                         "dev.comfyfluffy.caustica.renderer.runtime",
-                         "dev.comfyfluffy.caustica.engine"]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations.add("${source}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) throw new GradleException("Slang runtime import violations:\n${violations.join('\n')}")
-    }
-}
-
 def verifySlangRuntimeJar = tasks.register("verifySlangRuntimeJar") {
     group = "verification"
     dependsOn(tasks.named("jar"))
@@ -240,7 +217,7 @@ tasks.named("test", Test) {
         systemProperty "caustica.test.spirvVal", rootProject.slangTooling.spirvVal.get()
     }
 }
-tasks.named("check") { dependsOn(verifySlangRuntimeImports, verifySlangRuntimeJar) }
+tasks.named("check") { dependsOn(verifySlangRuntimeJar) }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 
 java {

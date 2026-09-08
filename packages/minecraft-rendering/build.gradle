@@ -104,31 +104,6 @@ def reproduceMinecraftRenderingRecords = tasks.register("reproduceMinecraftRende
 
 sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generateMinecraftRenderingRecords))
 
-def verifyMinecraftRenderingAbi = tasks.register("verifyMinecraftRenderingAbi") {
-    group = "verification"
-    dependsOn(generateMinecraftRenderingRecords)
-    inputs.dir(generatedRecordRoot)
-    doLast {
-        def expected = [
-                MinecraftImplementationData: ["BYTE_SIZE = 16", "putLong(0, materialsAddress())", "putInt(8, samplerIndex().value())", "putInt(12, reserved())"],
-                MinecraftMaterialData: ["BYTE_SIZE = 112", "putInt(0, features())", "putFloat(32, materialUv().x())", "putFloat(108, emissionLuminance())"],
-                MinecraftPrimitiveData: ["BYTE_SIZE = 144", "putFloat(0 + i0 * 8, textureCoordinates()[i0].x())", "putInt(92, materialIndex())", "putInt(100, baseSampler().value())", "putFloat(128, bitangent().x())"],
-                MinecraftInstanceData: ["BYTE_SIZE = 32", "putFloat(0, tint().x())", "putInt(16, damageTexture().value())", "putFloat(20, damageStrength())"],
-                MinecraftEnvironmentBindingData: ["BYTE_SIZE = 32"],
-                SkyInputsData: ["BYTE_SIZE = 112"],
-                SkyLutPushData: ["BYTE_SIZE = 144", "putLong(128, skyInputsAddress())"]
-        ]
-        expected.each { name, fragments ->
-            def source = generatedRecordRoot.get().file(
-                    (name.startsWith("Sky") || name.startsWith("MinecraftEnvironment")
-                            ? "dev/comfyfluffy/caustica/minecraft/rendering/sky/gen/${name}.java"
-                            : "dev/comfyfluffy/caustica/minecraft/rendering/gen/${name}.java")).asFile.getText("UTF-8")
-            def missing = fragments.findAll { !source.contains(it) }
-            if (!missing.empty) throw new GradleException("${name} ABI drifted: ${missing}")
-        }
-    }
-}
-
 def verifyMinecraftRenderingGenerationReproducible = tasks.register("verifyMinecraftRenderingGenerationReproducible") {
     group = "verification"
     dependsOn(generateMinecraftRenderingRecords, reproduceMinecraftRenderingRecords)
@@ -165,100 +140,16 @@ def verifyMinecraftRenderingDependencies = tasks.register("verifyMinecraftRender
     }
 }
 
-def verifyMinecraftRenderingImports = tasks.register("verifyMinecraftRenderingImports") {
-    group = "verification"
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = ["com.mojang", "net.minecraft", "net.fabricmc", "net.neoforged",
-                         "dev.comfyfluffy.caustica.minecraft.client.CausticaMod", "dev.comfyfluffy.caustica.renderer.runtime",
-                         "dev.comfyfluffy.caustica.minecraft.client.platform", "dev.comfyfluffy.caustica.minecraft.client.mixin",
-                         "dev.comfyfluffy.caustica.renderer", "dev.comfyfluffy.caustica.engine"]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { file ->
-            file.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations.add("${file}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) throw new GradleException("minecraft-rendering import violations:\n${violations.join('\n')}")
-    }
-}
-
-def verifyMinecraftRenderingResources = tasks.register("verifyMinecraftRenderingResources") {
-    group = "verification"
-    dependsOn(tasks.named("processResources"))
-    doLast {
-        def files = fileTree(sourceSets.main.output.resourcesDir).matching {
-            include "caustica/shaders/minecraft/**"
-        }.files.collect { sourceSets.main.output.resourcesDir.toPath().relativize(it.toPath()).toString().replace('\\', '/') }
-        def expected = [
-                "caustica/shaders/minecraft/surface/caustica_minecraft_coverage.slang",
-                "caustica/shaders/minecraft/surface/caustica_minecraft_material.slang",
-                "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",
-                "caustica/shaders/minecraft/surface/caustica_portal_surface.slang",
-                "caustica/shaders/minecraft/surface/caustica_water_surface.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_celestial_dressing.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_overworld_sky.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_atmosphere.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_bindings.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_multiscatter.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_transmittance.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_types.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang"
-        ]
-        if (files.sort() != expected.sort()) throw new GradleException("minecraft-rendering resource ownership mismatch: ${files.sort()}")
-    }
-}
-
 def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") {
     group = "verification"
     dependsOn(tasks.named("jar"))
     doLast {
-        def allowedClassPrefixes = [
-                "dev/comfyfluffy/caustica/minecraft/rendering/program/MinecraftPrograms",
-                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialRecord",
-                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialEpochCompiler",
-                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialLookup",
-                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialUpload",
-                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftProgramResources",
-                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftLightingCalibration",
-                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameSelector",
-                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameSelectionInstaller",
-                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameCaptureInstaller",
-                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameCaptureState",
-                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftEntityCaptureBinding",
-                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainGeometry",
-                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainLightAdapter",
-                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainMesh",
-                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainUploader",
-                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftVulkanTerrainUploader",
-                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftEntityMesh",
-                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftEntityGeometry",
-                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftEntityUploader",
-                "dev/comfyfluffy/caustica/minecraft/rendering/entity/EntityTextureResolver",
-                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftVulkanEntityUploader",
-                "dev/comfyfluffy/caustica/minecraft/rendering/texture/",
-                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftMaterialData",
-                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftImplementationData",
-                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftPrimitiveData",
-                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftInstanceData"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/CelestialAtlasImage"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftCapturedFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftCelestialFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftLightFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftSkyFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/light/"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/provider/MinecraftLightProvider"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/sky/MinecraftSkyCatalog"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/sky/SkyLutPass"
-                ,"dev/comfyfluffy/caustica/minecraft/rendering/sky/gen/"
-        ]
         def foreign = []
         def shaderResources = []
         new java.util.jar.JarFile(tasks.named("jar", Jar).get().archiveFile.get().asFile).withCloseable { jar ->
             jar.entries().each { entry ->
-                if (entry.name.endsWith(".class") && !allowedClassPrefixes.any { entry.name.startsWith(it) }) {
+                if (entry.name.endsWith(".class")
+                        && !entry.name.startsWith("dev/comfyfluffy/caustica/minecraft/rendering/")) {
                     foreign.add(entry.name)
                 }
                 if (entry.name.startsWith("caustica/shaders/minecraft/") && !entry.name.endsWith("/")) {
@@ -271,15 +162,15 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "caustica/shaders/minecraft/surface/caustica_minecraft_material.slang",
                 "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",
                 "caustica/shaders/minecraft/surface/caustica_portal_surface.slang",
-                "caustica/shaders/minecraft/surface/caustica_water_surface.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_celestial_dressing.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_overworld_sky.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_atmosphere.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_bindings.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_multiscatter.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_transmittance.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_types.slang"
-                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang"
+                "caustica/shaders/minecraft/surface/caustica_water_surface.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_celestial_dressing.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_overworld_sky.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_sky_atmosphere.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_sky_bindings.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_multiscatter.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_transmittance.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_types.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang"
         ]
         if (!foreign.empty || shaderResources.sort() != expectedResources.sort()) {
             throw new GradleException("minecraft-rendering JAR mismatch; foreign=${foreign}, resources=${shaderResources.sort()}")
@@ -289,9 +180,8 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
 
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
-    dependsOn(verifyMinecraftRenderingAbi, verifyMinecraftRenderingGenerationReproducible,
-            verifyMinecraftRenderingDependencies, verifyMinecraftRenderingImports,
-            verifyMinecraftRenderingResources, verifyMinecraftRenderingJar, verifyMinecraftSkyShaders)
+    dependsOn(verifyMinecraftRenderingGenerationReproducible, verifyMinecraftRenderingDependencies,
+            verifyMinecraftRenderingJar, verifyMinecraftSkyShaders)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 

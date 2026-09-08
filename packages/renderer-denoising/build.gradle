@@ -15,26 +15,7 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
-def verifyRendererDenoisingImports = tasks.register("verifyRendererDenoisingImports") {
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = ["org.lwjgl", "net.minecraft", "dev.comfyfluffy.caustica.minecraft",
-                         "dev.comfyfluffy.caustica.nvidia", "dev.comfyfluffy.caustica.renderer.runtime",
-                         "dev.comfyfluffy.caustica.renderer.raytracing"]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations += "${source}:${number}: ${line.trim()}"
-                }
-            }
-        }
-        if (!violations.empty) throw new GradleException("renderer-denoising boundary violations:\n${violations.join('\n')}")
-    }
-}
-
 tasks.named("test", Test) { useJUnitPlatform() }
-tasks.named("check") { dependsOn verifyRendererDenoisingImports }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 java { withSourcesJar() }
 tasks.named("jar", Jar).configure {

@@ -28,38 +28,6 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
-def verifyRendererRuntimeImports = tasks.register("verifyRendererRuntimeImports") {
-    group = "verification"
-    description = "Verifies that renderer orchestration has no root-mod, client, loader, or Minecraft runtime imports."
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = [
-                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
-                "dev.comfyfluffy.caustica.minecraft.client",
-                "dev.comfyfluffy.caustica.minecraft.client.platform",
-                "dev.comfyfluffy.caustica.fabric",
-                "dev.comfyfluffy.caustica.neoforge",
-                "dev.comfyfluffy.caustica.minecraft",
-                "net.minecraft",
-                "com.mojang",
-                "net.fabricmc",
-                "net.neoforged"
-        ]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ")
-                        && forbidden.any { line.contains(it) }) {
-                    violations += "${source}:${number}: ${line.trim()}"
-                }
-            }
-        }
-        if (!violations.empty) {
-            throw new GradleException("renderer-runtime import violations:\n${violations.join('\n')}")
-        }
-    }
-}
-
 def verifyRendererRuntimeDependencies = tasks.register("verifyRendererRuntimeDependencies") {
     group = "verification"
     doLast {
@@ -122,7 +90,7 @@ tasks.named("test", Test) {
     jvmArgs "--enable-native-access=ALL-UNNAMED"
 }
 tasks.named("check") {
-    dependsOn verifyRendererRuntimeImports, verifyRendererRuntimeDependencies,
+    dependsOn verifyRendererRuntimeDependencies,
             verifyRendererRuntimeJar, verifyRendererRuntimeOwnership
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }

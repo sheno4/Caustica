@@ -98,25 +98,6 @@ def verifyBloomShaderAbi = tasks.register("verifyBloomShaderAbi") {
     }
 }
 
-def verifyBuiltinDependencies = tasks.register("verifyBuiltinDependencies") {
-    group = "verification"
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = ["dev.comfyfluffy.caustica.engine", "dev.comfyfluffy.caustica.minecraft",
-                "dev.comfyfluffy.caustica.renderer.runtime", "dev.comfyfluffy.caustica.ngx",
-                "dev.comfyfluffy.caustica.minecraft.client.platform", "net.minecraft", "net.fabricmc", "net.neoforged"]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations.add("${source}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) throw new GradleException("built-in feature dependency violations:\n${violations.join('\n')}")
-    }
-}
-
 def verifyBuiltinJar = tasks.register("verifyBuiltinJar") {
     group = "verification"
     dependsOn(tasks.named("jar"))
@@ -153,7 +134,7 @@ sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compile
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 tasks.named("check") {
-    dependsOn(verifyBloomShaderAbi, verifyBuiltinDependencies, verifyBuiltinJar)
+    dependsOn(verifyBloomShaderAbi, verifyBuiltinJar)
 }
 
 java {

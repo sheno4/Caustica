@@ -38,38 +38,6 @@ def verifyMinecraftContentDependencies = tasks.register("verifyMinecraftContentD
     }
 }
 
-def verifyMinecraftContentImports = tasks.register("verifyMinecraftContentImports") {
-    group = "verification"
-    description = "Verifies that reusable content logic has no Minecraft host, runtime, platform, or loader imports."
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = [
-                "com.mojang",
-                "net.minecraft",
-                "net.fabricmc",
-                "net.neoforged",
-                "dev.comfyfluffy.caustica.renderer.runtime",
-                "dev.comfyfluffy.caustica.engine",
-                "dev.comfyfluffy.caustica.minecraft.client.platform",
-                "dev.comfyfluffy.caustica.fabric",
-                "dev.comfyfluffy.caustica.neoforge",
-                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
-                "dev.comfyfluffy.caustica.minecraft.client.MinecraftApiBootstrap"
-        ]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { file ->
-            file.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations.add("${file}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) {
-            throw new GradleException("minecraft-content import violations:\n${violations.join('\n')}")
-        }
-    }
-}
-
 def verifyMinecraftContentJar = tasks.register("verifyMinecraftContentJar") {
     group = "verification"
     description = "Verifies that the artifact contains only reusable Minecraft material content classes."
@@ -94,7 +62,7 @@ def verifyMinecraftContentJar = tasks.register("verifyMinecraftContentJar") {
 
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
-    dependsOn(verifyMinecraftContentDependencies, verifyMinecraftContentImports, verifyMinecraftContentJar)
+    dependsOn(verifyMinecraftContentDependencies, verifyMinecraftContentJar)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 

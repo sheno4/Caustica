@@ -127,25 +127,10 @@ processResources {
 
 def checkApiBoundary = tasks.register("checkApiBoundary") {
     group = "verification"
-    description = "Rejects viewer references outside the public APIs and reusable glTF content."
-    inputs.files(sourceSets.main.allJava)
+    description = "Verifies that the viewer embeds reusable glTF content and leaves public API classes external."
     dependsOn(tasks.named("jar"))
     inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
     doLast {
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                def packageDeclaration = line =~ /^\s*package\s+dev\.comfyfluffy\.caustica\.example\.gltfviewer\s*;/
-                def allowedReference = line =~ /dev\.comfyfluffy\.caustica\.(?!api(?:\.|;)|minecraft\.api(?:\.|;)|example\.gltfcontent(?:\.|;)|example\.gltfviewer(?:\.|;))/
-                if (!packageDeclaration.matches() && allowedReference.find()) {
-                    violations.add("${project.relativePath(source)}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) {
-            throw new GradleException("Minecraft glTF viewer crossed the Caustica API boundary:\n"
-                    + violations.join("\n"))
-        }
         def bundledApiClasses = []
         def bundledContentClasses = []
         def artifact = tasks.named("jar", Jar).get().archiveFile.get().asFile

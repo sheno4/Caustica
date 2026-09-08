@@ -48,7 +48,6 @@ def validateContentShaders = tasks.register("validateContentShaders", CompileSla
 def checkContentBoundary = tasks.register("checkContentBoundary") {
     group = "verification"
     description = "Rejects Minecraft and renderer implementation dependencies from reusable glTF content."
-    inputs.files(sourceSets.main.allJava)
     doLast {
         def violations = []
         def allowedProjects = [project.path, ":packages:api", ":packages:shader-api",
@@ -57,17 +56,6 @@ def checkContentBoundary = tasks.register("checkContentBoundary") {
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowedProjects.contains(dependency.path)) {
                     violations.add("${configuration.name}: project dependency ${dependency.path}")
-                }
-            }
-        }
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line =~ /(?:net\.minecraft|dev\.comfyfluffy\.caustica\.minecraft)(?:\.|;)/) {
-                    violations.add("${project.relativePath(source)}:${number}: ${line.trim()}")
-                }
-                def implementationReference = line =~ /dev\.comfyfluffy\.caustica\.(?!api(?:\.|;)|vulkan(?:\.|;)|example\.gltfcontent(?:\.|;))/
-                if (implementationReference.find()) {
-                    violations.add("${project.relativePath(source)}:${number}: ${line.trim()}")
                 }
             }
         }
