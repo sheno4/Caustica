@@ -61,9 +61,8 @@ public float3 transformNormal(NormalTransform transform, float3 normal) {
 /** Homogeneous transport properties produced by a volume implementation at its boundary. */
 public struct VolumeProperties {
     /**
-     * Finite, non-negative Beer-Lambert absorption coefficient per scene unit. Vacuum is zero. This is
-     * The current engine supports homogeneous absorption but not participating scattering; scattering
-     * and phase data require a future transport ABI.
+     * Finite, non-negative Beer-Lambert absorption coefficient per scene unit. Vacuum is zero.
+     * Volume transport supports homogeneous absorption without participating scattering.
      */
     public float3 absorptionCoefficient = float3(0.0);
     /** Physical index of refraction for boundary reflection and transmission. Vacuum and air are 1. */
@@ -174,7 +173,7 @@ public float3 openPbrSpecularF0(OpenPbrSurface material) {
 
 /**
  * Where the surface is being looked at, and the frame constants a procedural one evaluates against. The
- * description itself is not here: the implementation produces it as the `inout OpenPbrSurface` it fills.
+ * implementation returns an OpenPbrSurface describing the hit.
  */
 public struct SurfaceInput {
     /** Versioned pushed roots and descriptor-heap address-table root for this composition. */

@@ -3,12 +3,9 @@ module caustica_surface;
 import caustica_types;
 
 /**
- * A surface implementation supplies PARAMETERS, not lobes. The engine implements the OpenPBR BSDF once,
- * so the value/pdf agreement every lighting backend targets cannot be violated by an implementation
- * rather than merely being required of it.
- *
- * The cost of that narrowing is deliberate: a genuinely different lobe (hair, cloth, a coat) is engine
- * work, and OpenPBR already reserves the parameters for those.
+ * Supplies the supported OpenPBR parameters. The engine evaluates and samples the BSDF, keeping its
+ * scattering value and probability density consistent. Additional lobes require engine support and
+ * corresponding parameters in OpenPbrSurface.
  */
 public interface ISurfaceModel {
     /**
