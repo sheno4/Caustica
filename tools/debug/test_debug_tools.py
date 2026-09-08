@@ -2,13 +2,37 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 from caustica_debug import Client
 from analyze_recording import analyze, summarize, milliseconds
+import check_rt_lifecycle
 
 
 class DebugToolsTest(unittest.TestCase):
+    def test_lifecycle_restores_rt_when_report_write_fails(self):
+        client = Mock()
+        client.call.side_effect = lambda op, **kwargs: (
+            {"ready": True, "paused": False, "runtime": {"requested": False}}
+            if op == "status" else {})
+        failure = OSError("report storage unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            output = str(Path(directory) / "lifecycle.json")
+            with patch("sys.argv", ["check_rt_lifecycle", "--cycles", "1", "--output", output]), \
+                    patch.object(check_rt_lifecycle, "Client", return_value=client), \
+                    patch.object(check_rt_lifecycle, "await_runtime", return_value={"frames": 42}) as settle, \
+                    patch.object(Path, "write_text", side_effect=failure):
+                with self.assertRaises(OSError) as caught:
+                    check_rt_lifecycle.main()
+        self.assertIs(caught.exception, failure)
+        self.assertEqual([entry for entry in client.call.call_args_list
+                          if entry.args[0] == "runtime.set"], [
+            call("runtime.set", enabled=False),
+            call("runtime.set", enabled=True),
+            call("runtime.set", enabled=False),
+        ])
+        settle.assert_called_with(client, False, 120)
+
     def test_jfr_timespan_json_units(self):
         self.assertEqual(milliseconds("PT0.0125S"), 12.5)
         self.assertEqual(milliseconds(12500000), 12.5)

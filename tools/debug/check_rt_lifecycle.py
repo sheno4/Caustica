@@ -48,10 +48,12 @@ def main():
                                      "status": status, "capture": capture})
                 print(f"Cycle {cycle + 1}: enabled={enabled}, frame={status['frames']}", flush=True)
     finally:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(observations, indent=2), encoding="utf-8")
-        client.call("runtime.set", enabled=initial["runtime"]["requested"])
-        await_runtime(client, initial["runtime"]["requested"], args.timeout)
+        try:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(observations, indent=2), encoding="utf-8")
+        finally:
+            client.call("runtime.set", enabled=initial["runtime"]["requested"])
+            await_runtime(client, initial["runtime"]["requested"], args.timeout)
 
 
 if __name__ == "__main__":
