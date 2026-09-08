@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.client.entity;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.minecraft.client.mixin.ModelPartAccessor;
-import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,9 +22,8 @@ final class RtCuboidEmitter {
         }
     };
 
-    // Model.Simple wrappers are created per submission by vanilla. Their root ModelPart is the stable
-    // geometry identity: caching by the wrapper leaked one complete template tree every frame.
-    private final IdentityHashMap<ModelPart, ModelTemplate> templates = new IdentityHashMap<>();
+    // Model.Simple wrappers are created per submission; their root is the stable geometry identity.
+    private final IdentityHashMap<ModelPart, PartTemplate> templates = new IdentityHashMap<>();
     private final Vector3f scratch = new Vector3f();
     private final float[] quadX = new float[4];
     private final float[] quadY = new float[4];
@@ -40,16 +38,16 @@ final class RtCuboidEmitter {
      * Return a template only after validating the complete ordered tree. Nothing is written on failure,
      * so the caller can safely use vanilla's final render method as the fallback.
      */
-    ModelTemplate prepare(Model<?> model) {
+    PartTemplate prepare(Model<?> model) {
         if (!VANILLA_MODEL_CLASS.get(model.getClass())) {
             return null;
         }
         ModelPart root = model.root();
-        ModelTemplate template = templates.get(root);
+        PartTemplate template = templates.get(root);
         if (template != null && template.matches(root)) {
             return template;
         }
-        template = ModelTemplate.create(root);
+        template = PartTemplate.create(root);
         if (template == null) {
             templates.remove(root);
             return null;
@@ -66,9 +64,9 @@ final class RtCuboidEmitter {
     }
 
     /** Return packed actual cube counts: specialized in the high 32 bits, generic in the low 32 bits. */
-    long emit(ModelTemplate template, PoseStack poseStack, RtEntityCapture capture, int color) {
+    long emit(PartTemplate template, PoseStack poseStack, RtEntityCapture capture, int color) {
         capture.ensureAdditionalVertexCapacity(template.maxVertices);
-        return emitPart(template.root, poseStack, capture, color);
+        return emitPart(template, poseStack, capture, color);
     }
 
     private long emitPart(PartTemplate template, PoseStack poseStack, RtEntityCapture capture, int color) {
@@ -77,25 +75,28 @@ final class RtCuboidEmitter {
             return 0L;
         }
         poseStack.pushPose();
-        part.translateAndRotate(poseStack);
-        long counts = 0L;
-        if (!part.skipDraw) {
-            PoseStack.Pose pose = poseStack.last();
-            for (CubeTemplate cube : template.cubes) {
-                if (cube instanceof EightCornerCube eight) {
-                    emitEightCornerCube(eight, pose, capture, color);
-                    counts += 1L << 32;
-                } else {
-                    emitGenericCube(cube.cube, pose, capture, color);
-                    counts++;
+        try {
+            part.translateAndRotate(poseStack);
+            long counts = 0L;
+            if (!part.skipDraw) {
+                PoseStack.Pose pose = poseStack.last();
+                for (CubeTemplate cube : template.cubes) {
+                    if (cube instanceof EightCornerCube eight) {
+                        emitEightCornerCube(eight, pose, capture, color);
+                        counts += 1L << 32;
+                    } else {
+                        emitGenericCube(cube.cube, pose, capture, color);
+                        counts++;
+                    }
                 }
             }
+            for (PartTemplate child : template.children) {
+                counts += emitPart(child, poseStack, capture, color);
+            }
+            return counts;
+        } finally {
+            poseStack.popPose();
         }
-        for (PartTemplate child : template.children) {
-            counts += emitPart(child, poseStack, capture, color);
-        }
-        poseStack.popPose();
-        return counts;
     }
 
     private void emitEightCornerCube(EightCornerCube cube, PoseStack.Pose pose,
@@ -137,26 +138,7 @@ final class RtCuboidEmitter {
         }
     }
 
-    static final class ModelTemplate {
-        final PartTemplate root;
-        final int maxVertices;
-
-        private ModelTemplate(PartTemplate root) {
-            this.root = root;
-            this.maxVertices = root.maxVertices;
-        }
-
-        static ModelTemplate create(ModelPart root) {
-            PartTemplate part = PartTemplate.create(root);
-            return part != null ? new ModelTemplate(part) : null;
-        }
-
-        boolean matches(ModelPart root) {
-            return this.root.matches(root);
-        }
-    }
-
-    private static final class PartTemplate {
+    static final class PartTemplate {
         final ModelPart part;
         final CubeTemplate[] cubes;
         final PartTemplate[] children;
@@ -319,9 +301,9 @@ final class RtCuboidEmitter {
 
         EightCornerCube(ModelPart.Cube cube, float[] x, float[] y, float[] z, FaceTemplate[] faces) {
             super(cube);
-            this.x = Arrays.copyOf(x, STANDARD_CORNERS);
-            this.y = Arrays.copyOf(y, STANDARD_CORNERS);
-            this.z = Arrays.copyOf(z, STANDARD_CORNERS);
+            this.x = x;
+            this.y = y;
+            this.z = z;
             this.faces = faces;
         }
     }

@@ -175,7 +175,7 @@ class RtEntityCollectorBase {
         int color = tintedColor == 0 ? -1 : tintedColor; // vanilla uses 0 as the no-tint sentinel in some submit paths
         int vertStart = capture.verts.size();
         int idxStart = capture.idx.size();
-        RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
+        RtCuboidEmitter.PartTemplate directTemplate = cuboidEmitter.prepare(model);
         long directCubeCounts = 0L;
         long drawStart = profileDynamicEntity ? instrumentation.startStage() : 0L;
         try {
