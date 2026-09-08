@@ -235,7 +235,7 @@ final class RtLightCollector {
         return (atlas - origin) * inverse;
     }
 
-    /** Two halves in one float lane (world_common.slang {@code unpackHalf2} order: x low, y high). */
+    /** Two half-float bit patterns in one float lane: x low, y high. */
     private static float packHalf2(float x, float y) {
         int bits = (Float.floatToFloat16(y) << 16) | (Float.floatToFloat16(x) & 0xFFFF);
         return Float.intBitsToFloat(bits);

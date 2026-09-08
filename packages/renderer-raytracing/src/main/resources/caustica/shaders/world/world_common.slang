@@ -2,16 +2,12 @@
 // records and serializers from Slang reflection.
 module world_common;
 
-// Re-exported: engine code has used these names since before the API existed, and the colour space a
-// slot must return is part of the slot contract, so one definition serves both sides.
+// Color-space definitions are shared by renderer code and material slot contracts.
 __exported import caustica_color;
 import caustica_types;
 
-// Read-only device pointer with explicit std430 layout. The layout parameter is LOAD-BEARING: a bare
-// Ptr<T> gets Slang's "natural" layout (no vec4 16-byte alignment can shift reflected vector fields
-// away from the Java writer's offsets, silently reading garbage) and additionally requires the
-// scalarBlockLayout device feature. Keep std430 unless RtDeviceBringup explicitly enables that feature;
-// this alias is the single layout switch and generated Java serialization stays in lock-step.
+// Device pointers use the same std430 offsets as reflected Java serializers. Natural layout
+// can change vector alignment and requires the scalarBlockLayout device feature.
 public typealias ConstPtr<T> = Ptr<T, Access.Read, AddressSpace.Device, Std430DataLayout>;
 public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
 
@@ -140,77 +136,3 @@ public struct WorldPush {
     public uint64_t environmentBinding;
     public uint     environmentImplementation;
 };
-
-// Largest finite half. Producers of fp16 HDR storage clamp to this instead of letting the conversion
-// round up to +inf and propagate as NaN — world.rgen's rgba16f outImage store most of all, which is the
-// one place the whole path integral's absolute radiance meets a half.
-public static const float HALF_MAX = 65504.0;
-
-// Canonical per-triangle record (48 B). Geometry producers resolve source-specific attributes before
-// writing this representation; the hit shaders do not branch on producer identity.
-public struct Prim {
-    public float4 normal; // xyz = geometric normal, w = per-primitive emission strength
-    public float4 tint;
-    public uint materialId;
-    public uint flags;
-    // baseColorTextureIndex:16 | coverageMode:2 | texturePresent:1 | textureLinear:1.
-    public uint aux0;
-    // Conservative provider-authored triangle coverage min:8|max:8; bit 16 means absent.
-    public uint aux1;
-};
-
-// The compiled material record is split by which stage reads it.
-//
-// MaterialBinding is the only material record either any-hit loads. Its sixteen aligned bytes hold only
-// definition-owned state; per-triangle texture and coverage facts live in Prim.aux0.
-public struct MaterialBinding {
-    // flags:8 | reserved:16 | surfaceImpl:8. Implementation 0 is the built-in surface; invalid indices
-    // visibly resolve to the error surface.
-    public uint packed0;
-    public uint surface;
-    public uint reserved;
-    public uint packed1;    // coverageCutoff:8, unorm
-};
-
-// Coverage: whether the surface is present along this ray. Varies per texel, and it is the only axis
-// whose estimator varies by ray type — radiance rays resolve STOCHASTIC with white noise, guide and
-// shadow rays need a single-valued answer and take the deterministic cutoff instead.
-public static const uint COVERAGE_CUTOUT = 1u;
-
-// Transmittance: the surface is there and passes light through, so a shadow ray filters and continues
-// rather than being blocked.
-public static const uint BINDING_TRANSMISSIVE = 1u;
-
-public uint primitiveCoverage(uint aux0) { return (aux0 >> 16u) & 3u; }
-public bool primitiveBaseTexturePresent(uint aux0) { return (aux0 & (1u << 18u)) != 0u; }
-
-public uint bindingFlags(MaterialBinding binding) { return binding.packed0 & 255u; }
-public float bindingCutoff(MaterialBinding binding) { return float(binding.packed1 & 255u) * (1.0 / 255.0); }
-
-// packHalf2x16 equivalent (Slang core module has no GLSL pack builtin; f32tof16 returns the half
-// bit-pattern in the low 16 bits).
-public uint packHalf2(float2 v) {
-    return (f32tof16(v.y) << 16) | (f32tof16(v.x) & 0xFFFFu);
-}
-
-public float2 unpackHalf2(uint p) {
-    return float2(f16tof32(p & 0xFFFFu), f16tof32(p >> 16));
-}
-
-// Octahedral 16:16 unit-vector packing for compact current/previous guide normals.
-public uint packNormalOct(float3 n) {
-    float3 v = n / max(abs(n.x) + abs(n.y) + abs(n.z), 1.0e-8);
-    float2 p = v.z >= 0.0 ? v.xy
-            : (1.0 - abs(float2(v.y, v.x))) * float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
-    uint2 q = uint2(round(clamp(p * 0.5 + 0.5, 0.0, 1.0) * 65535.0));
-    return q.x | (q.y << 16);
-}
-
-public float3 unpackNormalOct(uint packed) {
-    float2 p = float2(uint2(packed & 0xFFFFu, packed >> 16)) * (1.0 / 65535.0) * 2.0 - 1.0;
-    float3 v = float3(p, 1.0 - abs(p.x) - abs(p.y));
-    float fold = max(-v.z, 0.0);
-    v.x += v.x >= 0.0 ? -fold : fold;
-    v.y += v.y >= 0.0 ? -fold : fold;
-    return normalize(v);
-}
