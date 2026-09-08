@@ -3,10 +3,8 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
-import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -76,14 +74,12 @@ final class RtFramePreparationTest {
     @Test
     void parallelGeometryEmitterAndHitOrderMatchesSequentialPacking() {
         int count = 1027;
-        var origin = new SceneOrigin(17, -3, 29);
         List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
         for (int index = 0; index < count; index++) {
             int flags = RtRetainedGeometryPlan.HAS_SURFACE
                     | (index % 2 == 0 ? RtRetainedGeometryPlan.CUTOUT : RtRetainedGeometryPlan.HAS_VOLUME);
             records.add(new RtRetainedGeometryPlan.GeometryRecord(index, 2, 3, flags,
-                    100, 200, index, 0.4f, GeometryTransform.translation(index, 5, 9),
-                    GeometryTransform.translation(index - 1, 6, 8), new VulkanDeviceAddress(0x1000), 12,
+                    100, 200, 0.4f, index,
                     new VulkanDeviceAddress(0x2000), index * 21,
                     new VulkanDeviceAddress(0x3000 + index * 28L), 0));
         }
@@ -91,11 +87,10 @@ final class RtFramePreparationTest {
                 new RetainedSceneSnapshot.PrimitiveEmitter(4, 1, 84L),
                 new RetainedSceneSnapshot.PrimitiveEmitter(5, 1, 99L));
         var indices = new Long2IntOpenHashMap(new long[]{42, 84}, new int[]{1, 0});
-        ByteBuffer sequentialGeometry = RtRetainedGeometryPlan.pack(records, origin);
+        ByteBuffer sequentialGeometry = RtRetainedGeometryPlan.pack(records);
         ByteBuffer sequentialEmitters = ByteBuffer.allocate(count * 28).order(ByteOrder.nativeOrder());
-        boolean[] sequentialLinked = new boolean[3];
         for (int index = 0; index < count; index++) {
-            RtRetainedSceneBackend.putEmitterIndices(sequentialEmitters, 0, 7, ranges, indices, sequentialLinked);
+            EmitterReference.pack(sequentialEmitters, 0, 7, ranges, indices);
         }
         sequentialEmitters.flip();
         ByteBuffer parallelGeometry = ByteBuffer.allocateDirect(sequentialGeometry.remaining());
@@ -110,13 +105,17 @@ final class RtFramePreparationTest {
                 int first = chunk.getFirst();
                 List<RtRetainedGeometryPlan.GeometryRecord> chunkRecords = records.subList(first, chunk.getLast() + 1);
                 RtRetainedGeometryPlan.packInto(parallelGeometry.slice(first * RtRetainedGeometryPlan.RECORD_BYTES,
-                        chunk.size() * RtRetainedGeometryPlan.RECORD_BYTES), chunkRecords, origin);
+                        chunk.size() * RtRetainedGeometryPlan.RECORD_BYTES), chunkRecords);
                 ByteBuffer emitterSlice = parallelEmitters.slice(first * 28, chunk.size() * 28)
                         .order(ByteOrder.nativeOrder());
-                for (int ignored : chunk) {
-                    RtRetainedSceneBackend.putEmitterIndices(emitterSlice, 0, 7, ranges, indices,
-                            linked.get(chunkIndex)::set);
+                var builder = new RtEmitterRuns.Builder();
+                for (int index = 0; index < chunk.size(); index++) {
+                    builder.addSpan(index * 28, 0, 7, ranges);
                 }
+                var runs = builder.build();
+                runs.resolve(new Object(), indices);
+                runs.pack(emitterSlice);
+                for (int light : runs.linked()) linked.get(chunkIndex).set(light);
                 hits.set(chunkIndex, RtRetainedGeometryPlan.hitGroups(chunkRecords));
             });
         }
@@ -125,9 +124,7 @@ final class RtFramePreparationTest {
         assertEquals(RtRetainedGeometryPlan.hitGroups(records), hits.stream().flatMap(List::stream).toList());
         BitSet combined = new BitSet();
         linked.forEach(combined::or);
-        for (int index = 0; index < sequentialLinked.length; index++) {
-            assertEquals(sequentialLinked[index], combined.get(index));
-        }
+        assertEquals(BitSet.valueOf(new long[]{0b11}), combined);
     }
 
     @Test

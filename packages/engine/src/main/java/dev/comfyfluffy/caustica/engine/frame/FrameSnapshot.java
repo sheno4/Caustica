@@ -32,6 +32,12 @@ public final class FrameSnapshot {
 
     public SceneView view() { return view; }
 
+    /** Units and origin belong to the completed scene used by this frame. */
+    public FrameSnapshot withSceneCoordinates(SceneOrigin origin, double metersPerUnit) {
+        return sceneOrigin.equals(origin) && metersPerWorldUnit == metersPerUnit ? this : new FrameSnapshot(view, origin,
+                proceduralSurfaceAnimationEnabled, timeSeconds, metersPerUnit);
+    }
+
     public Matrix4f copyProjection() {
         return new Matrix4f(projection);
     }
@@ -60,7 +66,7 @@ public final class FrameSnapshot {
         return view.camera().z();
     }
 
-    /** Host-selected world origin used to keep this frame's GPU coordinates precise. */
+    /** Scene origin used to keep this frame's GPU coordinates precise. */
     public SceneOrigin sceneOrigin() {
         return sceneOrigin;
     }

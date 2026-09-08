@@ -148,12 +148,17 @@ public final class TlasBuilder {
 
         public Pool(VulkanDeviceContext ctx) {
             this.ctx = ctx;
-            slots = new RtCompletionSlotPool<>(slot -> ctx.deferDestroy(slot::destroy));
+            slots = new RtCompletionSlotPool<>(Slot::destroy);
         }
 
         public Reserved reserve(int count, GraphicsUse graphicsUse) {
+            return reserve(count, graphicsUse::whenComplete);
+        }
+
+        /** The revision returns storage only after preparation and every published reader release it. */
+        public Reserved reserve(int count, java.util.function.Consumer<Runnable> whenReleased) {
             var slot = slots.acquire(candidate -> candidate.capacity >= count,
-                    () -> createSlot(ctx, capacity(count)), graphicsUse::whenComplete);
+                    () -> createSlot(ctx, capacity(count)), whenReleased);
             return new Reserved(slot, count);
         }
 
@@ -215,7 +220,7 @@ public final class TlasBuilder {
     }
 
     /** Immutable source buffers retain their position and length while cached by a completed slot. */
-    static int copyPages(ByteBuffer target, List<ByteBuffer> pages, List<ByteBuffer> previous) {
+    public static int copyPages(ByteBuffer target, List<ByteBuffer> pages, List<ByteBuffer> previous) {
         int offset = 0, previousOffset = 0, copied = 0;
         for (int index = 0; index < pages.size(); index++) {
             var page = pages.get(index);
@@ -336,7 +341,7 @@ public final class TlasBuilder {
             vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     build.get(0), stack.ints(capacity), sizes);
 
-            backing = ctx.createBuffer(sizes.accelerationStructureSize(),
+            backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, label + " backing");
             VkAccelerationStructureCreateInfoKHR createInfo = VkAccelerationStructureCreateInfoKHR.calloc(stack)
                     .sType$Default().buffer(backing.handle()).offset(0).size(sizes.accelerationStructureSize())
@@ -382,7 +387,7 @@ public final class TlasBuilder {
 
     /** Record the prepared top-level build. */
     public static void record(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer, Prepared prepared) {
-        try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, commandBuffer, prepared.label + " build");
+        try (var ignored = RtDebugLabels.scope(ctx, commandBuffer, prepared.label + " build");
              MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = buildInfo(
                     stack, prepared.instanceBuffer.deviceAddress());

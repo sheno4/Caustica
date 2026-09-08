@@ -20,10 +20,10 @@ final class RtFrameHistory {
         Matrix4f projectionView = new Matrix4f(projection).mul(rotation);
         boolean continuous = previous != null && previous.number() + 1 == number
                 && previous.snapshot().view().entryScene() == snapshot.view().entryScene()
-                && previous.snapshot().sceneOrigin().equals(snapshot.sceneOrigin())
                 && previous.snapshot().metersPerWorldUnit() == snapshot.metersPerWorldUnit()
                 && previous.extent().equals(extent) && previous.route() == route
                 && !cameraCut(snapshot, projection, rotation);
+        // Camera-relative projections use world motion; GPU instance history separately rebases scene origins.
         Float3 delta = continuous ? new Float3(
                 (float) (snapshot.cameraX() - previous.snapshot().cameraX()),
                 (float) (snapshot.cameraY() - previous.snapshot().cameraY()),

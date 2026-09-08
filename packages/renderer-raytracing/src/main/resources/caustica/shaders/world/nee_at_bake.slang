@@ -3,14 +3,15 @@ module nee_at_bake;
 import world_common;
 import caustica_resources;
 
-struct NeeAtPlanRecord {
-    uint previousToCurrent;
-    float power;
+struct NeeAtLightIdentity {
+    uint64_t identity;
+    uint denseIndex;
+    uint reserved;
 };
 
 public struct NeeAtBakePush {
     public uint64_t stateAddress;
-    public uint64_t planAddress;
+    public uint64_t powerAddress;
     public uint64_t previousPixelFeedbackAddress;
     public uint64_t blockSumAddress;
     public uint64_t previousDepthAddress;
@@ -19,9 +20,13 @@ public struct NeeAtBakePush {
     public uint historyValid;
     public uint currentLinearDepthIndex;
     public uint currentMotionIndex;
+    public uint64_t previousIdentitiesAddress;
+    public uint64_t currentIdentityLookupAddress;
+    public uint currentIdentityLookupMask;
+    public uint reserved;
 };
 
-// Feedback winners carry screen-space coherence in bit 31 and a light identity in bits 0–30.
+// Feedback winners carry screen-space coherence in bit 31 and the previous dense light index in bits 0–30.
 static const uint NEE_AT_BAKE_SCREEN_SPACE_COHERENT = 0x80000000u;
 static const uint NEE_AT_BAKE_LIGHT_INDEX_MASK = 0x7fffffffu;
 
@@ -29,8 +34,36 @@ groupshared uint localLights[128];
 groupshared uint localMasses[128];
 groupshared uint localScan[128];
 groupshared uint blockScan[64];
-groupshared uint blockScanNext[64];
 groupshared uint blockCarry;
+
+// Every lane participates, including padded lanes with value zero. Each barrier separates reads
+// of the previous scan step from writes to the next one.
+uint inclusiveBlockScan(uint lane, uint value) {
+    blockScan[lane] = value;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint offset = 1u; offset < 64u; offset <<= 1u) {
+        uint next = blockScan[lane] + (lane >= offset ? blockScan[lane - offset] : 0u);
+        GroupMemoryBarrierWithGroupSync();
+        blockScan[lane] = next;
+        GroupMemoryBarrierWithGroupSync();
+    }
+    return blockScan[lane];
+}
+
+// Feedback indices belong to the actual previous submitted frame's immutable dense identity table.
+uint neeAtCurrentLight(uint previousIndex) {
+    ConstPtr<uint64_t> previous = (ConstPtr<uint64_t>)neeAtBakePush.previousIdentitiesAddress;
+    uint64_t identity = previous[previousIndex];
+    ConstPtr<NeeAtLightIdentity> current = (ConstPtr<NeeAtLightIdentity>)neeAtBakePush.currentIdentityLookupAddress;
+    uint mask = neeAtBakePush.currentIdentityLookupMask;
+    uint slot = neeAtHash(uint(identity) ^ uint(identity >> 32u)) & mask;
+    for (;;) {
+        NeeAtLightIdentity entry = current[slot];
+        if (entry.identity == 0ull) return 0xffffffffu;
+        if (entry.identity == identity) return entry.denseIndex;
+        slot = (slot + 1u) & mask;
+    }
+}
 
 uint neeAtBlockCount(NeeAtState state) {
     return (state.lightCount + 63u) / 64u;
@@ -53,8 +86,7 @@ void collectGlobalFeedback(NeeAtState state, uint pixelIndex) {
     uint slot = state.lightCount;
     uint previousLight = event.x & NEE_AT_BAKE_LIGHT_INDEX_MASK;
     if (asfloat(event.y) > 0.0 && previousLight < state.priorLightCount) {
-        ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
-        uint mapped = plan[previousLight].previousToCurrent;
+        uint mapped = neeAtCurrentLight(previousLight);
         if (mapped < state.lightCount) slot = mapped;
     }
     DevicePtr<uint> counts = (DevicePtr<uint>)state.lightFeedbackAddress;
@@ -66,12 +98,12 @@ void collectGlobalFeedback(NeeAtState state, uint pixelIndex) {
 void computeProxyCounts(NeeAtState state, uint group, uint lane, uint lightIndex) {
     DevicePtr<uint2> distribution = (DevicePtr<uint2>)state.globalDistributionAddress;
     DevicePtr<uint> blockSums = (DevicePtr<uint>)neeAtBakePush.blockSumAddress;
-    ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
+    ConstPtr<float> powers = (ConstPtr<float>)neeAtBakePush.powerAddress;
     ConstPtr<uint> feedback = (ConstPtr<uint>)state.lightFeedbackAddress;
     float feedbackTotal = neeAtFeedbackTotal(state);
     uint count = 0u;
     if (lightIndex < state.lightCount) {
-        float prior = plan[lightIndex].power / max(state.powerTotal, 1.0e-20);
+        float prior = powers[lightIndex] / max(state.powerTotal, 1.0e-20);
         float historic = feedbackTotal > 0.0 ? float(feedback[lightIndex]) / feedbackTotal : prior;
         float pdf = clamp(lerp(prior, historic, NEE_AT_GLOBAL_FEEDBACK_WEIGHT), 0.0, 1.0);
         // The proxy buffer holds NEE_AT_PROXY_RATIO entries per light and the sampler indexes it by
@@ -103,17 +135,9 @@ void scanBlockBases(NeeAtState state, uint lane) {
     for (uint chunk = 0u; chunk < blocks; chunk += 64u) {
         uint index = chunk + lane;
         uint value = index < blocks ? blockSums[index] : 0u;
-        blockScan[lane] = value;
-        GroupMemoryBarrierWithGroupSync();
-        for (uint offset = 1u; offset < 64u; offset <<= 1u) {
-            blockScanNext[lane] = blockScan[lane]
-                    + (lane >= offset ? blockScan[lane - offset] : 0u);
-            GroupMemoryBarrierWithGroupSync();
-            blockScan[lane] = blockScanNext[lane];
-            GroupMemoryBarrierWithGroupSync();
-        }
+        uint inclusive = inclusiveBlockScan(lane, value);
         uint chunkBase = blockCarry;
-        if (index < blocks) blockSums[index] = chunkBase + blockScan[lane] - value;
+        if (index < blocks) blockSums[index] = chunkBase + inclusive - value;
         GroupMemoryBarrierWithGroupSync();
         if (lane == 0u) blockCarry = chunkBase + blockScan[63];
         GroupMemoryBarrierWithGroupSync();
@@ -127,16 +151,9 @@ void computeProxyBases(NeeAtState state, uint group, uint lane, uint lightIndex)
     DevicePtr<uint2> distribution = (DevicePtr<uint2>)state.globalDistributionAddress;
     ConstPtr<uint> blockSums = (ConstPtr<uint>)neeAtBakePush.blockSumAddress;
     uint count = lightIndex < state.lightCount ? distribution[lightIndex].x : 0u;
-    blockScan[lane] = count;
-    GroupMemoryBarrierWithGroupSync();
-    for (uint offset = 1u; offset < 64u; offset <<= 1u) {
-        blockScanNext[lane] = blockScan[lane] + (lane >= offset ? blockScan[lane - offset] : 0u);
-        GroupMemoryBarrierWithGroupSync();
-        blockScan[lane] = blockScanNext[lane];
-        GroupMemoryBarrierWithGroupSync();
-    }
+    uint inclusive = inclusiveBlockScan(lane, count);
     if (lightIndex < state.lightCount) {
-        distribution[lightIndex] = uint2(count, blockSums[group] + blockScan[lane] - count);
+        distribution[lightIndex] = uint2(count, blockSums[group] + inclusive - count);
     }
 }
 
@@ -191,7 +208,6 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
     uint2 jitter = uint2(neeAtHash(state.frameIndex * 2u) % state.tileSize,
             neeAtHash(state.frameIndex * 2u + 1u) % state.tileSize);
     ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
-    ConstPtr<NeeAtPlanRecord> plan = (ConstPtr<NeeAtPlanRecord>)neeAtBakePush.planAddress;
     if (lane < state.tileSize * state.tileSize) {
         uint2 local = uint2(lane % state.tileSize, lane / state.tileSize);
         uint2 paddedExtent = uint2(state.tileCountX, state.tileCountY) * state.tileSize;
@@ -211,7 +227,7 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
         uint previousLight = event.x & NEE_AT_BAKE_LIGHT_INDEX_MASK;
         if (asfloat(event.y) > 0.0 && (event.x & NEE_AT_BAKE_SCREEN_SPACE_COHERENT) != 0u
                 && previousLight < state.priorLightCount) {
-            uint currentLight = plan[previousLight].previousToCurrent;
+            uint currentLight = neeAtCurrentLight(previousLight);
             if (currentLight < state.lightCount) {
                 uint slot = neeAtHash(currentLight) % state.localSlotCount;
                 for (uint probe = 0u; probe < state.localSlotCount; probe++) {

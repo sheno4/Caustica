@@ -13,14 +13,14 @@ import java.util.List;
 public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh> meshes,
                                     List<Instance> instances, List<Light> lights) {
     public RetainedSceneSnapshot {
-        scenes = List.copyOf(scenes);
+        scenes = immutable(scenes);
         meshes = immutable(meshes);
         instances = immutable(instances);
         lights = immutable(lights);
     }
 
     private static <T> List<T> immutable(List<T> values) {
-        return values instanceof SnapshotPages.Values<?> ? values : List.copyOf(values);
+        return values instanceof SnapshotList<?> ? values : List.copyOf(values);
     }
 
     public record Scene(SceneId id, EnvironmentBinding<?> environment) { }
@@ -43,22 +43,10 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
         return true;
     }
 
-    public record Mesh(long identity, MeshBuild<?> build, List<GeometryPrograms> geometryPrograms,
+    public record Mesh(long identity, MeshBuild<?> build,
                        dev.comfyfluffy.caustica.api.geometry.ReadyMesh<?> ready) {
         public Mesh {
             java.util.Objects.requireNonNull(build, "build");
-            geometryPrograms = List.copyOf(geometryPrograms);
-            if (geometryPrograms.size() != build.geometries().size()) {
-                throw new IllegalArgumentException("each geometry needs one resolved program entry");
-            }
-        }
-    }
-    /** Zero selects the built-in error surface or vacuum volume. */
-    public record GeometryPrograms(int surfaceImplementation, int volumeImplementation) {
-        public GeometryPrograms {
-            if (surfaceImplementation < 0 || volumeImplementation < 0) {
-                throw new IllegalArgumentException("program implementation indices must be non-negative");
-            }
         }
     }
     public record Instance(long identity, long placementOrdinal, SceneId scene, long meshIdentity,

@@ -445,6 +445,7 @@ public final class MinecraftRtRuntime {
         settings = CausticaConfig.snapshot();
         if (session != null && session.renderer != null) {
             session.renderer.configureSettings(RtRenderSettings.capture(settings, swapchainPqActive));
+            session.renderer.latchSceneReadiness();
         }
         frameActive = state == State.ACTIVE;
     }

@@ -8,6 +8,7 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
@@ -41,31 +42,36 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Supplier;
-import java.util.function.IntConsumer;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
 
-/** Immutable scene snapshots consumed by frame-local TLAS, shader-table, and lighting work. */
+/** Workers publish completed geometry revisions; frames retain current and submitted history roots. */
 public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final VulkanDeviceContext ctx;
     private final RtNeeAtBackend neeAt;
     private final RtFramePreparation framePreparation = new RtFramePreparation();
     private final RtCompletionSlotPool<TraceSlot> traceSlots;
+    private final RtCompletionSlotPool<InstanceUploadSlot> instanceBuffers;
     private final TlasBuilder.Pool tlasSlots;
     private final Map<GraphicsUse, FrameSnapshot> inFlightFrames = new IdentityHashMap<>();
-    private final Map<SceneId, SharedResource<SceneMotionHistory>> motionHistoryByScene = new IdentityHashMap<>();
-    private final FrameAssembly frameAssembly = new FrameAssembly(mesh ->
-            new FrameMesh(mesh, (RtPreparedMesh) SceneDirectory.preparedResource(mesh.ready())));
-    private List<RetainedSceneSnapshot.Scene> contentScenes;
-    private List<RetainedSceneSnapshot.Light> contentLights;
-    private Map<SceneId, SceneContent> retainedContent;
-    private final RtLightPageAssembly lightAssembly = new RtLightPageAssembly();
-    private final Map<SceneId, LightIndexRevision> lightIndicesByScene = new IdentityHashMap<>();
-    private final Map<SceneId, TracePlanCache> tracePlansByScene = new IdentityHashMap<>();
-    private final Map<SceneId, EmitterCaches> emitterPagesByScene = new IdentityHashMap<>();
-    private final Map<SceneId, RtPackedLightPages> packedLightsByScene = new IdentityHashMap<>();
-    private final Map<SceneId, RtPackedTlasPages> packedTlasByScene = new IdentityHashMap<>();
+    private final Map<SceneId, SharedResource<PreparedWorldGeometry>> preparedGeometryByScene = new IdentityHashMap<>();
+    private Thread retirementThread;
+    private final java.util.concurrent.ExecutorService retirement = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "Caustica scene retirement");
+        thread.setDaemon(true);
+        retirementThread = thread;
+        return thread;
+    });
+    private final RtInstanceTablePlan.Builder instanceTables = new RtInstanceTablePlan.Builder();
+    private final SceneRevisionPreparation scenePreparation = new SceneRevisionPreparation((mesh, composition) ->
+            new FrameMesh(mesh, (RtPreparedMesh) SceneDirectory.preparedResource(mesh.ready()), composition));
+    private Runnable scenePreparationQuiescer = () -> { };
+    private final Map<SceneId, SceneCaches> preparationCaches = new IdentityHashMap<>();
     private Supplier<SharedResource<RetainedSceneSnapshot>> capture;
     private boolean closed;
     private boolean sessionClosing;
@@ -73,29 +79,63 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     public RtRetainedSceneBackend(VulkanDeviceContext ctx) {
         this.ctx = Objects.requireNonNull(ctx);
         this.neeAt = new RtNeeAtBackend(ctx);
-        this.traceSlots = new RtCompletionSlotPool<>(slot -> ctx.deferDestroy(slot::destroy));
+        this.traceSlots = new RtCompletionSlotPool<>(TraceSlot::destroy);
+        this.instanceBuffers = new RtCompletionSlotPool<>(slot -> slot.buffer.destroy());
         this.tlasSlots = new TlasBuilder.Pool(ctx);
+    }
+
+    private void retire(Runnable release) {
+        if (Thread.currentThread() == retirementThread) release.run();
+        else retirement.execute(release);
     }
 
     @Override public synchronized void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
         this.capture = Objects.requireNonNull(capture);
     }
 
+    /** The runtime stops preparation and releases its pending/publication claims before lifecycle drains. */
+    public synchronized void bindScenePreparationQuiescer(Runnable quiescer) {
+        scenePreparationQuiescer = Objects.requireNonNull(quiescer);
+    }
+
+    /** A serial preparation worker owns the assembly caches; the returned revision owns its source resources. */
+    public SharedResource<PreparedSceneRevision> prepareSceneRevision(SharedResource<RetainedSceneSnapshot> root,
+                                                                     ProgramComposition composition) {
+        requireOpen();
+        return RtFramePreparation.measure("scene-revision", root.get().instances().size(), root.get().lights().size(),
+                () -> scenePreparation.prepare(root, composition));
+    }
+
+    /** Called after the preparation worker is quiescent; existing frame claims remain valid. */
+    public void clearScenePreparation() {
+        scenePreparation.clear();
+        var released = new ArrayList<>(preparedGeometryByScene.values());
+        preparedGeometryByScene.clear();
+        closeAll(released, null);
+    }
+
+    private void quiesceScenePreparation() {
+        Runnable quiescer;
+        synchronized (this) { quiescer = scenePreparationQuiescer; }
+        quiescer.run();
+        clearScenePreparation();
+    }
+
     /** Prepares the global light distribution before the stable-plane build. */
     public synchronized PreparedLighting prepareLighting(SceneId scene, LightingFrame frame,
                                                           VkCommandBuffer commandBuffer,
                                                           GraphicsUse graphicsUse) {
-        FrameSceneSnapshot current = frameScene(scene, graphicsUse);
+        PreparedWorldGeometry current = frameScene(scene, graphicsUse).geometry;
         var input = new RtNeeAtBackend.FrameInput(frame.width(), frame.height(), frame.frameIndex(),
                 frame.metersPerSceneUnit(), frame.historyContinuous());
-        return new PreparedLighting(neeAt.prepare(scene, current.content.lights(), input,
+        return new PreparedLighting(neeAt.prepare(frame.view(), scene, current.lighting, input,
                 commandBuffer, graphicsUse));
     }
 
     /** Bakes the local distribution from BuildStablePlanes linear depth and pixel motion. */
-    public synchronized void bakeLocal(SceneId scene, VkCommandBuffer commandBuffer,
+    public synchronized void bakeLocal(PreparedLighting lighting, VkCommandBuffer commandBuffer,
                                        int currentLinearDepthIndex, int currentMotionIndex) {
-        neeAt.bakeLocal(scene, commandBuffer, currentLinearDepthIndex, currentMotionIndex);
+        neeAt.bakeLocal(lighting.delegate, commandBuffer, currentLinearDepthIndex, currentMotionIndex);
     }
 
     public synchronized void finishLighting(SceneId scene, PreparedLighting lighting,
@@ -105,7 +145,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (lighting.delegate.scene() != scene) {
             throw new IllegalArgumentException("prepared lighting belongs to another scene");
         }
-        neeAt.finish(scene, lighting.delegate, commandBuffer, graphicsUse);
+        neeAt.finish(lighting.delegate, commandBuffer, graphicsUse);
     }
 
     /** Invalidates feedback when a prepared frame cannot reach its trace completion point. */
@@ -114,8 +154,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (lighting.delegate.scene() != scene) {
             throw new IllegalArgumentException("prepared lighting belongs to another scene");
         }
-        neeAt.abandon(scene, lighting.delegate);
+        neeAt.abandon(lighting.delegate);
     }
+
+    public synchronized void releaseView(Object view) { neeAt.releaseView(view); }
 
     @Override
     public void prepareForSessionClose() {
@@ -124,6 +166,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             if (sessionClosing) return;
             sessionClosing = true;
         }
+        quiesceScenePreparation();
         ctx.drainAndWaitIdle();
         synchronized (this) {
             releaseTerminalFrameRoots();
@@ -132,9 +175,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     @Override
     public void settleFrameUses() {
+        quiesceScenePreparation();
         synchronized (this) {
             requireOpen();
-            if (inFlightFrames.isEmpty() && motionHistoryByScene.isEmpty() && frameAssembly.previousFrameMeshes.isEmpty()) return;
+            if (inFlightFrames.isEmpty()) return;
         }
         ctx.drainAndWaitIdle();
         synchronized (this) {
@@ -144,18 +188,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     /** Immutable light/environment view for one target scene. */
     public synchronized SceneContent content(SceneId scene, GraphicsUse graphicsUse) {
-        return frameScene(scene, graphicsUse).content;
+        return frameScene(scene, graphicsUse).geometry.trace.current.content;
     }
 
-    /** Prepares only the TLAS belonging to {@code scene}; no implicit root-scene global is used. */
-    public synchronized TlasBuilder.Prepared prepareTlas(SceneId scene, SceneOrigin origin, GraphicsUse graphicsUse) {
-        Objects.requireNonNull(origin, "origin");
-        Objects.requireNonNull(graphicsUse, "graphicsUse");
-        FrameSceneSnapshot current = frameScene(scene, graphicsUse);
-        return TlasBuilder.pack(tlasSlots.reserve(current.instances.size(), graphicsUse), current.instances, tlasWriter(origin));
-    }
-
-    private static TlasBuilder.InstanceWriter<FrameInstanceSnapshot> tlasWriter(SceneOrigin origin) {
+    private static TlasBuilder.InstanceWriter<FrameInstanceSnapshot> instanceWriter(SceneOrigin origin) {
         return (instance, target) -> {
             target.transform().matrix().put(instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z()));
             target.instanceCustomIndex(instance.geometryBase)
@@ -166,86 +202,136 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         };
     }
 
-    private static TlasBuilder.InstanceWriter<LatchedInstance> latchedWriter(SceneOrigin origin) {
-        return (instance, target) -> {
-            target.transform().matrix().put(instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z()));
-            target.instanceCustomIndex(instance.geometryBase)
-                    .mask(instance.current.mask())
-                    .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset)
-                    .flags(org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instance.nativeInstance.mesh.blas().accel.deviceAddress.value());
-        };
-    }
-
-    /** Joins TLAS packing and trace preparation before exposing frame-owned geometry for recording. */
-    public synchronized PreparedWorldGeometry prepareWorldGeometry(SceneId scene, SceneOrigin origin,
-                                                                    RtPipeline pipeline, GraphicsUse graphicsUse) {
-        FrameSceneSnapshot current = frameScene(scene, graphicsUse);
-        TlasBuilder.Reserved reserved = RtFramePreparation.measure("tlas-reserve", current.instances.size(), 0,
-                () -> tlasSlots.reserve(current.instances.size(), graphicsUse));
-        TlasBuilder.Prepared[] tlas = new TlasBuilder.Prepared[1];
-        RtPackedTlasPages packedTlas = packedTlasByScene.computeIfAbsent(scene, ignored -> new RtPackedTlasPages());
-        PendingTrace trace;
-        try (var batch = framePreparation.batch()) {
-            batch.submit(RtFramePreparation.measured("tlas-pack", current.instances.size(), 0,
-                    () -> tlas[0] = TlasBuilder.packPages(reserved, packedTlas.resolve(current.tlasInstances,
-                            origin, latchedWriter(origin)))));
-            trace = prepareTraceGeometry(scene, current, origin, pipeline, graphicsUse);
+    /** The serial preparation worker waits for GPU completion before exposing the atomic bundle. */
+    public SharedResource<PreparedTraceRevision> prepareTraceRevision(SharedResource<PreparedSceneRevision> source,
+                                                                     SceneOrigin origin, RtPipeline pipeline,
+                                                                     float metersPerSceneUnit) {
+        requireOpen();
+        var revision = source.get();
+        var completed = new IdentityHashMap<SceneId, SharedResource<PreparedWorldGeometry>>();
+        try {
+            for (var entry : revision.instances.entrySet()) {
+                SceneId scene = entry.getKey();
+                var cached = preparedGeometryByScene.get(scene);
+                if (cached != null && cached.get().matches(entry.getValue(), revision.content.get(scene),
+                        origin, pipeline, metersPerSceneUnit)) {
+                    completed.put(scene, cached.retain());
+                    continue;
+                }
+                int instanceCount = entry.getValue().stream().mapToInt(page -> page.instances.size()).sum();
+                var ready = RtFramePreparation.measure("trace-revision", instanceCount, revision.content.get(scene).lights().size(),
+                        () -> prepareWorldRevision(scene, source, origin, pipeline, metersPerSceneUnit));
+                completed.put(scene, ready);
+                var displaced = preparedGeometryByScene.put(scene, ready.retain());
+                if (displaced != null) displaced.close();
+            }
+            var obsolete = new ArrayList<SharedResource<PreparedWorldGeometry>>();
+            preparedGeometryByScene.entrySet().removeIf(entry -> {
+                if (completed.containsKey(entry.getKey())) return false;
+                obsolete.add(entry.getValue());
+                return true;
+            });
+            closeAll(obsolete, null);
+            preparationCaches.keySet().retainAll(completed.keySet());
+            var value = new PreparedTraceRevision(source.retain(), Collections.unmodifiableMap(completed),
+                    origin, metersPerSceneUnit);
+            return SharedResource.owned(value, released -> retire(released::close));
+        } catch (Throwable failure) {
+            closeAll(completed.values(), failure);
+            throw failure;
         }
-        return new PreparedWorldGeometry(tlas[0], trace);
     }
 
-    public synchronized PreparedTrace finishTrace(PreparedWorldGeometry geometry, PreparedLighting lighting) {
-        return finishTrace(geometry.trace, geometry.tlas.accel.handle, lighting.delegate);
-    }
-
-    /** Packs a dense diagnostic view of the scene's GeometryIndex-addressed records. */
-    public synchronized ByteBuffer geometryRecords(SceneId scene, SceneOrigin origin,
-                                                    GraphicsUse graphicsUse) {
-        Objects.requireNonNull(origin, "origin");
-        List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
-        for (FrameInstanceSnapshot instance : frameScene(scene, graphicsUse).instances) {
-            records.addAll(RtRetainedGeometryPlan.records(instance.resolvedMesh,
-                    instance.resolvedPlacement, instance.current.transform(),
-                    instance.nativeInstance.mesh.logical.build().positions()));
+    private SharedResource<PreparedWorldGeometry> prepareWorldRevision(SceneId scene,
+            SharedResource<PreparedSceneRevision> source, SceneOrigin origin, RtPipeline pipeline, float metersPerSceneUnit) {
+        RtRevisionResources resources = new RtRevisionResources();
+        var sourceClaim = source.retain();
+        resources.add(sourceClaim::close);
+        CompletableFuture<Void> pendingTlas = null;
+        try {
+            var revision = source.get();
+            var cache = preparationCaches.computeIfAbsent(scene, ignored -> new SceneCaches());
+            var inputs = FrameSceneSnapshot.prepare(revision.content.get(scene), revision.instances.get(scene));
+            var tableInputs = new ArrayList<RtInstanceTablePlan.Input>(inputs.instances.size());
+            for (var page : SnapshotList.pagesOf(inputs.instances)) {
+                for (var instance : page) tableInputs.add(new RtInstanceTablePlan.Input(
+                        instance.current.identity(), instance.current.placementOrdinal(),
+                        instance.resolvedMesh.build(), instance.current.transform(), instance.current.instanceData().bits()));
+            }
+            var previous = preparedGeometryByScene.get(scene);
+            var instanceTable = instanceTables.build(tableInputs, previous == null ? null : previous.get().instanceTable);
+            InstanceUploadSlot instanceSlot = instanceBuffers.acquire(slot -> slot.buffer.size() >= instanceTable.byteSize(),
+                    () -> new InstanceUploadSlot(ctx.createMappedGpuUploadBuffer(RtCompletionSlotPool.capacity(instanceTable.byteSize()),
+                            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained instance history table")), resources::add);
+            GpuBuffer instanceBuffer = instanceSlot.buffer;
+            var instancePages = cache.instances.resolve(instanceTable, origin);
+            if (TlasBuilder.copyPages(MemoryUtil.memByteBuffer(instanceBuffer.mapped(), instanceTable.byteSize()),
+                    instancePages, instanceSlot.pages) != 0) instanceBuffer.flush(0L, instanceTable.byteSize());
+            instanceSlot.pages = instancePages;
+            var reserved = RtFramePreparation.measure("tlas-reserve", inputs.instances.size(), 0,
+                    () -> tlasSlots.reserve(inputs.instances.size(), resources::add));
+            var tlas = RtFramePreparation.measure("tlas-pack", inputs.instances.size(), 0,
+                    () -> TlasBuilder.packPages(reserved,
+                            cache.tlas.resolve(inputs.instances, origin, instanceWriter(origin))));
+            var done = new CompletableFuture<Void>();
+            ctx.gpuExecutor().submit(command -> TlasBuilder.record(ctx, command, tlas), completion -> {
+                switch (completion) {
+                    case GpuComputeCompletion.Succeeded ignored -> done.complete(null);
+                    case GpuComputeCompletion.Failed failed -> done.completeExceptionally(failed.failure());
+                    case GpuComputeCompletion.Cancelled ignored -> done.completeExceptionally(
+                            new java.util.concurrent.CancellationException("scene TLAS preparation cancelled"));
+                }
+            });
+            pendingTlas = done;
+            var trace = prepareTraceGeometry(cache, inputs, origin, pipeline, instanceTable, resources);
+            var lighting = neeAt.prepareLightRevision(inputs.content.lights(), metersPerSceneUnit);
+            resources.add(lighting::close);
+            RtFramePreparation.measure("tlas-ready", inputs.instances.size(), 0, () -> { done.join(); return null; });
+            pendingTlas = null;
+            ctx.descriptorHeap().writer().writeAccelerationStructure(trace.slot.tlasDescriptor, 0, tlas.accel.handle);
+            var ready = new PreparedWorldGeometry(trace, origin, pipeline, instanceTable, instanceBuffer,
+                    lighting, metersPerSceneUnit, resources);
+            return SharedResource.owned(ready, released -> retire(released.resources::close));
+        } catch (Throwable failure) {
+            // A packing failure cannot release the source BLAS or TLAS slot while its build is running.
+            if (pendingTlas != null) suppressCleanupFailure(failure, pendingTlas::join);
+            suppressCleanupFailure(failure, resources::close);
+            throw failure;
         }
-        return RtRetainedGeometryPlan.pack(records, origin);
     }
 
-    /** Returns a dense diagnostic view of hit-group selection in snapshot instance order. */
-    public synchronized List<RtRetainedGeometryPlan.HitGroup> hitGroups(
-            SceneId scene, GraphicsUse graphicsUse) {
-        List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
-        for (FrameInstanceSnapshot instance : frameScene(scene, graphicsUse).instances) {
-            records.addAll(RtRetainedGeometryPlan.records(instance.resolvedMesh,
-                    instance.resolvedPlacement, instance.current.transform(),
-                    instance.nativeInstance.mesh.logical.build().positions()));
-        }
-        return RtRetainedGeometryPlan.hitGroups(records);
+    /** Borrowed completed geometry and actual submitted predecessor, both protected by this frame. */
+    public synchronized GeometryHistory geometry(SceneId scene, GraphicsUse graphicsUse) {
+        var use = frameScene(scene, graphicsUse);
+        var current = use.geometry;
+        var previous = use.previous;
+        return new GeometryHistory(current.instanceBuffer.deviceAddress(),
+                previous == null ? null : previous.instanceBuffer.deviceAddress(),
+                previous == null ? 0 : previous.instanceTable.mask(), current.origin,
+                previous == null ? current.origin : previous.origin);
     }
 
-    /** Uploads this frame's geometry records and pipeline-specific hit SBT into this scene's buffers. */
-    public synchronized PreparedTrace prepareTrace(SceneId scene, SceneOrigin origin, RtPipeline pipeline,
-                                                   long tlasHandle, GraphicsUse graphicsUse) {
-        Objects.requireNonNull(pipeline, "pipeline");
-        Objects.requireNonNull(graphicsUse, "graphicsUse");
-        FrameSceneSnapshot current = frameScene(scene, graphicsUse);
-        PendingTrace trace = prepareTraceGeometry(scene, current, origin, pipeline, graphicsUse);
-        RtNeeAtBackend.Prepared lighting = neeAt.active(scene);
-        if (lighting == null) throw new IllegalStateException("prepareLighting must precede prepareTrace");
-        return finishTrace(trace, tlasHandle, lighting);
+    public synchronized PreparedTrace finishTrace(SceneId scene, GraphicsUse graphicsUse, PreparedLighting lighting) {
+        var use = frameScene(scene, graphicsUse);
+        var trace = use.geometry.trace;
+        lighting.delegate.bindLightTable(trace.slot.lights.deviceAddress());
+        return new PreparedTrace(trace.slot.geometry.deviceAddress(), lighting.delegate.stateAddress(),
+                trace.slot.tlasDescriptor.firstIndex().value(), trace.hitTable);
     }
 
-    private PendingTrace prepareTraceGeometry(SceneId scene, FrameSceneSnapshot current, SceneOrigin origin,
-                                              RtPipeline pipeline, GraphicsUse graphicsUse) {
+    public record GeometryHistory(VulkanDeviceAddress currentInstances, VulkanDeviceAddress previousInstances,
+                                  int previousMask, SceneOrigin currentOrigin, SceneOrigin previousOrigin) { }
+
+    private PendingTrace prepareTraceGeometry(SceneCaches cache, FrameSceneSnapshot current, SceneOrigin origin,
+                                              RtPipeline pipeline, RtInstanceTablePlan instanceTable, RtRevisionResources resources) {
         List<SceneLight> sceneLights = current.content.lights();
-        LightIndexRevision indexed = lightIndicesByScene.get(scene);
+        LightIndexRevision indexed = cache.lightIndex;
         boolean rebuildLightIndices = indexed == null || indexed.lights != sceneLights
                 || !indexed.indices.matches(sceneLights);
         int geometryCount = current.geometryHighWater;
         List<List<FrameInstanceSnapshot>> pageInputs = SnapshotList.pagesOf(current.instances);
         LightIndexRevision[] preparedIndex = {indexed};
-        var tracePlans = tracePlansByScene.computeIfAbsent(scene, ignored -> new TracePlanCache());
+        var tracePlans = cache.tracePlans;
         TraceBatch[] pages;
         try (var batch = framePreparation.batch()) {
             if (rebuildLightIndices) {
@@ -260,7 +346,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             pages = tracePlans.resolveBatches(pageInputs, framePreparation);
         }
         LightIndexRevision lightIndexRevision = preparedIndex[0];
-        if (rebuildLightIndices) lightIndicesByScene.put(scene, lightIndexRevision);
+        if (rebuildLightIndices) cache.lightIndex = lightIndexRevision;
         Long2IntFunction lightIndices = lightIndexRevision.indices;
         int emitterBytes = current.emitterHighWater;
         int geometryBytes = Math.multiplyExact(geometryCount, RtRetainedGeometryPlan.RECORD_BYTES);
@@ -268,9 +354,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), pipeline.retainedHitRecordStride());
         int lightBytes = Math.multiplyExact(sceneLights.size(), RtRetainedLightPlan.RECORD_BYTES);
         TraceSlot slot = acquireTraceSlot(geometryBytes, hitBytes, lightBytes, emitterBytes,
-                pipeline, graphicsUse);
-        var emitterCaches = emitterPagesByScene.computeIfAbsent(scene, ignored -> new EmitterCaches());
-        var emitterPages = emitterCaches.pages;
+                pipeline, resources);
+        // Table slot assignment is part of the immutable geometry payload.
+        slot.setInstanceTable(instanceTable);
+        var emitterPages = cache.emitterPages;
         List<TracePageWork> writes = new ArrayList<>();
         List<TraceBatchResidency> checkedBatches = new ArrayList<>();
         boolean flushGeometry = false, flushHits = false;
@@ -283,7 +370,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             activeEmitterBytes = Math.addExact(activeEmitterBytes, batch.emitterBytes);
             activeInstances = Math.addExact(activeInstances, batch.plans.length);
             var batchResidency = slot.batch(batch, pages);
-            boolean geometryResident = batchResidency.hasGeometry(origin, pipeline);
+            boolean geometryResident = batchResidency.hasGeometry(origin, pipeline, slot.instanceAssignments);
             boolean emittersResident = batch.emitterBytes == 0 || batchResidency.hasEmitters(lightIndexRevision);
             if (geometryResident && emittersResident) continue;
             checkedBatches.add(batchResidency);
@@ -293,7 +380,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 long emitterAddress = page.emitterBytes == 0 ? 0L
                         : slot.emitters.deviceAddress().addBytes(emitterBase).value();
                 int flags = 0;
-                if (!geometryResident && !residency.hasGeometry(page.identity, page.geometryBase, origin, emitterAddress)) {
+                int instanceIndex = slot.instanceTable.slot(page.identity.current.identity(),
+                        page.identity.current.placementOrdinal());
+                if (!geometryResident && !residency.hasGeometry(page.identity, page.geometryBase, origin,
+                        emitterAddress, instanceIndex)) {
                     flags |= TracePageWork.GEOMETRY;
                     flushGeometry = true;
                 }
@@ -318,7 +408,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (!writes.isEmpty()) {
             List<List<TracePageWork>> writeChunks = RtFramePreparation.chunks(writes, TracePageWork::work);
             framePreparation.run("pack", writeChunks,
-                    chunk -> chunk.stream().mapToInt(work -> work.page.instances.size()).sum(),
+                    List::size,
                     chunk -> chunk.forEach(TracePageWork::pack));
         }
         if (flushGeometry && geometryBytes > 0) slot.geometry.flush(0L, geometryBytes);
@@ -327,16 +417,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         for (TracePageWork write : writes) flushEmitters |= write.emittersWritten;
         if (flushEmitters) slot.emitters.flush(0L, emitterBytes);
         writes.forEach(TracePageWork::commit);
-        for (var batch : checkedBatches) batch.written(origin, pipeline, lightIndexRevision);
+        for (var batch : checkedBatches)
+            batch.written(origin, pipeline, lightIndexRevision, slot.instanceAssignments);
         slot.retainPages(pages);
         var emitterLayout = tracePlans.emitterLayout;
-        if (emitterCaches.layout != emitterLayout) {
+        if (cache.emitterLayout != emitterLayout) {
             emitterPages.keySet().retainAll(slot.pages.keySet());
-            emitterCaches.layout = emitterLayout;
+            cache.emitterLayout = emitterLayout;
         }
         BitSet linked = slot.linked(emitterLayout, lightIndexRevision);
-        List<ByteBuffer> lightPages = packedLightsByScene.computeIfAbsent(scene, ignored -> new RtPackedLightPages())
-                .resolve(sceneLights, origin, linked, framePreparation);
+        List<ByteBuffer> lightPages = cache.lights.resolve(sceneLights, origin, linked, framePreparation);
         List<ByteBuffer> previousLightPages = slot.lightPages;
         slot.lightPages = List.of();
         int lightOffset = 0, previousLightOffset = 0;
@@ -360,40 +450,64 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         return new PendingTrace(current, slot, hitTable);
     }
 
-    private PreparedTrace finishTrace(PendingTrace trace, long tlasHandle, RtNeeAtBackend.Prepared lighting) {
-        TraceSlot slot = trace.slot;
-        ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
-        lighting.bindLightTable(slot.lights.deviceAddress());
-        PreparedTrace prepared = new PreparedTrace(slot.geometry.deviceAddress(), lighting.stateAddress(),
-                slot.tlasDescriptor.firstIndex().value(), trace.hitTable);
-        trace.current.markTraced();
-        return prepared;
+    private record PendingTrace(FrameSceneSnapshot current, TraceSlot slot, RtPipeline.HitTable hitTable) { }
+
+    /** A single atomic geometry/light/resource publication; every child has completed its GPU build. */
+    public static final class PreparedTraceRevision {
+        private final SharedResource<PreparedSceneRevision> source;
+        private final Map<SceneId, SharedResource<PreparedWorldGeometry>> scenes;
+        private final SceneOrigin origin;
+        private final float metersPerSceneUnit;
+
+        PreparedTraceRevision(SharedResource<PreparedSceneRevision> source,
+                              Map<SceneId, SharedResource<PreparedWorldGeometry>> scenes, SceneOrigin origin,
+                              float metersPerSceneUnit) {
+            this.source = source;
+            this.scenes = scenes;
+            this.origin = origin;
+            this.metersPerSceneUnit = metersPerSceneUnit;
+        }
+
+        public boolean contains(SceneId scene) { return scenes.containsKey(scene); }
+        public SceneOrigin origin() { return origin; }
+        public float metersPerSceneUnit() { return metersPerSceneUnit; }
+
+        private void close() {
+            try { closeAll(scenes.values(), null); }
+            finally { source.close(); }
+        }
     }
 
-    private record PendingTrace(FrameSceneSnapshot current, TraceSlot slot, RtPipeline.HitTable hitTable) {}
+    /** Immutable buffers and TLAS ownership remain shared through preparation, frames, and view history. */
+    static final class PreparedWorldGeometry {
+        final PendingTrace trace;
+        final SceneOrigin origin;
+        final RtPipeline pipeline;
+        final RtInstanceTablePlan instanceTable;
+        final GpuBuffer instanceBuffer;
+        final SharedResource<RtNeeAtBackend.LightRevision> lighting;
+        final float metersPerSceneUnit;
+        final RtRevisionResources resources;
 
-    /** Borrowed geometry ready for TLAS recording, with trace bindings finalized after lighting preparation. */
-    public static final class PreparedWorldGeometry {
-        private final TlasBuilder.Prepared tlas;
-        private final PendingTrace trace;
-
-        private PreparedWorldGeometry(TlasBuilder.Prepared tlas, PendingTrace trace) {
-            this.tlas = tlas;
+        PreparedWorldGeometry(PendingTrace trace, SceneOrigin origin, RtPipeline pipeline,
+                              RtInstanceTablePlan instanceTable, GpuBuffer instanceBuffer,
+                              SharedResource<RtNeeAtBackend.LightRevision> lighting, float metersPerSceneUnit,
+                              RtRevisionResources resources) {
             this.trace = trace;
+            this.origin = origin;
+            this.pipeline = pipeline;
+            this.instanceTable = instanceTable;
+            this.instanceBuffer = instanceBuffer;
+            this.lighting = lighting;
+            this.metersPerSceneUnit = metersPerSceneUnit;
+            this.resources = resources;
         }
 
-        public TlasBuilder.Prepared tlas() { return tlas; }
-    }
-
-    static int emitterIndex(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                            int primitive, Long2IntFunction lightIndices) {
-        for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
-            if (primitive < range.firstPrimitive()) break;
-            if (primitive < range.firstPrimitive() + range.primitiveCount()) {
-                return lightIndices.getOrDefault(range.lightIdentity(), -1);
-            }
+        boolean matches(Object layout, SceneContent content, SceneOrigin origin, RtPipeline pipeline,
+                        float metersPerSceneUnit) {
+            return trace.current.layout == layout && trace.current.content == content
+                    && this.origin.equals(origin) && this.pipeline == pipeline && this.metersPerSceneUnit == metersPerSceneUnit;
         }
-        return -1;
     }
 
     static boolean hasEmitterMapping(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
@@ -415,95 +529,41 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         return low;
     }
 
-    /** Packs a consecutive primitive range in one forward pass over the sorted, disjoint emitter ranges. */
-    static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
-                                  List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                                  Long2IntFunction lightIndices, boolean[] linkedEmitters) {
-        putEmitterIndices(output, firstPrimitive, primitiveCount, ranges, lightIndices,
-                index -> linkedEmitters[index] = true);
-    }
-
-    static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
-                                  List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                                  Long2IntFunction lightIndices, IntConsumer markLinked) {
-        int primitive = firstPrimitive;
-        int end = Math.addExact(firstPrimitive, primitiveCount);
-        for (int index = firstEmitterRange(ranges, firstPrimitive); index < ranges.size(); index++) {
-            var range = ranges.get(index);
-            if (range.firstPrimitive() >= end) break;
-            int rangeEnd = (int) Math.min((long) end, (long) range.firstPrimitive() + range.primitiveCount());
-            if (rangeEnd <= primitive) continue;
-            while (primitive < range.firstPrimitive()) {
-                output.putInt(-1);
-                primitive++;
-            }
-            int dense = lightIndices.getOrDefault(range.lightIdentity(), -1);
-            if (dense >= 0) markLinked.accept(dense);
-            while (primitive < rangeEnd) {
-                output.putInt(dense);
-                primitive++;
-            }
-        }
-        while (primitive < end) {
-            output.putInt(-1);
-            primitive++;
-        }
-    }
-
     /** Releases all native state after the GPU executor has stopped and the device has been made idle. */
-    public synchronized void shutdownAfterDeviceIdle() {
-        if (closed) return;
-        closed = true;
-        framePreparation.close();
-        releaseTerminalFrameRoots();
-        capture = null;
-        neeAt.destroyAfterDeviceIdle();
-        traceSlots.close();
-        tlasSlots.close();
+    public void shutdownAfterDeviceIdle() {
+        synchronized (this) { if (closed) return; }
+        quiesceScenePreparation();
+        synchronized (this) {
+            closed = true;
+            framePreparation.close();
+            releaseTerminalFrameRoots();
+            capture = null;
+            neeAt.destroyAfterDeviceIdle();
+            traceSlots.close();
+            instanceBuffers.close();
+            tlasSlots.close();
+        }
+        retirement.close();
     }
 
     private void releaseTerminalFrameRoots() {
-        frameAssembly.clear();
-        contentScenes = null;
-        contentLights = null;
-        retainedContent = null;
-        lightAssembly.clear();
-        lightIndicesByScene.clear();
-        tracePlansByScene.clear();
-        emitterPagesByScene.clear();
-        packedLightsByScene.clear();
-        packedTlasByScene.clear();
-        releaseTerminalFrameRoots(inFlightFrames, motionHistoryByScene);
+        preparationCaches.clear();
+        releaseTerminalFrameRoots(inFlightFrames);
     }
 
-    static void releaseTerminalFrameRoots(Map<?, ? extends AutoCloseable> frames,
-                                          Map<?, ? extends AutoCloseable> histories) {
-        List<AutoCloseable> roots = new ArrayList<>(frames.size() + histories.size());
-        roots.addAll(frames.values());
-        roots.addAll(histories.values());
-        frames.clear();
-        histories.clear();
+    @SafeVarargs
+    static void releaseTerminalFrameRoots(Map<?, ? extends AutoCloseable>... groups) {
+        List<AutoCloseable> roots = new ArrayList<>();
+        for (var group : groups) {
+            roots.addAll(group.values());
+            group.clear();
+        }
         closeAll(roots, null);
     }
 
     static Map<SceneId, SceneContent> assembleContent(
             List<RetainedSceneSnapshot.Scene> scenes, List<RetainedSceneSnapshot.Light> lights) {
         return new RtLightPageAssembly().resolve(scenes, lights);
-    }
-
-    private void retainRenderedScenes(java.util.Set<SceneId> retained) {
-        lightIndicesByScene.keySet().retainAll(retained);
-        tracePlansByScene.keySet().retainAll(retained);
-        emitterPagesByScene.keySet().retainAll(retained);
-        packedLightsByScene.keySet().retainAll(retained);
-        packedTlasByScene.keySet().retainAll(retained);
-        List<SharedResource<SceneMotionHistory>> removed = new ArrayList<>();
-        motionHistoryByScene.entrySet().removeIf(entry -> {
-            if (retained.contains(entry.getKey())) return false;
-            removed.add(entry.getValue());
-            return true;
-        });
-        closeAll(removed, null);
     }
 
     /** Capture retained scene revisions independently of command recording. */
@@ -513,12 +573,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     /** Attach captured inputs to one execution; later scene edits cannot change this frame. */
-    public synchronized void beginFrame(SharedResource<RetainedSceneSnapshot> root, GraphicsUse graphicsUse) {
+    public synchronized void beginFrame(SharedResource<PreparedTraceRevision> root,
+                                         SharedResource<PreparedTraceRevision> previous, GraphicsUse graphicsUse) {
         requireOpen();
-        FrameSnapshot frame = new FrameSnapshot(graphicsUse, root.retain());
+        FrameSnapshot frame = new FrameSnapshot(graphicsUse, root.retain(), previous == null ? null : previous.retain());
         inFlightFrames.put(graphicsUse, frame);
         try {
-            graphicsUse.whenSubmitted(frame::accept);
             graphicsUse.keepAlive(frame);
         } catch (Throwable failure) {
             frame.close();
@@ -530,45 +590,97 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         requireOpen();
         FrameSnapshot frame = Objects.requireNonNull(inFlightFrames.get(graphicsUse), "frame was not captured");
-        if (!frame.currentContent.containsKey(scene)) {
+        if (!frame.root.get().contains(scene)) {
             throw new IllegalArgumentException("scene is not in the frame's scene revision");
         }
         return frame;
     }
 
-    static ResolvedFrameInput resolveFrameInput(RetainedSceneSnapshot.Mesh mesh,
-                                               RetainedSceneSnapshot.Instance instance) {
-        return new ResolvedFrameInput(resolveMesh(mesh),
-                new RtRetainedGeometryPlan.ResolvedPlacement(instance.transform(), instance.instanceData().bits()));
+    /** Immutable renderer inputs prepared from one atomic scene boundary, with shared source ownership. */
+    public static final class PreparedSceneRevision {
+        private final SharedResource<RetainedSceneSnapshot> root;
+        private final ProgramComposition composition;
+        final Map<SceneId, List<InstancePage>> instances;
+        final Map<SceneId, SceneContent> content;
+
+        private PreparedSceneRevision(SharedResource<RetainedSceneSnapshot> root,
+                                      ProgramComposition composition,
+                                      Map<SceneId, List<InstancePage>> instances,
+                                      Map<SceneId, SceneContent> content) {
+            this.root = root;
+            this.composition = composition;
+            this.instances = instances;
+            this.content = content;
+        }
+
+        /** Borrowed source values remain valid while the prepared revision is retained. */
+        public RetainedSceneSnapshot snapshot() { return root.get(); }
+
+        private void close() { root.close(); }
     }
 
-    private static RtRetainedGeometryPlan.ResolvedMesh resolveMesh(RetainedSceneSnapshot.Mesh mesh) {
-        MeshBuild<?> build = mesh.build();
-        var geometries = new ArrayList<RtRetainedGeometryPlan.ResolvedGeometry>(build.geometries().size());
-        for (int index = 0; index < build.geometries().size(); index++) {
-            MeshBuild.Geometry<?> geometry = build.geometries().get(index);
-            RetainedSceneSnapshot.GeometryPrograms programs = mesh.geometryPrograms().get(index);
-            geometries.add(new RtRetainedGeometryPlan.ResolvedGeometry(geometry,
-                    programs.surfaceImplementation(), programs.volumeImplementation(),
-                    geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
-                    geometry.volume() == null ? 0L : geometry.volume().bindingData().bits()));
+    /** Serial-worker cache; its publication claim keeps every borrowed assembly value alive. */
+    static final class SceneRevisionPreparation {
+        private final FrameAssembly frames;
+        private final RtLightPageAssembly lights = new RtLightPageAssembly();
+        private SharedResource<PreparedSceneRevision> prepared;
+
+        SceneRevisionPreparation(java.util.function.BiFunction<RetainedSceneSnapshot.Mesh, ProgramComposition, FrameMesh> resolveMesh) {
+            frames = new FrameAssembly(resolveMesh);
         }
-        return new RtRetainedGeometryPlan.ResolvedMesh(build, geometries);
+
+        SharedResource<PreparedSceneRevision> prepare(SharedResource<RetainedSceneSnapshot> source,
+                                                      ProgramComposition composition) {
+            RetainedSceneSnapshot snapshot = source.get();
+            if (prepared != null && prepared.get().snapshot() == snapshot
+                    && prepared.get().composition == composition) return prepared.retain();
+            SharedResource<RetainedSceneSnapshot> root = source.retain();
+            SharedResource<PreparedSceneRevision> replacement;
+            try {
+                PreparedSceneRevision previous = prepared == null ? null : prepared.get();
+                Map<SceneId, SceneContent> content = previous != null
+                        && previous.snapshot().scenes() == snapshot.scenes()
+                        && previous.snapshot().lights() == snapshot.lights()
+                        ? previous.content : Collections.unmodifiableMap(lights.resolve(snapshot.scenes(), snapshot.lights()));
+                var instances = frames.resolve(snapshot, composition);
+                replacement = SharedResource.owned(new PreparedSceneRevision(root, composition, instances, content),
+                        PreparedSceneRevision::close);
+            } catch (Throwable failure) {
+                // Partial assembly borrows this source; discard it before releasing the source claim.
+                frames.clear();
+                lights.clear();
+                suppressCleanupFailure(failure, root::close);
+                throw failure;
+            }
+            SharedResource<PreparedSceneRevision> previous = prepared;
+            prepared = replacement;
+            if (previous != null) previous.close();
+            return replacement.retain();
+        }
+
+        void clear() {
+            frames.clear();
+            lights.clear();
+            SharedResource<PreparedSceneRevision> previous = prepared;
+            prepared = null;
+            if (previous != null) previous.close();
+        }
     }
 
     /** Reuses CPU values by immutable page identity; consuming frames retain their own scene roots. */
     static final class FrameAssembly {
         private final Long2ObjectOpenHashMap<FrameMesh> previousFrameMeshes = new Long2ObjectOpenHashMap<>();
-        private Map<List<RetainedSceneSnapshot.Mesh>, Boolean> previousMeshPages = new IdentityHashMap<>();
+        private Set<List<RetainedSceneSnapshot.Mesh>> previousMeshPages = Collections.newSetFromMap(new IdentityHashMap<>());
         private Map<List<RetainedSceneSnapshot.Instance>, Map<SceneId, InstancePage>> previousInstancePages = new IdentityHashMap<>();
         private final Map<SceneId, RtStableTraceRanges> traceRanges = new IdentityHashMap<>();
         private List<RetainedSceneSnapshot.Mesh> assembledMeshes;
         private List<RetainedSceneSnapshot.Instance> assembledInstances;
         private List<RetainedSceneSnapshot.Scene> assembledScenes;
+        private ProgramComposition assembledComposition;
         private Map<SceneId, List<InstancePage>> assembledPages;
-        private final java.util.function.Function<RetainedSceneSnapshot.Mesh, FrameMesh> resolveMesh;
+        private final java.util.function.BiFunction<RetainedSceneSnapshot.Mesh, ProgramComposition, FrameMesh> resolveMesh;
 
-        FrameAssembly(java.util.function.Function<RetainedSceneSnapshot.Mesh, FrameMesh> resolveMesh) {
+        FrameAssembly(java.util.function.BiFunction<RetainedSceneSnapshot.Mesh, ProgramComposition, FrameMesh> resolveMesh) {
             this.resolveMesh = resolveMesh;
         }
 
@@ -580,27 +692,32 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             assembledMeshes = null;
             assembledInstances = null;
             assembledScenes = null;
+            assembledComposition = null;
             assembledPages = null;
         }
 
-        Map<SceneId, List<InstancePage>> resolve(RetainedSceneSnapshot snapshot) {
-            boolean replacedPrograms = false;
+        Map<SceneId, List<InstancePage>> resolve(RetainedSceneSnapshot snapshot, ProgramComposition composition) {
+            if (assembledComposition != composition) {
+                clear();
+                assembledComposition = composition;
+            }
+            boolean replacedMeshes = false;
             if (assembledMeshes != snapshot.meshes()) {
-                var nextMeshPages = new IdentityHashMap<List<RetainedSceneSnapshot.Mesh>, Boolean>();
+                Set<List<RetainedSceneSnapshot.Mesh>> nextMeshPages = Collections.newSetFromMap(new IdentityHashMap<>());
                 var refreshedMeshes = new LongOpenHashSet();
                 for (var page : SnapshotList.pagesOf(snapshot.meshes())) {
-                    nextMeshPages.put(page, Boolean.TRUE);
-                    if (previousMeshPages.containsKey(page)) continue;
+                    nextMeshPages.add(page);
+                    if (previousMeshPages.contains(page)) continue;
                     for (var mesh : page) {
                         refreshedMeshes.add(mesh.identity());
                         var previous = previousFrameMeshes.get(mesh.identity());
                         if (previous != null && previous.logical == mesh) continue;
-                        if (previous != null) replacedPrograms = true;
-                        previousFrameMeshes.put(mesh.identity(), resolveMesh.apply(mesh));
+                        if (previous != null) replacedMeshes = true;
+                        previousFrameMeshes.put(mesh.identity(), resolveMesh.apply(mesh, composition));
                     }
                 }
-                for (var page : previousMeshPages.keySet()) {
-                    if (nextMeshPages.containsKey(page)) continue;
+                for (var page : previousMeshPages) {
+                    if (nextMeshPages.contains(page)) continue;
                     for (var mesh : page) {
                         var current = previousFrameMeshes.get(mesh.identity());
                         if (!refreshedMeshes.contains(mesh.identity()) && current != null && current.logical == mesh) {
@@ -611,16 +728,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 previousMeshPages = nextMeshPages;
                 assembledMeshes = snapshot.meshes();
             }
-            if (replacedPrograms) {
+            if (replacedMeshes) {
                 previousInstancePages.clear();
                 traceRanges.clear();
             }
-            if (!replacedPrograms && assembledInstances == snapshot.instances() && assembledScenes == snapshot.scenes()) {
+            if (!replacedMeshes && assembledInstances == snapshot.instances() && assembledScenes == snapshot.scenes()) {
                 return assembledPages;
             }
             List<List<RetainedSceneSnapshot.Instance>> sourcePages = SnapshotList.pagesOf(snapshot.instances());
-            var retainedSources = new IdentityHashMap<List<RetainedSceneSnapshot.Instance>, Boolean>();
-            for (var source : sourcePages) retainedSources.put(source, Boolean.TRUE);
+            Set<List<RetainedSceneSnapshot.Instance>> retainedSources = Collections.newSetFromMap(new IdentityHashMap<>());
+            retainedSources.addAll(sourcePages);
             var changedInstances = new Long2ObjectOpenHashMap<RetainedSceneSnapshot.Instance>();
             for (var source : sourcePages) {
                 if (!previousInstancePages.containsKey(source)) {
@@ -629,7 +746,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             }
             var previousInstances = new Long2ObjectOpenHashMap<InstancePage>();
             for (var entry : previousInstancePages.entrySet()) {
-                if (retainedSources.containsKey(entry.getKey())) continue;
+                if (retainedSources.contains(entry.getKey())) continue;
                 entry.getValue().forEach((scene, page) -> {
                     for (var instance : page.instances) {
                         var next = changedInstances.get(instance.nativeInstance.placementOrdinal);
@@ -693,20 +810,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             return bytes;
         }
 
-        private static InstancePage page(List<InstancePage> pages, long placementOrdinal) {
-            int first = 0;
-            int end = pages.size();
-            while (first < end) {
-                int middle = (first + end) >>> 1;
-                if (pages.get(middle).lastOrdinal < placementOrdinal) first = middle + 1;
-                else end = middle;
-            }
-            return first == pages.size() ? null : pages.get(first);
-        }
 
     }
 
-    private FrameSceneSnapshot frameScene(SceneId scene, GraphicsUse graphicsUse) {
+    private SceneUse frameScene(SceneId scene, GraphicsUse graphicsUse) {
         return frameLease(scene, graphicsUse).scene(scene);
     }
 
@@ -743,148 +850,71 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     private final class FrameSnapshot implements AutoCloseable {
         private final GraphicsUse graphicsUse;
-        private SharedResource<RetainedSceneSnapshot> root;
-        private final Map<SceneId, List<InstancePage>> currentInstances;
-        private final Map<SceneId, SceneContent> currentContent;
-        private final Map<SceneId, FrameSceneSnapshot> scenes = new IdentityHashMap<>();
+        private SharedResource<PreparedTraceRevision> root;
+        private final SharedResource<PreparedTraceRevision> previous;
 
-        FrameSnapshot(GraphicsUse graphicsUse, SharedResource<RetainedSceneSnapshot> root) {
+        FrameSnapshot(GraphicsUse graphicsUse, SharedResource<PreparedTraceRevision> root,
+                      SharedResource<PreparedTraceRevision> previous) {
             this.graphicsUse = graphicsUse;
             this.root = root;
-            try {
-                RetainedSceneSnapshot snapshot = root.get();
-                if (contentScenes != snapshot.scenes() || contentLights != snapshot.lights()) {
-                    retainedContent = lightAssembly.resolve(snapshot.scenes(), snapshot.lights());
-                    contentScenes = snapshot.scenes();
-                    contentLights = snapshot.lights();
-                }
-                currentContent = retainedContent;
-                currentInstances = frameAssembly.resolve(snapshot);
-                neeAt.retainScenes(currentContent.keySet());
-                retainRenderedScenes(currentContent.keySet());
-            } catch (Throwable failure) {
-                this.root = null;
-                suppressCleanupFailure(failure, root::close);
-                throw failure;
-            }
+            this.previous = previous;
         }
 
-        FrameSceneSnapshot scene(SceneId scene) {
-            FrameSceneSnapshot existing = scenes.get(scene);
-            if (existing != null) return existing;
-            SharedResource<SceneMotionHistory> historyLease = motionHistoryByScene.get(scene);
-            SharedResource<SceneMotionHistory> retainedHistory = historyLease == null
-                    ? null : historyLease.retain();
-            try {
-                SceneMotionHistory history = retainedHistory == null ? null : retainedHistory.get();
-                int geometryHighWater = 0;
-                int emitterHighWater = 0;
-                var pages = new ArrayList<List<FrameInstanceSnapshot>>();
-                var tlasPages = new ArrayList<List<LatchedInstance>>();
-                for (var page : currentInstances.get(scene)) {
-                    pages.add(page.frame(history));
-                    tlasPages.add(page.instances);
-                    geometryHighWater = Math.max(geometryHighWater, page.geometryHighWater);
-                    emitterHighWater = Math.max(emitterHighWater, page.emitterHighWater);
-                }
-                FrameSceneSnapshot created = new FrameSceneSnapshot(
-                        currentContent.get(scene), SnapshotList.ofPages(pages), SnapshotList.ofPages(tlasPages),
-                        currentInstances.get(scene), retainedHistory,
-                        geometryHighWater, emitterHighWater);
-                retainedHistory = null;
-                scenes.put(scene, created);
-                return created;
-            } catch (Throwable failure) {
-                if (retainedHistory != null) suppressCleanupFailure(failure, retainedHistory::close);
-                throw failure;
-            }
+        SceneUse scene(SceneId scene) {
+            return new SceneUse(root.get().scenes.get(scene).get(),
+                    previous != null && previous.get().contains(scene) ? previous.get().scenes.get(scene).get() : null);
         }
 
-        void accept() {
-            List<SharedResource<SceneMotionHistory>> displaced = new ArrayList<>();
-            synchronized (RtRetainedSceneBackend.this) {
-                if (root == null) return;
-                for (Map.Entry<SceneId, FrameSceneSnapshot> entry : scenes.entrySet()) {
-                    if (!entry.getValue().traced()) continue;
-                    SharedResource<RetainedSceneSnapshot> historyRoot = root.retain();
-                    SharedResource<SceneMotionHistory> replacement = null;
-                    try {
-                        SceneMotionHistory history = new SceneMotionHistory(currentInstances.get(entry.getKey()),
-                                historyRoot);
-                        replacement = SharedResource.owned(history, SceneMotionHistory::close);
-                        historyRoot = null;
-                    } finally {
-                        if (historyRoot != null) historyRoot.close();
-                    }
-                    SharedResource<SceneMotionHistory> previous =
-                            motionHistoryByScene.put(entry.getKey(), replacement);
-                    if (previous != null) displaced.add(previous);
-                }
-            }
-            closeAll(displaced, null);
-        }
-
-        @Override
-        public void close() {
-            SharedResource<RetainedSceneSnapshot> released;
-            List<FrameSceneSnapshot> releasedScenes;
+        @Override public void close() {
+            SharedResource<PreparedTraceRevision> released;
             synchronized (RtRetainedSceneBackend.this) {
                 if (root == null) return;
                 inFlightFrames.remove(graphicsUse, this);
                 released = root;
                 root = null;
-                releasedScenes = List.copyOf(scenes.values());
-                scenes.clear();
             }
-            Throwable failure = null;
-            try {
-                released.close();
-            } catch (Throwable releaseFailure) {
-                failure = releaseFailure;
-            }
-            closeAll(releasedScenes, failure);
-            throwFailure(failure, "frame snapshot release failed");
+            try { released.close(); }
+            finally { if (previous != null) previous.close(); }
         }
     }
 
-    private static final class FrameSceneSnapshot implements AutoCloseable {
+    /** Borrowed from the frame's retained current and submitted-predecessor roots. */
+    private record SceneUse(PreparedWorldGeometry geometry, PreparedWorldGeometry previous) { }
+
+    private static final class FrameSceneSnapshot {
         final SceneContent content;
         final List<FrameInstanceSnapshot> instances;
-        final List<LatchedInstance> tlasInstances;
         final Object layout;
-        final SharedResource<SceneMotionHistory> previousHistory;
         final int geometryHighWater;
         final int emitterHighWater;
-        private boolean traced;
 
-        FrameSceneSnapshot(SceneContent content, List<FrameInstanceSnapshot> instances, List<LatchedInstance> tlasInstances,
-                           Object layout,
-                           SharedResource<SceneMotionHistory> previousHistory,
-                           int geometryHighWater, int emitterHighWater) {
+        FrameSceneSnapshot(SceneContent content, List<FrameInstanceSnapshot> instances,
+                           Object layout, int geometryHighWater, int emitterHighWater) {
             this.content = content;
             this.instances = instances;
-            this.tlasInstances = tlasInstances;
             this.layout = layout;
-            this.previousHistory = previousHistory;
             this.geometryHighWater = geometryHighWater;
             this.emitterHighWater = emitterHighWater;
         }
 
-        void markTraced() { traced = true; }
-
-        boolean traced() { return traced; }
-
-        @Override public void close() {
-            if (previousHistory != null) previousHistory.close();
+        static FrameSceneSnapshot prepare(SceneContent content, List<InstancePage> inputs) {
+            var geometryPages = new ArrayList<List<FrameInstanceSnapshot>>(inputs.size());
+            int geometryEnd = 0, emitterEnd = 0;
+            for (var page : inputs) {
+                geometryPages.add(page.instances);
+                geometryEnd = Math.max(geometryEnd, page.geometryHighWater);
+                emitterEnd = Math.max(emitterEnd, page.emitterHighWater);
+            }
+            return new FrameSceneSnapshot(content, SnapshotList.ofPages(geometryPages),
+                    inputs, geometryEnd, emitterEnd);
         }
     }
 
-    /** CPU plans follow instance revision identity and borrow resources from the consuming frame. */
+    /** CPU plans follow instance revision identity and borrow resources from their retained source revision. */
     static final class TracePlanCache {
         private IdentityHashMap<FrameInstanceSnapshot, TracePagePlan> plans = new IdentityHashMap<>();
         private IdentityHashMap<List<FrameInstanceSnapshot>, TraceBatch> pagePlans = new IdentityHashMap<>();
         private List<List<FrameInstanceSnapshot>> previousPages;
-        private TracePagePlan[] previousPlans;
         private TraceBatch[] previousBatches;
         private EmitterLayout emitterLayout;
 
@@ -945,25 +975,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 plans = retained;
             }
             previousPages = List.copyOf(pages);
-            previousPlans = null;
             previousBatches = resolved;
             emitterLayout = EmitterLayout.resolve(emitterLayout, resolved);
             return resolved;
-        }
-
-        TracePagePlan[] resolve(List<List<FrameInstanceSnapshot>> pages, RtFramePreparation preparation) {
-            var batches = resolveBatches(pages, preparation);
-            if (previousPlans == null) {
-                int count = 0;
-                for (var batch : batches) count = Math.addExact(count, batch.plans.length);
-                previousPlans = new TracePagePlan[count];
-                int offset = 0;
-                for (var batch : batches) {
-                    System.arraycopy(batch.plans, 0, previousPlans, offset, batch.plans.length);
-                    offset += batch.plans.length;
-                }
-            }
-            return previousPlans;
         }
     }
 
@@ -1035,19 +1049,22 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         private SceneOrigin origin;
         private Object pipeline;
         private Object lightRevision;
+        private long instanceAssignments;
 
         TraceBatchResidency(TraceBatch batch) { this.batch = batch; }
 
-        boolean hasGeometry(SceneOrigin origin, Object pipeline) {
-            return origin.equals(this.origin) && this.pipeline == pipeline;
+        boolean hasGeometry(SceneOrigin origin, Object pipeline, long instanceAssignments) {
+            return origin.equals(this.origin) && this.pipeline == pipeline
+                    && this.instanceAssignments == instanceAssignments;
         }
 
         boolean hasEmitters(Object lightRevision) { return this.lightRevision == lightRevision; }
 
-        void written(SceneOrigin origin, Object pipeline, Object lightRevision) {
+        void written(SceneOrigin origin, Object pipeline, Object lightRevision, long instanceAssignments) {
             this.origin = origin;
             this.pipeline = pipeline;
             this.lightRevision = lightRevision;
+            this.instanceAssignments = instanceAssignments;
         }
     }
 
@@ -1057,10 +1074,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    /** Immutable geometry, emitter layout, and pipeline SBT data for one motion-resolved instance. */
+    /** Immutable geometry, emitter layout, and pipeline SBT data for one current instance. */
     static final class TracePagePlan {
         final FrameInstanceSnapshot identity;
-        final List<FrameInstanceSnapshot> instances;
         final RtStableTraceRanges.PageRange range;
         final int geometryBase;
         final List<RtRetainedGeometryPlan.GeometryRecord> records;
@@ -1071,22 +1087,19 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
         TracePagePlan(FrameInstanceSnapshot frame) {
             identity = frame;
-            this.instances = List.of(frame);
-            range = instances.getFirst().range;
+            range = frame.range;
             geometryBase = range.geometryBase();
             var spans = new ArrayList<EmitterSpan>();
             int bytes = 0;
-            for (FrameInstanceSnapshot frameInstance : instances) {
-                NativeInstance instance = frameInstance.nativeInstance;
-                List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
-                for (int index = 0; index < geometries.size(); index++) {
-                    MeshBuild.Geometry<?> geometry = geometries.get(index);
-                    if (!hasEmitterMapping(instance.logical.primitiveEmitters(), geometry.firstIndex() / 3,
-                            geometry.triangleCount())) continue;
-                    spans.add(new EmitterSpan(frameInstance.geometryBase - geometryBase + index, bytes,
-                            geometry.firstIndex() / 3, geometry.triangleCount(), instance.logical.primitiveEmitters()));
-                    bytes = Math.addExact(bytes, Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
-                }
+            NativeInstance instance = frame.nativeInstance;
+            List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
+            for (int index = 0; index < geometries.size(); index++) {
+                MeshBuild.Geometry<?> geometry = geometries.get(index);
+                if (!hasEmitterMapping(instance.logical.primitiveEmitters(), geometry.firstIndex() / 3,
+                        geometry.triangleCount())) continue;
+                spans.add(new EmitterSpan(index, bytes, geometry.firstIndex() / 3,
+                        geometry.triangleCount(), instance.logical.primitiveEmitters()));
+                bytes = Math.addExact(bytes, Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
             }
             records = frame.geometryRecords;
             emitterSpans = List.copyOf(spans);
@@ -1111,7 +1124,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             return hits;
         }
 
-        void packGeometry(TraceSlot slot, SceneOrigin origin, int emitterBase) {
+        void packGeometry(TraceSlot slot, int emitterBase) {
             List<RtRetainedGeometryPlan.GeometryRecord> output = records;
             if (!emitterSpans.isEmpty()) {
                 var addressed = new ArrayList<>(records);
@@ -1126,7 +1139,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             ByteBuffer target = MemoryUtil.memByteBuffer(slot.geometry.mapped()
                     + (long) geometryBase * RtRetainedGeometryPlan.RECORD_BYTES, bytes)
                     .order(ByteOrder.nativeOrder());
-            RtRetainedGeometryPlan.packInto(target, output, origin);
+            RtRetainedGeometryPlan.packInto(target, output,
+                    slot.instanceTable.slot(identity.current.identity(), identity.current.placementOrdinal()));
         }
 
         void packHits(TraceSlot slot, RtPipeline pipeline) {
@@ -1137,9 +1151,15 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     }
 
-    private static final class EmitterCaches {
-        final IdentityHashMap<RtStableTraceRanges.PageRange, EmitterPageCache> pages = new IdentityHashMap<>();
-        Object layout;
+    /** Serial-worker CPU caches share one scene lifetime; completed revisions own GPU resources separately. */
+    private static final class SceneCaches {
+        LightIndexRevision lightIndex;
+        final TracePlanCache tracePlans = new TracePlanCache();
+        final RtPackedLightPages lights = new RtPackedLightPages();
+        final RtPackedTlasPages tlas = new RtPackedTlasPages();
+        final RtPackedInstancePages instances = new RtPackedInstancePages();
+        final IdentityHashMap<RtStableTraceRanges.PageRange, EmitterPageCache> emitterPages = new IdentityHashMap<>();
+        EmitterLayout emitterLayout;
     }
 
     private static final class EmitterPageCache {
@@ -1201,7 +1221,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
         void pack() {
             if ((flags & GEOMETRY) != 0) {
-                page.packGeometry(slot, origin, emitterBase);
+                page.packGeometry(slot, emitterBase);
             }
             if ((flags & HITS) != 0) {
                 page.packHits(slot, pipeline);
@@ -1222,7 +1242,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             long emitterAddress = page.emitterBytes == 0 ? 0L
                     : slot.emitters.deviceAddress().addBytes(emitterBase).value();
             if ((flags & GEOMETRY) != 0) {
-                residency.geometryWritten(page.identity, page.geometryBase, origin, emitterAddress);
+                residency.geometryWritten(page.identity, page.geometryBase, origin, emitterAddress,
+                        slot.instanceTable.slot(page.identity.current.identity(), page.identity.current.placementOrdinal()));
             }
             if ((flags & HITS) != 0) {
                 residency.hitsWritten(page.identity, page.hitBase(pipeline), pipeline);
@@ -1246,6 +1267,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         private int geometryBase;
         private SceneOrigin geometryOrigin;
         private long geometryEmitterAddress;
+        private int geometryInstanceIndex;
         private Object hitPage;
         private int hitBase;
         private Object hitPipeline;
@@ -1263,16 +1285,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             for (int index : linkedEmitters) target.set(index);
         }
 
-        boolean hasGeometry(Object page, int base, SceneOrigin origin, long emitterAddress) {
+        boolean hasGeometry(Object page, int base, SceneOrigin origin, long emitterAddress, int instanceIndex) {
             return geometryPage == page && geometryBase == base && origin.equals(geometryOrigin)
-                    && geometryEmitterAddress == emitterAddress;
+                    && geometryEmitterAddress == emitterAddress && geometryInstanceIndex == instanceIndex;
         }
 
-        void geometryWritten(Object page, int base, SceneOrigin origin, long emitterAddress) {
+        void geometryWritten(Object page, int base, SceneOrigin origin, long emitterAddress, int instanceIndex) {
             geometryPage = page;
             geometryBase = base;
             geometryOrigin = origin;
             geometryEmitterAddress = emitterAddress;
+            geometryInstanceIndex = instanceIndex;
         }
 
         boolean hasHits(Object page, int base, Object pipeline) {
@@ -1297,50 +1320,28 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     record FrameInstanceSnapshot(NativeInstance nativeInstance,
-                                         RetainedSceneSnapshot.Instance current,
-                                         RtRetainedGeometryPlan.ResolvedMesh resolvedMesh,
-                                         RtRetainedGeometryPlan.ResolvedPlacement resolvedPlacement,
-                                         GeometryTransform previousTransform,
-                                         MeshBuild.Stream previousPositions,
-                                         RtStableTraceRanges.PageRange range,
-                                         int geometryBase, int sbtRecordOffset,
-                                         List<RtRetainedGeometryPlan.GeometryRecord> geometryRecords) { }
-
-    record LatchedInstance(NativeInstance nativeInstance,
-                                   RetainedSceneSnapshot.Instance current,
-                                   RtRetainedGeometryPlan.ResolvedMesh resolvedMesh,
-                                   RtRetainedGeometryPlan.ResolvedPlacement resolvedPlacement,
-                                   RtStableTraceRanges.PageRange range,
-                                   int geometryBase, int sbtRecordOffset,
-                                   List<RtRetainedGeometryPlan.GeometryRecord> stationaryGeometryRecords) {
-    }
-
-    record ResolvedFrameInput(RtRetainedGeometryPlan.ResolvedMesh mesh,
-                              RtRetainedGeometryPlan.ResolvedPlacement placement) { }
+                                 RetainedSceneSnapshot.Instance current,
+                                 RtRetainedGeometryPlan.ResolvedMesh resolvedMesh,
+                                 RtStableTraceRanges.PageRange range,
+                                 int geometryBase, int sbtRecordOffset,
+                                 List<RtRetainedGeometryPlan.GeometryRecord> geometryRecords) { }
 
     /** Storage pages group iteration; each instance revision owns its own trace range generation. */
     static final class InstancePage {
-        final Object contentIdentity;
-        final List<LatchedInstance> instances;
-        final List<FrameInstanceSnapshot> stationary;
+        final List<FrameInstanceSnapshot> instances;
         final int geometryHighWater;
         final int emitterHighWater;
-        final long lastOrdinal;
 
         InstancePage(List<RetainedSceneSnapshot.Instance> values, RtStableTraceRanges ranges,
                      Long2ObjectOpenHashMap<InstancePage> previousPages, Long2ObjectOpenHashMap<FrameMesh> meshes) {
-            contentIdentity = new Object();
-            var latched = new ArrayList<LatchedInstance>(values.size());
             var frames = new ArrayList<FrameInstanceSnapshot>(values.size());
             for (var logical : values) {
                 var mesh = meshes.get(logical.meshIdentity());
                 var previousPage = previousPages.get(logical.placementOrdinal());
-                int previousIndex = previousPage == null ? -1
-                        : previousPage.index(logical.placementOrdinal(), logical.identity());
-                LatchedInstance previous = previousIndex < 0 ? null : previousPage.instances.get(previousIndex);
+                FrameInstanceSnapshot previous = previousPage == null ? null
+                        : previousPage.instance(logical.placementOrdinal(), logical.identity());
                 if (previous != null && previous.current == logical && previous.nativeInstance.mesh == mesh) {
-                    latched.add(previous);
-                    frames.add(previousPage.stationary.get(previousIndex));
+                    frames.add(previous);
                     continue;
                 }
                 int count = mesh.logical.build().geometries().size();
@@ -1349,17 +1350,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                         : ranges.replace(previous.range, count, emitterBytes);
                 int base = range.geometryBase();
                 var instance = new NativeInstance(logical, mesh, logical.placementOrdinal());
-                var placement = new RtRetainedGeometryPlan.ResolvedPlacement(
-                        logical.transform(), logical.instanceData().bits());
-                var records = RtRetainedGeometryPlan.records(mesh.resolved, placement,
-                        logical.transform(), mesh.logical.build().positions());
-                var value = new LatchedInstance(instance, instance.logical, instance.mesh.resolved, placement, range,
+                var records = RtRetainedGeometryPlan.records(mesh.resolved, 0);
+                var value = new FrameInstanceSnapshot(instance, instance.logical, instance.mesh.resolved, range,
                         base, Math.multiplyExact(base, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), records);
-                latched.add(value);
-                frames.add(frame(value, null, null));
+                frames.add(value);
             }
-            instances = List.copyOf(latched);
-            stationary = List.copyOf(frames);
+            instances = List.copyOf(frames);
             int geometryEnd = 0, emitterEnd = 0;
             for (var instance : instances) {
                 geometryEnd = Math.max(geometryEnd, Math.addExact(instance.range.geometryBase(), instance.range.geometryCount()));
@@ -1367,15 +1363,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             }
             geometryHighWater = geometryEnd;
             emitterHighWater = emitterEnd;
-            lastOrdinal = values.getLast().placementOrdinal();
         }
 
-        private LatchedInstance instance(long placementOrdinal, long identity) {
-            int index = index(placementOrdinal, identity);
-            return index < 0 ? null : instances.get(index);
-        }
-
-        private int index(long placementOrdinal, long identity) {
+        private FrameInstanceSnapshot instance(long placementOrdinal, long identity) {
             int first = 0;
             int end = instances.size();
             while (first < end) {
@@ -1383,68 +1373,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 if (instances.get(middle).nativeInstance.placementOrdinal < placementOrdinal) first = middle + 1;
                 else end = middle;
             }
-            if (first == instances.size()) return -1;
+            if (first == instances.size()) return null;
             var instance = instances.get(first);
             return instance.nativeInstance.placementOrdinal == placementOrdinal && instance.current.identity() == identity
-                    ? first : -1;
+                    ? instance : null;
         }
 
-        List<FrameInstanceSnapshot> frame(SceneMotionHistory history) {
-            if (history == null) return stationary;
-            var samePage = history.page(lastOrdinal);
-            if (samePage != null && samePage.contentIdentity == contentIdentity) return stationary;
-            ArrayList<FrameInstanceSnapshot> values = null;
-            for (int index = 0; index < instances.size(); index++) {
-                var instance = instances.get(index);
-                var page = history.page(instance.nativeInstance.placementOrdinal);
-                var prior = page == null ? null
-                        : page.instance(instance.nativeInstance.placementOrdinal, instance.current.identity());
-                var frame = frame(instance, prior, stationary.get(index));
-                if (frame != stationary.get(index) && values == null) values = new ArrayList<>(stationary);
-                if (values != null) values.set(index, frame);
-            }
-            return values == null ? stationary : List.copyOf(values);
-        }
-
-        private static FrameInstanceSnapshot frame(LatchedInstance current, LatchedInstance prior,
-                                                    FrameInstanceSnapshot stationary) {
-            NativeInstance instance = current.nativeInstance;
-            GeometryTransform previousTransform = current.current.transform();
-            MeshBuild.Stream previousPositions = instance.mesh.logical.build().positions();
-            if (prior != null && prior.nativeInstance.placementOrdinal == instance.placementOrdinal) {
-                previousTransform = prior.current.transform();
-                var previousBuild = prior.nativeInstance.mesh.logical.build();
-                if (previousBuild == instance.mesh.logical.build()
-                        || RetainedSceneSnapshot.vertexTopologyCompatible(previousBuild, instance.mesh.logical.build())) {
-                    previousPositions = previousBuild.positions();
-                }
-            }
-            boolean stationaryMotion = previousTransform.equals(current.current.transform())
-                    && previousPositions == instance.mesh.logical.build().positions();
-            if (stationaryMotion && stationary != null) return stationary;
-            return new FrameInstanceSnapshot(instance, current.current, current.resolvedMesh, current.resolvedPlacement,
-                    previousTransform, previousPositions, current.range, current.geometryBase, current.sbtRecordOffset,
-                    stationaryMotion ? current.stationaryGeometryRecords
-                            : RtRetainedGeometryPlan.records(current.resolvedMesh, current.resolvedPlacement,
-                            previousTransform, previousPositions));
-        }
-    }
-
-    static final class SceneMotionHistory implements AutoCloseable {
-        final List<InstancePage> pages;
-        // The captured revision owns every previous position stream, with one claim for the history.
-        final SharedResource<RetainedSceneSnapshot> root;
-
-        SceneMotionHistory(List<InstancePage> pages, SharedResource<RetainedSceneSnapshot> root) {
-            this.pages = pages;
-            this.root = root;
-        }
-
-        InstancePage page(long placementOrdinal) {
-            return FrameAssembly.page(pages, placementOrdinal);
-        }
-
-        @Override public void close() { root.close(); }
     }
 
     public record SceneLight(long identity, LightDescriptor descriptor) {
@@ -1457,7 +1391,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    public record LightingFrame(int width, int height, long frameIndex, float metersPerSceneUnit,
+    public record LightingFrame(Object view, int width, int height, long frameIndex, float metersPerSceneUnit,
                                 boolean historyContinuous) { }
 
     public static final class PreparedLighting {
@@ -1490,20 +1424,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    /**
-     * Completed slots can be rewritten for a new frame, including its TLAS descriptor. Graphics
-     * completion returns the slot without taking the backend lock; allocation only sees returned slots.
-     * Pipeline-specific hit strides affect packing, while the reused base address must remain aligned.
-     */
+    /** A last-reader release returns writable storage; pipeline hit records retain their required alignment. */
     private TraceSlot acquireTraceSlot(int geometryBytes, int hitBytes, int lightBytes,
-                                      int emitterBytes, RtPipeline pipeline, GraphicsUse graphicsUse) {
+                                      int emitterBytes, RtPipeline pipeline, RtRevisionResources resources) {
         TraceSlot slot = traceSlots.acquire(candidate ->
                         candidate.geometry.size() >= geometryBytes && candidate.hits.size() >= hitBytes
                                 && candidate.lights.size() >= lightBytes && candidate.emitters.size() >= emitterBytes
                                 && candidate.hits.deviceAddress().value() % pipeline.retainedHitTableAlignment() == 0,
                 () -> createTraceSlot(ctx, geometryBytes, hitBytes, lightBytes, emitterBytes, pipeline));
         try {
-            graphicsUse.whenComplete(() -> traceSlots.release(slot));
+            resources.add(() -> traceSlots.release(slot));
             return slot;
         } catch (Throwable failure) {
             traceSlots.release(slot);
@@ -1545,6 +1475,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     static final class TraceSlot {
+        RtInstanceTablePlan instanceTable;
+        long instanceAssignments;
         List<ByteBuffer> lightPages = List.of();
         private Object batchRevision;
         private Object linkedLayout;
@@ -1565,6 +1497,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             this.lights = lights;
             this.emitters = emitters;
             this.tlasDescriptor = tlasDescriptor;
+        }
+
+        void setInstanceTable(RtInstanceTablePlan table) {
+            if (!table.sameSlotAssignments(instanceTable)) instanceAssignments++;
+            instanceTable = table;
         }
 
         TraceBatchResidency batch(TraceBatch batch, Object currentRevision) {
@@ -1624,21 +1561,28 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     record LightIndexRevision(List<SceneLight> lights, RtDenseLightIndex<SceneLight> indices) { }
 
+    private static final class InstanceUploadSlot {
+        final GpuBuffer buffer;
+        List<ByteBuffer> pages = List.of();
+
+        InstanceUploadSlot(GpuBuffer buffer) { this.buffer = buffer; }
+    }
+
     record NativeInstance(RetainedSceneSnapshot.Instance logical, FrameMesh mesh,
                                   long placementOrdinal) { }
 
     /**
-     * Immutable CPU resolution reused only for the same captured mesh object. The last-frame cache
-     * borrows these references; each consuming frame's root owns the mesh and program resources.
+     * Immutable CPU resolution reused for one captured mesh and composition. The preparation cache
+     * retains the source root; each consuming renderer revision owns its mesh and program resources.
      */
     static final class FrameMesh {
         final RetainedSceneSnapshot.Mesh logical;
         final RtPreparedMesh nativeMesh;
         final RtRetainedGeometryPlan.ResolvedMesh resolved;
-        FrameMesh(RetainedSceneSnapshot.Mesh logical, RtPreparedMesh nativeMesh) {
+        FrameMesh(RetainedSceneSnapshot.Mesh logical, RtPreparedMesh nativeMesh, ProgramComposition composition) {
             this.logical = logical;
             this.nativeMesh = nativeMesh;
-            resolved = resolveMesh(logical);
+            resolved = RtRetainedGeometryPlan.resolve(logical.build(), composition);
         }
         RtPreparedMesh.State blas() { return nativeMesh.value(); }
     }

@@ -66,10 +66,8 @@ final class RtFrameHistoryTest {
     }
 
     @Test
-    void sceneOriginScaleExtentAndRouteChangesResetHistory() {
+    void sceneScaleExtentAndRouteChangesResetHistory() {
         assertReset(capture(seeded(), snapshot(new SceneId() { }, SceneOrigin.ZERO, 0, .01,
-                1, false, new Matrix4f(), new Matrix4f()), 1));
-        assertReset(capture(seeded(), snapshot(SCENE, new SceneOrigin(1, 0, 0), 0, .01,
                 1, false, new Matrix4f(), new Matrix4f()), 1));
         assertReset(capture(seeded(), snapshot(SCENE, SceneOrigin.ZERO, 0, .01,
                 2, false, new Matrix4f(), new Matrix4f()), 1));
@@ -78,6 +76,51 @@ final class RtFrameHistoryTest {
         assertReset(seeded().capture(snapshot(0, .01), 1, 16_000_000L,
                 EXTENT, DenoiserRoute.RAY_RECONSTRUCTION, 1, 1, 1));
         assertFalse(seeded().changesScene(snapshot(0, .01)));
+    }
+
+    @Test
+    void completedRevisionOriginLagPreservesWorldCameraMotionAndSubmittedHistory() {
+        var history = new RtFrameHistory();
+        var previousOrigin = new SceneOrigin(30_000_000.25, -30_000_000.25, 1024.25);
+        var requestedOrigin = new SceneOrigin(30_000_032.25, -29_999_968.25, 1056.25);
+        var completedOrigin = new SceneOrigin(30_000_016.25, -29_999_984.25, 1040.25);
+        var projection = new Matrix4f().m00(1.25f);
+        var rotation = new Matrix4f().rotationY(.15f);
+        var previousCamera = new Camera(30_000_000.5, -30_000_000.75, 1025.0,
+                projection.get(new float[16]), rotation.get(new float[16]));
+        var previous = capture(history, new FrameSnapshot(new SceneView(SCENE, previousCamera),
+                previousOrigin, true, 12, 1), 0);
+        history.submitted(previous);
+
+        var currentCamera = new Camera(30_000_000.75, -30_000_000.25, 1025.75,
+                projection.get(new float[16]), rotation.get(new float[16]));
+        var requested = new FrameSnapshot(new SceneView(SCENE, currentCamera), requestedOrigin, true, 12.1, 1);
+        var selected = requested.withSceneCoordinates(completedOrigin, requested.metersPerWorldUnit());
+        var frame = capture(history, selected, 1);
+
+        assertSame(requested.view(), selected.view());
+        assertEquals(requestedOrigin, requested.sceneOrigin());
+        assertEquals(completedOrigin, frame.snapshot().sceneOrigin());
+        assertTrue(frame.historyContinuous());
+        assertEquals(new Float3(.25f, .5f, .75f), frame.cameraDelta());
+        assertEquals(new Float3(-15.5f, -16f, -14.5f), frame.cameraOffset());
+        assertEquals(previous.projectionView(), frame.previousProjectionView());
+        assertEquals(previous.viewRotation(), frame.previousViewRotation());
+        assertEquals(previous.jitterX(), frame.previousJitterX());
+        assertEquals(12, frame.previousProceduralTime());
+        assertEquals(16, frame.frameTimeMilliseconds(), .0001f);
+
+        var sameCameraDifferentOrigin = capture(history, requested, 1);
+        assertEquals(frame.cameraDelta(), sameCameraDifferentOrigin.cameraDelta());
+        assertEquals(frame.previousProceduralTime(), sameCameraDifferentOrigin.previousProceduralTime());
+        assertEquals(frame.projectionView(), sameCameraDifferentOrigin.projectionView());
+        assertEquals(new Float3(-31.5f, -32f, -30.5f), sameCameraDifferentOrigin.cameraOffset());
+        history.submitted(frame);
+        var next = capture(history, requested, 2);
+        assertTrue(next.historyContinuous());
+        assertEquals(new Float3(0, 0, 0), next.cameraDelta());
+        assertEquals(frame.jitterX(), next.previousJitterX());
+        assertEquals(12.1f, next.previousProceduralTime());
     }
 
     @Test

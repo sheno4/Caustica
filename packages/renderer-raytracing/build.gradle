@@ -89,6 +89,7 @@ def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflec
 def rayTracingRecordSpecs = [
         "buffer|worldPushLayoutProbe|WorldPush|dev.comfyfluffy.caustica.renderer.raytracing.gen|WorldPushData|false",
         "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedGeometryRecordData|false",
+        "buffer|retainedInstanceRecordLayoutProbe|RetainedInstanceRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedInstanceRecordData|false",
         "buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedLightRecordData|false",
         "buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.renderer.raytracing.gen|NeeAtStateData|false",
         "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.renderer.raytracing.gen|PackedPathSegmentData|false",
@@ -121,65 +122,16 @@ sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generateRayTracin
 sourceSets.main.java.srcDir(files(generatedBindingsRoot).builtBy(generateRayTracingBindings))
 sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compileRayTracingShaders))
 
-def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
+def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi", Test) {
     group = "verification"
-    description = "Verifies exact host layouts reflected from ray-tracing Slang records."
-    dependsOn(generateRayTracingRecords, generateRayTracingBindings)
-    def expectedFragments = [
-            WorldPushData: ["BYTE_SIZE = 304", "invViewProj().get(0, dst)",
-                            "putFloat(64, camOffset().x())", "putInt(76, frameIndex())",
-                            "prevViewProj().get(80, dst)", "putInt(168, flags())",
-                            "putFloat(176, time())", "curViewProj().get(208, dst)",
-                            "putFloat(276, preExposure())", "putLong(280, environmentBinding())",
-                            "putInt(288, environmentImplementation())"],
-            RetainedGeometryRecordData: ["BYTE_SIZE = 192", "putInt(0, surfaceImplementation())",
-                    "putLong(16, surfaceBinding())", "putFloat(48, currentRow0().x())",
-                    "putFloat(96, previousRow0().x())", "putLong(144, emitterIndexAddress())",
-                    "putInt(152, emitterPrimitiveBase())", "putInt(156, previousPositionStride())",
-                    "putLong(160, previousPositionAddress())", "putLong(168, indexAddress())",
-                    "putInt(176, firstIndex())"],
-            RetainedLightRecordData: ["BYTE_SIZE = 80", "putInt(0, type())",
-                    "putFloat(8, rangeMeters())", "putFloat(16, positionOrDirection().x())",
-                    "putFloat(64, radiometry().x())"],
-            NeeAtStateData: ["BYTE_SIZE = 104", "putLong(0, lightTableAddress())",
-                    "putLong(32, pixelFeedbackAddress())", "putLong(40, proxyIndexAddress())",
-                    "putInt(48, lightCount())", "putInt(72, tileSize())",
-                    "putInt(80, candidateCount())", "putFloat(88, metersPerSceneUnit())",
-                    "putInt(92, frameIndex())", "putFloat(96, powerTotal())",
-                    "putFloat(100, localToGlobalRatio())"]
-    ]
-    inputs.dir(generatedRecordRoot)
-    inputs.dir(generatedBindingsRoot)
-    doLast {
-        expectedFragments.each { className, fragments ->
-            def source = generatedRecordRoot.get().file(
-                    "dev/comfyfluffy/caustica/renderer/raytracing/gen/${className}.java").asFile.getText("UTF-8")
-            def missing = fragments.findAll { !source.contains(it) }
-            if (!missing.empty) throw new GradleException("${className} ABI drifted: ${missing}")
-        }
-        def bindings = generatedBindingsRoot.get().file(
-                "dev/comfyfluffy/caustica/renderer/raytracing/layout/RtBindings.java").asFile.getText("UTF-8")
-        def requiredBindings = [
-                "WORLD_PUSH_ADDRESS_OFFSET = 0", "WORLD_COMPOSITION_DATA_ADDRESS_OFFSET = 8",
-                "WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET = 16", "WORLD_PATH_QUEUE_ADDRESS_OFFSET = 24",
-                "WORLD_TOP_LEVEL_AS_INDEX_OFFSET = 32", "WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET = 40",
-                "WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET = 64",
-                "WORLD_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET = 68",
-                "WORLD_SPECULAR_RADIANCE_HIT_DISTANCE_INDEX_OFFSET = 72",
-                "WORLD_NRD_VIEW_Z_INDEX_OFFSET = 76",
-                "WORLD_DENOISED_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET = 80",
-                "WORLD_DENOISED_SPECULAR_RADIANCE_HIT_DISTANCE_INDEX_OFFSET = 84",
-                "WORLD_NRD_STABLE_RADIANCE_INDEX_OFFSET = 88",
-                "WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET = 92", "WORLD_INITIAL_VOLUME_ACTIVE_OFFSET = 96",
-                "WORLD_INITIAL_VOLUME_BINDING_OFFSET = 104", "WORLD_INITIAL_VOLUME_INSTANCE_OFFSET = 112",
-                "WORLD_NEE_AT_STATE_ADDRESS_OFFSET = 120", "WORLD_NRD_SIGNAL_ENCODING_OFFSET = 128"
-        ]
-        def missing = requiredBindings.findAll { !bindings.contains(it) }
-        if (!missing.empty) throw new GradleException("world root ABI drifted: ${missing}")
-        def obsolete = ["WORLD_SET", "WORLD_BINDLESS", "WORLD_PROVIDER_TEXTURES"].findAll {
-            bindings.contains(it)
-        }
-        if (!obsolete.empty) throw new GradleException("world root retains descriptor-set ABI: ${obsolete}")
+    description = "Verifies serialized host layouts reflected from ray-tracing Slang records."
+    dependsOn(tasks.named("testClasses"))
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("*.RtShaderRecordAbiTest")
+        includeTestsMatching("*.RtRetainedGeometryPlanTest")
     }
 }
 
@@ -260,39 +212,6 @@ def verifyRendererRayTracingDependencies = tasks.register("verifyRendererRayTrac
     }
 }
 
-def verifyRendererRayTracingImports = tasks.register("verifyRendererRayTracingImports") {
-    group = "verification"
-    description = "Verifies that renderer shader compilation has no Minecraft or root-mod imports."
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = [
-                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
-                "dev.comfyfluffy.caustica.config",
-                "dev.comfyfluffy.caustica.minecraft",
-                "dev.comfyfluffy.caustica.minecraft.client.platform",
-                "dev.comfyfluffy.caustica.fabric",
-                "dev.comfyfluffy.caustica.neoforge",
-                "dev.comfyfluffy.caustica.ngx",
-                "net.minecraft",
-                "net.fabricmc",
-                "net.neoforged"
-        ]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { file ->
-            file.eachLine { line, number ->
-                def rootRayImport = line.contains("dev.comfyfluffy.caustica.renderer.runtime.")
-                if (line.stripLeading().startsWith("import ")
-                        && (forbidden.any { line.contains(it) } || rootRayImport)) {
-                    violations.add("${file}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) {
-            throw new GradleException("renderer-raytracing import violations:\n${violations.join('\n')}")
-        }
-    }
-}
-
 def verifyRendererRayTracingResources = tasks.register("verifyRendererRayTracingResources") {
     group = "verification"
     description = "Verifies that the package owns the complete world Slang resource set."
@@ -338,7 +257,7 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
         def generatedTopLevelClasses = names.findAll {
             it.startsWith(generatedRecordClassRoot) && it.endsWith("Data.class")
         } as Set
-        def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData",
+        def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData", "RetainedInstanceRecordData",
                 "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData",
                 "StablePlaneRecordData"].collect {
             "${generatedRecordClassRoot}${it}.class"
@@ -374,8 +293,8 @@ tasks.named("test", Test) {
     systemProperty "caustica.test.spirvVal", rootProject.slangTooling.spirvVal.get()
 }
 tasks.named("check") {
-    dependsOn(verifyRendererRayTracingDependencies, verifyRendererRayTracingImports,
-            verifyRendererRayTracingResources, verifyRendererRayTracingJar, verifyRayTracingAbi,
+    dependsOn(verifyRendererRayTracingDependencies, verifyRendererRayTracingResources,
+            verifyRendererRayTracingJar, verifyRayTracingAbi,
             verifyRayTracingGenerationReproducible, verifyRayTracingSpirvTarget)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }

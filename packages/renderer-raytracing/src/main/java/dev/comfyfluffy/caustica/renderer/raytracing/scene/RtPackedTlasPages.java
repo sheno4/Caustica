@@ -12,12 +12,12 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 
-/** Immutable current-instance pages fix TLAS fields; cached bytes borrow BLAS addresses owned by the frame. */
+/** Immutable current-instance pages fix TLAS fields; retained source revisions own their BLAS addresses. */
 final class RtPackedTlasPages {
     private IdentityHashMap<List<?>, Page> cached = new IdentityHashMap<>();
     private ByteBuffer scratch = ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder());
 
-    /** One joined packing worker owns this cache and its scratch; previous motion does not affect TLAS fields. */
+    /** The serial scene worker owns this cache and scratch; previous motion does not affect TLAS fields. */
     <T> List<ByteBuffer> resolve(List<T> instances, SceneOrigin origin, TlasBuilder.InstanceWriter<T> writer) {
         var result = new ArrayList<ByteBuffer>();
         var next = new IdentityHashMap<List<?>, Page>();

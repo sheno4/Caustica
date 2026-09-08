@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsQueue.TrackedGraphicsUse;
+import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtStateData;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
@@ -30,9 +30,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
 
-/** Persistent per-scene adaptive light distributions and visible-contribution feedback. */
+/** Per-view adaptive light distributions and completion-owned visible-contribution feedback. */
 final class RtNeeAtBackend {
     private static final EventType NEE_FRAME_EVENT = EventType.getEventType(NeeFrameEvent.class);
     static final int TILE_SIZE = 8;
@@ -47,48 +46,89 @@ final class RtNeeAtBackend {
     static final int LOCAL_HISTORY_VALID = 1;
     private static final int GLOBAL_ENTRY_BYTES = 2 * Integer.BYTES;
     private static final int LOCAL_ENTRY_BYTES = 2 * Integer.BYTES;
-    private static final int PLAN_ENTRY_BYTES = 2 * Integer.BYTES;
     private static final int PIXEL_FEEDBACK_BYTES = 2 * Integer.BYTES;
-    private static final int PUSH_BYTES = 64;
+    private static final int PUSH_BYTES = 88;
     private static final String SHADER = "/caustica/shaders/pipelines/nee_at/bake.comp.spv";
 
     private final VulkanDeviceContext context;
     private final ShaderObjectCompute bake;
-    private final Map<SceneId, SceneState> scenes = new IdentityHashMap<>();
+    private final Map<Object, SceneState> views = new IdentityHashMap<>();
+    private final RtNeeAtPlan.Cache lightPlans = new RtNeeAtPlan.Cache();
+    private RtNeeAtPlan.Plan cachedPlan;
+    private SharedResource<LightRevision> cachedLightRevision;
 
     RtNeeAtBackend(VulkanDeviceContext context) {
         this.context = Objects.requireNonNull(context, "context");
         this.bake = load(context);
     }
 
-    Prepared prepare(SceneId scene, List<RtRetainedSceneBackend.SceneLight> lights,
+    /** Runs on the serial scene worker; metadata contains no submitted-predecessor state. */
+    SharedResource<LightRevision> prepareLightRevision(List<RtRetainedSceneBackend.SceneLight> lights,
+                                                      float metersPerSceneUnit) {
+        RtNeeAtPlan.Plan plan = lightPlans.prepare(lights, metersPerSceneUnit);
+        if (cachedPlan == plan) return cachedLightRevision.retain();
+        RtRevisionResources resources = new RtRevisionResources();
+        SharedResource<LightRevision> replacement;
+        try {
+            GpuBuffer power = upload(plan.packPower(), "NEE-AT light powers", resources);
+            GpuBuffer identities = upload(plan.packIdentities(), "NEE-AT dense identities", resources);
+            GpuBuffer lookup = upload(plan.packLookup(), "NEE-AT identity lookup", resources);
+            LightRevision revision = new LightRevision(power, identities, lookup, plan.count(), plan.mask(),
+                    plan.powerTotal(), lights.stream().anyMatch(light ->
+                    light.descriptor() instanceof LightDescriptor.Distant distant && distant.environmentEmitter()),
+                    telemetry(lights));
+            replacement = SharedResource.owned(revision, released -> context.deferDestroy(resources::close));
+        } catch (RuntimeException | Error failure) {
+            try (resources) { throw failure; }
+        }
+        var old = cachedLightRevision;
+        cachedLightRevision = replacement;
+        cachedPlan = plan;
+        if (old != null) old.close();
+        return replacement.retain();
+    }
+
+    private GpuBuffer upload(ByteBuffer bytes, String label, RtRevisionResources resources) {
+        GpuBuffer buffer = context.createMappedGpuUploadBuffer(Math.max(4, bytes.remaining()),
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label);
+        resources.add(buffer::destroy);
+        write(buffer, bytes);
+        return buffer;
+    }
+
+    Prepared prepare(Object view, SceneId scene, SharedResource<LightRevision> revision,
                      FrameInput input, VkCommandBuffer commandBuffer, GraphicsUse use) {
         Objects.requireNonNull(scene, "scene");
-        Objects.requireNonNull(lights, "lights");
+        Objects.requireNonNull(revision, "revision");
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(commandBuffer, "commandBuffer");
         Objects.requireNonNull(use, "use");
-        SceneState state = scenes.computeIfAbsent(scene, ignored -> new SceneState());
-        if (state.active != null) throw new IllegalStateException("lighting frame is already active");
-        state.ensure(input.width(), input.height(),
-                Math.max(lights.size(), state.previousLights.size()));
-        boolean continuous = historyValid(input, state.hasHistory, state.lastFrameIndex,
-                state.width, state.height);
-        if (state.metadataLights != lights) {
-            state.metadataLights = lights;
-            state.telemetry = null;
-            state.environmentEmitters = lights.stream().anyMatch(light ->
-                    light.descriptor() instanceof LightDescriptor.Distant distant && distant.environmentEmitter());
+        SceneState state = views.get(view);
+        if (state == null || state.scene != scene) {
+            if (state != null) state.retire();
+            state = new SceneState(scene);
+            views.put(view, state);
         }
+        if (state.active != null) throw new IllegalStateException("lighting frame is already active");
+        LightRevision lights = revision.get();
+        SharedResource<Frame> targetOwner = state.slots.acquire(
+                frame -> frame.width == input.width() && frame.height == input.height()
+                        && frame.lightCapacity >= lights.count,
+                () -> new Frame(Math.max(1, lights.count), input.width(), input.height(),
+                        Math.multiplyExact(divideRoundUp(input.width(), TILE_SIZE),
+                                divideRoundUp(input.height(), TILE_SIZE))));
+        SharedResource<Frame> previousOwner = state.history.capture();
+        Frame previous = previousOwner == null ? null : previousOwner.get();
+        boolean continuous = previous != null && historyValid(input, true, previous.input.frameIndex(),
+                previous.width, previous.height);
         if (NEE_FRAME_EVENT.isEnabled()) {
-            if (state.telemetry == null) state.telemetry = telemetry(lights, false);
-            Telemetry telemetry = state.telemetry;
+            Telemetry telemetry = lights.telemetry;
             NeeFrameEvent event = new NeeFrameEvent();
             event.rendererFrameId = input.frameIndex();
             event.scene = scene.toString();
             event.width = input.width();
             event.height = input.height();
-            event.candidates = telemetry.candidates();
+            event.candidates = CANDIDATES;
             event.historyValid = continuous;
             event.localHistoryValid = continuous;
             event.retainedLights = telemetry.lightCount();
@@ -97,73 +137,66 @@ final class RtNeeAtBackend {
             event.distants = telemetry.distants();
             event.commit();
         }
-        int targetIndex = state.cursor ^ 1;
-        Frame target = state.frames[targetIndex];
-        Frame previous = state.frames[state.cursor];
-        context.graphics().graphicsUseWaiter().await(target.use);
-
-        RtNeeAtPlan.Plan plan = state.plans.prepare(lights, continuous, input.metersPerSceneUnit());
-        if (target.uploadedPlan != plan) {
-            write(target.plan, plan.pack());
-            target.uploadedPlan = plan;
-        }
+        Frame target = targetOwner.get();
+        target.lights = revision.retain();
+        target.input = input;
         int tileCountX = divideRoundUp(input.width(), TILE_SIZE);
         int tileCountY = divideRoundUp(input.height(), TILE_SIZE);
         int flags = (continuous ? LOCAL_HISTORY_VALID : 0)
-                | (state.environmentEmitters ? ENVIRONMENT_EMITTERS_SAMPLED : 0);
+                | (lights.environmentEmitters ? ENVIRONMENT_EMITTERS_SAMPLED : 0);
         NeeAtStateData control = new NeeAtStateData(0L, target.global.deviceAddress().value(),
                 target.local.deviceAddress().value(), target.lightFeedback.deviceAddress().value(),
                 target.pixelFeedback.deviceAddress().value(),
-                target.proxyIndices.deviceAddress().value(), lights.size(),
-                continuous ? state.previousLights.size() : 0,
+                target.proxyIndices.deviceAddress().value(), lights.count,
+                continuous ? previous.lights.get().count : 0,
                 input.width(), input.height(), tileCountX, tileCountY, TILE_SIZE, LOCAL_SLOTS,
                 CANDIDATES, flags, input.metersPerSceneUnit(),
-                (int) input.frameIndex(), plan.powerTotal(),
+                (int) input.frameIndex(), lights.powerTotal,
                 LOCAL_TO_GLOBAL_RATIO);
-        writeState(target.state, control);
-
-        // The previous frame's pixel feedback is read by the bake below, so the ray-tracing writes
-        // that produced it must land before either the fills or the compute passes run.
-        barrier(commandBuffer, KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT,
-                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-                        | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        // Both targets are this frame's write destinations, distinct from the previous frame's
-        // buffers the bake reads, so they can be zeroed up front in one go.
-        fill(commandBuffer, target.lightFeedback);
-        fill(commandBuffer, target.pixelFeedback);
-        barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT, VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        int pixels = Math.multiplyExact(input.width(), input.height());
-        int lightGroups = divideRoundUp(lights.size(), SCAN_BLOCK);
-        if (continuous) {
-            dispatch(commandBuffer, target, previous, input, true, 0, divideRoundUp(pixels, SCAN_BLOCK));
-            computeBarrier(commandBuffer);
-        }
-        dispatch(commandBuffer, target, previous, input, continuous, 1, lightGroups);
-        computeBarrier(commandBuffer);
-        dispatch(commandBuffer, target, previous, input, continuous, 2, 1);
-        computeBarrier(commandBuffer);
-        dispatch(commandBuffer, target, previous, input, continuous, 3, lightGroups);
-        computeBarrier(commandBuffer);
-        dispatch(commandBuffer, target, previous, input, continuous, 4,
-                divideRoundUp(Math.multiplyExact(lights.size(), PROXY_RATIO), SCAN_BLOCK));
-        barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-        target.use.mark(use);
-        state.cursor = targetIndex;
-        state.width = input.width();
-        state.height = input.height();
-        state.lastFrameIndex = input.frameIndex();
-        state.previousLights = lights;
-        Prepared prepared = new Prepared(scene, target, control, continuous, use);
+        Prepared prepared = new Prepared(state, targetOwner, previousOwner, control, continuous);
+        use.keepAlive(prepared);
         state.active = prepared;
-        return prepared;
+
+        try {
+            writeState(target.state, control);
+            // The previous frame's pixel feedback is read by the bake below, so the ray-tracing writes
+            // that produced it must land before either the fills or the compute passes run.
+            barrier(commandBuffer, KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                    VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                    VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                            | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            // Both targets are this frame's write destinations, distinct from the previous frame's
+            // buffers the bake reads, so they can be zeroed up front in one go.
+            fill(commandBuffer, target.lightFeedback);
+            fill(commandBuffer, target.pixelFeedback);
+            barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT, VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            int pixels = Math.multiplyExact(input.width(), input.height());
+            int lightGroups = divideRoundUp(lights.count, SCAN_BLOCK);
+            if (continuous) {
+                dispatch(commandBuffer, target, previous, true, 0, divideRoundUp(pixels, SCAN_BLOCK));
+                computeBarrier(commandBuffer);
+            }
+            dispatch(commandBuffer, target, previous, continuous, 1, lightGroups);
+            computeBarrier(commandBuffer);
+            dispatch(commandBuffer, target, previous, continuous, 2, 1);
+            computeBarrier(commandBuffer);
+            dispatch(commandBuffer, target, previous, continuous, 3, lightGroups);
+            computeBarrier(commandBuffer);
+            dispatch(commandBuffer, target, previous, continuous, 4,
+                    divideRoundUp(Math.multiplyExact(lights.count, PROXY_RATIO), SCAN_BLOCK));
+            barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                    VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+            return prepared;
+        } catch (RuntimeException | Error failure) {
+            state.active = null;
+            throw failure;
+        }
     }
 
     /**
@@ -172,16 +205,14 @@ final class RtNeeAtBackend {
      * through submission completion. Depth is linear view Z; motion is current-to-previous
      * displacement in pixels. Depth history shares the feedback frame's lifetime and continuity.
      */
-    void bakeLocal(SceneId scene, VkCommandBuffer commandBuffer, int currentLinearDepthIndex,
+    void bakeLocal(Prepared prepared, VkCommandBuffer commandBuffer, int currentLinearDepthIndex,
                    int currentMotionIndex) {
-        SceneState state = require(scene);
-        Prepared prepared = state.active;
         barrier(commandBuffer, KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
                         | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        dispatch(commandBuffer, prepared.frame, state.frames[state.cursor ^ 1],
+        dispatch(commandBuffer, prepared.frame, prepared.previous,
                 prepared.historyValid, 5,
                 Math.multiplyExact(prepared.control.tileCountX(), prepared.control.tileCountY()),
                 currentLinearDepthIndex, currentMotionIndex);
@@ -193,54 +224,48 @@ final class RtNeeAtBackend {
                 VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     }
 
-    void finish(SceneId scene, Prepared prepared, VkCommandBuffer commandBuffer, GraphicsUse use) {
-        SceneState state = require(scene);
+    void finish(Prepared prepared, VkCommandBuffer commandBuffer, GraphicsUse use) {
+        SceneState state = prepared.owner;
         if (state.active != prepared) throw new IllegalArgumentException("lighting frame is not active");
         barrier(commandBuffer, KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                 VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
-        prepared.frame.use.mark(use);
-        state.hasHistory = true;
+        use.whenSubmitted(() -> state.history.submitted(prepared.targetOwner));
         state.active = null;
     }
 
-    void abandon(SceneId scene, Prepared prepared) {
-        SceneState state = require(scene);
+    void abandon(Prepared prepared) {
+        SceneState state = prepared.owner;
         if (state.active != prepared) throw new IllegalArgumentException("lighting frame is not active");
-        state.hasHistory = false;
         state.active = null;
     }
 
-    Prepared active(SceneId scene) {
-        return require(scene).active;
+    void releaseView(Object view) {
+        SceneState state = views.remove(view);
+        if (state != null) state.retire();
     }
 
     void destroyAfterDeviceIdle() {
-        scenes.values().forEach(SceneState::destroy);
-        scenes.clear();
+        views.values().forEach(SceneState::retire);
+        views.clear();
+        if (cachedLightRevision != null) cachedLightRevision.close();
+        cachedLightRevision = null;
+        cachedPlan = null;
         bake.close();
     }
 
     void retainScenes(Set<SceneId> retained) {
-        var iterator = scenes.entrySet().iterator();
+        var iterator = views.values().iterator();
         while (iterator.hasNext()) {
-            var entry = iterator.next();
-            if (retained.contains(entry.getKey())) continue;
-            SceneState state = entry.getValue();
-            if (state.active != null) throw new IllegalStateException("cannot retire active lighting state");
+            SceneState state = iterator.next();
+            if (retained.contains(state.scene)) continue;
             iterator.remove();
             state.retire();
         }
     }
 
-    private SceneState require(SceneId scene) {
-        SceneState state = scenes.get(scene);
-        if (state == null) throw new IllegalArgumentException("scene has no NEE-AT state");
-        return state;
-    }
-
     private void dispatch(VkCommandBuffer commandBuffer, Frame target, Frame previous,
-                          FrameInput input, boolean continuous, int phase, int groups) {
+                          boolean continuous, int phase, int groups) {
         dispatch(commandBuffer, target, previous, continuous, phase, groups, 0, 0);
     }
 
@@ -249,13 +274,16 @@ final class RtNeeAtBackend {
                           int currentMotionIndex) {
         try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
             ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
-            push.putLong(target.state.deviceAddress().value()).putLong(target.plan.deviceAddress().value())
-                    .putLong(previous.pixelFeedback.deviceAddress().value())
+            LightRevision lights = target.lights.get();
+            push.putLong(target.state.deviceAddress().value()).putLong(lights.power.deviceAddress().value())
+                    .putLong(continuous ? previous.pixelFeedback.deviceAddress().value() : 0)
                     .putLong(target.blockSums.deviceAddress().value())
-                    .putLong(previous.depth.deviceAddress().value())
+                    .putLong(continuous ? previous.depth.deviceAddress().value() : 0)
                     .putLong(target.depth.deviceAddress().value())
                     .putInt(phase).putInt(continuous ? 1 : 0)
-                    .putInt(currentLinearDepthIndex).putInt(currentMotionIndex).flip();
+                    .putInt(currentLinearDepthIndex).putInt(currentMotionIndex)
+                    .putLong(continuous ? previous.lights.get().identities.deviceAddress().value() : 0)
+                    .putLong(lights.lookup.deviceAddress().value()).putInt(lights.mask).putInt(0).flip();
             bake.dispatch(commandBuffer, push, groups, 1, 1);
         }
     }
@@ -281,11 +309,6 @@ final class RtNeeAtBackend {
         return Math.max(1, (value + divisor - 1) / divisor);
     }
 
-    static int lightCapacity(int current, int required) {
-        if (current >= required) return Math.max(1, current);
-        return Math.max(required, Math.max(1, Math.addExact(current, Math.max(1, current / 2))));
-    }
-
     static boolean historyValid(FrameInput input, boolean hasHistory, long lastFrameIndex,
                                 int historyWidth, int historyHeight) {
         return input.historyContinuous() && hasHistory
@@ -293,7 +316,7 @@ final class RtNeeAtBackend {
                 && input.width() == historyWidth && input.height() == historyHeight;
     }
 
-    static Telemetry telemetry(List<RtRetainedSceneBackend.SceneLight> lights, boolean historyValid) {
+    static Telemetry telemetry(List<RtRetainedSceneBackend.SceneLight> lights) {
         int parallelograms = 0;
         int spots = 0;
         int distants = 0;
@@ -304,7 +327,7 @@ final class RtNeeAtBackend {
                 case LightDescriptor.Distant ignored -> distants++;
             }
         }
-        return new Telemetry(CANDIDATES, historyValid, parallelograms, spots, distants);
+        return new Telemetry(parallelograms, spots, distants);
     }
 
     @Name("dev.comfyfluffy.caustica.NeeFrame")
@@ -324,7 +347,7 @@ final class RtNeeAtBackend {
         public int distants;
     }
 
-    record Telemetry(int candidates, boolean historyValid, int parallelograms, int spots, int distants) {
+    record Telemetry(int parallelograms, int spots, int distants) {
         int lightCount() {
             return Math.addExact(Math.addExact(parallelograms, spots), distants);
         }
@@ -375,20 +398,49 @@ final class RtNeeAtBackend {
         }
     }
 
-    static final class Prepared {
-        private final SceneId scene;
+    static final class LightRevision {
+        final GpuBuffer power;
+        final GpuBuffer identities;
+        final GpuBuffer lookup;
+        final int count;
+        final int mask;
+        final float powerTotal;
+        final boolean environmentEmitters;
+        final Telemetry telemetry;
+
+        LightRevision(GpuBuffer power, GpuBuffer identities, GpuBuffer lookup, int count, int mask,
+                      float powerTotal, boolean environmentEmitters, Telemetry telemetry) {
+            this.power = power;
+            this.identities = identities;
+            this.lookup = lookup;
+            this.count = count;
+            this.mask = mask;
+            this.powerTotal = powerTotal;
+            this.environmentEmitters = environmentEmitters;
+            this.telemetry = telemetry;
+        }
+
+    }
+
+    static final class Prepared implements AutoCloseable {
+        private final SceneState owner;
         private final Frame frame;
+        private final Frame previous;
+        private final SharedResource<Frame> targetOwner;
+        private final SharedResource<Frame> previousOwner;
         private NeeAtStateData control;
         private final boolean historyValid;
-        private final GraphicsUse use;
 
-        Prepared(SceneId scene, Frame frame, NeeAtStateData control,
-                 boolean historyValid, GraphicsUse use) {
-            this.scene = scene;
-            this.frame = frame;
+        Prepared(SceneState owner, SharedResource<Frame> targetOwner, SharedResource<Frame> previousOwner,
+                 NeeAtStateData control,
+                 boolean historyValid) {
+            this.owner = owner;
+            this.targetOwner = targetOwner;
+            this.previousOwner = previousOwner;
+            this.frame = targetOwner.get();
+            this.previous = previousOwner == null ? null : previousOwner.get();
             this.control = control;
             this.historyValid = historyValid;
-            this.use = use;
         }
 
         void bindLightTable(VulkanDeviceAddress address) {
@@ -405,106 +457,89 @@ final class RtNeeAtBackend {
 
         VulkanDeviceAddress stateAddress() { return frame.state.deviceAddress(); }
         boolean historyValid() { return historyValid; }
-        SceneId scene() { return scene; }
+        SceneId scene() { return owner.scene; }
+
+        @Override public void close() {
+            try (previousOwner) { targetOwner.close(); }
+        }
     }
 
     private final class SceneState {
-        Frame[] frames = {new Frame(), new Frame()};
-        int cursor;
-        int width;
-        int height;
-        int lightCapacity;
-        long lastFrameIndex = Long.MIN_VALUE;
-        boolean hasHistory;
-        final RtNeeAtPlan.Cache plans = new RtNeeAtPlan.Cache();
-        List<RtRetainedSceneBackend.SceneLight> previousLights = List.of();
-        List<RtRetainedSceneBackend.SceneLight> metadataLights;
-        Telemetry telemetry;
-        boolean environmentEmitters;
+        final SceneId scene;
+        final RtFeedbackSlots<Frame> slots = new RtFeedbackSlots<>(Frame::releaseMetadata,
+                frame -> context.deferDestroy(frame::destroy));
+        final RtFeedbackHistory<Frame> history = new RtFeedbackHistory<>();
         Prepared active;
 
-        void ensure(int wantedWidth, int wantedHeight, int lights) {
-            if (frames[0].state != null && width == wantedWidth && height == wantedHeight
-                    && lightCapacity >= lights) return;
-            int capacity = lightCapacity(lightCapacity, lights);
-            int tiles = Math.multiplyExact(divideRoundUp(wantedWidth, TILE_SIZE),
-                    divideRoundUp(wantedHeight, TILE_SIZE));
-            Frame[] replacement = {new Frame(), new Frame()};
-            for (Frame frame : replacement) frame.allocate(capacity, wantedWidth, wantedHeight, tiles);
-            retire();
-            frames = replacement;
-            width = wantedWidth;
-            height = wantedHeight;
-            lightCapacity = capacity;
-            hasHistory = false;
-            previousLights = List.of();
-            cursor = 0;
-        }
-
-        void destroy() { for (Frame frame : frames) frame.destroy(); }
+        SceneState(SceneId scene) { this.scene = scene; }
 
         void retire() {
-            Frame[] retired = frames;
-            // Each slot reads the other slot's feedback. Both completion values must retire before
-            // either slot is destroyed, and callbacks must retain this generation after replacement.
-            AtomicInteger pending = new AtomicInteger(retired.length);
-            for (Frame frame : retired) {
-                context.graphics().retireAfterGraphics(frame.use,
-                        () -> {
-                            if (pending.decrementAndGet() == 0) {
-                                for (Frame completed : retired) completed.destroy();
-                            }
-                        });
-            }
+            try (history) { slots.close(); }
         }
     }
 
     private final class Frame {
-        GpuBuffer state;
-        GpuBuffer global;
-        GpuBuffer proxyIndices;
-        GpuBuffer blockSums;
-        GpuBuffer local;
-        GpuBuffer lightFeedback;
-        GpuBuffer pixelFeedback;
-        GpuBuffer depth;
-        GpuBuffer plan;
-        RtNeeAtPlan.Plan uploadedPlan;
-        final TrackedGraphicsUse use = new TrackedGraphicsUse();
+        final RtRevisionResources resources = new RtRevisionResources();
+        final GpuBuffer state;
+        final GpuBuffer global;
+        final GpuBuffer proxyIndices;
+        final GpuBuffer blockSums;
+        final GpuBuffer local;
+        final GpuBuffer lightFeedback;
+        final GpuBuffer pixelFeedback;
+        final GpuBuffer depth;
+        SharedResource<LightRevision> lights;
+        FrameInput input;
+        final int lightCapacity;
+        final int width;
+        final int height;
 
-        void allocate(int lightCapacity, int width, int height, int tiles) {
+        Frame(int lightCapacity, int width, int height, int tiles) {
+            this.lightCapacity = lightCapacity;
+            this.width = width;
+            this.height = height;
             int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
             int cleared = usage | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            state = context.createMappedGpuUploadBuffer(NeeAtStateData.BYTE_SIZE, usage, "NEE-AT state");
-            // One entry past the last light carries the total proxy count.
-            global = context.createBuffer(Math.multiplyExact(lightCapacity + 1, GLOBAL_ENTRY_BYTES),
-                    usage, false, "NEE-AT global distribution");
-            proxyIndices = context.createBuffer(
-                    Math.multiplyExact(Math.multiplyExact(lightCapacity, PROXY_RATIO), Integer.BYTES),
-                    usage, false, "NEE-AT sampling proxies");
-            blockSums = context.createBuffer(
-                    Math.multiplyExact(divideRoundUp(lightCapacity, SCAN_BLOCK), Integer.BYTES),
-                    usage, false, "NEE-AT proxy block sums");
-            local = context.createBuffer(Math.multiplyExact(Math.multiplyExact(tiles, LOCAL_SLOTS),
-                    LOCAL_ENTRY_BYTES), usage, false, "NEE-AT local distributions");
-            // One entry past the last light counts pixels whose feedback pick was unusable.
-            lightFeedback = context.createBuffer(Math.multiplyExact(lightCapacity + 1, Integer.BYTES),
-                    cleared, false, "NEE-AT light feedback");
-            pixelFeedback = context.createBuffer(Math.multiplyExact(Math.multiplyExact(width, height),
-                    PIXEL_FEEDBACK_BYTES), cleared, false, "NEE-AT pixel feedback");
-            depth = context.createBuffer(Math.multiplyExact(Math.multiplyExact(width, height), Float.BYTES),
-                    usage, false, "NEE-AT linear depth history");
-            plan = context.createMappedGpuUploadBuffer(Math.multiplyExact(lightCapacity, PLAN_ENTRY_BYTES), usage,
-                    "NEE-AT identity plan");
+            try {
+                state = context.createMappedGpuUploadBuffer(NeeAtStateData.BYTE_SIZE, usage, "NEE-AT state");
+                resources.add(state::destroy);
+                // One entry past the last light carries the total proxy count.
+                global = context.createBuffer(Math.multiplyExact(lightCapacity + 1, GLOBAL_ENTRY_BYTES),
+                        usage, false, "NEE-AT global distribution");
+                resources.add(global::destroy);
+                proxyIndices = context.createBuffer(
+                        Math.multiplyExact(Math.multiplyExact(lightCapacity, PROXY_RATIO), Integer.BYTES),
+                        usage, false, "NEE-AT sampling proxies");
+                resources.add(proxyIndices::destroy);
+                blockSums = context.createBuffer(
+                        Math.multiplyExact(divideRoundUp(lightCapacity, SCAN_BLOCK), Integer.BYTES),
+                        usage, false, "NEE-AT proxy block sums");
+                resources.add(blockSums::destroy);
+                local = context.createBuffer(Math.multiplyExact(Math.multiplyExact(tiles, LOCAL_SLOTS),
+                        LOCAL_ENTRY_BYTES), usage, false, "NEE-AT local distributions");
+                resources.add(local::destroy);
+                // One entry past the last light counts pixels whose feedback pick was unusable.
+                lightFeedback = context.createBuffer(Math.multiplyExact(lightCapacity + 1, Integer.BYTES),
+                        cleared, false, "NEE-AT light feedback");
+                resources.add(lightFeedback::destroy);
+                pixelFeedback = context.createBuffer(Math.multiplyExact(Math.multiplyExact(width, height),
+                        PIXEL_FEEDBACK_BYTES), cleared, false, "NEE-AT pixel feedback");
+                resources.add(pixelFeedback::destroy);
+                depth = context.createBuffer(Math.multiplyExact(Math.multiplyExact(width, height), Float.BYTES),
+                        usage, false, "NEE-AT linear depth history");
+                resources.add(depth::destroy);
+            } catch (RuntimeException | Error failure) {
+                try (resources) { throw failure; }
+            }
         }
 
-        void destroy() {
-            if (state == null) return;
-            state.destroy(); global.destroy(); proxyIndices.destroy(); blockSums.destroy();
-            local.destroy(); lightFeedback.destroy(); pixelFeedback.destroy(); depth.destroy(); plan.destroy();
-            uploadedPlan = null;
-            state = global = proxyIndices = blockSums = local = lightFeedback = pixelFeedback
-                    = depth = plan = null;
+        void releaseMetadata() {
+            var released = lights;
+            lights = null;
+            input = null;
+            if (released != null) released.close();
         }
+
+        void destroy() { resources.close(); }
     }
 }

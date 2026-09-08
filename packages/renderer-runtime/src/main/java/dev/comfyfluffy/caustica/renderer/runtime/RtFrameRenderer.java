@@ -77,6 +77,7 @@ public final class RtFrameRenderer {
     private final VulkanDeviceContext context;
     private final RtProgramBackend programs;
     private final RtRetainedSceneBackend scenes;
+    private final RtScenePublication<RtSceneRequest, RtSceneRevision> scenePublication;
     private final RtPassSchedulerBackend passes;
     private final EngineSessionServices services;
     private final RtFramePresenter presenter;
@@ -86,7 +87,12 @@ public final class RtFrameRenderer {
     private final RtFrameResources frameResources;
     private RtRenderSettings settings;
     private final RtFrameHistory history = new RtFrameHistory();
+    private final RtSubmittedRevision<RtSceneRevision> submittedScenes = new RtSubmittedRevision<>();
     private SharedResource<RtCapturedFrame> frameSnapshot;
+    private SharedResource<RtSceneRevision> frameScenes;
+    private boolean sceneReady;
+    private SceneOrigin requestedOrigin = SceneOrigin.ZERO;
+    private float requestedMetersPerSceneUnit = 1.0f;
     private FrameExecution execution;
     private boolean loggedActive;
     private long debugCaptureFrameSerial = -1;
@@ -115,6 +121,8 @@ public final class RtFrameRenderer {
         this.context = Objects.requireNonNull(context, "context");
         this.programs = Objects.requireNonNull(programs, "programs");
         this.scenes = Objects.requireNonNull(scenes, "scenes");
+        this.scenePublication = new RtScenePublication<>(request -> RtSceneRevision.prepare(request, scenes));
+        scenes.bindScenePreparationQuiescer(this::clearScenePublication);
         this.passes = Objects.requireNonNull(passes, "passes");
         this.services = Objects.requireNonNull(services, "services");
         this.presenter = Objects.requireNonNull(presenter, "presenter");
@@ -243,7 +251,7 @@ public final class RtFrameRenderer {
     }
 
     public boolean requiresSourceWorldFallback() {
-        return !programs.hasActive();
+        return !sceneReady;
     }
 
     /**
@@ -253,19 +261,38 @@ public final class RtFrameRenderer {
      */
     public boolean completeStartupBoundary() {
         services.progress();
-        return programs.hasActive();
+        requestScenePreparation();
+        latchSceneReadiness();
+        return sceneReady;
+    }
+
+    private void requestScenePreparation() {
+        var request = RtSceneRequest.capture(programs::acquire, scenes::captureSnapshot,
+                telemetry::publicationCutoff, requestedOrigin, requestedMetersPerSceneUnit);
+        scenePublication.request(request.key(), request);
+    }
+
+    /** Latches completed-scene availability before the host decides which renderer owns this frame. */
+    public void latchSceneReadiness() {
+        try (var revision = scenePublication.acquire()) {
+            sceneReady = revision != null && revision.get().traceScenes() != null;
+        }
     }
 
     /** Capture the immutable host frame for the next composite. Called from the host render adapter. */
     public void captureFrame(FrameSnapshot snapshot) {
-        services.progress();
-        RtCapturedFrame captured;
-        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.captureScenes")) {
-            captured = RtCapturedFrame.capture(Objects.requireNonNull(snapshot, "snapshot"),
-                    programs::acquire, scenes::captureSnapshot, telemetry::publicationCutoff);
+        try (var ignored = telemetry.frame().stage("frame.capture")) {
+            requestedOrigin = snapshot.sceneOrigin();
+            requestedMetersPerSceneUnit = (float) snapshot.metersPerWorldUnit();
+            services.progress();
+            releaseCapturedFrame();
+            try (RtTelemetry.Scope sceneCapture = telemetry.frame().stage("frame.captureScenes")) {
+                requestScenePreparation();
+                frameScenes = scenePublication.acquire();
+                var captured = RtCapturedFrame.capture(Objects.requireNonNull(snapshot, "snapshot"));
+                frameSnapshot = SharedResource.owned(captured, RtCapturedFrame::close);
+            }
         }
-        releaseCapturedFrame();
-        frameSnapshot = SharedResource.owned(captured, RtCapturedFrame::close);
     }
 
     /** Reset exposure filtering after an explicit render-state invalidation such as F3+A. */
@@ -293,34 +320,38 @@ public final class RtFrameRenderer {
 
     /** Records UI passes in an owned heap command buffer after the host UI layer is available. */
     public void recordUiPasses(dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage uiLayer) {
-        Objects.requireNonNull(uiLayer, "uiLayer");
-        if (execution == null || execution.trace == null || frameSnapshot == null) {
-            throw new IllegalStateException("no retained frame is available for UI recording");
-        }
-        try (RtFrameCommands commands = new RtFrameCommands(context, gpuTiming, execution.graphicsUse, telemetry.frameSerial())) {
-            execution.graphicsUse.keepAlive(uiLayer.retain());
-            VkCommandBuffer commandBuffer = commands.heap("UI extensions");
-            passes.beginFrame(passFrame(commandBuffer, execution.graphicsUse,
-                    new RtPassSchedulerBackend.UiState(uiLayer, execution.frame.projectionView().get(new float[16]),
-                            execution.trace.tlasDescriptor())));
-            try {
-                services.passes().recordUi();
-            } finally {
-                passes.endFrame();
+        try (var ignored = telemetry.frame().stage("frame.recordUi")) {
+            Objects.requireNonNull(uiLayer, "uiLayer");
+            if (execution == null || execution.trace == null || frameSnapshot == null) {
+                throw new IllegalStateException("no retained frame is available for UI recording");
             }
-            commands.submit(context.backend().createGraphicsSubmission());
+            try (RtFrameCommands commands = new RtFrameCommands(context, gpuTiming, execution.graphicsUse, telemetry.frameSerial())) {
+                execution.graphicsUse.keepAlive(uiLayer.retain());
+                VkCommandBuffer commandBuffer = commands.heap("UI extensions");
+                passes.beginFrame(passFrame(commandBuffer, execution.graphicsUse,
+                        new RtPassSchedulerBackend.UiState(uiLayer, execution.frame.projectionView().get(new float[16]),
+                                execution.trace.tlasDescriptor())));
+                try {
+                    services.passes().recordUi();
+                } finally {
+                    passes.endFrame();
+                }
+                commands.submit(context.backend().createGraphicsSubmission());
+            }
         }
     }
 
     /** Signals this frame's completion reservation after the host has recorded any UI consumers. */
     public void finishGraphicsUse() {
-        if (execution == null) {
-            return;
+        try (var ignored = telemetry.frame().stage("frame.finishGraphicsUse")) {
+            if (execution == null) {
+                return;
+            }
+            GraphicsUse graphicsUse = execution.graphicsUse;
+            execution = null;
+            GraphicsSubmission submission = context.backend().createGraphicsSubmission();
+            context.graphics().resolveGraphicsUse(submission, graphicsUse);
         }
-        GraphicsUse graphicsUse = execution.graphicsUse;
-        execution = null;
-        GraphicsSubmission submission = context.backend().createGraphicsSubmission();
-        context.graphics().resolveGraphicsUse(submission, graphicsUse);
     }
 
     public void endFrame() {
@@ -328,6 +359,12 @@ public final class RtFrameRenderer {
     }
 
     public boolean composite(long nativeColorImage, int width, int height) {
+        try (var ignored = telemetry.frame().stage("frame.composite")) {
+            return compositeFrame(nativeColorImage, width, height);
+        }
+    }
+
+    private boolean compositeFrame(long nativeColorImage, int width, int height) {
         VulkanDiagnostics.setInFlight("graphics-latest", "frame=" + frameCounter + " size=" + width + "x" + height);
         SharedResource<RtCapturedFrame> captured = frameSnapshot;
         if (captured == null) {
@@ -336,12 +373,13 @@ public final class RtFrameRenderer {
         }
         FrameSnapshot snapshot = captured.get().inputs();
         try {
-            if (!ensurePresentationResources(context, width, height)) {
-                return false;
-            }
-            if (captured.get().program() == null) return false;
+            ensurePresentationResources(width, height);
+            if (frameScenes == null || frameScenes.get().traceScenes() == null) return false;
+            var traceRevision = frameScenes.get().traceScenes().get();
+            if (!traceRevision.contains(snapshot.view().entryScene())) return false;
+            snapshot = snapshot.withSceneCoordinates(traceRevision.origin(), traceRevision.metersPerSceneUnit());
             if (history.changesScene(snapshot)) resetSceneHistory();
-            recordFrame(context, captured, nativeColorImage, snapshot);
+            recordFrame(context, captured, frameScenes, nativeColorImage, snapshot);
             if (!loggedActive) {
                 loggedActive = true;
                 LOGGER.info("RT composite active: {}x{}, RT output replaces the world target", width, height);
@@ -368,23 +406,23 @@ public final class RtFrameRenderer {
             return false;
         }
         try {
-            return ensurePresentationResources(context, width, height);
+            ensurePresentationResources(width, height);
+            return true;
         } catch (IOException failure) {
             // Shader and pipeline bring-up has no partial success worth presenting around.
             throw new IllegalStateException("RT presentation resource bring-up failed", failure);
         }
     }
 
-    private boolean ensurePresentationResources(VulkanDeviceContext ctx, int width, int height)
+    private void ensurePresentationResources(int width, int height)
             throws IOException {
         presentationResources().configureExposure(settings.exposure());
-        frameResources.ensurePresentationPipelines(ctx, settings.peakNits());
-        if (frameResources.ensureSized(ctx, width, height, reconstruction.settings().route(),
+        frameResources.ensurePresentationPipelines(context, settings.peakNits());
+        if (frameResources.ensureSized(context, width, height, reconstruction.settings().route(),
                 reconstruction::closeBackendAfterIdle)) {
             resetSceneHistory();
         }
         reconstruction.ensureBackend(traceExtent());
-        return true;
     }
 
     /**
@@ -406,10 +444,13 @@ public final class RtFrameRenderer {
         reconstruction.resetHistory();
         presenter.resetSceneHistory();
         history.reset();
+        submittedScenes.close();
+        scenes.releaseView(this);
     }
 
     private void recordFrame(VulkanDeviceContext ctx,
                              SharedResource<RtCapturedFrame> captured,
+                             SharedResource<RtSceneRevision> revision,
                              long nativeColorImage,
                              FrameSnapshot snapshot) {
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
@@ -417,21 +458,24 @@ public final class RtFrameRenderer {
         GraphicsUse graphicsUse = graphics.beginGraphicsUse();
         execution = new FrameExecution(graphicsUse);
         graphicsUse.keepAlive(captured.retain());
-        RtProgramBackend.Published program = captured.get().program().get();
-        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.assembleScenes")) {
-            scenes.beginFrame(captured.get().scenes(), graphicsUse);
-        }
-        GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter = graphics.graphicsUseWaiter();
-        presentationResources().exposure().beginFrame(graphicsUseWaiter, telemetry.frameSerial());
+        graphicsUse.keepAlive(revision.retain());
+        RtProgramBackend.Published program = revision.get().program().get();
+        presentationResources().exposure().beginFrame(graphicsUse, telemetry.frameSerial());
         execution.frame = history.capture(snapshot, frameCounter, System.nanoTime(), traceExtent(),
                 reconstruction.settings().route(), exposure().preExposure(), settings.jitterSignX(), settings.jitterSignY());
+        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.assembleScenes")) {
+            try (var previous = execution.frame.historyContinuous() ? submittedScenes.acquire() : null) {
+                scenes.beginFrame(revision.get().traceScenes(),
+                        previous == null ? null : previous.get().traceScenes(), graphicsUse);
+            }
+        }
         if (!execution.frame.historyContinuous()) reconstruction.resetHistory();
         int debugView = settings.debugView();
         try (RtFrameCommands commands = new RtFrameCommands(ctx, gpuTiming, graphicsUse, telemetry.frameSerial());
              MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer cmd = commands.heap("world resources and trace");
             recordTrace(ctx, cmd, stack, graphicsUse, program, execution.frame, commands,
-                    captured.get().publicationCutoff());
+                    revision.get().publicationCutoff());
             var output = reconstruction.record(commands, stack, graphicsUse, execution.frame,
                     traceResources(), presentationResources());
             recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
@@ -441,6 +485,7 @@ public final class RtFrameRenderer {
             debugCapturePreExposure = execution.frame.preExposure();
             debugCaptureDenoising = reconstruction.settings();
             history.submitted(execution.frame);
+            submittedScenes.submitted(revision);
             reconstruction.submitted(execution.frame);
         }
         // Submission makes every frame-owned address reachable until the final overlay consumer.
@@ -454,8 +499,22 @@ public final class RtFrameRenderer {
 
     /** Release unsubmitted input ownership; accepted executions keep their independent claims. */
     public void releaseCapturedFrame() {
-        if (frameSnapshot != null) frameSnapshot.close();
+        var captured = frameSnapshot;
+        var revision = frameScenes;
         frameSnapshot = null;
+        frameScenes = null;
+        try (revision; captured) {
+            // Detach both claims before disposal; submitted executions retain their own copies.
+        }
+    }
+
+    private void clearScenePublication() {
+        sceneReady = false;
+        history.reset();
+        submittedScenes.close();
+        scenes.releaseView(this);
+        releaseCapturedFrame();
+        scenePublication.clear();
     }
 
     private void recordTrace(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
@@ -481,7 +540,11 @@ public final class RtFrameRenderer {
         EnvironmentBinding<?> environment = scenes.content(entryScene, graphicsUse).environment();
         telemetry.frameAssembled(publicationCutoff);
         EnvironmentPush environmentState = environmentPush(environment,
-                environment == null ? 0 : services.programs().resolve(environment.implementation()));
+                environment == null ? 0 : program.resolve(environment.implementation()));
+        var geometryHistory = scenes.geometry(entryScene, graphicsUse);
+        SceneOrigin previousOrigin = geometryHistory.previousOrigin();
+        Float3 previousOriginDelta = new Float3((float) (previousOrigin.x() - sceneOrigin.x()),
+                (float) (previousOrigin.y() - sceneOrigin.y()), (float) (previousOrigin.z() - sceneOrigin.z()));
 
         new WorldPushData(
                 frameInvViewProj,
@@ -500,21 +563,17 @@ public final class RtFrameRenderer {
                 // from the same RtExposure accessor), or the two stop cancelling.
                 frame.preExposure(),
                 environmentState.bindingData(),
-                environmentState.implementation()
+                environmentState.implementation(),
+                geometryHistory.currentInstances().value(),
+                geometryHistory.previousInstances() == null ? 0L : geometryHistory.previousInstances().value(),
+                geometryHistory.previousMask(), previousOriginDelta
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
-        RtRetainedSceneBackend.PreparedWorldGeometry geometry;
-        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareWorldGeometry")) {
-            geometry = scenes.prepareWorldGeometry(entryScene, sceneOrigin, program.pipeline(), graphicsUse);
-        }
-        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.recordTlas")) {
-            TlasBuilder.record(ctx, cmd, geometry.tlas());
-        }
         VulkanBarriers.memoryBarrier(cmd, stack);
         RtRetainedSceneBackend.PreparedLighting lighting;
         try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareLighting")) {
             lighting = scenes.prepareLighting(entryScene,
-                    new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                    new RtRetainedSceneBackend.LightingFrame(this, traceExtent().renderWidth(), traceExtent().renderHeight(),
                             frameCounter, (float) snapshot.metersPerWorldUnit(),
                             frame.historyContinuous()), cmd, graphicsUse);
         }
@@ -522,11 +581,11 @@ public final class RtFrameRenderer {
         try {
             RtRetainedSceneBackend.PreparedTrace trace;
             try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.finishTrace")) {
-                trace = scenes.finishTrace(geometry, lighting);
+                trace = scenes.finishTrace(entryScene, graphicsUse, lighting);
             }
             execution.trace = trace;
             ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
-            writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, pathScratch);
+            writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, pathScratch, program);
             program.writeCompositionDataAddress(roots);
             trace.writeWorldRoots(roots);
 
@@ -540,19 +599,19 @@ public final class RtFrameRenderer {
             VulkanBarriers.worldResourcesToPrimary(cmd, stack);
 
             try (var gpu = commands.time("build stable planes");
-                 RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "build stable planes");
+                 var ignored = RtDebugLabels.scope(ctx, cmd, "build stable planes");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.buildStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                         roots, 0, trace.hitTable());
             }
             try (var gpu = commands.time("local NEE bake");
-                 RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "local NEE bake");
+                 var ignored = RtDebugLabels.scope(ctx, cmd, "local NEE bake");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.bakeLocal")) {
-                scenes.bakeLocal(entryScene, cmd,
+                scenes.bakeLocal(lighting, cmd,
                         storageIndex(traceImages().nrdViewZ()), storageIndex(traceImages().motion()));
             }
             try (var gpu = commands.time("fill stable planes");
-                 RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fill stable planes");
+                 var ignored = RtDebugLabels.scope(ctx, cmd, "fill stable planes");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.fillStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                         roots, 1, trace.hitTable());
@@ -561,7 +620,7 @@ public final class RtFrameRenderer {
             scenes.finishLighting(entryScene, lighting, cmd, graphicsUse);
             lightingFinished = true;
         } catch (Throwable failure) {
-            if (!lightingFinished) scenes.abandonLighting(entryScene, lighting);
+            scenes.abandonLighting(entryScene, lighting);
             throw failure;
         }
     }
@@ -575,7 +634,7 @@ public final class RtFrameRenderer {
             // Auto-exposure meters the selected route's reconstructed output. This keeps temporal routes
             // stable and leaves RR exposure-independent as required by its integration contract; raw mode
             // deliberately meters its own noisy reference.
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
+            try (var ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.exposure")) {
                 presentationResources().exposure().record(ctx, cmd, stack, output,
                         traceImages().depth(), traceImages().diffuseAlbedo());
@@ -583,12 +642,12 @@ public final class RtFrameRenderer {
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // exposure image visible to downstream passes
 
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "post chain");
+            try (var ignored = RtDebugLabels.scope(ctx, cmd, "post chain");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.postChain")) {
                 services.passes().recordPostEffects();
             }
             RtToneLut displayLookLut = presentationResources().lookLut();
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
+            try (var ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.displayMap")) {
                 presentationResources().displayPipeline().dispatch(cmd, presentationResources().displayImage(),
                         passes.sceneColor(), presentationResources().exposure().image(),
@@ -604,7 +663,7 @@ public final class RtFrameRenderer {
                 // exposure, and display mapping. It therefore observes the renderer without perturbing
                 // exposure history or feeding literal diagnostic colors through ACES. Debug presentation
                 // remains SDR for now; a PQ swapchain uses the existing SDR->PQ conversion path.
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "debug present");
+                try (var ignored = RtDebugLabels.scope(ctx, cmd, "debug present");
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.debugPresent")) {
                     presentationResources().debugPresentPipeline().dispatch(cmd,
                             presentationResources().displayImage(), traceImages().normalRoughness(),
@@ -619,7 +678,7 @@ public final class RtFrameRenderer {
             }
             VulkanBarriers.memoryBarrier(cmd, stack);
 
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "copy composite to main target");
+            try (var ignored = RtDebugLabels.scope(ctx, cmd, "copy composite to main target");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.copyOutput")) {
                 VK13.vkCmdCopyImage2(cmd, VkCopyImageInfo2.calloc(stack).sType$Default()
                         .srcImage(presentationResources().displayImage().image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
@@ -649,7 +708,7 @@ public final class RtFrameRenderer {
     }
 
     private void writeFrameRoots(ByteBuffer roots, VulkanDeviceAddress worldPushAddress, FrameSnapshot snapshot,
-                                 GpuBuffer pathScratch) {
+                                 GpuBuffer pathScratch, RtProgramBackend.Published program) {
         ByteBuffer target = roots.duplicate().order(ByteOrder.nativeOrder());
         int base = roots.position();
         target.putLong(base + RtBindings.WORLD_PUSH_ADDRESS_OFFSET, worldPushAddress.value());
@@ -687,7 +746,7 @@ public final class RtFrameRenderer {
                         ? 1 : 0);
         ViewMedium medium = snapshot.view().medium();
         int implementation = medium instanceof ViewMedium.Volume<?, ?> volume
-                ? services.programs().resolve(volume.implementation()) : 0;
+                ? program.resolve(volume.implementation()) : 0;
         writeInitialVolumeRoots(roots, medium, implementation);
     }
 
@@ -735,11 +794,14 @@ public final class RtFrameRenderer {
     }
 
     public void destroy() {
+        scenePublication.close();
+        scenes.releaseView(this);
         gpuTiming.close();
         reconstruction.close();
         presenter.invalidateRenderedFrame();
         frameResources.destroy();
         history.reset();
+        submittedScenes.close();
         loggedActive = false;
         releaseCapturedFrame();
         execution = null;

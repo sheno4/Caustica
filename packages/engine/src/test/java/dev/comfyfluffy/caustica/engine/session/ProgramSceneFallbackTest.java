@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class ProgramSceneFallbackTest {
     interface Implementation { }
@@ -42,7 +43,7 @@ final class ProgramSceneFallbackTest {
                            VolumeId<Binding, Instance> volume) { }
 
     @Test
-    void programRemovalChangesOnlyFutureCapturesWithoutSceneRepublishing() {
+    void programRemovalPreservesRawSceneAndCapturedCompositionResolution() {
         ImmediateProgramBackend programsBackend = new ImmediateProgramBackend();
         ResourceDirectory resources = new ResourceDirectory(
                 failure -> { throw new AssertionError(failure); });
@@ -69,8 +70,9 @@ final class ProgramSceneFallbackTest {
         var frame = scenesBackend.capture.get();
         RetainedSceneSnapshot published = frame.get();
         RetainedSceneSnapshot.Mesh retainedMesh = published.meshes().getFirst();
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1, 1),
-                retainedMesh.geometryPrograms().getFirst());
+        var capturedComposition = programsBackend.activeComposition;
+        assertEquals(1, capturedComposition.resolve(registration.exports().surface()));
+        assertEquals(1, capturedComposition.resolve(registration.exports().volume()));
 
         registration.close();
         progress(programs);
@@ -79,20 +81,22 @@ final class ProgramSceneFallbackTest {
         assertEquals(0, programs.resolve(registration.exports().volume()));
         assertEquals(List.of(), programsBackend.activeComposition.declarations());
         assertEquals(retainedMesh.identity(), scenes.snapshot().meshes().getFirst().identity());
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1, 1),
-                frame.get().meshes().getFirst().geometryPrograms().getFirst());
+        assertEquals(1, capturedComposition.resolve(registration.exports().surface()));
+        assertEquals(1, capturedComposition.resolve(registration.exports().volume()));
         try (var next = scenesBackend.capture.get()) {
-            assertEquals(published.revision(), next.get().revision());
-            assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0, 0),
-                    next.get().meshes().getFirst().geometryPrograms().getFirst());
+            assertSame(published, next.get());
+            assertSame(registration.exports().surface(), retainedMesh.build().geometries().getFirst().surface().surface());
+            assertEquals(0, programsBackend.activeComposition.resolve(registration.exports().surface()));
+            assertEquals(0, programsBackend.activeComposition.resolve(registration.exports().volume()));
         }
         frame.close();
     }
 
     @Test
-    void preparedMeshStartsUsingProgramAfterCompilationWithoutAnotherSceneEdit() {
+    void programCompilationChangesResolutionWithoutRebuildingTheRawScene() {
         var resources=new ResourceDirectory(failure->{throw new AssertionError(failure);});
-        var programs=new ProgramSession(resources,new ImmediateProgramBackend(),failure->{throw new AssertionError(failure);});
+        var programBackend = new ImmediateProgramBackend();
+        var programs=new ProgramSession(resources,programBackend,failure->{throw new AssertionError(failure);});
         var registration=programs.openChannel(new ContributionOwner(1)).register(builder->new Exports(
             builder.surface(new SurfaceDefinition<>(shader("surface","test.Surface"),shader("coverage","test.Coverage"),
                 IMPLEMENTATION.data(0),BINDING,INSTANCE)),
@@ -104,11 +108,18 @@ final class ProgramSceneFallbackTest {
         var ready=channel.prepare(INSTANCE,mesh(registration.exports())).join();
         channel.edit(List.of(new SceneEdit.SetInstance<>(channel.newInstance(),scene,ready,
             GeometryTransform.translation(0,0,0),255,INSTANCE.data(0))));
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.programs());
-        progress(programs);
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(1,1),backend.programs());
-        registration.close();progress(programs);
-        assertEquals(new RetainedSceneSnapshot.GeometryPrograms(0,0),backend.programs());
+        try (var frame = backend.capture.get()) {
+            assertEquals(0, programBackend.activeComposition.resolve(registration.exports().surface()));
+            assertEquals(0, programBackend.activeComposition.resolve(registration.exports().volume()));
+            progress(programs);
+            assertEquals(1, programBackend.activeComposition.resolve(registration.exports().surface()));
+            assertEquals(1, programBackend.activeComposition.resolve(registration.exports().volume()));
+            try (var afterCompilation = backend.capture.get()) { assertSame(frame.get(), afterCompilation.get()); }
+            registration.close();progress(programs);
+            assertEquals(0, programBackend.activeComposition.resolve(registration.exports().surface()));
+            assertEquals(0, programBackend.activeComposition.resolve(registration.exports().volume()));
+            try (var afterRemoval = backend.capture.get()) { assertSame(frame.get(), afterRemoval.get()); }
+        }
     }
 
     private static void progress(ProgramSession programs) {
@@ -136,7 +147,7 @@ final class ProgramSceneFallbackTest {
     }
 
     private static final class ImmediateProgramBackend implements ProgramBackend {
-        private ProgramComposition activeComposition;
+        private ProgramComposition activeComposition = new ProgramComposition(List.of());
 
         @Override
         public void compile(ProgramComposition composition,
@@ -165,10 +176,5 @@ final class ProgramSceneFallbackTest {
             this.capture = capture;
         }
 
-        RetainedSceneSnapshot.GeometryPrograms programs() {
-            try (var frame = capture.get()) {
-                return frame.get().meshes().getFirst().geometryPrograms().getFirst();
-            }
-        }
     }
 }

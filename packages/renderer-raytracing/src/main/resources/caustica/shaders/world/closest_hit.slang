@@ -10,6 +10,20 @@ import caustica_surface;
 import caustica_volume;
 import surface_bsdf;
 
+VolumeInput volumeInput(SurfaceInput surface, uint64_t bindingData, uint evaluationFlags) {
+    VolumeInput query = {};
+    query.shaderRoot = surface.shaderRoot;
+    query.bindingData = bindingData;
+    query.instanceData = surface.instanceData;
+    query.boundaryPosition = surface.position;
+    query.proceduralPosition = surface.proceduralPosition;
+    query.metersPerSceneUnit = surface.metersPerSceneUnit;
+    query.time = surface.time;
+    query.previousTime = surface.previousTime;
+    query.evaluationFlags = evaluationFlags;
+    return query;
+}
+
 public void runClosestHit<TComposition : IComposition>(inout WorldPayload payload,
         in BuiltInTriangleIntersectionAttributes attributes) {
     RetainedGeometryRecord record = worldGeometryRecord();
@@ -21,7 +35,8 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
         payload.radiance = float3(0.0);
         return;
     }
-    SurfaceInput input = worldSurfaceInput(attributes);
+    WorldInstanceHistory history = worldInstanceHistory(record);
+    SurfaceInput input = worldSurfaceInput(attributes, record, history);
     TComposition.Surfaces surfaces = {};
     OpenPbrSurface material = surfaces.evaluateSurface(record.surfaceImplementation, input);
     material.geometry_thin_walled = !volume;
@@ -33,20 +48,12 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
         payload.volumeAbsorption = float3(0.0);
         payload.volumeIor = 1.0;
         payload.radiance = float3(0.0);
-        if (!volume || payload.surface.boundaryWeight <= 0.0) return;
+        if (payload.surface.boundaryWeight <= 0.0) return;
         payload.radiance = payload.surface.thinTransmissionColor * payload.surface.boundaryWeight;
         TComposition.Volumes volumes = {};
-        VolumeInput query = {};
-        query.shaderRoot = input.shaderRoot;
-        query.bindingData = record.volumeBinding;
-        query.instanceData = record.instanceData;
-        query.boundaryPosition = input.position;
-        query.proceduralPosition = input.proceduralPosition;
-        query.metersPerSceneUnit = input.metersPerSceneUnit;
-        query.time = input.time;
-        query.previousTime = input.previousTime;
-        query.evaluationFlags = input.evaluationFlags & EVALUATION_ANIMATION_ENABLED;
-        if (worldHitEntering()) {
+        VolumeInput query = volumeInput(input, record.volumeBinding,
+                input.evaluationFlags & EVALUATION_ANIMATION_ENABLED);
+        if (worldHitEntering(input.objectToScene)) {
             VolumeProperties properties = volumes.evaluateVolume(record.volumeImplementation, query);
             payload.volumeAbsorption = max(properties.absorptionCoefficient, float3(0.0));
             payload.volumeIor = max(properties.indexOfRefraction, 1.0);
@@ -63,7 +70,7 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
         return;
     }
     payload.position = input.position;
-    payload.previousPosition = worldPreviousHitPosition(attributes, record);
+    payload.previousPosition = worldPreviousHitPosition(attributes, record, history);
     payload.geometricNormal = input.geometricNormal;
     payload.previousNormal = any(material.previous_geometry_normal != 0.0)
             ? normalize(material.previous_geometry_normal) : input.previousGeometricNormal;
@@ -72,18 +79,9 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     payload.pathFlags &= ~(WORLD_PATH_MISS | WORLD_PATH_VOLUME_ACTIVE);
     payload.volumeAbsorption = float3(0.0);
     payload.volumeIor = 1.0;
-    if (volume && worldHitEntering()) {
+    if (volume && worldHitEntering(input.objectToScene)) {
         TComposition.Volumes volumes = {};
-        VolumeInput query = {};
-        query.shaderRoot = input.shaderRoot;
-        query.bindingData = record.volumeBinding;
-        query.instanceData = record.instanceData;
-        query.boundaryPosition = input.position;
-        query.proceduralPosition = input.proceduralPosition;
-        query.metersPerSceneUnit = input.metersPerSceneUnit;
-        query.time = input.time;
-        query.previousTime = input.previousTime;
-        query.evaluationFlags = input.evaluationFlags;
+        VolumeInput query = volumeInput(input, record.volumeBinding, input.evaluationFlags);
         VolumeProperties properties = volumes.evaluateVolume(record.volumeImplementation, query);
         payload.volumeAbsorption = max(properties.absorptionCoefficient, float3(0.0));
         payload.volumeIor = max(properties.indexOfRefraction, 1.0);

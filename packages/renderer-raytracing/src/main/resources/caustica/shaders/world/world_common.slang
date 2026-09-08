@@ -11,9 +11,8 @@ import caustica_types;
 public typealias ConstPtr<T> = Ptr<T, Access.Read, AddressSpace.Device, Std430DataLayout>;
 public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
 
-// GeometryIndex-addressed retained hit state. The TLAS instance custom index is the placement's base.
-// The explicit float4 transform rows keep the std430 record aligned. Motion addresses refer to the
-// source-owned streams retained by the scene snapshot for this publication.
+// GeometryIndex-addressed retained hit state. The TLAS custom index is the placement's geometry base.
+// Instance indices address the current revision's immutable table.
 public struct RetainedGeometryRecord {
     public uint surfaceImplementation;
     public uint coverageImplementation;
@@ -21,22 +20,28 @@ public struct RetainedGeometryRecord {
     public uint flags;
     public uint64_t surfaceBinding;
     public uint64_t volumeBinding;
-    public uint64_t instanceData;
     public float alphaCutoff;
+    public uint instanceIndex;
+    public uint64_t emitterIndexAddress;
+    public uint emitterPrimitiveBase;
+    public uint firstIndex;
+    public uint64_t indexAddress;
+};
+
+// Identity zero marks an empty entry. Every populated entry and its source streams remain immutable
+// while any completed revision, submitted frame, or view history retains the table.
+public struct RetainedInstanceRecord {
+    public uint64_t identity;
+    public uint64_t placementOrdinal;
+    public uint64_t meshRevision;
+    public uint64_t topologyToken;
+    public uint64_t positionAddress;
+    public uint64_t instanceData;
+    public uint positionStride;
     public uint reserved;
     public float4 currentRow0;
     public float4 currentRow1;
     public float4 currentRow2;
-    public float4 previousRow0;
-    public float4 previousRow1;
-    public float4 previousRow2;
-    public uint64_t emitterIndexAddress;
-    public uint emitterPrimitiveBase;
-    public uint previousPositionStride;
-    public uint64_t previousPositionAddress;
-    public uint64_t indexAddress;
-    public uint firstIndex;
-    public uint reservedMotion;
 };
 
 public static const uint RETAINED_GEOMETRY_HAS_VOLUME = 2u;
@@ -135,4 +140,9 @@ public struct WorldPush {
     // Scene-selected environment tuple resolved against the currently published shader program.
     public uint64_t environmentBinding;
     public uint     environmentImplementation;
+    public uint64_t currentInstanceTableAddress;
+    public uint64_t previousInstanceTableAddress;
+    public uint previousInstanceTableMask;
+    // Previous revision origin minus current revision origin, subtracted in host double precision.
+    public float3 previousOriginDelta;
 };

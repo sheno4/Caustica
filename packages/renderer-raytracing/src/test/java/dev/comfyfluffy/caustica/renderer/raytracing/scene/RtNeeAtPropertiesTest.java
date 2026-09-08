@@ -138,23 +138,6 @@ final class RtNeeAtPropertiesTest {
     }
 
     @Test
-    void growingLightSetsReuseHeadroomAndNeverShrinkOnRemovalOrResize() {
-        int capacity = RtNeeAtBackend.lightCapacity(0, 100);
-        int generations = 1;
-        for (int count = 101; count <= 1000; count++) {
-            int next = RtNeeAtBackend.lightCapacity(capacity, count);
-            assertTrue(next >= count);
-            if (next != capacity) generations++;
-            capacity = next;
-        }
-        assertTrue(generations < 10);
-        assertEquals(capacity, RtNeeAtBackend.lightCapacity(capacity, 0));
-        assertEquals(capacity, RtNeeAtBackend.lightCapacity(capacity, 10));
-        assertEquals(10000, RtNeeAtBackend.lightCapacity(capacity, 10000));
-        assertEquals(1, RtNeeAtBackend.lightCapacity(0, 0));
-    }
-
-    @Test
     void historyRequiresIdentityContinuityWithoutResetResizeOrFrameGap() {
         var next = new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, true);
 
@@ -178,10 +161,8 @@ final class RtNeeAtPropertiesTest {
                 light(3, new LightDescriptor.Distant(
                         0, 1, 0, 10, 11, 12, 0.01, true)));
 
-        RtNeeAtBackend.Telemetry telemetry = RtNeeAtBackend.telemetry(lights, true);
+        RtNeeAtBackend.Telemetry telemetry = RtNeeAtBackend.telemetry(lights);
 
-        assertEquals(RtNeeAtBackend.CANDIDATES, telemetry.candidates());
-        assertTrue(telemetry.historyValid());
         assertEquals(1, telemetry.parallelograms());
         assertEquals(1, telemetry.spots());
         assertEquals(1, telemetry.distants());

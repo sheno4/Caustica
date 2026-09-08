@@ -23,13 +23,11 @@ final class RtCapturedFrameTest {
         var program = program(destroyed);
         var scene = SharedResource.owned(new RetainedSceneSnapshot(7, List.of(), List.of(), List.of(), List.of()),
                 ignored -> destroyed.incrementAndGet());
-        var inputs = inputs();
-        var captured = SharedResource.owned(RtCapturedFrame.capture(inputs, program::retain, scene::retain, () -> 0L),
-                RtCapturedFrame::close);
+        var captured = SharedResource.owned(RtSceneRequest.capture(program::retain, scene::retain, () -> 0L, SceneOrigin.ZERO, 1),
+                RtSceneRequest::close);
         program.close();
         scene.close();
         assertEquals(0, destroyed.get());
-        assertSame(inputs, captured.get().inputs());
         assertEquals(7, captured.get().scenes().get().revision());
 
         var execution = captured.retain();
@@ -42,8 +40,8 @@ final class RtCapturedFrameTest {
     @Test void failedSceneCaptureReleasesTheAcquiredProgram() {
         var destroyed = new AtomicInteger();
         var program = program(destroyed);
-        assertThrows(IllegalStateException.class, () -> RtCapturedFrame.capture(inputs(), program::retain,
-                () -> { throw new IllegalStateException("scene capture failed"); }, () -> 0L));
+        assertThrows(IllegalStateException.class, () -> RtSceneRequest.capture(program::retain,
+                () -> { throw new IllegalStateException("scene capture failed"); }, () -> 0L, SceneOrigin.ZERO, 1));
         program.close();
         assertEquals(1, destroyed.get());
     }
@@ -60,13 +58,10 @@ final class RtCapturedFrameTest {
                     new dev.comfyfluffy.caustica.api.program.VolumeId<Object, Object>() { }, binding, instance);
             var inputs = new FrameSnapshot(new SceneView(new SceneId() { }, Camera.IDENTITY, medium),
                     new SceneOrigin(0, 0, 0), false, 0, 1);
-            var scene = SharedResource.owned(new RetainedSceneSnapshot(1, List.of(), List.of(), List.of(), List.of()),
-                    ignored -> { });
-            var captured = RtCapturedFrame.capture(inputs, () -> null, scene::retain, () -> 0L);
+            var captured = RtCapturedFrame.capture(inputs);
             binding.close();
             instance.close();
             dependency.close();
-            scene.close();
             assertThrows(IllegalStateException.class, binding::retain);
             var retainedMedium = (dev.comfyfluffy.caustica.api.view.ViewMedium.Volume<?, ?>) captured.inputs().view().medium();
             var reader = retainedMedium.bindingData().retain();
@@ -87,16 +82,16 @@ final class RtCapturedFrameTest {
                 new RetainedSceneSnapshot(1, List.of(), List.of(), List.of(), List.of()), ignored -> { })) {
             telemetry.beginRenderFrame();
             telemetry.afterPublicationVisible(frame -> visible.add("before:" + frame));
-            try (var captured = RtCapturedFrame.capture(inputs(), () -> null, scene::retain,
-                    telemetry::publicationCutoff)) {
+            try (var captured = RtSceneRequest.capture(() -> null, scene::retain,
+                    telemetry::publicationCutoff, SceneOrigin.ZERO, 1)) {
                 telemetry.afterPublicationVisible(frame -> visible.add("after:" + frame));
                 telemetry.frameAssembled(captured.publicationCutoff());
                 assertEquals(List.of("before:1"), visible);
             }
             telemetry.endFrame();
             telemetry.beginRenderFrame();
-            try (var captured = RtCapturedFrame.capture(inputs(), () -> null, scene::retain,
-                    telemetry::publicationCutoff)) {
+            try (var captured = RtSceneRequest.capture(() -> null, scene::retain,
+                    telemetry::publicationCutoff, SceneOrigin.ZERO, 1)) {
                 telemetry.frameAssembled(captured.publicationCutoff());
                 assertEquals(List.of("before:1", "after:2"), visible);
             }

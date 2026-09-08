@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
@@ -8,7 +7,7 @@ import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
-import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
@@ -28,6 +27,7 @@ final class RtRetainedGeometryPlanTest {
     private static final ShaderDataType<Binding> BINDING = ShaderDataType.create("binding");
     private static final SurfaceId<Binding, Instance> SURFACE = new SurfaceId<>() { };
     private static final VolumeId<Binding, Instance> VOLUME = new VolumeId<>() { };
+    private static final ProgramComposition PROGRAMS = new ProgramComposition(List.of(), java.util.Map.of(SURFACE, 1));
 
     @Test
     void blasRangesPreserveSliceOrderOffsetsAndCoverageClass() {
@@ -50,23 +50,12 @@ final class RtRetainedGeometryPlanTest {
                         new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22),
                         new MeshBuild.CoveragePolicy.Stochastic(0.35f)));
-        MeshBuild.Stream renderedPredecessor = stream(0xa000, 256, 24);
-        var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
-                1, build, List.of(
-                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
-                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)), null);
-        var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
-                1, 1, new dev.comfyfluffy.caustica.api.scene.SceneId() { }, 1,
-                GeometryTransform.translation(0, 0, 0), 0xff, BINDING.data(0), List.of());
-
-        var record = RtRetainedGeometryPlan.records(mesh, instance,
-                GeometryTransform.translation(0, 0, 0), renderedPredecessor).get(1);
+        var record = RtRetainedGeometryPlan.records(RtRetainedGeometryPlan.resolve(build, PROGRAMS), 17).get(1);
 
         assertFalse(RtRetainedGeometryPlan.blasRanges(build).get(1).opaque());
         assertTrue((record.flags() & RtRetainedGeometryPlan.STOCHASTIC) != 0);
         assertEquals(0.35f, record.alphaCutoff());
-        assertEquals(renderedPredecessor.bytes().address(), record.previousPositionAddress());
-        assertEquals(24, record.previousPositionStride());
+        assertEquals(17, record.instanceIndex());
         assertEquals(build.indices().bytes().address(), record.indexAddress());
         assertEquals(12, record.firstIndex());
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_CUTOUT,
@@ -75,25 +64,16 @@ final class RtRetainedGeometryPlanTest {
     }
 
     @Test
-    void ordinaryRecordsUseCurrentPositions() {
+    void geometrySlicesShareThePublishedInstanceEntry() {
         MeshBuild<Instance> build = build(new MeshBuild.IndexRevision(7), 0x1000,
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(11),
                         new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22),
                         new MeshBuild.CoveragePolicy.Opaque()));
-        var mesh = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Mesh(
-                1, build, List.of(
-                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0),
-                new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.GeometryPrograms(1, 0)), null);
-        var instance = new dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot.Instance(
-                1, 1, new dev.comfyfluffy.caustica.api.scene.SceneId() { }, 1,
-                GeometryTransform.translation(0, 0, 0), 0xff, BINDING.data(0), List.of());
+        var records = RtRetainedGeometryPlan.records(RtRetainedGeometryPlan.resolve(build, PROGRAMS), 319);
 
-        var record = RtRetainedGeometryPlan.records(mesh, instance,
-                GeometryTransform.translation(0, 0, 0)).getFirst();
-
-        assertEquals(build.positions().bytes().address(), record.previousPositionAddress());
-        assertEquals(build.positions().byteStride(), record.previousPositionStride());
+        assertEquals(List.of(319, 319), records.stream().map(
+                RtRetainedGeometryPlan.GeometryRecord::instanceIndex).toList());
     }
 
     @Test
@@ -171,43 +151,57 @@ final class RtRetainedGeometryPlanTest {
     }
 
     @Test
-    void geometryAbiPacksProgramsRootsAndRebasedTransformHistory() {
-        GeometryTransform current = GeometryTransform.translation(110, 220, 330);
-        GeometryTransform previous = GeometryTransform.translation(109, 218, 327);
+    void geometryAbiPacksProgramsRootsAndCurrentInstanceIndices() {
         var first = new RtRetainedGeometryPlan.GeometryRecord(3, 3, 5,
                 RtRetainedGeometryPlan.HAS_SURFACE | RtRetainedGeometryPlan.HAS_VOLUME
                         | RtRetainedGeometryPlan.CUTOUT,
-                0x1111, 0x2222, 0x3333, 0.45f, current, previous,
-                new VulkanDeviceAddress(0x5550), 20, new VulkanDeviceAddress(0x6660), 3,
+                0x1111, 0x2222, 0.45f, 0x3333, new VulkanDeviceAddress(0x6660), 3,
                 new VulkanDeviceAddress(0x4444), 6);
         var second = new RtRetainedGeometryPlan.GeometryRecord(7, 0, 0,
-                RtRetainedGeometryPlan.HAS_SURFACE, 0x4444, 0, 0x5555, 0,
-                current, current, new VulkanDeviceAddress(0x7770), 12,
+                RtRetainedGeometryPlan.HAS_SURFACE, 0x4444, 0, 0, 0x5555,
                 new VulkanDeviceAddress(0x8880), 12, null, 0);
 
-        ByteBuffer packed = RtRetainedGeometryPlan.pack(List.of(first, second),
-                new SceneOrigin(100, 200, 300));
+        ByteBuffer packed = RtRetainedGeometryPlan.pack(List.of(first, second));
 
+        assertEquals(64, RtRetainedGeometryPlan.RECORD_BYTES);
         assertEquals(2 * RtRetainedGeometryPlan.RECORD_BYTES, packed.remaining());
         assertEquals(3, packed.getInt(RtRetainedGeometryPlan.SURFACE_IMPLEMENTATION_OFFSET));
         assertEquals(3, packed.getInt(RtRetainedGeometryPlan.COVERAGE_IMPLEMENTATION_OFFSET));
         assertEquals(5, packed.getInt(RtRetainedGeometryPlan.VOLUME_IMPLEMENTATION_OFFSET));
         assertEquals(0x1111, packed.getLong(RtRetainedGeometryPlan.SURFACE_BINDING_OFFSET));
         assertEquals(0x2222, packed.getLong(RtRetainedGeometryPlan.VOLUME_BINDING_OFFSET));
-        assertEquals(0x3333, packed.getLong(RtRetainedGeometryPlan.INSTANCE_DATA_OFFSET));
-        assertEquals(10.0f, packed.getFloat(RtRetainedGeometryPlan.CURRENT_TRANSFORM_OFFSET + 3 * 4));
-        assertEquals(9.0f, packed.getFloat(RtRetainedGeometryPlan.PREVIOUS_TRANSFORM_OFFSET + 3 * 4));
+        assertEquals(0x3333, packed.getInt(RtRetainedGeometryPlan.INSTANCE_INDEX_OFFSET));
+        assertEquals(0.45f, packed.getFloat(RtRetainedGeometryPlan.ALPHA_CUTOFF_OFFSET));
         assertEquals(0x4444, packed.getLong(RtRetainedGeometryPlan.EMITTER_INDEX_ADDRESS_OFFSET));
         assertEquals(6, packed.getInt(RtRetainedGeometryPlan.EMITTER_PRIMITIVE_BASE_OFFSET));
-        assertEquals(20, packed.getInt(RtRetainedGeometryPlan.PREVIOUS_POSITION_STRIDE_OFFSET));
-        assertEquals(0x5550, packed.getLong(RtRetainedGeometryPlan.PREVIOUS_POSITION_ADDRESS_OFFSET));
         assertEquals(0x6660, packed.getLong(RtRetainedGeometryPlan.INDEX_ADDRESS_OFFSET));
         assertEquals(3, packed.getInt(RtRetainedGeometryPlan.FIRST_INDEX_OFFSET));
+        assertEquals(0x5555, packed.getInt(64 + RtRetainedGeometryPlan.INSTANCE_INDEX_OFFSET));
+        assertEquals(0, packed.getLong(64 + RtRetainedGeometryPlan.EMITTER_INDEX_ADDRESS_OFFSET));
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
                         RtRetainedGeometryPlan.HitGroup.SHADOW_TRANSMISSIVE,
                         RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
                         RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE),
                 RtRetainedGeometryPlan.hitGroups(List.of(first, second)));
+    }
+
+    @Test
+    void revisionPackingBindsInstanceIndicesWithoutMutatingSharedTemplates() {
+        var template = new RtRetainedGeometryPlan.GeometryRecord(1, 0, 0,
+                RtRetainedGeometryPlan.HAS_SURFACE, 23, 0, 0, 7,
+                new VulkanDeviceAddress(0x2000), 3, null, 0);
+        ByteBuffer first = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer second = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
+
+        RtRetainedGeometryPlan.packInto(first, List.of(template), 41);
+        RtRetainedGeometryPlan.packInto(second, List.of(template), 83);
+
+        assertEquals(41, first.getInt(RtRetainedGeometryPlan.INSTANCE_INDEX_OFFSET));
+        assertEquals(83, second.getInt(RtRetainedGeometryPlan.INSTANCE_INDEX_OFFSET));
+        assertEquals(7, template.instanceIndex());
+        assertEquals(64, first.position());
+        assertEquals(64, second.position());
+        assertEquals(23, second.getLong(RtRetainedGeometryPlan.SURFACE_BINDING_OFFSET));
     }
 
     @Test
@@ -223,9 +217,7 @@ final class RtRetainedGeometryPlanTest {
         var record = new RtRetainedGeometryPlan.GeometryRecord(1, 1, 2,
                 RtRetainedGeometryPlan.HAS_SURFACE | RtRetainedGeometryPlan.HAS_VOLUME
                         | RtRetainedGeometryPlan.CUTOUT,
-                1, 2, 3, 0.5f, GeometryTransform.translation(0, 0, 0),
-                GeometryTransform.translation(0, 0, 0), positions.bytes().address(),
-                positions.byteStride(), indices.bytes().address(), 0, null, 0);
+                1, 2, 0.5f, 3, indices.bytes().address(), 0, null, 0);
 
         assertTrue(range.opaque());
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,

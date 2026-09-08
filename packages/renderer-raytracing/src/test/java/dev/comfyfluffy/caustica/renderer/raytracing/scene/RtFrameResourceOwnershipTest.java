@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
@@ -55,8 +56,8 @@ final class RtFrameResourceOwnershipTest {
                 stream(0x1000, 36, 12, positions),
                 stream(0x2000, 12, 4, indices), 3,
                 new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.STATIC, List.of(geometry));
-        RetainedSceneSnapshot.Mesh mesh = new RetainedSceneSnapshot.Mesh(1, build,
-                List.of(new RetainedSceneSnapshot.GeometryPrograms(3, 5)), null);
+        RetainedSceneSnapshot.Mesh mesh = new RetainedSceneSnapshot.Mesh(1, build, null);
+        var composition = new ProgramComposition(List.of(), java.util.Map.of(SURFACE, 3, VOLUME, 5));
         RetainedSceneSnapshot.Instance placement = new RetainedSceneSnapshot.Instance(2, 2, SCENE, 1,
                 GeometryTransform.translation(1, 2, 3), 0xff,
                 new ShaderData<>(INSTANCE, 0x3333, instance), List.of());
@@ -71,13 +72,19 @@ final class RtFrameResourceOwnershipTest {
         environment.close();
         ResourceOwners second = ResourceOwners.capture(references.stream().map(first::borrowed).toList());
 
-        var firstInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement);
-        var secondInput = RtRetainedSceneBackend.resolveFrameInput(mesh, placement);
-        assertEquals(3, firstInput.mesh().geometries().getFirst().surfaceImplementation());
-        assertEquals(0x1111, firstInput.mesh().geometries().getFirst().surfaceBinding());
+        var snapshot = new RetainedSceneSnapshot(1,
+                List.of(new RetainedSceneSnapshot.Scene(SCENE, environmentBinding)),
+                List.of(mesh), List.of(placement), List.of());
+        var assembly = new RtRetainedSceneBackend.FrameAssembly(
+                (value, programs) -> new RtRetainedSceneBackend.FrameMesh(value, null, programs));
+        var firstInput = assembly.resolve(snapshot, composition).get(SCENE).getFirst().instances.getFirst();
+        var secondInput = assembly.resolve(snapshot, composition).get(SCENE).getFirst().instances.getFirst();
+        assertEquals(3, firstInput.geometryRecords().getFirst().surfaceImplementation());
+        assertEquals(0x1111, firstInput.geometryRecords().getFirst().surfaceBinding());
         assertEquals(firstInput, secondInput);
-        assertEquals(5, secondInput.mesh().geometries().getFirst().volumeImplementation());
-        assertEquals(0x3333, secondInput.placement().instanceData());
+        assertEquals(5, secondInput.geometryRecords().getFirst().volumeImplementation());
+        assertEquals(0x3333, secondInput.current().instanceData().bits());
+        assembly.clear();
         first.close();
         positions.close();
         indices.close();

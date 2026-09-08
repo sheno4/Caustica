@@ -50,10 +50,6 @@ public ShaderRootData worldShaderRoot() {
     return root;
 }
 
-public float2 worldBarycentrics(BuiltInTriangleIntersectionAttributes attributes) {
-    return attributes.barycentrics;
-}
-
 // Slang's InstanceID intrinsic lowers to Vulkan's InstanceCustomIndexKHR value.
 public uint worldInstanceCustomIndex() { return InstanceID(); }
 
@@ -63,16 +59,70 @@ public RetainedGeometryRecord worldGeometryRecord() {
     return records[worldInstanceCustomIndex() + GeometryIndex()];
 }
 
+public RetainedInstanceRecord worldInstanceRecord(RetainedGeometryRecord record) {
+    ConstPtr<WorldPush> frame = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
+    ConstPtr<RetainedInstanceRecord> instances =
+            (ConstPtr<RetainedInstanceRecord>)frame[0].currentInstanceTableAddress;
+    return instances[record.instanceIndex];
+}
+
+// The worker's instance table uses this exact unsigned wrapping hash and linear probing.
+public uint worldInstanceHash(uint64_t identity, uint64_t placementOrdinal) {
+    uint64_t value = identity + 0x9e3779b97f4a7c15ull * (placementOrdinal + 1ull);
+    value = (value ^ (value >> 30u)) * 0xbf58476d1ce4e5b9ull;
+    value = (value ^ (value >> 27u)) * 0x94d049bb133111ebull;
+    return uint(value ^ (value >> 31u));
+}
+
+public struct WorldInstanceHistory {
+    public RetainedInstanceRecord current;
+    public RetainedInstanceRecord previous;
+    public bool hasPrevious;
+    public bool compatiblePositions;
+};
+
+public WorldInstanceHistory worldInstanceHistory(RetainedGeometryRecord geometry) {
+    WorldInstanceHistory history = {};
+    history.current = worldInstanceRecord(geometry);
+    history.previous = history.current;
+    ConstPtr<WorldPush> frame = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
+    if (frame[0].previousInstanceTableAddress == 0ull) return history;
+    ConstPtr<RetainedInstanceRecord> previous =
+            (ConstPtr<RetainedInstanceRecord>)frame[0].previousInstanceTableAddress;
+    uint mask = frame[0].previousInstanceTableMask;
+    uint slot = worldInstanceHash(history.current.identity, history.current.placementOrdinal) & mask;
+    // At most half of the table is populated, so an absent identity reaches an empty entry.
+    for (;;) {
+        RetainedInstanceRecord candidate = previous[slot];
+        if (candidate.identity == 0ull) return history;
+        if (candidate.identity == history.current.identity
+                && candidate.placementOrdinal == history.current.placementOrdinal) {
+            history.previous = candidate;
+            history.hasPrevious = true;
+            history.compatiblePositions = candidate.meshRevision == history.current.meshRevision
+                    || (candidate.topologyToken != 0ull
+                    && candidate.topologyToken == history.current.topologyToken);
+            return history;
+        }
+        slot = (slot + 1u) & mask;
+    }
+}
+
 public uint worldEmitterLightIndex(RetainedGeometryRecord record) {
     if (record.emitterIndexAddress == 0u) return 0xffffffffu;
     ConstPtr<uint> emitters = (ConstPtr<uint>)record.emitterIndexAddress;
     return emitters[record.emitterPrimitiveBase + PrimitiveIndex()];
 }
 
-public bool worldHitEntering() {
+public float3 worldTriangleNormal(AffineTransform transform, float3 edgeU, float3 edgeV) {
+    // Transform edges before crossing to preserve winding under nonuniform scale, shear, and reflection.
+    return normalize(cross(transformDirection(transform, edgeU), transformDirection(transform, edgeV)));
+}
+
+public bool worldHitEntering(AffineTransform transform) {
     float3 edgeU = HitTriangleVertexPosition(1u) - HitTriangleVertexPosition(0u);
     float3 edgeV = HitTriangleVertexPosition(2u) - HitTriangleVertexPosition(0u);
-    float3 outward = transformDirection(worldCurrentTransform(worldGeometryRecord()), cross(edgeU, edgeV));
+    float3 outward = worldTriangleNormal(transform, edgeU, edgeV);
     return dot(outward, WorldRayDirection()) < 0.0;
 }
 
@@ -82,26 +132,28 @@ public uint3 worldTriangleIndices(RetainedGeometryRecord record) {
     return uint3(indices[first], indices[first + 1u], indices[first + 2u]);
 }
 
-public float3 worldPreviousVertex(RetainedGeometryRecord record, uint vertexIndex) {
-    uint64_t address = record.previousPositionAddress
-            + uint64_t(vertexIndex) * uint64_t(record.previousPositionStride);
+public float3 worldPreviousVertex(WorldInstanceHistory history, uint vertexIndex) {
+    // Incompatible topology has no vertex correspondence; retain rigid motion using current geometry.
+    RetainedInstanceRecord source = history.compatiblePositions ? history.previous : history.current;
+    uint64_t address = source.positionAddress
+            + uint64_t(vertexIndex) * uint64_t(source.positionStride);
     ConstPtr<float> position = (ConstPtr<float>)address;
     return float3(position[0], position[1], position[2]);
 }
 
 public float3 worldPreviousHitPosition(BuiltInTriangleIntersectionAttributes attributes,
-                                       RetainedGeometryRecord record) {
+                                       RetainedGeometryRecord record, WorldInstanceHistory history) {
     uint3 indices = worldTriangleIndices(record);
-    float3 p0 = worldPreviousVertex(record, indices.x);
-    float3 p1 = worldPreviousVertex(record, indices.y);
-    float3 p2 = worldPreviousVertex(record, indices.z);
+    float3 p0 = worldPreviousVertex(history, indices.x);
+    float3 p1 = worldPreviousVertex(history, indices.y);
+    float3 p2 = worldPreviousVertex(history, indices.z);
     float2 barycentrics = attributes.barycentrics;
     float3 objectPosition = p0 * (1.0 - barycentrics.x - barycentrics.y)
             + p1 * barycentrics.x + p2 * barycentrics.y;
-    return transformPosition(worldPreviousTransform(record), objectPosition);
+    return transformPosition(worldPreviousTransform(history), objectPosition);
 }
 
-public AffineTransform worldCurrentTransform(RetainedGeometryRecord record) {
+public AffineTransform worldCurrentTransform(RetainedInstanceRecord record) {
     AffineTransform value = {};
     value.row0 = record.currentRow0;
     value.row1 = record.currentRow1;
@@ -109,11 +161,14 @@ public AffineTransform worldCurrentTransform(RetainedGeometryRecord record) {
     return value;
 }
 
-public AffineTransform worldPreviousTransform(RetainedGeometryRecord record) {
-    AffineTransform value = {};
-    value.row0 = record.previousRow0;
-    value.row1 = record.previousRow1;
-    value.row2 = record.previousRow2;
+public AffineTransform worldPreviousTransform(WorldInstanceHistory history) {
+    AffineTransform value = worldCurrentTransform(history.previous);
+    if (history.hasPrevious) {
+        ConstPtr<WorldPush> frame = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
+        value.row0.w += frame[0].previousOriginDelta.x;
+        value.row1.w += frame[0].previousOriginDelta.y;
+        value.row2.w += frame[0].previousOriginDelta.z;
+    }
     return value;
 }
 
@@ -129,16 +184,16 @@ public NormalTransform worldNormalTransform(AffineTransform affine) {
     return value;
 }
 
-public SurfaceInput worldSurfaceInput(BuiltInTriangleIntersectionAttributes attributes) {
-    RetainedGeometryRecord record = worldGeometryRecord();
+public SurfaceInput worldSurfaceInput(BuiltInTriangleIntersectionAttributes attributes,
+                                      RetainedGeometryRecord record, WorldInstanceHistory history) {
     SurfaceInput input = {};
     input.shaderRoot = worldShaderRoot();
     input.bindingData = record.surfaceBinding;
-    input.instanceData = record.instanceData;
+    input.instanceData = history.current.instanceData;
     input.primitiveIndex = PrimitiveIndex();
-    input.barycentrics = worldBarycentrics(attributes);
-    input.objectToScene = worldCurrentTransform(record);
-    input.previousObjectToScene = worldPreviousTransform(record);
+    input.barycentrics = attributes.barycentrics;
+    input.objectToScene = worldCurrentTransform(history.current);
+    input.previousObjectToScene = worldPreviousTransform(history);
     input.normalToScene = worldNormalTransform(input.objectToScene);
     input.previousNormalToScene = worldNormalTransform(input.previousObjectToScene);
     input.position = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
@@ -146,17 +201,14 @@ public SurfaceInput worldSurfaceInput(BuiltInTriangleIntersectionAttributes attr
     float3 objectEdgeU = HitTriangleVertexPosition(1u) - HitTriangleVertexPosition(0u);
     float3 objectEdgeV = HitTriangleVertexPosition(2u) - HitTriangleVertexPosition(0u);
     uint3 triangleIndices = worldTriangleIndices(record);
-    float3 previousObjectPosition0 = worldPreviousVertex(record, triangleIndices.x);
-    float3 previousObjectEdgeU = worldPreviousVertex(record, triangleIndices.y)
+    float3 previousObjectPosition0 = worldPreviousVertex(history, triangleIndices.x);
+    float3 previousObjectEdgeU = worldPreviousVertex(history, triangleIndices.y)
             - previousObjectPosition0;
-    float3 previousObjectEdgeV = worldPreviousVertex(record, triangleIndices.z)
+    float3 previousObjectEdgeV = worldPreviousVertex(history, triangleIndices.z)
             - previousObjectPosition0;
-    float3 currentEdgeU = transformDirection(input.objectToScene, objectEdgeU);
-    float3 currentEdgeV = transformDirection(input.objectToScene, objectEdgeV);
-    float3 previousEdgeU = transformDirection(input.previousObjectToScene, previousObjectEdgeU);
-    float3 previousEdgeV = transformDirection(input.previousObjectToScene, previousObjectEdgeV);
-    float3 currentNormal = normalize(cross(currentEdgeU, currentEdgeV));
-    float3 previousNormal = normalize(cross(previousEdgeU, previousEdgeV));
+    float3 currentNormal = worldTriangleNormal(input.objectToScene, objectEdgeU, objectEdgeV);
+    float3 previousNormal = worldTriangleNormal(input.previousObjectToScene,
+            previousObjectEdgeU, previousObjectEdgeV);
     float orientation = dot(currentNormal, WorldRayDirection()) <= 0.0 ? 1.0 : -1.0;
     input.geometricNormal = currentNormal * orientation;
     input.previousGeometricNormal = previousNormal * orientation;
@@ -175,9 +227,9 @@ public CoverageInput worldCoverageInput(BuiltInTriangleIntersectionAttributes at
     CoverageInput input = {};
     input.shaderRoot = worldShaderRoot();
     input.bindingData = record.surfaceBinding;
-    input.instanceData = record.instanceData;
+    input.instanceData = worldInstanceRecord(record).instanceData;
     input.primitiveIndex = PrimitiveIndex();
-    input.barycentrics = worldBarycentrics(attributes);
+    input.barycentrics = attributes.barycentrics;
     return input;
 }
 

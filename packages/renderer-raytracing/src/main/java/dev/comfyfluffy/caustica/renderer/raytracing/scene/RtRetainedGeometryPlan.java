@@ -1,13 +1,11 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
-import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedGeometryRecordData;
-import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedGeometryRecordData.Float4;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -25,16 +23,12 @@ public final class RtRetainedGeometryPlan {
     public static final int FLAGS_OFFSET = 12;
     public static final int SURFACE_BINDING_OFFSET = 16;
     public static final int VOLUME_BINDING_OFFSET = 24;
-    public static final int INSTANCE_DATA_OFFSET = 32;
-    public static final int ALPHA_CUTOFF_OFFSET = 40;
-    public static final int CURRENT_TRANSFORM_OFFSET = 48;
-    public static final int PREVIOUS_TRANSFORM_OFFSET = 96;
-    public static final int EMITTER_INDEX_ADDRESS_OFFSET = 144;
-    public static final int EMITTER_PRIMITIVE_BASE_OFFSET = 152;
-    public static final int PREVIOUS_POSITION_STRIDE_OFFSET = 156;
-    public static final int PREVIOUS_POSITION_ADDRESS_OFFSET = 160;
-    public static final int INDEX_ADDRESS_OFFSET = 168;
-    public static final int FIRST_INDEX_OFFSET = 176;
+    public static final int ALPHA_CUTOFF_OFFSET = 32;
+    public static final int INSTANCE_INDEX_OFFSET = 36;
+    public static final int EMITTER_INDEX_ADDRESS_OFFSET = 40;
+    public static final int EMITTER_PRIMITIVE_BASE_OFFSET = 48;
+    public static final int FIRST_INDEX_OFFSET = 52;
+    public static final int INDEX_ADDRESS_OFFSET = 56;
 
     public static final int HAS_SURFACE = 1;
     public static final int HAS_VOLUME = 2;
@@ -69,41 +63,23 @@ public final class RtRetainedGeometryPlan {
                 && blasRanges(previous).equals(blasRanges(next));
     }
 
-    public static List<GeometryRecord> records(RetainedSceneSnapshot.Mesh mesh,
-                                               RetainedSceneSnapshot.Instance placement,
-                                               GeometryTransform previousTransform) {
-        return records(mesh, placement, previousTransform, mesh.build().positions());
-    }
-
-    public static List<GeometryRecord> records(RetainedSceneSnapshot.Mesh mesh,
-                                               RetainedSceneSnapshot.Instance placement,
-                                               GeometryTransform previousTransform,
-                                               MeshBuild.Stream previousPositions) {
-        List<ResolvedGeometry> geometries = new ArrayList<>(mesh.build().geometries().size());
-        for (int i = 0; i < mesh.build().geometries().size(); i++) {
-            MeshBuild.Geometry<?> geometry = mesh.build().geometries().get(i);
-            RetainedSceneSnapshot.GeometryPrograms programs = mesh.geometryPrograms().get(i);
-            geometries.add(new ResolvedGeometry(geometry, programs.surfaceImplementation(),
-                    programs.volumeImplementation(), geometry.surface() == null ? 0L
+    /** Resolves producer shader identities against the exact composition retained by the renderer revision. */
+    public static ResolvedMesh resolve(MeshBuild<?> build, ProgramComposition composition) {
+        List<ResolvedGeometry> geometries = new ArrayList<>(build.geometries().size());
+        for (MeshBuild.Geometry<?> geometry : build.geometries()) {
+            geometries.add(new ResolvedGeometry(geometry,
+                    geometry.surface() == null ? 0 : composition.resolve(geometry.surface().surface()),
+                    geometry.volume() == null ? 0 : composition.resolve(geometry.volume().volume()),
+                    geometry.surface() == null ? 0L
                     : geometry.surface().bindingData().bits(), geometry.volume() == null ? 0L
                     : geometry.volume().bindingData().bits()));
         }
-        return records(new ResolvedMesh(mesh.build(), geometries),
-                new ResolvedPlacement(placement.transform(), placement.instanceData().bits()),
-                previousTransform, previousPositions);
+        return new ResolvedMesh(build, geometries);
     }
 
-    /** Builds shader records only from resource availability already latched for this frame. */
-    public static List<GeometryRecord> records(ResolvedMesh mesh, ResolvedPlacement placement,
-                                               GeometryTransform previousTransform,
-                                               MeshBuild.Stream previousPositions) {
+    /** Builds current geometry records against the exact instance table retained by the revision. */
+    public static List<GeometryRecord> records(ResolvedMesh mesh, int instanceIndex) {
         List<GeometryRecord> records = new ArrayList<>(mesh.geometries().size());
-        appendRecords(records, mesh, placement, previousTransform, previousPositions);
-        return List.copyOf(records);
-    }
-
-    static void appendRecords(List<GeometryRecord> records, ResolvedMesh mesh, ResolvedPlacement placement,
-                              GeometryTransform previousTransform, MeshBuild.Stream previousPositions) {
         for (ResolvedGeometry resolved : mesh.geometries()) {
             MeshBuild.Geometry<?> geometry = resolved.geometry();
             int surface = resolved.surfaceImplementation();
@@ -123,12 +99,11 @@ public final class RtRetainedGeometryPlan {
                     ? ((MeshBuild.CoveragePolicy.Stochastic) coveragePolicy).guideAlphaCutoff()
                     : 0.0f;
             records.add(new GeometryRecord(surface, coverage, volume, flags,
-                    resolved.surfaceBinding(), resolved.volumeBinding(), placement.instanceData(),
-                    alphaCutoff, placement.transform(), previousTransform,
-                    previousPositions.bytes().address(), previousPositions.byteStride(),
+                    resolved.surfaceBinding(), resolved.volumeBinding(), alphaCutoff, instanceIndex,
                     mesh.build().indices().bytes().address(), geometry.firstIndex(),
                     null, 0));
         }
+        return List.copyOf(records);
     }
 
     public record ResolvedMesh(MeshBuild<?> build, List<ResolvedGeometry> geometries) {
@@ -152,37 +127,34 @@ public final class RtRetainedGeometryPlan {
         }
     }
 
-    public record ResolvedPlacement(GeometryTransform transform, long instanceData) {
-        public ResolvedPlacement {
-            java.util.Objects.requireNonNull(transform, "transform");
-        }
-    }
-
-    public static ByteBuffer pack(List<GeometryRecord> records, SceneOrigin origin) {
+    public static ByteBuffer pack(List<GeometryRecord> records) {
         ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(records.size(), RECORD_BYTES))
                 .order(ByteOrder.LITTLE_ENDIAN);
-        packInto(packed, records, origin);
+        packInto(packed, records);
         return packed.flip();
     }
 
-    /** Writes directly to the frame-owned upload storage without an intermediate heap table. */
-    static void packInto(ByteBuffer packed, List<GeometryRecord> records, SceneOrigin origin) {
+    /** Writes directly to exclusively owned revision upload storage. */
+    static void packInto(ByteBuffer packed, List<GeometryRecord> records) {
         for (GeometryRecord record : records) {
-            int base = packed.position();
-            float[] current = record.currentTransform().relativeTo(origin.x(), origin.y(), origin.z());
-            float[] previous = record.previousTransform().relativeTo(origin.x(), origin.y(), origin.z());
-            new RetainedGeometryRecordData(record.surfaceImplementation(), record.coverageImplementation(),
-                    record.volumeImplementation(), record.flags(), record.surfaceBinding(),
-                    record.volumeBinding(), record.instanceData(), record.alphaCutoff(), 0,
-                    row(current, 0), row(current, 4), row(current, 8),
-                    row(previous, 0), row(previous, 4), row(previous, 8),
-                    record.emitterIndexAddress() == null ? 0L : record.emitterIndexAddress().value(),
-                    record.emitterPrimitiveBase(), record.previousPositionStride(),
-                    record.previousPositionAddress().value(), record.indexAddress().value(),
-                    record.firstIndex(), 0)
-                    .write(packed.slice(base, RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN));
-            packed.position(base + RECORD_BYTES);
+            packRecord(packed, record, record.instanceIndex());
         }
+    }
+
+    /** Binds shared geometry templates to one entry in this revision's instance table. */
+    static void packInto(ByteBuffer packed, List<GeometryRecord> records, int instanceIndex) {
+        for (GeometryRecord record : records) packRecord(packed, record, instanceIndex);
+    }
+
+    private static void packRecord(ByteBuffer packed, GeometryRecord record, int instanceIndex) {
+        int base = packed.position();
+        new RetainedGeometryRecordData(record.surfaceImplementation(), record.coverageImplementation(),
+                record.volumeImplementation(), record.flags(), record.surfaceBinding(),
+                record.volumeBinding(), record.alphaCutoff(), instanceIndex,
+                record.emitterIndexAddress() == null ? 0L : record.emitterIndexAddress().value(),
+                record.emitterPrimitiveBase(), record.firstIndex(), record.indexAddress().value())
+                .write(packed.slice(base, RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN));
+        packed.position(base + RECORD_BYTES);
     }
 
     public static List<HitGroup> hitGroups(List<GeometryRecord> records) {
@@ -198,10 +170,6 @@ public final class RtRetainedGeometryPlan {
         return List.copyOf(groups);
     }
 
-    private static Float4 row(float[] values, int offset) {
-        return new Float4(values[offset], values[offset + 1], values[offset + 2], values[offset + 3]);
-    }
-
     private static boolean isOpaque(MeshBuild.Geometry<?> geometry) {
         return geometry.volume() != null || geometry.surface() == null
                 || geometry.surface().coverage() instanceof MeshBuild.CoveragePolicy.Opaque;
@@ -209,15 +177,12 @@ public final class RtRetainedGeometryPlan {
 
     public record GeometryRecord(int surfaceImplementation, int coverageImplementation,
                                  int volumeImplementation, int flags, long surfaceBinding,
-                                 long volumeBinding, long instanceData, float alphaCutoff,
-                                 GeometryTransform currentTransform, GeometryTransform previousTransform,
-                                 VulkanDeviceAddress previousPositionAddress, int previousPositionStride,
+                                 long volumeBinding, float alphaCutoff, int instanceIndex,
                                  VulkanDeviceAddress indexAddress, int firstIndex,
                                  VulkanDeviceAddress emitterIndexAddress, int emitterPrimitiveBase) {
         GeometryRecord withEmitterIndex(VulkanDeviceAddress address, int primitiveBase) {
             return new GeometryRecord(surfaceImplementation, coverageImplementation, volumeImplementation,
-                    flags, surfaceBinding, volumeBinding, instanceData, alphaCutoff, currentTransform,
-                    previousTransform, previousPositionAddress, previousPositionStride, indexAddress,
+                    flags, surfaceBinding, volumeBinding, alphaCutoff, instanceIndex, indexAddress,
                     firstIndex, java.util.Objects.requireNonNull(address, "address"), primitiveBase);
         }
     }

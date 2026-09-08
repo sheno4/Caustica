@@ -1,136 +1,81 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
-
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
 
-/** CPU-side stable-identity and physical-power inputs for the GPU adaptive sampler. */
+/** Immutable identity and physical-power metadata independent of submitted view history. */
 final class RtNeeAtPlan {
-    static final int NO_LIGHT = 0xffff_ffff;
     static final double DISTANT_REFERENCE_AREA_M2 = 1.0;
-
+    static final int LOOKUP_ENTRY_BYTES = 16;
     private RtNeeAtPlan() { }
 
-    static Plan build(List<RtRetainedSceneBackend.SceneLight> current,
-                      List<RtRetainedSceneBackend.SceneLight> previous,
-                      double metersPerSceneUnit) {
-        Cache cache = new Cache();
-        cache.prepare(previous, false, metersPerSceneUnit);
-        return cache.prepare(current, true, metersPerSceneUnit);
+    static int hash(long identity) {
+        int value = (int) identity ^ (int) (identity >>> 32);
+        value ^= value >>> 16;
+        value *= 0x7feb352d;
+        value ^= value >>> 15;
+        value *= 0x846ca68b;
+        return value ^ (value >>> 16);
     }
 
-    /** Captured light lists are immutable revisions; reference identity permits constant-time reuse. */
+    /** Unchanged immutable source pages reuse their identity and physical-power arrays. */
     static final class Cache {
-        private List<RtRetainedSceneBackend.SceneLight> lights = List.of();
+        private IdentityHashMap<List<RtRetainedSceneBackend.SceneLight>, Page> pages = new IdentityHashMap<>();
+        private List<List<RtRetainedSceneBackend.SceneLight>> sourcePages = List.of();
         private double scale = Double.NaN;
-        private float[] power = new float[0];
-        private int[] identity = new int[0];
-        private List<Page> pages = List.of();
-        private IdentityHashMap<List<RtRetainedSceneBackend.SceneLight>, Page> pageLookup = new IdentityHashMap<>();
-        private Plan stable;
-        private Plan withoutHistory;
+        private Plan prepared;
 
-        Plan prepare(List<RtRetainedSceneBackend.SceneLight> current, boolean continuous,
-                     double metersPerSceneUnit) {
+        Plan prepare(List<RtRetainedSceneBackend.SceneLight> current, double metersPerSceneUnit) {
             if (!(metersPerSceneUnit > 0.0) || !Double.isFinite(metersPerSceneUnit)) {
                 throw new IllegalArgumentException("metersPerSceneUnit must be finite and positive");
             }
-            if (current == lights && scale == metersPerSceneUnit) {
-                return continuous ? stable : withoutHistory;
-            }
-            var currentPages = SnapshotList.pagesOf(current);
+            List<List<RtRetainedSceneBackend.SceneLight>> inputs = SnapshotList.pagesOf(current);
             boolean sameScale = scale == metersPerSceneUnit;
-            boolean samePages = currentPages.size() == pages.size();
-            for (int index = 0; samePages && index < pages.size(); index++) {
-                samePages = currentPages.get(index) == pages.get(index).lights;
+            boolean unchanged = sameScale && prepared != null && inputs.size() == sourcePages.size();
+            for (int index = 0; unchanged && index < inputs.size(); index++) {
+                unchanged = inputs.get(index) == sourcePages.get(index);
             }
-            if (sameScale && samePages) {
-                lights = current;
-                return continuous ? stable : withoutHistory;
-            }
-            var nextPages = new ArrayList<Page>(currentPages.size());
-            var nextLookup = new IdentityHashMap<List<RtRetainedSceneBackend.SceneLight>, Page>(currentPages.size());
-            int first = 0;
-            for (var page : currentPages) {
-                var next = new Page(page, first);
-                nextPages.add(next);
-                nextLookup.put(page, next);
-                first += page.size();
-            }
-            int[] remap = identity.clone();
-            int changedCount = 0;
-            for (Page page : pages) {
-                if (!nextLookup.containsKey(page.lights)) changedCount += page.lights.size();
-            }
-            var changed = new Long2ObjectOpenHashMap<PreviousLight>(changedCount);
-            for (Page page : pages) {
-                if (nextLookup.containsKey(page.lights)) continue;
-                Arrays.fill(remap, page.first, page.first + page.lights.size(), NO_LIGHT);
-                int index = page.first;
-                for (var light : page.lights) changed.put(light.identity(), new PreviousLight(light, index++));
-            }
-            float[] nextPower = new float[current.size()];
-            boolean sameMembership = current.size() == lights.size();
-            for (Page page : nextPages) {
-                Page previous = pageLookup.get(page.lights);
-                if (previous != null) {
-                    sameMembership &= previous.first == page.first;
-                    if (previous.first != page.first) {
-                        for (int offset = 0; offset < page.lights.size(); offset++) {
-                            remap[previous.first + offset] = page.first + offset;
-                        }
+            if (unchanged) return prepared;
+            var next = new IdentityHashMap<List<RtRetainedSceneBackend.SceneLight>, Page>();
+            List<Page> ordered = new ArrayList<>(inputs.size());
+            for (var input : inputs) {
+                Page page = sameScale ? pages.get(input) : null;
+                if (page == null) {
+                    long[] identities = new long[input.size()];
+                    float[] powers = new float[input.size()];
+                    for (int index = 0; index < input.size(); index++) {
+                        var light = input.get(index);
+                        identities[index] = light.identity();
+                        powers[index] = samplingPower(light.descriptor(), metersPerSceneUnit);
                     }
-                    if (sameScale) {
-                        System.arraycopy(power, previous.first, nextPower, page.first, page.lights.size());
-                    } else {
-                        int index = page.first;
-                        for (var light : page.lights) {
-                            nextPower[index++] = samplingPower(light.descriptor(), metersPerSceneUnit);
-                        }
-                    }
-                } else {
-                    int index = page.first;
-                    for (var light : page.lights) {
-                        PreviousLight old = changed.get(light.identity());
-                        sameMembership &= old != null && old.index == index;
-                        if (old != null) remap[old.index] = index;
-                        nextPower[index++] = sameScale && old != null && old.light.descriptor() == light.descriptor()
-                                ? power[old.index] : samplingPower(light.descriptor(), metersPerSceneUnit);
-                    }
+                    page = new Page(identities, powers);
                 }
+                next.put(input, page);
+                ordered.add(page);
             }
-            if (identity.length != current.size()) {
-                identity = new int[current.size()];
-                for (int index = 0; index < identity.length; index++) identity[index] = index;
+            long[] identities = new long[current.size()];
+            float[] powers = new float[current.size()];
+            int first = 0;
+            for (Page page : ordered) {
+                System.arraycopy(page.identities, 0, identities, first, page.identities.length);
+                System.arraycopy(page.powers, 0, powers, first, page.powers.length);
+                first += page.identities.length;
             }
-            pages = nextPages;
-            pageLookup = nextLookup;
-            power = nextPower;
+            pages = next;
+            sourcePages = inputs;
             scale = metersPerSceneUnit;
-            lights = current;
-            float total = powerTotal(power);
-            stable = new Plan(identity, power, total);
-            withoutHistory = new Plan(new int[0], power, total);
-            return !continuous ? withoutHistory : sameMembership ? stable : new Plan(remap, power, total);
+            return prepared = new Plan(identities, powers);
         }
 
-        /** Shared pages keep light identity, descriptor, and local order unchanged across revisions. */
-        private record Page(List<RtRetainedSceneBackend.SceneLight> lights, int first) { }
-        private record PreviousLight(RtRetainedSceneBackend.SceneLight light, int index) { }
+        private record Page(long[] identities, float[] powers) { }
     }
 
-    /**
-     * Sum of every light's sampling power, accumulated in double precision so the GPU can normalize
-     * the power-based prior with a single divide instead of a reduction over the light table.
-     */
+    /** Accumulating in double precision preserves small lights' contribution to the sampling prior. */
     static float powerTotal(float[] power) {
         double total = 0.0;
         for (float value : power) total += value;
@@ -154,8 +99,7 @@ final class RtNeeAtPlan {
                         light.intensityGreenCandela(), light.intensityBlueCandela()));
             }
             case LightDescriptor.Distant light -> positive(DISTANT_REFERENCE_AREA_M2 * luminance(
-                    light.illuminanceRedLux(), light.illuminanceGreenLux(),
-                    light.illuminanceBlueLux()));
+                    light.illuminanceRedLux(), light.illuminanceGreenLux(), light.illuminanceBlueLux()));
         };
     }
 
@@ -168,34 +112,53 @@ final class RtNeeAtPlan {
         return (float) Math.clamp(value, 1.0e-8, 1.0e30);
     }
 
-    /** Arrays are private plan storage shared only with the revision cache and never mutated. */
     static final class Plan {
-        private final int[] previousToCurrent;
+        private final long[] identities;
         private final float[] power;
+        private final long[] lookupIdentities;
+        private final int[] lookupIndices;
         private final float powerTotal;
-        private ByteBuffer packed;
 
-        Plan(int[] previousToCurrent, float[] power, float powerTotal) {
-            this.previousToCurrent = previousToCurrent;
+        Plan(long[] identities, float[] power) {
+            this.identities = identities;
             this.power = power;
-            this.powerTotal = powerTotal;
+            this.powerTotal = RtNeeAtPlan.powerTotal(power);
+            int capacity = 1;
+            while (capacity < Math.multiplyExact(identities.length, 2)) capacity = Math.multiplyExact(capacity, 2);
+            lookupIdentities = new long[capacity];
+            lookupIndices = new int[capacity];
+            for (int index = 0; index < identities.length; index++) {
+                long identity = identities[index];
+                if (identity == 0) throw new IllegalArgumentException("light identity must be nonzero");
+                int slot = hash(identity) & mask();
+                while (lookupIdentities[slot] != 0) slot = (slot + 1) & mask();
+                lookupIdentities[slot] = identity;
+                lookupIndices[slot] = index;
+            }
         }
 
-        int[] previousToCurrent() { return previousToCurrent; }
-        float[] power() { return power; }
+        int count() { return identities.length; }
+        int mask() { return lookupIdentities.length - 1; }
         float powerTotal() { return powerTotal; }
 
-        ByteBuffer pack() {
-            if (packed != null) return packed;
-            int count = Math.max(previousToCurrent.length, power.length);
-            ByteBuffer result = ByteBuffer.allocate(Math.multiplyExact(count, 2 * Integer.BYTES))
-                    .order(ByteOrder.nativeOrder());
-            for (int index = 0; index < count; index++) {
-                result.putInt(index < previousToCurrent.length ? previousToCurrent[index] : NO_LIGHT);
-                result.putFloat(index < power.length ? power[index] : 0.0f);
+        ByteBuffer packPower() {
+            ByteBuffer bytes = ByteBuffer.allocate(power.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            for (float value : power) bytes.putFloat(value);
+            return bytes.flip();
+        }
+
+        ByteBuffer packIdentities() {
+            ByteBuffer bytes = ByteBuffer.allocate(identities.length * Long.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            for (long identity : identities) bytes.putLong(identity);
+            return bytes.flip();
+        }
+
+        ByteBuffer packLookup() {
+            ByteBuffer bytes = ByteBuffer.allocate(lookupIdentities.length * LOOKUP_ENTRY_BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            for (int slot = 0; slot < lookupIdentities.length; slot++) {
+                bytes.putLong(lookupIdentities[slot]).putInt(lookupIndices[slot]).putInt(0);
             }
-            packed = result.flip().asReadOnlyBuffer().order(ByteOrder.nativeOrder());
-            return packed;
+            return bytes.flip();
         }
     }
 }

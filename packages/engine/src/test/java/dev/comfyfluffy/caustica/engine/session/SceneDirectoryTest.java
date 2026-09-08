@@ -296,7 +296,7 @@ final class SceneDirectoryTest {
         assertEquals(1, nativeDestroyed.get());
     }
 
-    @Test void capturedMeshProgramsFollowPublicationWithoutChangingEarlierFrames() {
+    @Test void capturedMeshesKeepProducerShaderIdentitiesAcrossProgramPublication() {
         var f = new Fixture();
         var channel = f.programs.session.openChannel(new ContributionOwner(19));
         var registration = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
@@ -307,17 +307,19 @@ final class SceneDirectoryTest {
         var ready = f.channel.prepare(INSTANCE, mesh(registration.exports())).join();
         f.channel.edit(List.of(set(f.channel.newInstance(), f.scene, ready)));
         try (var first = f.capture.get()) {
-            int published = first.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation();
-            assertTrue(published > 0);
+            var captured = first.get().meshes().getFirst();
+            assertSame(registration.exports(), captured.build().geometries().getFirst().surface().surface());
+            assertTrue(f.programs.session.resolve(registration.exports()) > 0);
             try (var repeated = f.capture.get()) {
-                assertEquals(published, repeated.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation());
+                assertSame(first.get(), repeated.get());
             }
             channel.invalidate();
             f.programs.session.progress();
             f.programs.session.progress();
             try (var removed = f.capture.get()) {
-                assertEquals(0, removed.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation());
-                assertEquals(published, first.get().meshes().getFirst().geometryPrograms().getFirst().surfaceImplementation());
+                assertEquals(0, f.programs.session.resolve(registration.exports()));
+                assertSame(first.get(), removed.get());
+                assertSame(captured, removed.get().meshes().getFirst());
             }
         }
     }
@@ -436,6 +438,77 @@ final class SceneDirectoryTest {
             }
             editing.get(10, TimeUnit.SECONDS);
         }
+    }
+
+    @Test void captureDoesNotWaitForAnEditHoldingTheDirectoryMonitor() throws Exception {
+        var f = new Fixture();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var instance = f.channel.newInstance();
+        f.channel.edit(List.of(set(instance, f.scene, ready)));
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        List<SceneEdit> edits = new AbstractList<>() {
+            @Override public int size() { return 1; }
+            @Override public SceneEdit get(int index) {
+                assertTrue(Thread.holdsLock(f.directory));
+                entered.countDown();
+                try { release.await(); }
+                catch (InterruptedException failure) { throw new AssertionError(failure); }
+                return new SceneEdit.SetTransform(instance, GeometryTransform.translation(9, 0, 0), 7);
+            }
+        };
+        try (var original = f.capture.get(); var executor = Executors.newFixedThreadPool(2)) {
+            var editing = executor.submit(() -> f.channel.edit(edits));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                var capturing = executor.submit(() -> {
+                    try (var captured = f.capture.get()) { return captured.get(); }
+                });
+                assertSame(original.get(), capturing.get(5, TimeUnit.SECONDS));
+                assertFalse(editing.isDone());
+            } finally { release.countDown(); }
+            editing.get(5, TimeUnit.SECONDS);
+            try (var replacement = f.capture.get()) {
+                assertEquals(7, replacement.get().instances().getFirst().mask());
+                assertEquals(255, original.get().instances().getFirst().mask());
+            }
+        }
+        ready.close();
+        f.channel.invalidate();
+    }
+
+    @Test void mixedGeometryAndLightEditsPublishOneRootUnderConcurrentCapture() throws Exception {
+        var f = new Fixture();
+        var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
+        var instance = f.channel.newInstance();
+        var light = f.channel.newLight();
+        f.channel.edit(List.of(set(instance, f.scene, ready), new SceneEdit.SetLight(light, f.scene,
+                new LightDescriptor.Distant(0, 1, 0, 255, 255, 255, 0, false))));
+        var start = new CountDownLatch(1);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var editing = executor.submit(() -> {
+                start.await();
+                for (int index = 0; index < 300; index++) {
+                    int value = index % 256;
+                    f.channel.edit(List.of(new SceneEdit.SetTransform(instance,
+                                    GeometryTransform.translation(value, 0, 0), value),
+                            new SceneEdit.SetLight(light, f.scene,
+                                    new LightDescriptor.Distant(0, 1, 0, value, value, value, 0, false))));
+                }
+                return null;
+            });
+            start.countDown();
+            for (int index = 0; index < 300; index++) {
+                try (var captured = f.capture.get()) {
+                    var snapshot = captured.get();
+                    var descriptor = (LightDescriptor.Distant) snapshot.lights().getFirst().descriptor();
+                    assertEquals(snapshot.instances().getFirst().mask(), descriptor.illuminanceRedLux());
+                }
+            }
+            editing.get(10, TimeUnit.SECONDS);
+        }
+        ready.close();
+        f.channel.invalidate();
     }
 
     @Test void preparationRejectsWrongSchemaBeforeCallingBackend() {
