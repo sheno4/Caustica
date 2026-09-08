@@ -832,3 +832,7 @@ After 9facbdb7, moved the client test task's host-platform selection and Slang v
 Full Windows Fabric root check passed at terminal zero in47s,187 tasks(50 executed,137 up-to-date). Then the isolated-output Windows NeoForge root check passed at terminal zero in25s,189 tasks(50 executed,139 up-to-date). Both runs used --warning-mode all and executed the client test task; neither emitted the Task.project deprecation. Compiler deprecated-API notes and the external JOML Unsafe warning are separate and remain. This does not claim whole-build configuration-cache or Gradle10 compatibility, or revalidate Linux runtime-path behavior.
 
 Evidence: tmp/aesthetic-slang-test-path-fabric.log and tmp/aesthetic-slang-test-path-neoforge.log. No renderer, native implementation or shader changed.
+
+## Nix Slang prerequisite clarified (2026-09-09)
+
+At e311509e, reviewed flake.nix and the Nix setup instructions against Slang's CMake and Gradle inputs. The shell exports Java, Vulkan and DLSS paths and provides shader-slang tooling, but does not set SLANG_SDK. CMake requires that variable for headers and the link library; bundling requires the version-matched compiler runtime and standard modules. Updated the Nix instructions to explicitly supply the separate SDK instead of implying that entering the shell supplies everything. Nix execution is not verified by this source review.

@@ -102,11 +102,13 @@ cmake -S packages/slang-runtime/native -B build/cmake/slang_shim -G Ninja -DCMAK
 cmake --build build/cmake/slang_shim
 ```
 
-On NixOS, enter the development shell from `flake.nix` instead of setting up
-the toolchain by hand:
+On NixOS, `flake.nix` supplies Java, C/C++ and Vulkan tools plus the DLSS SDK.
+The Slang runtime build still requires a separate `SLANG_SDK` matching
+`slang_runtime_version`; the shell's `slangc` executable alone is not that SDK.
 
 ```bash
 nix develop
+export SLANG_SDK=/path/to/slang-2026.14.1
 cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake/ngx_shim/release
 cmake -S packages/slang-runtime/native -B build/cmake/slang_shim -G Ninja -DCMAKE_BUILD_TYPE=Release
