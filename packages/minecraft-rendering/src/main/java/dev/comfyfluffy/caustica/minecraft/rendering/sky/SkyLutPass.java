@@ -116,7 +116,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     @Override public void record(PassFrame frame) {
         boolean hasPriorGpuUse = initialized;
-        if (!initialized) { initializeImages(frame.commandBuffer()); initialized = true; }
+        if (!initialized) {
+            ComputeSynchronization.initializeImages(frame.commandBuffer(), List.of(transmittance, multiScatter, skyView));
+            initialized = true;
+        }
         MinecraftSkyFrame captured = frames.get();
         if (captured == null) return;
         if (hasPriorGpuUse) priorRayReadsToSkyWrites(frame.commandBuffer());
@@ -127,9 +130,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
         if (baked && Float.compare(bakedGroundAlbedo, state.groundAlbedo()) != 0) baked = false;
         if (!baked) {
             dispatch(transmittanceShader, frame, transmittance, inputs, skyInputsAddress());
-            barrier(frame.commandBuffer());
+            ComputeSynchronization.betweenDispatches(frame.commandBuffer());
             dispatch(multiScatterShader, frame, multiScatter, inputs, skyInputsAddress());
-            barrier(frame.commandBuffer());
+            ComputeSynchronization.betweenDispatches(frame.commandBuffer());
             bakedGroundAlbedo = state.groundAlbedo();
             baked = true;
         }
@@ -294,39 +297,6 @@ public final class SkyLutPass implements Pass<PassFrame> {
         return new SkyInputsData.Float4(uv.u0(), uv.v0(), uv.u1(), uv.v1());
     }
 
-    private void initializeImages(VkCommandBuffer commandBuffer) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            List<VmaImage2D> images = List.of(transmittance, multiScatter, skyView);
-            VkImageMemoryBarrier2.Buffer barriers = VkImageMemoryBarrier2.calloc(images.size(), stack);
-            for (int i = 0; i < images.size(); i++) {
-                VmaImage2D image = images.get(i);
-                barriers.get(i).sType$Default().srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE)
-                        .srcAccessMask(VK13.VK_ACCESS_2_NONE).dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                        .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-                                | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                        .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_GENERAL)
-                        .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                        .image(image.image());
-                barriers.get(i).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                        .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            }
-            VK14.vkCmdPipelineBarrier2(commandBuffer,
-                    VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(barriers));
-        }
-    }
-    private static void barrier(VkCommandBuffer commandBuffer) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkMemoryBarrier2.Buffer b = VkMemoryBarrier2.calloc(1, stack);
-            b.get(0).sType$Default().srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                    .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
-                            | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            VK14.vkCmdPipelineBarrier2(commandBuffer,
-                    VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(b));
-        }
-    }
-
     private void priorRayReadsToSkyWrites(VkCommandBuffer commandBuffer) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VK14.vkCmdPipelineBarrier2(commandBuffer,
@@ -375,11 +345,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private record BindingResources(VmaMappedBuffer root, SharedResource<AtlasEntry> atlas,
                                     SharedResource<AutoCloseable[]> resources) implements AutoCloseable {
         @Override public void close() {
-            Throwable failure = cleanup(null, root::close);
-            failure = cleanup(failure, atlas::close);
-            failure = cleanup(failure, resources::close);
-            if (failure instanceof RuntimeException runtime) throw runtime;
-            if (failure instanceof Error error) throw error;
+            new ResourceLifetime(root::close, atlas::close, resources::close).close();
         }
     }
 
@@ -415,10 +381,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
             }
         }
         void close() {
-            Throwable failure = cleanup(null, descriptor::destroy);
-            failure = cleanup(failure, image::releaseViews);
-            if (failure instanceof RuntimeException runtime) throw runtime;
-            if (failure instanceof Error error) throw error;
+            new ResourceLifetime(descriptor::destroy, image::releaseViews).close();
         }
         GpuDescriptorIndex.Resource index() { return descriptor.firstIndex(); }
     }
@@ -434,13 +397,5 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     private static Option<Float> option(String name, float min, float max, float value) {
         return Option.range("sky." + name, min, max, value).inGroup(GROUP);
-    }
-    private static Throwable cleanup(Throwable failure, Runnable action) {
-        try { action.run(); }
-        catch (Throwable cleanupFailure) {
-            if (failure == null) return cleanupFailure;
-            failure.addSuppressed(cleanupFailure);
-        }
-        return failure;
     }
 }
