@@ -2,11 +2,9 @@ package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 
-import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.renderer.raytracing.resource.RtCompletionSlotPool;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -22,7 +20,6 @@ import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 
-import java.util.Arrays;
 import java.util.List;
 import java.nio.ByteBuffer;
 
@@ -32,7 +29,6 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERA
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_OPAQUE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR;
@@ -41,72 +37,14 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.vkDestroyAccelerationStr
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureDeviceAddressKHR;
 
-/** Builds top-level acceleration structures whose storage is exclusive through graphics completion. */
+/** Builds top-level acceleration structures whose storage is retained through preparation and every reader. */
 public final class TlasBuilder {
     private static final long INSTANCE_ADDRESS_ALIGNMENT = 16L;
 
     private TlasBuilder() {
     }
 
-    /** One top-level instance with its transform, BLAS address, visibility, and hit-record selection. */
-    public record Instance(float[] transform3x4, VulkanDeviceAddress blasDeviceAddress, int customIndex, int mask,
-                           int sbtRecordOffset) {
-        public Instance(float[] transform3x4, VulkanDeviceAddress blasDeviceAddress, int customIndex) {
-            this(transform3x4, blasDeviceAddress, customIndex, 0xFF, 0);
-        }
-
-        public Instance(float[] transform3x4, VulkanDeviceAddress blasDeviceAddress, int customIndex, int mask) {
-            this(transform3x4, blasDeviceAddress, customIndex, mask, 0);
-        }
-    }
-
-    /** Reusable structure-of-arrays staging for a frame's instances. */
-    public static final class InstanceBatch {
-        private static final int TRANSFORM_FLOATS = 12;
-        float[] transforms = new float[0];
-        VulkanDeviceAddress[] blasDeviceAddresses = new VulkanDeviceAddress[0];
-        int[] customIndices = new int[0];
-        int[] masks = new int[0];
-        int[] sbtRecordOffsets = new int[0];
-        private int size;
-
-        public void reset(int expectedSize) {
-            ensureCapacity(expectedSize);
-            size = 0;
-        }
-
-        public void append(float[] transform3x4, float translationX, float translationY, float translationZ,
-                           VulkanDeviceAddress blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
-            ensureCapacity(size + 1);
-            int transformOffset = size * TRANSFORM_FLOATS;
-            System.arraycopy(transform3x4, 0, transforms, transformOffset, TRANSFORM_FLOATS);
-            transforms[transformOffset + 3] += translationX;
-            transforms[transformOffset + 7] += translationY;
-            transforms[transformOffset + 11] += translationZ;
-            blasDeviceAddresses[size] = blasDeviceAddress;
-            customIndices[size] = customIndex;
-            masks[size] = mask;
-            sbtRecordOffsets[size] = sbtRecordOffset;
-            size++;
-        }
-
-        public int size() {
-            return size;
-        }
-
-        private void ensureCapacity(int required) {
-            int current = blasDeviceAddresses.length;
-            if (required <= current) return;
-            int grown = Math.max(required, Math.max(16, current + current / 2));
-            transforms = Arrays.copyOf(transforms, Math.multiplyExact(grown, TRANSFORM_FLOATS));
-            blasDeviceAddresses = Arrays.copyOf(blasDeviceAddresses, grown);
-            customIndices = Arrays.copyOf(customIndices, grown);
-            masks = Arrays.copyOf(masks, grown);
-            sbtRecordOffsets = Arrays.copyOf(sbtRecordOffsets, grown);
-        }
-    }
-
-    /** A build-ready view whose resources remain owned through the frame's graphics completion. */
+    /** A build-ready view borrowed from a retained storage reservation. */
     public static final class Prepared {
         public final RtAccel accel;
         private final GpuBuffer instanceBuffer;
@@ -124,7 +62,7 @@ public final class TlasBuilder {
         }
     }
 
-    /** Writable only while reserved by one graphics use, or after that use completes. */
+    /** Writable during preparation; published readers retain the slot until it can be reused. */
     private static final class Slot {
         private final int capacity;
         private RtAccel accel;
@@ -149,10 +87,6 @@ public final class TlasBuilder {
         public Pool(VulkanDeviceContext ctx) {
             this.ctx = ctx;
             slots = new RtCompletionSlotPool<>(Slot::destroy);
-        }
-
-        public Reserved reserve(int count, GraphicsUse graphicsUse) {
-            return reserve(count, graphicsUse::whenComplete);
         }
 
         /** The revision returns storage only after preparation and every published reader release it. */
@@ -189,24 +123,9 @@ public final class TlasBuilder {
         }
     }
 
-    /** Allocates resources and registers their ownership on the graphics-use calling thread. */
-    public static Reserved reserve(VulkanDeviceContext ctx, int count, GraphicsUse graphicsUse) {
-        return new Reserved(createSlot(ctx, count, graphicsUse), count);
-    }
-
-    /**
-     * Packs exactly the reserved instance count and flushes borrowed resources. The caller must join
-     * this work before recording the build or ending the graphics use that owns the reservation.
-     */
-    public static <T> Prepared pack(Reserved reserved, List<T> instances, InstanceWriter<T> writer) {
-        reserved.slot.inputPages = List.of();
-        writeInstances(instances, reserved.slot.instanceBuffer.mapped(), writer);
-        return finish(reserved.slot, reserved.count);
-    }
-
     /**
      * Updates changed CPU pages in exclusively reserved input; unchanged pages keep their existing bytes.
-     * The caller must join this copy and flush before recording or ending the owning graphics use.
+     * The caller must finish this copy and flush before recording, and retain the reservation through all uses.
      */
     public static Prepared packPages(Reserved reserved, List<ByteBuffer> pages) {
         var previous = reserved.slot.inputPages;
@@ -236,90 +155,12 @@ public final class TlasBuilder {
         return copied;
     }
 
-    /** Packs every instance into fresh frame-owned input, acceleration-structure, and scratch storage. */
-    public static <T> Prepared prepare(VulkanDeviceContext ctx, List<T> instances,
-                                       InstanceWriter<T> writer, GraphicsUse graphicsUse) {
-        return pack(reserve(ctx, instances.size(), graphicsUse), instances, writer);
-    }
-
-    static <T> void writeInstances(List<T> instances, long mapped, InstanceWriter<T> writer) {
-        var records = VkAccelerationStructureInstanceKHR.create(mapped, instances.size());
-        int index = 0;
-        for (var page : SnapshotList.pagesOf(instances)) {
-            for (T instance : page) writer.write(instance, records.get(index++));
-        }
-    }
-
-    /** Pack two instance ranges into a TLAS allocated for this frame. */
-    public static Prepared prepare(VulkanDeviceContext ctx, List<Instance> baseInstances,
-                                   List<Instance> dynamicInstances, GraphicsUse graphicsUse) {
-        int baseCount = baseInstances.size();
-        int count = Math.addExact(baseCount, dynamicInstances.size());
-        Slot slot = createSlot(ctx, count, graphicsUse);
-        writeInstances(baseInstances, slot.instanceBuffer.mapped(), 0);
-        writeInstances(dynamicInstances, slot.instanceBuffer.mapped(), baseCount);
-        return finish(slot, count);
-    }
-
-    /** Pack staged instances into a TLAS allocated for this frame. */
-    public static Prepared prepare(VulkanDeviceContext ctx, InstanceBatch instances, GraphicsUse graphicsUse) {
-        int count = instances.size();
-        Slot slot = createSlot(ctx, count, graphicsUse);
-        writeInstances(instances, slot.instanceBuffer.mapped());
-        return finish(slot, count);
-    }
-
-    private static Prepared finish(Slot slot, int count) {
-        return finish(slot, count, true);
-    }
-
     private static Prepared finish(Slot slot, int count, boolean flush) {
         if (flush && count > 0) {
             slot.instanceBuffer.flush(0L, (long) count * VkAccelerationStructureInstanceKHR.SIZEOF);
         }
         return new Prepared(slot.accel, slot.instanceBuffer, slot.scratch, count,
                 "frame TLAS " + count + " instances");
-    }
-
-    private static void writeInstances(List<Instance> instances, long mapped, int firstInstance) {
-        VkAccelerationStructureInstanceKHR.Buffer records = VkAccelerationStructureInstanceKHR.create(
-                mapped + (long) firstInstance * VkAccelerationStructureInstanceKHR.SIZEOF, instances.size());
-        for (int i = 0, count = instances.size(); i < count; i++) {
-            Instance instance = instances.get(i);
-            VkAccelerationStructureInstanceKHR record = records.get(i);
-            record.transform().matrix().put(instance.transform3x4());
-            record.instanceCustomIndex(instance.customIndex())
-                    .mask(instance.mask())
-                    .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset())
-                    .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instance.blasDeviceAddress().value());
-        }
-    }
-
-    private static void writeInstances(InstanceBatch instances, long mapped) {
-        VkAccelerationStructureInstanceKHR.Buffer records = VkAccelerationStructureInstanceKHR.create(
-                mapped, instances.size);
-        for (int i = 0; i < instances.size; i++) {
-            VkAccelerationStructureInstanceKHR record = records.get(i);
-            record.transform().matrix().put(instances.transforms, i * InstanceBatch.TRANSFORM_FLOATS,
-                    InstanceBatch.TRANSFORM_FLOATS);
-            record.instanceCustomIndex(instances.customIndices[i])
-                    .mask(instances.masks[i])
-                    .instanceShaderBindingTableRecordOffset(instances.sbtRecordOffsets[i])
-                    .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instances.blasDeviceAddresses[i].value());
-        }
-    }
-
-    private static Slot createSlot(VulkanDeviceContext ctx, int capacity, GraphicsUse graphicsUse) {
-        var slot = createSlot(ctx, capacity);
-        try {
-            graphicsUse.whenComplete(slot::destroy);
-            return slot;
-        } catch (RuntimeException | Error failure) {
-            slot.destroy();
-            throw failure;
-        }
     }
 
     /** Zero-instance builds still need an addressable input buffer. All size queries use slot capacity. */
