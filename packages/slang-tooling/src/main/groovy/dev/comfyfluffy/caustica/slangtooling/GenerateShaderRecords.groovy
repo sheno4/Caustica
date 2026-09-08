@@ -404,7 +404,7 @@ abstract class GenerateShaderRecords extends DefaultTask {
                 includeDirectories.files, new File(temporaryDir, "jar-includes"))
         def includeArgs = (shaderRoot.get().asFileTree.matching { include "**/*.slang" }.files
                 .collect { it.parentFile }.unique().sort { it.absolutePath }
-                + externalRoots.collectMany { CompileSlangShaders.directoryTree(it) })
+                + externalRoots.collectMany { SlangIncludeRoots.directoryTree(it) })
                 .unique().sort { it.absolutePath }.collectMany { ["-I", it.absolutePath] }
         execOps.exec {
             commandLine([slangc.get(), probeSource.get().asFile.absolutePath] + includeArgs +

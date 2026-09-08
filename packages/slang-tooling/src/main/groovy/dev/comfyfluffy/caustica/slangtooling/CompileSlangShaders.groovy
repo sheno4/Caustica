@@ -79,8 +79,8 @@ abstract class CompileSlangShaders extends DefaultTask {
         }
 
         List<File> includeRoots = ([aliases] + materializedIncludes.collectMany { File root ->
-            directoryTree(root)
-        } + directoryTree(sourceRoot))
+            SlangIncludeRoots.directoryTree(root)
+        } + SlangIncludeRoots.directoryTree(sourceRoot))
                 .unique().sort { it.absolutePath }
         Set<File> shaderFiles = [] as LinkedHashSet
         sourcePatterns.get().each { pattern ->
@@ -164,10 +164,4 @@ abstract class CompileSlangShaders extends DefaultTask {
         }
     }
 
-    static List<File> directoryTree(File root) {
-        if (!root.isDirectory()) return []
-        List<File> directories = [root]
-        root.eachFileRecurse(FileType.DIRECTORIES) { directories.add(it) }
-        directories
-    }
 }

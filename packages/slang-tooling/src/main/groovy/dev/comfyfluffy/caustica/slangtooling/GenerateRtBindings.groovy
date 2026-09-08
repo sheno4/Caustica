@@ -77,7 +77,7 @@ abstract class GenerateRtBindings extends DefaultTask {
         def reflectionFile = new File(scratchDir, "${stem}.json")
         def spvFile = new File(scratchDir, "${stem}.spv")
         def includeDirs = (shaderRoot.get().asFileTree.matching { include "**/*.slang" }.files
-                .collect { it.parentFile } + externalRoots.collectMany { CompileSlangShaders.directoryTree(it) })
+                .collect { it.parentFile } + externalRoots.collectMany { SlangIncludeRoots.directoryTree(it) })
                 .unique().sort { it.absolutePath }
         def includes = [source.parentFile] + includeDirs.findAll { it != source.parentFile }
         execOps.exec {

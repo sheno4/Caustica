@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.slangtooling
 
-import groovy.io.FileType
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
@@ -42,8 +41,7 @@ abstract class ReflectSlang extends DefaultTask {
         File source = sourceFile.get().asFile
         List<File> directories = [source.parentFile]
         SlangIncludeRoots.materialize(includeDirectories.files, new File(temporaryDir, "jar-includes")).each { root ->
-            directories.add(root)
-            root.eachFileRecurse(FileType.DIRECTORIES) { directories.add(it) }
+            directories.addAll(SlangIncludeRoots.directoryTree(root))
         }
         directories = directories.unique().sort { it.absolutePath }
         File json = reflectionJson.get().asFile

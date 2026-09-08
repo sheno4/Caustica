@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.slangtooling
 
+import groovy.io.FileType
 import org.gradle.api.GradleException
 
 import java.nio.file.Files
@@ -10,6 +11,13 @@ import java.util.jar.JarFile
 /** Materializes directory and JAR shader-module inputs as Slang include roots. */
 final class SlangIncludeRoots {
     private SlangIncludeRoots() {
+    }
+
+    static List<File> directoryTree(File root) {
+        if (!root.isDirectory()) return []
+        List<File> directories = [root]
+        root.eachFileRecurse(FileType.DIRECTORIES) { directories.add(it) }
+        directories
     }
 
     static List<File> materialize(Collection<File> inputs, File extractionRoot) {
