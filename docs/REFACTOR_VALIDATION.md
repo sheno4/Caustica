@@ -466,3 +466,11 @@ Inspected all three images. Before reload (2084), city geometry, distant bright 
 The recording contains 66,859 upload events: mean allocatedBytes 56,252, median 33,536 and p95 187,832; mean started-to-finished worker duration 0.0372 ms, p95 0.1231 ms. CPU event time is quantized to 15.625 ms and mostly zero, so individual CPU percentiles are uninformative. These measurements characterize the new code only, without an equivalent old-code baseline, and establish no improvement. Capture/reload occurred outside the recording.
 
 Evidence: `tmp/aesthetic-mesh-views-live.{py,json,log}`, `tmp/aesthetic-mesh-views-runtime.log`, `tmp/aesthetic-mesh-views-analyze.py`, and `tmp/aesthetic-mesh-views-upload-summary.json`; recording `run/caustica-debug/recording-d836d37c-5492-4cd8-8404-ff02c3f05fcd.jfr`. Initial observer attempt reached an unloaded world, failed before mutation, and was retried after the existing client reported active world composition.
+
+## Reload convergence after immutable stream views (2026-09-09)
+
+Repeated the same city camera under REBLUR/SR at 854x480, with a 400-tick pre-reload settle. Inspected five captures: before (7111), after 100 composites (9582), another 100 ticks (10417), another 500 ticks total (14426), and settled normals (14510). Distant towers were partially missing in the early image, returned by the additional 100-tick capture, and remained present at 500 ticks. Settled normals include the distant structures. This resolves the prior bounded observation as delayed preparation in this scene, not persistent missing geometry. It does not prove that every terrain section completed or establish equivalence with prior-code preparation timing.
+
+The observer restored exact player/settings and exited 0. Graceful client stop exited 0 after 2m07s; no device-loss, entity-publication-failure or bounds-exception matches. Added the composite-versus-terrain-readiness distinction to the debug guide. No production fix was justified by this reproduction. Allocation/timing comparison against the previous array-access implementation remains outstanding.
+
+Evidence: `tmp/aesthetic-reload-convergence.{py,json,log}` and `tmp/aesthetic-reload-convergence-runtime.log`; all five screenshot paths are recorded in the JSON. The run did not use Computer Use and does not close pending keyboard/visual interaction checks.
