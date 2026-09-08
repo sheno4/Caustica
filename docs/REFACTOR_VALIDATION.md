@@ -4,6 +4,7 @@ The project-wide aesthetic review includes interactive behavior and visual inspe
 
 ## Queued lifecycle checks
 
+- Reload resources with RT active through F3+T or the resource-pack screen. Verify renderer detachment before atlas replacement and recovery after the reload future completes; repeat a reload to exercise generation ordering after the method-wrapper refactor.
 - Enter the debug workbench, wait for active RT and visible geometry, exit to the title screen, enter a different existing test world in the same client process, and return to the first world. Check coherent scene replacement, camera/history reset, stale geometry, errors and shutdown.
 - Toggle RT off/on five times in one world, waiting for the requested state and fresh rendered frames each time. Inspect vanilla terrain while disabled and world, hand, HUD and transparency after enabling. Repeat a toggle after switching worlds.
 - Leave a world while RT preparation is active, then open another world. Check that completed jobs from the old world cannot publish into the new session.
