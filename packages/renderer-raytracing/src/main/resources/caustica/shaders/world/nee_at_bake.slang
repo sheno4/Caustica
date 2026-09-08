@@ -26,10 +26,6 @@ public struct NeeAtBakePush {
     public uint reserved;
 };
 
-// Feedback winners carry screen-space coherence in bit 31 and the previous dense light index in bits 0–30.
-static const uint NEE_AT_BAKE_SCREEN_SPACE_COHERENT = 0x80000000u;
-static const uint NEE_AT_BAKE_LIGHT_INDEX_MASK = 0x7fffffffu;
-
 groupshared uint localLights[128];
 groupshared uint localMasses[128];
 groupshared uint localScan[128];
@@ -84,7 +80,7 @@ void collectGlobalFeedback(NeeAtState state, uint pixelIndex) {
     ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
     uint2 event = feedback[pixelIndex];
     uint slot = state.lightCount;
-    uint previousLight = event.x & NEE_AT_BAKE_LIGHT_INDEX_MASK;
+    uint previousLight = event.x & NEE_AT_FEEDBACK_LIGHT_MASK;
     if (asfloat(event.y) > 0.0 && previousLight < state.priorLightCount) {
         uint mapped = neeAtCurrentLight(previousLight);
         if (mapped < state.lightCount) slot = mapped;
@@ -205,8 +201,7 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
     }
     GroupMemoryBarrierWithGroupSync();
     uint2 tile = uint2(tileIndex % state.tileCountX, tileIndex / state.tileCountX);
-    uint2 jitter = uint2(neeAtHash(state.frameIndex * 2u) % state.tileSize,
-            neeAtHash(state.frameIndex * 2u + 1u) % state.tileSize);
+    uint2 jitter = neeAtTileJitter(state);
     ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
     if (lane < state.tileSize * state.tileSize) {
         uint2 local = uint2(lane % state.tileSize, lane / state.tileSize);
@@ -224,8 +219,8 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
                 if (reprojectLocalPixel(state, pixel, depth, previousIndex)) event = feedback[previousIndex];
             }
         }
-        uint previousLight = event.x & NEE_AT_BAKE_LIGHT_INDEX_MASK;
-        if (asfloat(event.y) > 0.0 && (event.x & NEE_AT_BAKE_SCREEN_SPACE_COHERENT) != 0u
+        uint previousLight = event.x & NEE_AT_FEEDBACK_LIGHT_MASK;
+        if (asfloat(event.y) > 0.0 && (event.x & NEE_AT_FEEDBACK_COHERENT) != 0u
                 && previousLight < state.priorLightCount) {
             uint currentLight = neeAtCurrentLight(previousLight);
             if (currentLight < state.lightCount) {

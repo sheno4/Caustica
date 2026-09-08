@@ -20,7 +20,7 @@ public float traceEpsilon() {
 }
 
 public uint traceSeed(uint2 pixel, uint frame, uint plane) {
-    return retainedLightHash(pixel.x ^ (pixel.y * 0x9e3779b9u)
+    return neeAtHash(pixel.x ^ (pixel.y * 0x9e3779b9u)
             ^ (frame * 0x85ebca6bu) ^ (plane * 0xc2b2ae35u)) | 1u;
 }
 

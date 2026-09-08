@@ -26,12 +26,8 @@ public struct DirectLightSample {
     public bool valid;
 };
 
-public uint retainedLightHash(uint value) {
-    return neeAtHash(value);
-}
-
 public float retainedLightRandom(inout uint state) {
-    state = retainedLightHash(state);
+    state = neeAtHash(state);
     return float(state >> 8u) * (1.0 / 16777216.0);
 }
 
@@ -80,11 +76,8 @@ public float neeAtLightMisPdf(float proposalPdf, float shapePdf, uint candidateC
 }
 
 uint neeAtTileIndex(NeeAtState state, uint2 pixel) {
-    uint tileSize = max(state.tileSize, 1u);
-    uint2 jitter = uint2(retainedLightHash(state.frameIndex * 2u) % tileSize,
-            retainedLightHash(state.frameIndex * 2u + 1u) % tileSize);
-    uint2 tileCount = uint2(max(state.tileCountX, 1u), max(state.tileCountY, 1u));
-    uint2 tile = ((pixel + jitter) % (tileCount * tileSize)) / tileSize;
+    uint2 paddedExtent = uint2(state.tileCountX, state.tileCountY) * state.tileSize;
+    uint2 tile = ((pixel + neeAtTileJitter(state)) % paddedExtent) / state.tileSize;
     return tile.y * state.tileCountX + tile.x;
 }
 
@@ -98,7 +91,7 @@ bool neeAtLocalAvailable(NeeAtState state, uint2 pixel) {
 float neeAtLocalPdf(NeeAtState state, uint lightIndex, uint base, uint total) {
     ConstPtr<uint2> entries = (ConstPtr<uint2>)state.localDistributionAddress;
     if (total == 0u) return 0.0;
-    uint slot = retainedLightHash(lightIndex) % state.localSlotCount;
+    uint slot = neeAtHash(lightIndex) % state.localSlotCount;
     for (uint probe = 0u; probe < state.localSlotCount; probe++) {
         uint2 entry = entries[base + slot];
         if (entry.x == lightIndex) {
@@ -343,8 +336,10 @@ public void neeAtWriteFeedback(WorldBindingRoots roots, uint2 pixel, uint lightI
     // zero-filled buffer reads back as 0.0.
     uint2 event = pixelFeedback[pixelIndex];
     float total = min(asfloat(event.y) + weight, NEE_AT_MAX_FEEDBACK_WEIGHT);
-    uint selectionSeed = retainedLightHash(pixelIndex ^ state.frameIndex ^ lightIndex ^ event.y) | 1u;
-    if (retainedLightRandom(selectionSeed) * total <= weight) event.x = lightIndex | (coherent ? 0x80000000u : 0u);
+    uint selectionSeed = neeAtHash(pixelIndex ^ state.frameIndex ^ lightIndex ^ event.y) | 1u;
+    if (retainedLightRandom(selectionSeed) * total <= weight) {
+        event.x = lightIndex | (coherent ? NEE_AT_FEEDBACK_COHERENT : 0u);
+    }
     event.y = asuint(total);
     pixelFeedback[pixelIndex] = event;
 }

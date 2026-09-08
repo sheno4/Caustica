@@ -92,6 +92,10 @@ public struct NeeAtState {
 
 public static const uint NEE_AT_ENVIRONMENT_EMITTERS_SAMPLED = 2u;
 public static const uint NEE_AT_LOCAL_HISTORY_VALID = 1u;
+// Pixel feedback packs the winning dense light index and its screen-space coherence into .x;
+// .y holds the accumulated reservoir weight as float bits. The index belongs to the writing frame.
+public static const uint NEE_AT_FEEDBACK_COHERENT = 0x80000000u;
+public static const uint NEE_AT_FEEDBACK_LIGHT_MASK = 0x7fffffffu;
 // Average sampling proxies per light. Sets the quantization floor of the global distribution: a
 // light's pdf resolution is 1/(lightCount * this). Mirrored by RtNeeAtBackend.PROXY_RATIO, which
 // sizes the proxy buffer.
@@ -108,6 +112,13 @@ public uint neeAtHash(uint value) {
     value ^= value >> 15u;
     value *= 0x846ca68bu;
     return value ^ (value >> 16u);
+}
+
+// The host supplies a positive tile size. Sampling adds this offset; baking subtracts it to recover
+// the pixels in that tile. Both wrap over the extent padded to whole tiles.
+public uint2 neeAtTileJitter(NeeAtState state) {
+    return uint2(neeAtHash(state.frameIndex * 2u) % state.tileSize,
+            neeAtHash(state.frameIndex * 2u + 1u) % state.tileSize);
 }
 
 public ConstPtr<NeeAtState> neeAtState(uint64_t address) {
