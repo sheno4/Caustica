@@ -113,7 +113,11 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                 publicationExecutor.execute(this::drain);
             }
         }
-        if (!discarded.isEmpty()) executePacking(() -> discarded.forEach(Capture::close));
+        if (!discarded.isEmpty()) executePacking(() -> {
+            Throwable failure = null;
+            for (var capture : discarded) failure = cleanup(failure, capture::close);
+            throwFailure(failure);
+        });
     }
 
     private void drain() {
@@ -140,6 +144,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         try {
             packingExecutor.execute(() -> {
                 try { action.run(); }
+                catch (Throwable thrown) { failure = thrown; }
                 finally { packing.remove(terminal); terminal.complete(null); }
             });
         } catch (RuntimeException | Error thrown) {

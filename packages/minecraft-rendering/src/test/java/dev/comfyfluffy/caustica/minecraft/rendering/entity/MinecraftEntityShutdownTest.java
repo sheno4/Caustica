@@ -23,6 +23,48 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftEntityShutdownTest {
     @Test
+    void supersededCapturesAllRetireAndWorkerFailureReachesTheCaller() {
+        var scene = new PreparedScene();
+        var packing = new java.util.ArrayDeque<Runnable>();
+        var publication = new java.util.ArrayDeque<Runnable>();
+        var deferPublication = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var closes = new AtomicInteger();
+        var rejected = new IllegalStateException("capture release failed");
+        var uploader = new MinecraftEntityUploader() {
+            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
+            @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
+                return new UploadJob() {
+                    @Override public UploadedEntity finish() { throw new AssertionError(); }
+                    @Override public void close() {
+                        if (closes.incrementAndGet() == 1) throw rejected;
+                    }
+                };
+            }
+        };
+        var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {}, uploader,
+                packing::add, action -> {
+                    if (deferPublication.get()) publication.add(action);
+                    else action.run();
+                });
+        try (var group = geometry.beginUpdateGroup()) {
+            var key = new MinecraftEntityGeometry.Key(1, 1);
+            for (int revision = 1; revision <= 3; revision++)
+                geometry.put(key, revision(revision), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+            group.submit();
+        }
+
+        assertDoesNotThrow(packing.removeFirst()::run);
+        assertEquals(2, closes.get());
+        assertSame(rejected, assertThrows(IllegalStateException.class, geometry::beginUpdateGroup).getCause());
+        publication.removeFirst().run();
+        assertEquals(3, closes.get());
+        assertTrue(scene.jobs.isEmpty());
+        deferPublication.set(false);
+        geometry.close();
+        assertEquals(3, closes.get());
+    }
+
+    @Test
     void groupedRemovalReleasesEveryRetiredGenerationAfterOneCloseFails() {
         var scene = new PreparedScene();
         var uploads = new ArrayList<Uploaded>();
