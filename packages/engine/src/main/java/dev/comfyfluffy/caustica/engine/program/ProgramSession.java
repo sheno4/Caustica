@@ -105,7 +105,7 @@ public final class ProgramSession {
 
     /** Returns the published implementation index, or zero for a stale/foreign surface. */
     public synchronized int resolve(SurfaceId<?, ?> id) {
-        if (!(id instanceof SurfaceReference reference) || reference.session != this
+        if (!(id instanceof SurfaceReference<?, ?> reference) || reference.session != this
                 || !reference.registration.published) {
             return 0;
         }
@@ -114,7 +114,7 @@ public final class ProgramSession {
 
     /** Returns the published implementation index, or zero for vacuum. */
     public synchronized int resolve(VolumeId<?, ?> id) {
-        if (!(id instanceof VolumeReference reference) || reference.session != this
+        if (!(id instanceof VolumeReference<?, ?> reference) || reference.session != this
                 || !reference.registration.published) {
             return 0;
         }
@@ -123,7 +123,7 @@ public final class ProgramSession {
 
     /** Returns the published implementation index, or zero for the error environment. */
     public synchronized int resolve(EnvironmentId<?> id) {
-        if (!(id instanceof EnvironmentReference reference) || reference.session != this
+        if (!(id instanceof EnvironmentReference<?> reference) || reference.session != this
                 || !reference.registration.published) {
             return 0;
         }
@@ -133,7 +133,7 @@ public final class ProgramSession {
     /** Validates a surface reference and its erased geometry-slot schemas for this session. */
     public synchronized void validateSurface(SurfaceId<?, ?> id, ShaderData<?> bindingData,
                                              ShaderDataType<?> instanceType, boolean cutout) {
-        if (!(id instanceof SurfaceReference reference) || reference.session != this) {
+        if (!(id instanceof SurfaceReference<?, ?> reference) || reference.session != this) {
             throw new IllegalArgumentException("surface belongs to another program session");
         }
         reference.definition.bindingDataType().require(bindingData);
@@ -148,7 +148,7 @@ public final class ProgramSession {
     /** Validates a volume reference and its erased geometry-slot schemas for this session. */
     public synchronized void validateVolume(VolumeId<?, ?> id, ShaderData<?> bindingData,
                                             ShaderDataType<?> instanceType) {
-        if (!(id instanceof VolumeReference reference) || reference.session != this) {
+        if (!(id instanceof VolumeReference<?, ?> reference) || reference.session != this) {
             throw new IllegalArgumentException("volume belongs to another program session");
         }
         reference.definition.bindingDataType().require(bindingData);
@@ -159,7 +159,7 @@ public final class ProgramSession {
 
     /** Validates a same-session environment reference and its erased scene-binding schema. */
     public synchronized void validateEnvironment(EnvironmentId<?> id, ShaderData<?> bindingData) {
-        if (!(id instanceof EnvironmentReference reference) || reference.session != this) {
+        if (!(id instanceof EnvironmentReference<?> reference) || reference.session != this) {
             throw new IllegalArgumentException("environment belongs to another program session");
         }
         reference.definition.bindingDataType().require(bindingData);
@@ -445,23 +445,23 @@ public final class ProgramSession {
         }
     }
 
-    private static final class SurfaceReference extends Reference implements SurfaceId<Object, Object> {
-        private final SurfaceDefinition<?, ?> definition;
-        SurfaceReference(ProgramSession session, ProgramKey key, SurfaceDefinition<?, ?> definition) {
+    private static final class SurfaceReference<B, N> extends Reference implements SurfaceId<B, N> {
+        private final SurfaceDefinition<B, N> definition;
+        SurfaceReference(ProgramSession session, ProgramKey key, SurfaceDefinition<B, N> definition) {
             super(session, key);
             this.definition = definition;
         }
     }
-    private static final class VolumeReference extends Reference implements VolumeId<Object, Object> {
-        private final VolumeDefinition<?, ?> definition;
-        VolumeReference(ProgramSession session, ProgramKey key, VolumeDefinition<?, ?> definition) {
+    private static final class VolumeReference<B, N> extends Reference implements VolumeId<B, N> {
+        private final VolumeDefinition<B, N> definition;
+        VolumeReference(ProgramSession session, ProgramKey key, VolumeDefinition<B, N> definition) {
             super(session, key);
             this.definition = definition;
         }
     }
-    private static final class EnvironmentReference extends Reference implements EnvironmentId<Object> {
-        final EnvironmentDefinition<?> definition;
-        EnvironmentReference(ProgramSession session, ProgramKey key, EnvironmentDefinition<?> definition) {
+    private static final class EnvironmentReference<B> extends Reference implements EnvironmentId<B> {
+        final EnvironmentDefinition<B> definition;
+        EnvironmentReference(ProgramSession session, ProgramKey key, EnvironmentDefinition<B> definition) {
             super(session, key);
             this.definition = definition;
         }
@@ -474,7 +474,7 @@ public final class ProgramSession {
         ResourceOwner implementationDataResource();
     }
 
-    private record SurfaceDeclaration(SurfaceReference reference, SurfaceDefinition<?, ?> definition)
+    private record SurfaceDeclaration(SurfaceReference<?, ?> reference, SurfaceDefinition<?, ?> definition)
             implements Declaration {
         @Override public ProgramComposition.Declaration external() {
             return new ProgramComposition.Surface(reference.key, definition);
@@ -488,7 +488,7 @@ public final class ProgramSession {
         }
     }
 
-    private record VolumeDeclaration(VolumeReference reference, VolumeDefinition<?, ?> definition)
+    private record VolumeDeclaration(VolumeReference<?, ?> reference, VolumeDefinition<?, ?> definition)
             implements Declaration {
         @Override public ProgramComposition.Declaration external() {
             return new ProgramComposition.Volume(reference.key, definition);
@@ -499,7 +499,7 @@ public final class ProgramSession {
         }
     }
 
-    private record EnvironmentDeclaration(EnvironmentReference reference, EnvironmentDefinition<?> definition)
+    private record EnvironmentDeclaration(EnvironmentReference<?> reference, EnvironmentDefinition<?> definition)
             implements Declaration {
         @Override public ProgramComposition.Declaration external() {
             return new ProgramComposition.Environment(reference.key, definition);
@@ -513,36 +513,33 @@ public final class ProgramSession {
         private boolean active = true;
 
         @Override
-        @SuppressWarnings("unchecked")
         public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            SurfaceReference reference = new SurfaceReference(
+            SurfaceReference<B, N> reference = new SurfaceReference<>(
                     ProgramSession.this, nextKey(ProgramKey.Kind.SURFACE), definition);
             declarations.add(new SurfaceDeclaration(reference, definition));
-            return (SurfaceId<B, N>) (SurfaceId<?, ?>) reference;
+            return reference;
         }
 
         @Override
-        @SuppressWarnings("unchecked")
         public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            VolumeReference reference = new VolumeReference(
+            VolumeReference<B, N> reference = new VolumeReference<>(
                     ProgramSession.this, nextKey(ProgramKey.Kind.VOLUME), definition);
             declarations.add(new VolumeDeclaration(reference, definition));
-            return (VolumeId<B, N>) (VolumeId<?, ?>) reference;
+            return reference;
         }
 
         @Override
-        @SuppressWarnings("unchecked")
         public <B> EnvironmentId<B> environment(EnvironmentDefinition<B> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            EnvironmentReference reference = new EnvironmentReference(
+            EnvironmentReference<B> reference = new EnvironmentReference<>(
                     ProgramSession.this, nextKey(ProgramKey.Kind.ENVIRONMENT), definition);
             declarations.add(new EnvironmentDeclaration(reference, definition));
-            return (EnvironmentId<B>) (EnvironmentId<?>) reference;
+            return reference;
         }
 
         private void requireActive() {
