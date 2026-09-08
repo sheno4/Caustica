@@ -183,6 +183,11 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "world.leave" -> {
                 requireWorld();
                 int pending = CausticaClientComposition.current().terrain().outstandingBuilds();
+                if (request.has("onlyIfTerrainBusy") && request.get("onlyIfTerrainBusy").getAsBoolean()
+                        && pending == 0) {
+                    future.complete(Map.of("left", false, "terrainBuildsBeforeDisconnect", 0));
+                    break;
+                }
                 client.disconnectFromWorld(net.minecraft.network.chat.Component.translatable("menu.disconnect"));
                 future.complete(Map.of("left", true, "terrainBuildsBeforeDisconnect", pending));
             }
