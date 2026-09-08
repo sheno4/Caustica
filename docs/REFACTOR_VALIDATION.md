@@ -824,3 +824,11 @@ At e9991f52, ran the full root check with loader=neoforge and isolated client bu
 Inspected tmp/aesthetic-neoforge-current/libs/caustica-0.1.0-neoforge.jar:103,261,944 bytes,SHA-256234b5f6ba3929dda05d5179e8c22acb4c94acac39964bab4a71a23c9ef451237. Parsed loader metadata reports caustica0.1.0. Common and NeoForge mixin descriptors, the NeoForge entry point and updated capture/writer classes occur exactly once; Fabric descriptors are absent. Windows NGX/DLSS, Slang and NRD DLL entries are present. This inspection checks artifact composition; it does not claim native byte equivalence or runtime loading.
 
 The warning-mode-all run reproduced client build.gradle's execution-time Slang runtime version lookup in test setup (line259 at this commit). It remains a concrete Gradle10 migration issue despite the now-clean dependency boundary tasks. Evidence: tmp/aesthetic-neoforge-current-check.log, tmp/aesthetic-neoforge-current-inspect.py, tmp/aesthetic-neoforge-current-artifact.json and the isolated client XML reports.
+
+## Slang test setup configures policy before execution (2026-09-09)
+
+After 9facbdb7, moved the client test task's host-platform selection and Slang version lookup into task configuration. Its generated-runtime directory remains a Provider resolved in doFirst, so the layout is not frozen before later build-directory overrides. Execution only supplies the resolved path as the test JVM's caustica.slang.path property; it no longer accesses Task.project or the Slang project layout directly.
+
+Full Windows Fabric root check passed at terminal zero in47s,187 tasks(50 executed,137 up-to-date). Then the isolated-output Windows NeoForge root check passed at terminal zero in25s,189 tasks(50 executed,139 up-to-date). Both runs used --warning-mode all and executed the client test task; neither emitted the Task.project deprecation. Compiler deprecated-API notes and the external JOML Unsafe warning are separate and remain. This does not claim whole-build configuration-cache or Gradle10 compatibility, or revalidate Linux runtime-path behavior.
+
+Evidence: tmp/aesthetic-slang-test-path-fabric.log and tmp/aesthetic-slang-test-path-neoforge.log. No renderer, native implementation or shader changed.

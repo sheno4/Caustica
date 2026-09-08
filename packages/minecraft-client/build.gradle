@@ -250,16 +250,15 @@ tasks.named("test", Test) {
 	workingDir(rootProject.projectDir)
 	dependsOn(bundleSlangRuntime)
 	jvmArgs "--enable-native-access=ALL-UNNAMED"
+	def os = org.gradle.internal.os.OperatingSystem.current()
+	def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
+	def x64 = arch == "x86_64" || arch == "amd64"
+	def platform = os.windows && x64 ? "windows-x64" : os.linux && x64 ? "linux-x64" : null
+	if (platform == null) throw new GradleException("Unsupported Slang runtime host")
+	def runtimeDir = slangRuntimePackage.layout.buildDirectory.dir(
+			"generated/slang-runtime/caustica/natives/slang/${project.slang_runtime_version}/${platform}")
 	doFirst {
-		def os = org.gradle.internal.os.OperatingSystem.current()
-		def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
-		def x64 = arch == "x86_64" || arch == "amd64"
-		def platform = os.windows && x64 ? "windows-x64" : os.linux && x64 ? "linux-x64" : null
-		if (platform == null) throw new GradleException("Unsupported Slang runtime host")
-		def runtimeDir = slangRuntimePackage.layout.buildDirectory.dir(
-				"generated/slang-runtime/caustica/natives/slang/${project.slang_runtime_version}/${platform}")
-				.get().asFile
-		systemProperty "caustica.slang.path", runtimeDir.absolutePath
+		systemProperty "caustica.slang.path", runtimeDir.get().asFile.absolutePath
 	}
 }
 tasks.withType(JavaCompile).configureEach {
