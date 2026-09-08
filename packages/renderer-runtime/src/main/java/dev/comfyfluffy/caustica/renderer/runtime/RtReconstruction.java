@@ -63,7 +63,9 @@ final class RtReconstruction implements AutoCloseable {
     void configureAfterIdle(RtDenoisingSettings settings) { denoiser.configureAfterIdle(settings); }
     void closeBackendAfterIdle() { denoiser.closeBackendAfterIdle(); }
     void ensureBackend(TraceExtent extent) {
-        if (nrdComposePipeline == null) nrdComposePipeline = RtNrdComposePipeline.create(context);
+        if (settings().route() == DenoiserRoute.TEMPORAL_DENOISER && nrdComposePipeline == null) {
+            nrdComposePipeline = RtNrdComposePipeline.create(context);
+        }
         denoiser.ensureBackend(new DenoiserExtent(extent.renderWidth(), extent.renderHeight()));
     }
     void resetHistory() {
