@@ -2,6 +2,8 @@
 
 Use Java 25 and CMake 3.30 or newer. Native builds also require a C++ compiler;
 the Windows commands below use Visual Studio 2022 with the C++ build tools installed.
+On Linux, install Ninja and export `CMAKE_GENERATOR=Ninja` before the preparation
+and build commands. The Nix development shell sets this automatically.
 
 Initialize the pinned NRD source subrepository after cloning:
 
