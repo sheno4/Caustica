@@ -1,5 +1,12 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackendFactory;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserCommonSettings;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserExtent;
@@ -9,16 +16,14 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserInputs;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserReset;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
-import dev.comfyfluffy.caustica.renderer.presentation.RtNrdComposePipeline;
-import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdPlaneFrameData;
-
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-
-
+import dev.comfyfluffy.caustica.renderer.raytracing.RtNrdComposePipeline;
+import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
+import dev.comfyfluffy.caustica.renderer.raytracing.TraceImages;
+import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.NrdPlaneFrameData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.WorldPushData.Float3;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
+
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -30,18 +35,9 @@ import org.lwjgl.vulkan.VkCopyImageInfo2;
 import org.lwjgl.vulkan.VkImageBlit2;
 import org.lwjgl.vulkan.VkImageCopy2;
 
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
-import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
-import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
-import dev.comfyfluffy.caustica.renderer.presentation.PresentationResources;
-import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
-import dev.comfyfluffy.caustica.renderer.raytracing.TraceImages;
-import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
-
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Optional;
-
 /** Owns output reconstruction; every route returns the image consumed by presentation. */
 final class RtReconstruction implements AutoCloseable {
     static final float NRD_DENOISING_RANGE = 50_000.0f;
@@ -50,6 +46,7 @@ final class RtReconstruction implements AutoCloseable {
     private final DlssSuperResolution upscaler;
     private final RtDenoiserState denoiser;
     private final RtTelemetry telemetry;
+    private RtNrdComposePipeline nrdComposePipeline;
 
     RtReconstruction(VulkanDeviceContext context, DlssRayReconstruction rayReconstruction,
                      DlssSuperResolution upscaler, DenoiserBackendFactory factory,
@@ -66,6 +63,7 @@ final class RtReconstruction implements AutoCloseable {
     void configureAfterIdle(RtDenoisingSettings settings) { denoiser.configureAfterIdle(settings); }
     void closeBackendAfterIdle() { denoiser.closeBackendAfterIdle(); }
     void ensureBackend(TraceExtent extent) {
+        if (nrdComposePipeline == null) nrdComposePipeline = RtNrdComposePipeline.create(context);
         denoiser.ensureBackend(new DenoiserExtent(extent.renderWidth(), extent.renderHeight()));
     }
     void resetHistory() {
@@ -78,7 +76,7 @@ final class RtReconstruction implements AutoCloseable {
     }
 
     GpuImage record(RtFrameCommands commands, MemoryStack stack, GraphicsUse graphicsUse,
-                    RtFrameInput frame, TraceResources trace, PresentationResources presentation) {
+                    RtFrameInput frame, TraceResources trace) {
         GpuImage source = trace.images().traceColor();
         GpuImage output = trace.images().reconstructedColor();
         boolean reconstructed = switch (frame.route()) {
@@ -93,7 +91,7 @@ final class RtReconstruction implements AutoCloseable {
                 boolean reset;
                 try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.nrd")) {
                     reset = recordTemporalDenoiser(commands, stack, graphicsUse,
-                            frame, trace, presentation, denoised);
+                            frame, trace, denoised);
                 }
                 if (!upscale) yield true;
                 try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.upscale")) {
@@ -138,7 +136,7 @@ final class RtReconstruction implements AutoCloseable {
     private boolean recordTemporalDenoiser(RtFrameCommands commands,
                                            MemoryStack stack, GraphicsUse graphicsUse,
                                            RtFrameInput frame, TraceResources trace,
-                                           PresentationResources presentation, GpuImage output) {
+                                           GpuImage output) {
         DenoiserReset frameReset = denoiser.frameReset(frame.historyContinuous());
         boolean reset = frameReset == DenoiserReset.CLEAR_AND_RESTART;
         Matrix4f previousWorldToView = nrdPreviousWorldToView(reset, frame.viewRotation(),
@@ -189,13 +187,13 @@ final class RtReconstruction implements AutoCloseable {
                 trace.images().denoisedSpecularRadianceHitDistance(), trace.images().nrdStableRadiance());
         for (int plane = RtDenoiserState.PLANE_COUNT - 1; plane >= 0; plane--) {
             VkCommandBuffer commandBuffer = commands.heap("NRD plane " + plane + " prepare");
-            presentation.nrdComposePipeline().prepare(commandBuffer,
+            nrdComposePipeline.prepare(commandBuffer,
                     stablePlaneAddress, frameAddress, plane, nrdSignalEncoding(), exchange);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
             commandBuffer = commands.external("NRD plane " + plane + " evaluate");
             denoiser.backend(plane).record(new DenoiserFrame(commandBuffer.address(), common, inputs));
             commandBuffer = commands.heap("NRD plane " + plane + " merge");
-            presentation.nrdComposePipeline().merge(commandBuffer,
+            nrdComposePipeline.merge(commandBuffer,
                     stablePlaneAddress, frameAddress, plane, nrdSignalEncoding(), exchange);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
         }
@@ -223,9 +221,12 @@ final class RtReconstruction implements AutoCloseable {
 
 
     @Override public void close() {
-        denoiser.close();
-        rayReconstruction.destroyAfterDeviceIdle();
-        upscaler.destroyAfterDeviceIdle();
+        var compose = nrdComposePipeline;
+        nrdComposePipeline = null;
+        new ResourceLifetime(denoiser::close, rayReconstruction::destroyAfterDeviceIdle,
+                upscaler::destroyAfterDeviceIdle, () -> {
+                    if (compose != null) compose.destroy();
+                }).close();
     }
 
     private static VkImageCopy2.Buffer copyRegion(MemoryStack stack, int width, int height) {

@@ -1,68 +1,42 @@
-import display_common;
+import world_common;
+import stable_plane_types;
+import nrd_compose_types;
 
 [[vk::push_constant]] NrdComposePush pc;
 
 static const uint NRD_MODE_PREPARE = 0u;
 static const uint NRD_MODE_MERGE = 1u;
-static const uint STABLE_PLANE_RECORD_SLOTS = 7u;
-static const uint STABLE_PLANE_INVALID_BRANCH = 0xffffffffu;
-static const uint STABLE_PLANE_FLAG_VALID = 1u;
-static const uint STABLE_PLANE_FLAG_SKY = 2u;
-static const uint STABLE_PLANE_FLAG_DOMINANT = 4u;
 static const float NRD_INVALID_VIEW_Z = 65504.0;
 static const float4 REBLUR_HIT_DISTANCE_PARAMETERS = float4(3.0, 0.1, 20.0, -25.0);
 
-struct PlaneRecord {
-    float3 currentVirtualPosition; float roughness;
-    float3 previousVirtualPosition; float throughputLuminance;
-    float3 normal; float diffuseHitDistance;
-    float3 diffuseBsdfEstimate; float specularHitDistance;
-    float3 specularBsdfEstimate; float branchWeight;
-    float3 noisyDiffuseRadiance; uint flags;
-    float3 noisySpecularRadiance; uint branchId;
-};
-
-// The ray tracer owns plane-major 112-byte records. Keeping the raw seven-float4 decode here makes
-// that cross-module ABI explicit without duplicating its source struct in presentation ownership.
-PlaneRecord loadPlane(DevicePtr<float4> records, uint recordIndex) {
-    uint base = recordIndex * STABLE_PLANE_RECORD_SLOTS;
-    PlaneRecord r = {};
-    r.branchId = asuint(records[base + 6u].w);
-    if (r.branchId == STABLE_PLANE_INVALID_BRANCH) return r;
-    float4 s0 = records[base]; float4 s1 = records[base + 1u];
-    float4 s2 = records[base + 2u]; float4 s3 = records[base + 3u];
-    float4 s4 = records[base + 4u]; float4 s5 = records[base + 5u];
-    float4 s6 = records[base + 6u];
-    r.currentVirtualPosition = s0.xyz; r.roughness = s0.w;
-    r.previousVirtualPosition = s1.xyz; r.throughputLuminance = s1.w;
-    r.normal = s2.xyz; r.diffuseHitDistance = s2.w;
-    r.diffuseBsdfEstimate = s3.xyz; r.specularHitDistance = s3.w;
-    r.specularBsdfEstimate = s4.xyz; r.branchWeight = s4.w;
-    r.noisyDiffuseRadiance = s5.xyz; r.flags = asuint(s5.w);
-    r.noisySpecularRadiance = s6.xyz;
-    return r;
+// Inactive records only initialize branchId and flags; do not read their remaining fields.
+StablePlaneRecord loadPlane(ConstPtr<StablePlaneRecord> records, uint index) {
+    StablePlaneRecord record = {};
+    record.branchId = records[index].branchId;
+    if (record.branchId == STABLE_PLANE_INVALID_BRANCH) return record;
+    return records[index];
 }
 
 uint recordIndex(uint2 pixel, uint2 extent, uint plane) {
     return plane * extent.x * extent.y + pixel.y * extent.x + pixel.x;
 }
 
-bool validSurface(PlaneRecord r) {
+bool validSurface(StablePlaneRecord r) {
     return r.branchId != STABLE_PLANE_INVALID_BRANCH
             && (r.flags & STABLE_PLANE_FLAG_VALID) != 0u
             && (r.flags & STABLE_PLANE_FLAG_SKY) == 0u;
 }
 
-float neighborRelaxation(DevicePtr<float4> records, int2 pixel, int2 extent,
+float neighborRelaxation(ConstPtr<StablePlaneRecord> records, int2 pixel, int2 extent,
         uint plane, float3 centerNormal, int2 offset) {
     uint2 neighbor = uint2(clamp(pixel + offset, int2(0), extent - 1));
-    PlaneRecord r = loadPlane(records, recordIndex(neighbor, uint2(extent), plane));
+    StablePlaneRecord r = loadPlane(records, recordIndex(neighbor, uint2(extent), plane));
     return r.branchId == STABLE_PLANE_INVALID_BRANCH
             ? 0.02 : 1.0 - dot(centerNormal, normalize(r.normal));
 }
 
-float disocclusionRelaxation(DevicePtr<float4> records, uint2 pixel, uint2 extent,
-        uint plane, PlaneRecord r) {
+float disocclusionRelaxation(ConstPtr<StablePlaneRecord> records, uint2 pixel, uint2 extent,
+        uint plane, StablePlaneRecord r) {
     if (((r.flags >> 8u) & 0xffu) == 0u) return 0.0;
     float3 n = normalize(r.normal);
     int2 p = int2(pixel); int2 size = int2(extent);
@@ -109,11 +83,11 @@ float3 unpackRadiance(float3 encoded) {
     return max(pc.signalEncoding == 0u ? encoded : ycocgToLinear(encoded), float3(0.0));
 }
 
-void prepare(uint2 pixel, uint2 extent, DevicePtr<float4> records, NrdPlaneFrame frame,
+void prepare(uint2 pixel, uint2 extent, ConstPtr<StablePlaneRecord> records, NrdPlaneFrame frame,
         RWTexture2D<float4> diffuseSignal, RWTexture2D<float4> specularSignal,
         RWTexture2D<float4> normalRoughness, RWTexture2D<float> viewZImage,
         RWTexture2D<float4> motionImage, RWTexture2D<float> disocclusionMix) {
-    PlaneRecord r = loadPlane(records, recordIndex(pixel, extent, pc.planeIndex));
+    StablePlaneRecord r = loadPlane(records, recordIndex(pixel, extent, pc.planeIndex));
     if (!validSurface(r)) {
         diffuseSignal[pixel] = float4(0.0); specularSignal[pixel] = float4(0.0);
         normalRoughness[pixel] = float4(0.0); viewZImage[pixel] = NRD_INVALID_VIEW_Z;
@@ -149,13 +123,13 @@ void prepare(uint2 pixel, uint2 extent, DevicePtr<float4> records, NrdPlaneFrame
     disocclusionMix[pixel] = relaxation;
 }
 
-void merge(uint2 pixel, uint2 extent, DevicePtr<float4> records, NrdPlaneFrame frame,
+void merge(uint2 pixel, uint2 extent, ConstPtr<StablePlaneRecord> records, NrdPlaneFrame frame,
         RWTexture2D<float4> outputImage, RWTexture2D<float4> denoisedDiffuse,
         RWTexture2D<float4> denoisedSpecular, RWTexture2D<float4> stableRadiance) {
-    float3 accumulated = pc.planeIndex == 2u
+    float3 accumulated = pc.planeIndex == STABLE_PLANE_COUNT - 1u
             ? max(stableRadiance[pixel].rgb, float3(0.0)) * frame.preExposure
             : outputImage[pixel].rgb;
-    PlaneRecord r = loadPlane(records, recordIndex(pixel, extent, pc.planeIndex));
+    StablePlaneRecord r = loadPlane(records, recordIndex(pixel, extent, pc.planeIndex));
     if (validSurface(r)) {
         float3 diffuse = unpackRadiance(denoisedDiffuse[pixel].rgb) * r.diffuseBsdfEstimate;
         float3 specular = unpackRadiance(denoisedSpecular[pixel].rgb) * r.specularBsdfEstimate;
@@ -186,7 +160,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     [format("rgba16f")] RWTexture2D<float4> stableRadiance = ResourceDescriptorHeap[NonUniformResourceIndex(pc.stableRadianceImageIndex)];
 
     NrdPlaneFrame frame = ((DevicePtr<NrdPlaneFrame>)pc.frameAddress)[0];
-    DevicePtr<float4> records = (DevicePtr<float4>)pc.stablePlaneAddress;
+    ConstPtr<StablePlaneRecord> records = (ConstPtr<StablePlaneRecord>)pc.stablePlaneAddress;
     uint2 extent = uint2(frame.width, frame.height); uint2 pixel = tid.xy;
     if (any(pixel >= extent)) return;
     if (pc.mode == NRD_MODE_PREPARE) prepare(pixel, extent, records, frame, diffuseSignal,

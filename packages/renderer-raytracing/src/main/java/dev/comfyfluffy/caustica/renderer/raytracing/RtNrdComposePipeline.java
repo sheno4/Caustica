@@ -1,16 +1,19 @@
-package dev.comfyfluffy.caustica.renderer.presentation;
+package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdComposePushData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.NrdComposePushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
+
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
-
 /** Prepares one stable plane for NRD and merges its remodulated output into scene radiance. */
 public final class RtNrdComposePipeline {
     public static final int SIGNAL_LINEAR_RGB = 0;
@@ -45,7 +48,19 @@ public final class RtNrdComposePipeline {
     }
 
     public static RtNrdComposePipeline create(VulkanDeviceContext context) {
-        return new RtNrdComposePipeline(context, PresentationShaders.load(context, SHADER));
+        try (var input = RtNrdComposePipeline.class.getResourceAsStream(SHADER)) {
+            if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
+            byte[] bytes = input.readAllBytes();
+            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
+            try {
+                spirv.put(bytes).flip();
+                return new RtNrdComposePipeline(context, ShaderObjectCompute.create(context, spirv, "main"));
+            } finally {
+                MemoryUtil.memFree(spirv);
+            }
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
+        }
     }
 
     public void prepare(VkCommandBuffer command, long stablePlaneAddress, long frameAddress,

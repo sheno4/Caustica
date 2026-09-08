@@ -1,6 +1,6 @@
-package dev.comfyfluffy.caustica.renderer.presentation;
+package dev.comfyfluffy.caustica.renderer.raytracing;
 
-import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdComposePushData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.NrdComposePushData;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;

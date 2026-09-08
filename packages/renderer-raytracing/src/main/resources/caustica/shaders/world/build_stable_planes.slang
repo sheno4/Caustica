@@ -117,7 +117,6 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             record.previousVirtualPosition = record.currentVirtualPosition + branch.motion
                     + (sky ? float3(0.0) : mul(branch.imageTransform, hit.previousPosition - hit.position));
             record.throughputLuminance = traceLuminance(branch.path.throughput);
-            record.branchWeight = record.throughputLuminance;
             record.normal = sky ? -cameraDirection : normalize(mul(branch.imageTransform, hit.surface.shadingNormal));
             record.roughness = sky ? 1.0 : sqrt(hit.surface.alphaRoughness);
             if (!sky) {

@@ -477,7 +477,7 @@ public final class RtFrameRenderer {
             recordTrace(ctx, cmd, stack, graphicsUse, program, execution.frame, commands,
                     revision.get().publicationCutoff());
             var output = reconstruction.record(commands, stack, graphicsUse, execution.frame,
-                    traceResources(), presentationResources());
+                    traceResources());
             recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
                     graphicsUse, output, nativeColorImage, debugView);
             commands.submit(submission);

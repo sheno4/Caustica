@@ -15,7 +15,6 @@ public final class PresentationResources {
     private final RtExposure exposure;
     private RtDisplayPipeline displayPipeline;
     private RtDebugPresentPipeline debugPresentPipeline;
-    private RtNrdComposePipeline nrdComposePipeline;
     private RtToneLut sdrToneLut;
     private RtToneLut hdrToneLut;
     private RtToneLut lookLut;
@@ -34,7 +33,6 @@ public final class PresentationResources {
     public RtExposure exposure() { return exposure; }
     public RtDisplayPipeline displayPipeline() { return Objects.requireNonNull(displayPipeline, "displayPipeline"); }
     public RtDebugPresentPipeline debugPresentPipeline() { return Objects.requireNonNull(debugPresentPipeline, "debugPresentPipeline"); }
-    public RtNrdComposePipeline nrdComposePipeline() { return Objects.requireNonNull(nrdComposePipeline, "nrdComposePipeline"); }
     public RtToneLut sdrToneLut() { return Objects.requireNonNull(sdrToneLut, "sdrToneLut"); }
     public RtToneLut hdrToneLut() { return Objects.requireNonNull(hdrToneLut, "hdrToneLut"); }
     public RtToneLut lookLut() { return Objects.requireNonNull(lookLut, "lookLut"); }
@@ -51,7 +49,6 @@ public final class PresentationResources {
     public void ensurePipelines(VulkanDeviceContext context, int wantedHdrNits) throws IOException {
         if (displayPipeline == null) displayPipeline = RtDisplayPipeline.create(context);
         if (debugPresentPipeline == null) debugPresentPipeline = RtDebugPresentPipeline.create(context);
-        if (nrdComposePipeline == null) nrdComposePipeline = RtNrdComposePipeline.create(context);
         if (sdrToneLut == null) sdrToneLut = RtToneLut.load(context, "sdr_aces2_rec709.bin");
         if (hdrToneLut == null || loadedHdrLutNits != wantedHdrNits) {
             RtToneLut replacement = RtToneLut.load(context,
@@ -98,13 +95,11 @@ public final class PresentationResources {
         releases.add(exposure::destroy);
         if (displayPipeline != null) releases.add(displayPipeline::destroy);
         if (debugPresentPipeline != null) releases.add(debugPresentPipeline::destroy);
-        if (nrdComposePipeline != null) releases.add(nrdComposePipeline::destroy);
         if (sdrToneLut != null) releases.add(sdrToneLut::destroy);
         if (hdrToneLut != null) releases.add(hdrToneLut::destroy);
         if (lookLut != null) releases.add(lookLut::destroy);
         displayPipeline = null;
         debugPresentPipeline = null;
-        nrdComposePipeline = null;
         sdrToneLut = null;
         hdrToneLut = null;
         lookLut = null;

@@ -18,7 +18,6 @@ public struct StablePlaneRecord {
     public float3 diffuseBsdfEstimate;
     public float specularHitDistance;
     public float3 specularBsdfEstimate;
-    public float branchWeight;
     public float3 noisyDiffuseRadiance;
     public uint flags;
     public float3 noisySpecularRadiance;

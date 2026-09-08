@@ -64,7 +64,7 @@ def worldShaderNames = [
         "path_tracer.slang", "retained_lights.slang", "trace_transport.slang",
         "retained_trace_ordinary.slang", "retained_trace_policy.slang",
         "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "sky_miss.slang",
-        "stable_planes.slang", "stable_plane_types.slang", "surface_bsdf.slang", "nrd_signals.slang",
+        "stable_planes.slang", "stable_plane_types.slang", "nrd_compose_types.slang", "surface_bsdf.slang", "nrd_signals.slang",
         "world_common.slang", "world_minimal.slang"
 ] as Set
 
@@ -93,7 +93,9 @@ def rayTracingRecordSpecs = [
         "buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedLightRecordData|false",
         "buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.renderer.raytracing.gen|NeeAtStateData|false",
         "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.renderer.raytracing.gen|PackedPathSegmentData|false",
-        "buffer|stablePlaneRecordLayoutProbe|StablePlaneRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|StablePlaneRecordData|false"
+        "buffer|stablePlaneRecordLayoutProbe|StablePlaneRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|StablePlaneRecordData|false",
+        "push|nrdComposePushProbe|NrdComposePush|dev.comfyfluffy.caustica.renderer.raytracing.gen|NrdComposePushData|false",
+        "buffer|nrdPlaneFrameLayoutProbe|NrdPlaneFrame|dev.comfyfluffy.caustica.renderer.raytracing.gen|NrdPlaneFrameData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateRayTracingRecords = tasks.register("generateRayTracingRecords", GenerateShaderRecords) {
@@ -259,13 +261,14 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
         } as Set
         def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData", "RetainedInstanceRecordData",
                 "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData",
-                "StablePlaneRecordData"].collect {
+                "StablePlaneRecordData", "NrdComposePushData", "NrdPlaneFrameData"].collect {
             "${generatedRecordClassRoot}${it}.class"
         } as Set
         def packagedShaders = names.findAll {
             it.startsWith("caustica/shaders/world/") && it.endsWith(".slang")
         }.collect { it.substring("caustica/shaders/world/".length()) } as Set
-        def expectedPipelineShaders = ["caustica/shaders/pipelines/nee_at/bake.comp.spv"] as Set
+        def expectedPipelineShaders = ["caustica/shaders/pipelines/nee_at/bake.comp.spv",
+                "caustica/shaders/pipelines/nrd_compose/main.comp.spv"] as Set
         def packagedPipelineShaders = names.findAll {
             it.startsWith("caustica/shaders/pipelines/") && it.endsWith(".spv")
         } as Set

@@ -1,6 +1,6 @@
-package dev.comfyfluffy.caustica.renderer.presentation;
+package dev.comfyfluffy.caustica.renderer.raytracing;
 
-import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdPlaneFrameData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.NrdPlaneFrameData;
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
 

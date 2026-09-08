@@ -1,3 +1,4 @@
+import nrd_compose_types;
 import world_common;
 import path_queue_types;
 import stable_plane_types;
@@ -29,5 +30,27 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + float(neeAtStateLayoutProbe[0].values[0].lightCount)
                 + float(packedPathSegmentLayoutProbe[0].values[0].flags)
                 + float(stablePlaneRecordLayoutProbe[0].values[0].flags);
+    }
+}
+
+[[vk::push_constant]] NrdComposePush nrdComposePushProbe;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeNrdComposePush(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        float sink = float(nrdComposePushProbe.denoisedDiffuseImageIndex)
+                + float(nrdComposePushProbe.mode);
+    }
+}
+
+struct NrdPlaneFrameLayoutProbe { NrdPlaneFrame values[2]; };
+[[vk::binding(7, 0)]] StructuredBuffer<NrdPlaneFrameLayoutProbe, Std430DataLayout> nrdPlaneFrameLayoutProbe;
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeNrdPlaneFrame(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        float sink = nrdPlaneFrameLayoutProbe[0].values[0].currentViewProjection[0][0]
+                + nrdPlaneFrameLayoutProbe[0].values[1].radianceScale;
     }
 }
