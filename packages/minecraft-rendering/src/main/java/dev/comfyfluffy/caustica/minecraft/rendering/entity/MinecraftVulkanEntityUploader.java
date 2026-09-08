@@ -214,24 +214,20 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         for (int t = 0; t < source.triangleCount(); t++) {
             var triangle = source.triangles().get(t);
             MinecraftPrimitiveData.Float2[] uv = new MinecraftPrimitiveData.Float2[3];
+            MinecraftPrimitiveData.Float4[] vertexColors = new MinecraftPrimitiveData.Float4[3];
             for (int corner = 0; corner < 3; corner++) {
                 int vertex = indices[t * 3 + corner];
                 uv[corner] = new MinecraftPrimitiveData.Float2(
                         uvs[vertex * 2], uvs[vertex * 2 + 1]);
-            }
-            MinecraftPrimitiveData.Float4[] vertexColors = new MinecraftPrimitiveData.Float4[3];
-            for (int corner = 0; corner < 3; corner++) {
-                int vertex = indices[t * 3 + corner];
                 vertexColors[corner] = new MinecraftPrimitiveData.Float4(colors[vertex * 4],
                         colors[vertex * 4 + 1], colors[vertex * 4 + 2], colors[vertex * 4 + 3]);
             }
-            Integer descriptor = triangle.material().texture() == null ? null : textureSet.indices.get(triangle.material().texture());
-            Integer samplerDescriptor = triangle.material().texture() == null
-                    ? null : textureSet.samplerIndices.get(triangle.material().texture());
+            TextureBinding binding = triangle.material().texture() == null
+                    ? null : textureSet.bindings.get(triangle.material().texture());
             TangentBasis basis = tangentBasis(positions, indices, uvs, t);
             var record = primitiveRecord(triangle, uv, vertexColors,
                     materialIndices.get(triangle.material()),
-                    descriptor, samplerDescriptor, basis);
+                    binding == null ? null : binding.image(), binding == null ? null : binding.sampler(), basis);
             record.write(bytes.slice(t * MinecraftPrimitiveData.BYTE_SIZE, MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
         }
         bytes.position(source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE);
@@ -306,14 +302,13 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     /** Consumes the captured host leases on both successful allocation and failure. */
     private TextureSet allocateTextures(CapturedTextures captured) {
         var leases = captured.leases;
-        if (leases.isEmpty()) return new TextureSet(null, null, Map.of(), Map.of(), List.of());
+        if (leases.isEmpty()) return new TextureSet(null, null, Map.of(), List.of());
         GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
         GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange = null;
         try {
             range = gpu.descriptorHeap().allocateResources(leases.size());
             samplerRange = gpu.descriptorHeap().allocateSamplers(leases.size());
-            Map<MinecraftEntityMesh.Texture, Integer> indices = new LinkedHashMap<>();
-            Map<MinecraftEntityMesh.Texture, Integer> samplerIndices = new LinkedHashMap<>();
+            Map<MinecraftEntityMesh.Texture, TextureBinding> bindings = new LinkedHashMap<>();
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 int offset = 0;
                 for (var entry : leases.entrySet()) {
@@ -330,12 +325,13 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                             VkResourceDescriptorInfoEXT.calloc(stack).sType$Default().type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(d -> d.pImage(image)));
                     gpu.descriptorHeap().writer().writeSampler(samplerRange, offset,
                             borrowed.sampler().write(VkSamplerCreateInfo.calloc(stack).sType$Default()));
-                    indices.put(entry.getKey(), Math.addExact(range.firstIndex().value(), offset));
-                    samplerIndices.put(entry.getKey(), Math.addExact(samplerRange.firstIndex().value(), offset));
+                    bindings.put(entry.getKey(), new TextureBinding(
+                            Math.addExact(range.firstIndex().value(), offset),
+                            Math.addExact(samplerRange.firstIndex().value(), offset)));
                     offset++;
                 }
             }
-            return new TextureSet(range, samplerRange, Map.copyOf(indices), Map.copyOf(samplerIndices),
+            return new TextureSet(range, samplerRange, Map.copyOf(bindings),
                     List.copyOf(leases.values()));
         } catch (RuntimeException | Error failure) {
             GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = range;
@@ -369,18 +365,15 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     static final class TextureSet implements AutoCloseable {
         final GpuDescriptorRange<GpuDescriptorIndex.Resource> range;
         final GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange;
-        final Map<MinecraftEntityMesh.Texture, Integer> indices;
-        final Map<MinecraftEntityMesh.Texture, Integer> samplerIndices;
+        final Map<MinecraftEntityMesh.Texture, TextureBinding> bindings;
         final List<BorrowedMinecraftTexture> leases;
         TextureSet(GpuDescriptorRange<GpuDescriptorIndex.Resource> range,
                    GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange,
-                   Map<MinecraftEntityMesh.Texture, Integer> indices,
-                   Map<MinecraftEntityMesh.Texture, Integer> samplerIndices,
+                   Map<MinecraftEntityMesh.Texture, TextureBinding> bindings,
                    List<BorrowedMinecraftTexture> leases) {
             this.range = range;
             this.samplerRange = samplerRange;
-            this.indices = indices;
-            this.samplerIndices = samplerIndices;
+            this.bindings = bindings;
             this.leases = leases;
         }
         @Override public void close() {
@@ -396,6 +389,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             throwIfFailed(closeAll(new LeaseCloser(shaderClaims), new LeaseCloser(bufferClaims)));
         }
     }
+    record TextureBinding(int image, int sampler) { }
     record GeometryRange(int firstTriangle, int endTriangle) { }
     record TangentBasis(MinecraftPrimitiveData.Float3 tangent, MinecraftPrimitiveData.Float3 bitangent) {
         static final TangentBasis ZERO = new TangentBasis(new MinecraftPrimitiveData.Float3(0, 0, 0),

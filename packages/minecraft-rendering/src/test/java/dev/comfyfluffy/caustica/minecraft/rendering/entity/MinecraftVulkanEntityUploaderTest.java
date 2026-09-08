@@ -183,7 +183,7 @@ final class MinecraftVulkanEntityUploaderTest {
         BorrowedMinecraftTexture first = lease(closed, "first", true);
         BorrowedMinecraftTexture second = lease(closed, "second", false);
         var set = new MinecraftVulkanEntityUploader.TextureSet(
-                range, samplers, Map.of(), Map.of(), List.of(first, second));
+                range, samplers, Map.of(), List.of(first, second));
 
         IllegalStateException failure = assertThrows(IllegalStateException.class, set::close);
         assertEquals(List.of("descriptor", "sampler", "first", "second"), closed);
