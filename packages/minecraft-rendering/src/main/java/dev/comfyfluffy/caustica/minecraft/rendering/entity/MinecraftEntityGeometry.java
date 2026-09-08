@@ -208,8 +208,10 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             if (resident == null) residents.remove(key); else residents.put(key, resident);
         });
         cancelled.forEach(request -> request.cancelled = true);
-        discarded.forEach(Capture::close);
-        retired.forEach(Generation::close);
+        Throwable retirementFailure = null;
+        for (var capture : discarded) retirementFailure = cleanup(retirementFailure, capture::close);
+        for (var generation : retired) retirementFailure = cleanup(retirementFailure, generation::close);
+        throwFailure(retirementFailure);
         accepted.forEach(Runnable::run);
         for (var key : changed.keySet()) startQueued(key);
     }

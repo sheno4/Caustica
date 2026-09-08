@@ -23,6 +23,43 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftEntityShutdownTest {
     @Test
+    void groupedRemovalReleasesEveryRetiredGenerationAfterOneCloseFails() {
+        var scene = new PreparedScene();
+        var uploads = new ArrayList<Uploaded>();
+        var uploader = new MinecraftEntityUploader() {
+            @Override public UploadedEntity upload(MinecraftEntityMesh source) {
+                var uploaded = new Uploaded();
+                uploads.add(uploaded);
+                return uploaded;
+            }
+        };
+        var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {}, uploader, Runnable::run);
+        var first = new MinecraftEntityGeometry.Key(1, 1);
+        var second = new MinecraftEntityGeometry.Key(1, 2);
+        var transform = GeometryTransform.translation(0, 0, 0);
+        geometry.put(first, revision(1), mesh(), transform, 255);
+        scene.jobs.getLast().complete();
+        geometry.put(second, revision(1), mesh(), transform, 255);
+        scene.jobs.getLast().complete();
+        var rejected = new IllegalStateException("upload release failed");
+        uploads.getFirst().closeFailure = rejected;
+
+        try (var group = geometry.beginUpdateGroup()) {
+            geometry.drop(first);
+            geometry.drop(second);
+            group.submit();
+        }
+
+        assertEquals(1, uploads.get(0).closed);
+        assertEquals(1, uploads.get(1).closed);
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+        assertSame(rejected, assertThrows(IllegalStateException.class, geometry::beginUpdateGroup).getCause());
+        geometry.close();
+        assertEquals(1, uploads.get(0).closed);
+        assertEquals(1, uploads.get(1).closed);
+    }
+
+    @Test
     void abandonedGroupReleasesEveryCapturedInputAfterOneCloseFails() {
         var scene = new PreparedScene();
         var closes = new AtomicInteger();
@@ -122,6 +159,7 @@ final class MinecraftEntityShutdownTest {
 
     private static final class Uploaded implements MinecraftEntityUploader.UploadedEntity {
         int closed;
+        RuntimeException closeFailure;
         @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x1000), 36),
                     12, ResourceOwner.none());
@@ -136,6 +174,9 @@ final class MinecraftEntityShutdownTest {
         @Override public ShaderData<MinecraftProgramTypes.InstanceData> instanceData() {
             return MinecraftProgramTypes.INSTANCE_DATA.data(0);
         }
-        @Override public void close() { closed++; }
+        @Override public void close() {
+            closed++;
+            if (closeFailure != null) throw closeFailure;
+        }
     }
 }
