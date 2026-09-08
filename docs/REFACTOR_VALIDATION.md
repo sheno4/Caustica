@@ -400,3 +400,13 @@ Reviewed the complete current MinecraftEntityGeometry implementation and its upl
 Added a behavioral regression with a rejecting scene and throwing uploaded-resource release. Before the fix the test failed because the cleanup exception became primary. Afterward it verifies the original rejection, its suppressed cleanup error, no published edits, and exactly one upload/ready-mesh release, including subsequent shutdown. The full root check passed: 187 tasks, 43 seconds, terminal exit 0; the entity geometry suite contains 15 tests with no failures. Local logs: `tmp/aesthetic-publication-cause-before.log` and `tmp/aesthetic-publication-cause-check.log`.
 
 This is an injected failure-path fix, not a diagnosis of the independent RR device loss. No client was launched and no new GPU runtime pass is claimed.
+
+## Actual End portal entry and fresh Computer Use check (2026-09-09)
+
+Launched the current client on World of worlds 4.2 - Copy with REBLUR/SR at 854x480. Computer Use located and activated the unique Minecraft window, but its client area was white. A fresh list/window binding and capture retry produced the same result; accessibility exposed only window chrome. No UI input was sent. This is a current capture limitation, not successful settings interaction.
+
+Used the independent debug API for actual portal-triggered travel. Verified an air block at y=310 in the player's loaded Overworld chunk, placed an End portal, then teleported the player into it without a cross-dimension teleport command. After 100 ticks, status reported the End; active RT and 100 composite frames completed. Inspected the captured PNG: violet/blue End sky and stars, dark terrain/pillar silhouettes and the hand are visible. The portal also awarded the End advancement on the test copy. This establishes one End-entry pass, not End-exit, Nether portal, RR or continuous visual coverage.
+
+The original cleanup order attempted block removal while its Overworld chunk was unloaded. Returned to the original position and waited for that chunk before removing the portal; recovery verified original air, exact player state and settings. Updated the local script's cleanup order; that revised full script has not been rerun. Graceful client stop completed with Gradle exit 0 after four minutes; no device-loss match in this run. No production change was required.
+
+Evidence: `tmp/aesthetic-end-portal-entry.py`, `.json`, `.log`, `tmp/aesthetic-end-portal-restore.py`, `.log`, and `tmp/aesthetic-cu-settings-runtime.log`. Viewed image: `run/screenshots/caustica-debug-7622b041-8f05-4dbf-95e5-54488ffc3351.png`.
