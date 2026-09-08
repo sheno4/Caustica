@@ -59,10 +59,6 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         this.resources = Objects.requireNonNull(resources, "resources");
     }
 
-    @Override public UploadedEntity upload(MinecraftEntityMesh source) {
-        try (var job = prepareUpload(source)) { return job.finish(); }
-    }
-
     @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
         var captured = captureTextures(source);
         try {

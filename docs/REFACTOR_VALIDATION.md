@@ -434,3 +434,11 @@ Ran the current client on World of worlds 4.2 - Copy with REBLUR/SR at 854x480. 
 In the same process, completed five RT disable/enable cycles and a same-pack resource reload. Inspected all five city captures: RT before (6591), vanilla (6608), RT re-enabled (7267), RT after reload (10446), and normals (10506). Geometry, expected lighting transitions and populated normal output were present. Settings were restored. The portal and reload observers both exited 0; graceful client shutdown exited 0 after 2m49s, with no device-loss or entity-publication-failure matches.
 
 Evidence: `tmp/aesthetic-revision-portal.{py,json,log}`, `tmp/aesthetic-revision-reload.{py,json,log}` and `tmp/aesthetic-revision-lifecycle-runtime.log`. This validates the simplified entity revision contract through bounded live owner replacement. It does not establish RR stability, actual Nether/End-exit portal coverage, or the pending Computer Use keyboard/visual checks. No additional production change was required.
+
+## Staged entity upload interface (2026-09-09)
+
+Removed the unused synchronous upload entry point from MinecraftEntityUploader and MinecraftVulkanEntityUploader. Repository production calls use prepareUpload on the host, then UploadJob.finish on the packing worker. The interface now declares that staged operation directly instead of implementing it in terms of a synchronous callback. Production packing, texture capture and ownership transfer code is unchanged.
+
+Moved the simple synchronous fixture adapter into TestEntityUploader under test sources. Tests that implement staged capture now implement the production interface without dummy throwing upload methods. Existing deferral, publication, cancellation, failure and shutdown regressions retain their assertions.
+
+The first compile exposed three direct fixture lambdas needing the test adapter; these were updated. An intermediate full check failed at minecraft-client:jar with Gradle's `Valued object is in an unexpected state`. A serial retry with --stacktrace passed all 187 tasks in 40 seconds, terminal exit 0, including JAR creation. The packaging error did not recur; its cause was not established. Final log: `tmp/aesthetic-staged-uploader-check-retry.log`. No client or new GPU validation was run for this interface-only simplification.

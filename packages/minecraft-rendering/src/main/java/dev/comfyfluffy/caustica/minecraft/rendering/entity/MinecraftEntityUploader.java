@@ -6,15 +6,8 @@ import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 
 /** GPU upload seam for captured entity streams, primitive material records, and texture descriptors. */
 public interface MinecraftEntityUploader extends AutoCloseable {
-    UploadedEntity upload(MinecraftEntityMesh source);
-
     /** Captures required host state before a worker allocates and packs the upload. */
-    default UploadJob prepareUpload(MinecraftEntityMesh source) {
-        return new UploadJob() {
-            @Override public UploadedEntity finish() { return upload(source); }
-            @Override public void close() { }
-        };
-    }
+    UploadJob prepareUpload(MinecraftEntityMesh source);
 
     /**
      * Owns captured inputs until one worker finish transfers them or close discards the unstarted job.

@@ -31,7 +31,6 @@ final class MinecraftEntityShutdownTest {
         var closes = new AtomicInteger();
         var rejected = new IllegalStateException("capture release failed");
         var uploader = new MinecraftEntityUploader() {
-            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
             @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
                 return new UploadJob() {
                     @Override public UploadedEntity finish() { throw new AssertionError(); }
@@ -68,7 +67,7 @@ final class MinecraftEntityShutdownTest {
     void groupedRemovalReleasesEveryRetiredGenerationAfterOneCloseFails() {
         var scene = new PreparedScene();
         var uploads = new ArrayList<Uploaded>();
-        var uploader = new MinecraftEntityUploader() {
+        var uploader = new TestEntityUploader() {
             @Override public UploadedEntity upload(MinecraftEntityMesh source) {
                 var uploaded = new Uploaded();
                 uploads.add(uploaded);
@@ -107,7 +106,6 @@ final class MinecraftEntityShutdownTest {
         var closes = new AtomicInteger();
         var rejected = new IllegalStateException("capture release failed");
         var uploader = new MinecraftEntityUploader() {
-            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
             @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
                 return new UploadJob() {
                     @Override public UploadedEntity finish() { throw new AssertionError(); }
@@ -139,7 +137,6 @@ final class MinecraftEntityShutdownTest {
         var closedInputs = new AtomicInteger();
         var closedUploader = new AtomicInteger();
         var uploader = new MinecraftEntityUploader() {
-            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
             @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
                 return new UploadJob() {
                     @Override public UploadedEntity finish() {

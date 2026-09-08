@@ -32,7 +32,6 @@ final class MinecraftEntityGeometryTest {
         var cleanupFailure = new IllegalStateException("capture cleanup failed");
         int[] closed = {0};
         var uploader = new MinecraftEntityUploader() {
-            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
             @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
                 return new UploadJob() {
                     @Override public UploadedEntity finish() { throw new AssertionError(); }
@@ -62,7 +61,7 @@ final class MinecraftEntityGeometryTest {
         var release = new java.util.concurrent.CountDownLatch(1);
         try (var publication = java.util.concurrent.Executors.newSingleThreadExecutor()) {
             var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {},
-                    ignored -> new Uploaded(0x1000), Runnable::run, publication);
+                    (TestEntityUploader) ignored -> new Uploaded(0x1000), Runnable::run, publication);
             try {
                 var key = new MinecraftEntityGeometry.Key(1, 1);
                 geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
@@ -111,7 +110,6 @@ final class MinecraftEntityGeometryTest {
         var closedInputs = new java.util.concurrent.atomic.AtomicInteger();
         var captures = new java.util.concurrent.atomic.AtomicInteger();
         var uploader = new MinecraftEntityUploader() {
-            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
             @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
                 captures.incrementAndGet();
                 return new UploadJob() {
@@ -171,7 +169,7 @@ final class MinecraftEntityGeometryTest {
         var acknowledged = new ArrayList<Thread>();
         try (var publication = java.util.concurrent.Executors.newSingleThreadExecutor()) {
             var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {},
-                    ignored -> new Uploaded(0x1000), Runnable::run, publication);
+                    (TestEntityUploader) ignored -> new Uploaded(0x1000), Runnable::run, publication);
             try {
                 var first = new MinecraftEntityGeometry.Key(1, 1);
                 var second = new MinecraftEntityGeometry.Key(1, 2);
@@ -436,7 +434,6 @@ final class MinecraftEntityGeometryTest {
         var packedOn = new java.util.concurrent.atomic.AtomicReference<Thread>();
         var captured = new ArrayList<MinecraftEntityMesh>();
         var uploader = new MinecraftEntityUploader() {
-            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
             @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
                 assertSame(caller, Thread.currentThread());
                 captured.add(source);
@@ -476,7 +473,7 @@ final class MinecraftEntityGeometryTest {
         var scene = new PreparedScene();
         var queue = new java.util.ArrayDeque<Runnable>();
         var uploads = new ArrayList<Uploaded>();
-        var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {}, ignored -> {
+        var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {}, (TestEntityUploader) ignored -> {
             var uploaded = new Uploaded(0x1000);
             uploads.add(uploaded);
             return uploaded;
@@ -507,7 +504,6 @@ final class MinecraftEntityGeometryTest {
         var uploaded = new Uploaded(0x1000);
         try (var worker = java.util.concurrent.Executors.newSingleThreadExecutor()) {
             var uploader = new MinecraftEntityUploader() {
-                @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
                 @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
                     return new UploadJob() {
                         @Override public UploadedEntity finish() {
@@ -540,7 +536,7 @@ final class MinecraftEntityGeometryTest {
         }
     }
 
-    private static MinecraftEntityGeometry geometry(PreparedScene scene, MinecraftEntityUploader uploader) {
+    private static MinecraftEntityGeometry geometry(PreparedScene scene, TestEntityUploader uploader) {
         return new MinecraftEntityGeometry(scene, scene, new SceneId() {}, uploader, Runnable::run);
     }
 

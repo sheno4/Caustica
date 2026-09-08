@@ -24,7 +24,7 @@ final class MinecraftEntityUploaderTest {
             @Override public void close() { closes.incrementAndGet(); }
         };
         var source = mesh();
-        MinecraftEntityUploader uploader = input -> {
+        TestEntityUploader uploader = input -> {
             assertSame(source, input);
             uploadedThreads.add(Thread.currentThread());
             return uploaded;
