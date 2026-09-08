@@ -136,7 +136,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames(),
                     "operations", List.of("schema", "status",
-                    "settings.get", "settings.set", "runtime.set", "view.set", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
+                    "settings.get", "settings.set", "runtime.set", "resources.reload", "view.set", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
             case "status" -> future.complete(status());
             case "settings.get" -> future.complete(settings());
             case "runtime.set" -> {
@@ -201,6 +201,10 @@ public final class MinecraftDebugService implements AutoCloseable {
                         "currentFlyingSpeed", abilities.getFlyingSpeed()));
             }
             case "command" -> command(request, future);
+            case "resources.reload" -> client.reloadResourcePacks().whenComplete((result, error) -> {
+                if (error != null) future.completeExceptionally(error);
+                else future.complete(Map.of("reloaded", true));
+            });
             case "screenshot", "image.capture" -> {
                 requireWorld();
                 captures.add(() -> {

@@ -35,6 +35,7 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | `settings.get` | Setting IDs, values and whether JVM overrides apply |
 | `settings.set` | `values` mapping setting IDs to primitive values; JVM overrides cannot be changed |
 | `runtime.set` | Required `enabled` boolean applies the normal Minecraft RT toggle. Returns `requested`, `active`, `frameActive`, and `overridden`; the next client tick starts the lifecycle transition. JVM overrides cannot be changed. `status.runtime` reports the same fields. |
+| `resources.reload` | Reloads the currently selected resource packs through Minecraft's public reload entry point. Completes when the reload future completes, or reports its failure. RT recovery happens on subsequent client ticks; wait for active RT separately before capturing. Does not change selected packs. |
 | `view.set` | `name` from schema; `off` restores normal presentation |
 | `input.set` | `forward` and `sprint` booleans (default false); closes the current screen and holds the corresponding game keys for continuous flight. Optional `flyingSpeed` sets the spectator ability speed: a finite number from 0 to 0.2, matching the mouse-wheel range. Omission leaves speed unchanged. Returns `previousFlyingSpeed` and `currentFlyingSpeed` alongside key states. Call with no arguments to release both keys. |
 | `wait` | `frames` counts active RT frames; `ticks` counts unpaused world ticks. World required, counts must advance. Use ticks while RT is disabled. |
