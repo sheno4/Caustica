@@ -33,6 +33,7 @@ public final class CausticaDropdown<T> extends AbstractButton {
     private final int accent;
     private final Consumer<CausticaDropdown<?>> onToggled;
     private boolean expanded;
+    private int popupTop;
 
     public CausticaDropdown(SettingControl.ChoiceControl<T> control, Font font, int accent,
                             Consumer<CausticaDropdown<?>> onToggled) {
@@ -46,12 +47,15 @@ public final class CausticaDropdown<T> extends AbstractButton {
         }
     }
 
-    public boolean expanded() {
-        return expanded;
+    /** The screen closes the popup before scrolling or resizing its anchor row. */
+    public void expand(int screenHeight) {
+        int below = getY() + getHeight();
+        popupTop = below + popupHeight() <= screenHeight ? below : Math.max(0, getY() - popupHeight());
+        expanded = true;
     }
 
-    public void setExpanded(boolean expanded) {
-        this.expanded = expanded;
+    public void collapse() {
+        expanded = false;
     }
 
     @Override
@@ -68,10 +72,6 @@ public final class CausticaDropdown<T> extends AbstractButton {
 
     private int popupLeft() {
         return getX() + getWidth() - CausticaTheme.CONTENT_PAD - POPUP_WIDTH;
-    }
-
-    private int popupTop() {
-        return getY() + getHeight();
     }
 
     private int popupHeight() {
@@ -108,7 +108,7 @@ public final class CausticaDropdown<T> extends AbstractButton {
     /** Drawn by the screen after the content pane, so the pane's scissor does not cut it off. */
     public void extractPopup(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         int left = popupLeft();
-        int top = popupTop();
+        int top = popupTop;
         int height = popupHeight();
         graphics.fill(left, top, left + POPUP_WIDTH, top + height, CausticaTheme.POPUP_BODY);
         graphics.outline(left, top, POPUP_WIDTH, height, accent);
@@ -138,7 +138,7 @@ public final class CausticaDropdown<T> extends AbstractButton {
     public boolean clickPopup(double mouseX, double mouseY) {
         if (!isActive()) return false;
         int left = popupLeft();
-        int top = popupTop();
+        int top = popupTop;
         if (mouseX < left || mouseX >= left + POPUP_WIDTH || mouseY < top || mouseY >= top + popupHeight()) {
             return false;
         }

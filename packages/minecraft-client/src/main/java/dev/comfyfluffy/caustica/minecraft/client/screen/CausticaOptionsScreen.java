@@ -178,13 +178,13 @@ public final class CausticaOptionsScreen extends Screen {
         closeDropdown();
         if (!wasOpen) {
             openDropdown = dropdown;
-            dropdown.setExpanded(true);
+            dropdown.expand(height);
         }
     }
 
     private void closeDropdown() {
         if (openDropdown != null) {
-            openDropdown.setExpanded(false);
+            openDropdown.collapse();
             openDropdown = null;
         }
     }
