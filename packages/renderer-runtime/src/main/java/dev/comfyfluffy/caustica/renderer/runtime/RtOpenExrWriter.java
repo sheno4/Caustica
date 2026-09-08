@@ -10,10 +10,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
 import java.util.Objects;
 
 /**
- * Minimal uncompressed scanline OpenEXR writer for RGBA half-float screenshots.
+ * Uncompressed scanline OpenEXR writer for half-float screenshots and float diagnostic images.
  *
  * <p>Keeping this in Java makes screenshot capture self-contained; the offline toolchain is only needed
  * to inspect or process the resulting files.
@@ -22,6 +23,7 @@ final class RtOpenExrWriter {
     private static final int EXR_MAGIC = 20_000_630;
     private static final int EXR_VERSION = 2;
     private static final int HALF = 1;
+    private static final int FLOAT = 2;
     private static final int NO_COMPRESSION = 0;
     private static final DateTimeFormatter CAPTURE_DATE = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss");
     private static final int[] CHANNEL_COMPONENT = {3, 2, 1, 0}; // A, B, G, R (lexicographic channel order)
@@ -99,11 +101,16 @@ final class RtOpenExrWriter {
 
     /** Writes unmodified diagnostic samples as FLOAT channels; missing channels are supplied by the caller. */
     static void writeRaw(Path output, int width, int height, float[] rgba,
-                         java.util.Map<String, String> metadata) throws IOException {
+                         Map<String, String> metadata) throws IOException {
         if (rgba.length != Math.multiplyExact(Math.multiplyExact(width, height), 4)) {
             throw new IllegalArgumentException("Invalid diagnostic image sample count");
         }
-        byte[] header = header(width, height, null, metadata);
+        ByteArrayOutputStream attributes = header(width, height, FLOAT);
+        for (var entry : metadata.entrySet()) {
+            stringAttribute(attributes, entry.getKey(), entry.getValue());
+        }
+        attributes.write(0);
+        byte[] header = attributes.toByteArray();
         long rowBytes = Math.multiplyExact((long) width, 16L);
         long first = header.length + (long) height * 8L;
         Files.createDirectories(output.toAbsolutePath().getParent());
@@ -123,12 +130,8 @@ final class RtOpenExrWriter {
         }
     }
 
-    private static byte[] header(int width, int height, Metadata metadata) throws IOException {
-        return header(width, height, metadata, null);
-    }
-
-    private static byte[] header(int width, int height, Metadata metadata,
-                                 java.util.Map<String, String> rawMetadata) throws IOException {
+    /** Starts a header; each caller appends its metadata and the terminating zero byte. */
+    private static ByteArrayOutputStream header(int width, int height, int pixelType) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(1024);
         writeIntLe(bytes, EXR_MAGIC);
         writeIntLe(bytes, EXR_VERSION);
@@ -136,7 +139,7 @@ final class RtOpenExrWriter {
         ByteArrayOutputStream channels = new ByteArrayOutputStream();
         for (String name : CHANNEL_NAMES) {
             writeCString(channels, name);
-            writeIntLe(channels, rawMetadata == null ? HALF : 2);
+            writeIntLe(channels, pixelType);
             channels.write(0); // pLinear
             channels.write(0);
             channels.write(0);
@@ -154,12 +157,12 @@ final class RtOpenExrWriter {
         attribute(bytes, "screenWindowCenter", "v2f", floats(0.0f, 0.0f));
         attribute(bytes, "screenWindowWidth", "float", floats(1.0f));
 
-        if (rawMetadata != null) {
-            stringAttribute(bytes, "software", "Caustica");
-            for (var entry : rawMetadata.entrySet()) stringAttribute(bytes, entry.getKey(), entry.getValue());
-            bytes.write(0);
-            return bytes.toByteArray();
-        }
+        stringAttribute(bytes, "software", "Caustica");
+        return bytes;
+    }
+
+    private static byte[] header(int width, int height, Metadata metadata) throws IOException {
+        ByteArrayOutputStream bytes = header(width, height, HALF);
 
         // ACEScg/AP1 primaries and ACES white (D60). This is the standard EXR chromaticities attribute,
         // so color-managed applications do not have to infer the working space from the filename.
@@ -173,7 +176,6 @@ final class RtOpenExrWriter {
         OffsetDateTime now = OffsetDateTime.now();
         stringAttribute(bytes, "capDate", CAPTURE_DATE.format(now));
         floatAttribute(bytes, "utcOffset", now.getOffset().getTotalSeconds());
-        stringAttribute(bytes, "software", "Caustica");
         stringAttribute(bytes, "comments",
                 "Residual-exposed scene-linear ACEScg; before Look/LMT, ACES output transform, and UI");
         stringAttribute(bytes, "causticaColorSpace", "ACEScg (AP1/D60), scene-linear");
