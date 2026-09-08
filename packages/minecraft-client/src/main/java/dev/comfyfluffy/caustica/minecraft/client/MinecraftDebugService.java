@@ -136,7 +136,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames(),
                     "operations", List.of("schema", "status",
-                    "settings.get", "settings.set", "runtime.set", "resources.reload", "view.set", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
+                    "settings.get", "settings.set", "runtime.set", "resources.reload", "view.set", "screen.close", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
             case "status" -> future.complete(status());
             case "settings.get" -> future.complete(settings());
             case "runtime.set" -> {
@@ -179,6 +179,12 @@ public final class MinecraftDebugService implements AutoCloseable {
                     throw new IllegalArgumentException("Specify positive frames or ticks");
                 requireWorld();
                 waits.add(new FrameWait(Math.addExact(frames, frameCount), Math.addExact(ticks, tickCount), future));
+            }
+            case "screen.close" -> {
+                var screen = client.gui.screen();
+                // Screens can send protocol actions on close, including respawn after the End credits.
+                if (screen != null) screen.onClose();
+                future.complete(Map.of("closed", screen != null));
             }
             case "input.set" -> {
                 requireWorld();
@@ -297,6 +303,8 @@ public final class MinecraftDebugService implements AutoCloseable {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ready", client.level != null && client.player != null);
         result.put("paused", client.isPaused());
+        var screen = client.gui.screen();
+        result.put("screen", screen == null ? "" : screen.getClass().getName());
         result.put("window", Map.of("width", client.getWindow().getWidth(),
                 "height", client.getWindow().getHeight()));
         result.put("frames", frames);

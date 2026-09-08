@@ -31,12 +31,13 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | Operation | Arguments / result |
 | --- | --- |
 | `schema` | Available operations, named views and raw image names |
-| `status` | World/player/camera, renderer state, settings and latest recorded counters. The player includes `currentFlyingSpeed`, `flying`, and `sprinting`. |
+| `status` | World/player/camera, renderer state, settings and latest recorded counters. `screen` is the current screen class name, or an empty string during gameplay. The player includes `currentFlyingSpeed`, `flying`, and `sprinting`. |
 | `settings.get` | Minecraft adapter and renderer setting IDs, encoded values and whether JVM overrides apply. Unset optional strings use an empty string; returned values can be passed to `settings.set`. |
 | `settings.set` | `values` mapping setting IDs to primitive values; JVM overrides cannot be changed |
 | `runtime.set` | Required `enabled` boolean applies the normal Minecraft RT toggle. Returns `requested`, `active`, `frameActive`, and `overridden`; the next client tick starts the lifecycle transition. JVM overrides cannot be changed. `status.runtime` reports the same fields. |
 | `resources.reload` | Reloads the currently selected resource packs through Minecraft's public reload entry point. Completes when the reload future completes, or reports its failure. RT recovery happens on subsequent client ticks; wait for active RT separately before capturing. Does not change selected packs. |
 | `view.set` | `name` from schema; `off` restores normal presentation |
+| `screen.close` | Calls the current screen's normal close handler once; returns whether a screen was present. May return to a parent screen or initiate an asynchronous transition. Use this for screens with completion actions, such as End credits; poll status for the resulting screen/world. |
 | `input.set` | `forward` and `sprint` booleans (default false); closes the current screen and holds the corresponding game keys for continuous flight. Optional `flyingSpeed` sets the spectator ability speed: a finite number from 0 to 0.2, matching the mouse-wheel range. Omission leaves speed unchanged. Returns `previousFlyingSpeed` and `currentFlyingSpeed` alongside key states. Call with no arguments to release both keys. |
 | `wait` | `frames` counts frames with a successfully recorded RT world composite; runtime activity alone does not count. This is a command-recording milestone, not GPU completion or display cadence. `ticks` counts unpaused world ticks. World required, counts must advance. Use ticks while RT is disabled. |
 | `command` | `command` without slash; default `target:server` executes on the integrated server with player permissions and returns a result; `target:client` sends through the normal network connection and confirms dispatch only |
