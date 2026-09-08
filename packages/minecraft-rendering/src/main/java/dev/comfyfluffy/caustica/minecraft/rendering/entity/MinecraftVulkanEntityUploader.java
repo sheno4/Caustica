@@ -27,7 +27,6 @@ import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -139,17 +138,22 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     private UploadedEntity uploaded(MinecraftEntityMesh source, VmaMappedBuffer positions,
                                     VmaMappedBuffer indices, VmaMappedBuffer primitive,
                                     VmaMappedBuffer instance, TextureSet textureSet) {
-        ResourceOwner positionGeneration = null;
-        ResourceOwner indexGeneration = null;
-        ResourceOwner bindingGeneration = null;
-        ResourceOwner instanceGeneration = null;
+        ResourceLifetime bindingLifetime = new ResourceLifetime(textureSet::close, primitive::close);
+        Runnable releasePositions = positions::close;
+        Runnable releaseIndices = indices::close;
+        Runnable releaseBinding = bindingLifetime::close;
+        Runnable releaseInstance = instance::close;
         // MeshBuild borrows its shader data; each created value still owns a separate resource claim.
         List<ResourceOwner> claims = new ArrayList<>();
         try {
-            positionGeneration = resources.create(positions::close);
-            indexGeneration = resources.create(indices::close);
-            bindingGeneration = resources.create(() -> throwIfFailed(closeAll(textureSet, primitive)));
-            instanceGeneration = resources.create(instance::close);
+            ResourceOwner positionGeneration = resources.create(positions::close);
+            releasePositions = positionGeneration::close;
+            ResourceOwner indexGeneration = resources.create(indices::close);
+            releaseIndices = indexGeneration::close;
+            ResourceOwner bindingGeneration = resources.create(bindingLifetime::close);
+            releaseBinding = bindingGeneration::close;
+            ResourceOwner instanceGeneration = resources.create(instance::close);
+            releaseInstance = instanceGeneration::close;
             List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
             for (GeometryRange range : geometryRanges(source)) {
                 int first = range.firstTriangle(), end = range.endTriangle();
@@ -175,13 +179,10 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             return new Uploaded(build, instanceData, List.copyOf(claims),
                     List.of(positionGeneration, indexGeneration, bindingGeneration, instanceGeneration));
         } catch (RuntimeException | Error failure) {
-            Throwable cleanup = closeAll(new LeaseCloser(claims),
-                    positionGeneration == null ? positions : positionGeneration::close,
-                    indexGeneration == null ? indices : indexGeneration::close,
-                    bindingGeneration == null ? () -> throwIfFailed(closeAll(textureSet, primitive))
-                            : bindingGeneration::close,
-                    instanceGeneration == null ? instance : instanceGeneration::close);
-            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
+            ResourceLifetime shaderClaims = new ResourceLifetime(claims.stream()
+                    .map(owner -> (Runnable) owner::close).toArray(Runnable[]::new));
+            closeAfterFailure(failure, shaderClaims::close, releasePositions, releaseIndices,
+                    releaseBinding, releaseInstance);
             throw failure;
         }
     }
@@ -298,8 +299,8 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 }
             }
         } catch (RuntimeException | Error failure) {
-            Throwable cleanup = closeAll(new LeaseCloser(leases.values()));
-            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
+            closeAfterFailure(failure, leases.values().stream()
+                    .map(lease -> (Runnable) lease::close).toArray(Runnable[]::new));
             throw failure;
         }
         return new CapturedTextures(leases);
@@ -352,19 +353,6 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         buffer.flush(0L, size);
     }
 
-    static Throwable closeAll(AutoCloseable... values) {
-        Throwable failure = null;
-        for (AutoCloseable value : values) {
-            if (value == null) continue;
-            try {
-                value.close();
-            } catch (Throwable next) {
-                if (failure == null) failure = next;
-                else if (next != failure) failure.addSuppressed(next);
-            }
-        }
-        return failure;
-    }
     static final class TextureSet implements AutoCloseable {
         final Map<MinecraftEntityMesh.Texture, TextureBinding> bindings;
         private final ResourceLifetime lifetime;
@@ -403,18 +391,13 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         static final TangentBasis ZERO = new TangentBasis(new MinecraftPrimitiveData.Float3(0, 0, 0),
                 new MinecraftPrimitiveData.Float3(0, 0, 0));
     }
-    private record LeaseCloser(Collection<? extends AutoCloseable> leases) implements AutoCloseable {
-        @Override public void close() {
-            throwIfFailed(closeAll(leases.toArray(AutoCloseable[]::new)));
-        }
-    }
-    private record CapturedTextures(Map<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases)
+    private record CapturedTextures(Map<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases,
+                                    ResourceLifetime lifetime)
             implements AutoCloseable {
-        @Override public void close() { new LeaseCloser(leases.values()).close(); }
-    }
-    private static void throwIfFailed(Throwable failure) {
-        if (failure instanceof RuntimeException runtime) throw runtime;
-        if (failure instanceof Error error) throw error;
-        if (failure != null) throw new IllegalStateException(failure);
+        CapturedTextures(Map<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases) {
+            this(leases, new ResourceLifetime(leases.values().stream()
+                    .map(lease -> (Runnable) lease::close).toArray(Runnable[]::new)));
+        }
+        @Override public void close() { lifetime.close(); }
     }
 }

@@ -258,10 +258,11 @@ final class MinecraftVulkanEntityUploaderTest {
 
     @Test void cleanupContinuesAndAggregatesFailures() {
         ArrayList<Integer> closed = new ArrayList<>();
-        Throwable failure = MinecraftVulkanEntityUploader.closeAll(
+        var lifetime = new dev.comfyfluffy.caustica.vulkan.ResourceLifetime(
                 () -> { closed.add(1); throw new IllegalStateException("first"); },
                 () -> closed.add(2),
                 () -> { closed.add(3); throw new IllegalArgumentException("third"); });
+        Throwable failure = assertThrows(IllegalStateException.class, lifetime::close);
 
         assertEquals(List.of(1, 2, 3), closed);
         assertInstanceOf(IllegalStateException.class, failure);
@@ -272,10 +273,11 @@ final class MinecraftVulkanEntityUploaderTest {
     @Test void repeatedCleanupFailureDoesNotSkipRemainingResources() {
         var closed = new ArrayList<Integer>();
         var failure = new IllegalStateException("shared failure");
-        assertSame(failure, MinecraftVulkanEntityUploader.closeAll(
+        var lifetime = new dev.comfyfluffy.caustica.vulkan.ResourceLifetime(
                 () -> { closed.add(1); throw failure; },
                 () -> { closed.add(2); throw failure; },
-                () -> closed.add(3)));
+                () -> closed.add(3));
+        assertSame(failure, assertThrows(IllegalStateException.class, lifetime::close));
         assertEquals(List.of(1, 2, 3), closed);
         assertEquals(0, failure.getSuppressed().length);
     }
