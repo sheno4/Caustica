@@ -388,6 +388,34 @@ final class MinecraftEntityGeometryTest {
         assertEquals(1, scene.jobs.get(0).releases);
     }
 
+    @Test void rejectedPublicationPreservesItsCauseWhenUploadCleanupFails() {
+        var scene = new PreparedScene();
+        var cleanupFailure = new IllegalStateException("upload cleanup failed");
+        var upload = new Uploaded(0x1000) {
+            @Override public void close() {
+                super.close();
+                throw cleanupFailure;
+            }
+        };
+        var geometry = geometry(scene, ignored -> upload);
+        geometry.put(new MinecraftEntityGeometry.Key(1, 2), revision(1), mesh(),
+                GeometryTransform.translation(0, 0, 0), 255);
+        scene.reject = true;
+        scene.jobs.getFirst().complete();
+
+        var failure = assertThrows(IllegalStateException.class, geometry::beginUpdateGroup).getCause();
+        assertNotSame(cleanupFailure, failure);
+        assertEquals("rejected edit", failure.getMessage());
+        assertEquals(1, failure.getSuppressed().length);
+        assertSame(cleanupFailure, failure.getSuppressed()[0]);
+        assertTrue(scene.edits.isEmpty());
+        assertEquals(1, upload.closeCount);
+        assertEquals(1, scene.jobs.getFirst().releases);
+        geometry.close();
+        assertEquals(1, upload.closeCount);
+        assertEquals(1, scene.jobs.getFirst().releases);
+    }
+
     @Test void shutdownClosesLaterCompletionWithoutPublishing() {
         var scene = new PreparedScene();
         var upload = new Uploaded(0x1000);

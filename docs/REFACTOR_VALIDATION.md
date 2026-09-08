@@ -392,3 +392,11 @@ The authored-artifact review found that neither the native/package CI workflow n
 Executed the exact workflow commands locally on Windows: debug tools 6/6 passed, display LUT tools/resources 3/3 passed. These exercise debug job polling, lifecycle restoration on report failure, disconnect evidence retention, recording statistics and time units, cube import constraints, and the actual LMT binary payload. Parsed the YAML and inspected the event paths and two-OS matrix. Hosted Windows/Linux execution remains unverified; this is not a new Minecraft or GPU test pass.
 
 Also read the current native/package CI workflow, Gradle properties, Python project metadata, shader editor configurations, NRD submodule/patch metadata, both loaders' mod manifests and the common mixin manifest. No additional defect was established in those artifacts. Other static assets and documentation have not been recertified by this bounded review.
+
+## Entity publication rejection and cleanup failure (2026-09-09)
+
+Reviewed the complete current MinecraftEntityGeometry implementation and its uploader ownership contract. The prepared-publication catch closed the rejected generation before recording the scene error. A throwing upload release therefore replaced the original rejection in the worker failure latch. Reused the existing cleanup helper so the scene rejection remains primary and release errors are suppressed, matching the completion-submission rejection path.
+
+Added a behavioral regression with a rejecting scene and throwing uploaded-resource release. Before the fix the test failed because the cleanup exception became primary. Afterward it verifies the original rejection, its suppressed cleanup error, no published edits, and exactly one upload/ready-mesh release, including subsequent shutdown. The full root check passed: 187 tasks, 43 seconds, terminal exit 0; the entity geometry suite contains 15 tests with no failures. Local logs: `tmp/aesthetic-publication-cause-before.log` and `tmp/aesthetic-publication-cause-check.log`.
+
+This is an injected failure-path fix, not a diagnosis of the independent RR device loss. No client was launched and no new GPU runtime pass is claimed.

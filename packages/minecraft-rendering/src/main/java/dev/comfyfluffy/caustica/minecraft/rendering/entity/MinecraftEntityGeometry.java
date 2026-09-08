@@ -310,8 +310,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             channel.edit(List.of(new SceneEdit.SetInstance<>(resident.instance, scene, generation.mesh,
                     resident.transform, resident.mask, generation.uploaded.instanceData())));
         } catch (Throwable rejected) {
-            generation.close();
-            failure = rejected;
+            failure = cleanup(rejected, generation::close);
             return;
         }
         residents.put(key, new Resident(resident.instance, resident.revision, resident.transform,
