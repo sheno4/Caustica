@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.overlay;
 
+import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
+
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
@@ -51,15 +53,15 @@ final class GlowOutlineFeature implements OverlayFeature {
     // This frame's prepared draw data (valid between prepare() returning true and record()).
     private final Matrix4f viewProj = new Matrix4f();
     private float camOffX, camOffY, camOffZ;
-    private OverlayFramePool.Buffer vbo;
-    private OverlayFramePool.Buffer ibo;
+    private VmaMappedHostBuffer vbo;
+    private VmaMappedHostBuffer ibo;
     private int[] firstIndex;
     private int[] indexCount;
     private float[] colorRgba;
     private int drawCount;
 
     @Override
-    public boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
+    public boolean prepare(GpuDevice device, OverlayFrameBuffers pool, FrameResources frameResources,
                            int worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.glowEnabled()) {
             return false;
@@ -160,8 +162,8 @@ final class GlowOutlineFeature implements OverlayFeature {
             }
             {
                 WorldOverlayPass.beginColorRendering(cmd, stack, maskImage.view(), width, height, true);
-                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0L));
-                VK10.vkCmdBindIndexBuffer(cmd, ibo.handle(), 0, VK10.VK_INDEX_TYPE_UINT32);
+                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.buffer()), stack.longs(0L));
+                VK10.vkCmdBindIndexBuffer(cmd, ibo.buffer(), 0, VK10.VK_INDEX_TYPE_UINT32);
                 ByteBuffer push = stack.malloc(MASK_PUSH_BYTES);
                 viewProj.get(0, push);
                 for (int i = 0; i < drawCount; i++) {

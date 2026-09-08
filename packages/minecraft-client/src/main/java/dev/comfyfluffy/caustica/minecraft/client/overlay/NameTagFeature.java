@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.overlay;
 
+import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
+
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
@@ -73,7 +75,7 @@ final class NameTagFeature implements OverlayFeature {
     private float camOffX, camOffY, camOffZ;
     private final List<DrawPage> drawPages = new ArrayList<>();
 
-    private record DrawPage(GpuTextureView view, OverlayFramePool.Buffer vbo, int vertexCount) {
+    private record DrawPage(GpuTextureView view, VmaMappedHostBuffer vbo, int vertexCount) {
     }
 
     /** One font-atlas page's accumulated glyph quads this frame: x,y,z,u,v per vertex + a packed colour. */
@@ -87,7 +89,7 @@ final class NameTagFeature implements OverlayFeature {
     }
 
     @Override
-    public boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
+    public boolean prepare(GpuDevice device, OverlayFrameBuffers pool, FrameResources frameResources,
                            int worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.nameTagsEnabled()) {
             return false;
@@ -120,7 +122,7 @@ final class NameTagFeature implements OverlayFeature {
             if (vertexCount == 0) {
                 continue;
             }
-            OverlayFramePool.Buffer vbo = pool.acquireVertex(device, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
+            VmaMappedHostBuffer vbo = pool.acquireVertex(device, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
             ByteBuffer buf = vbo.mapped().order(ByteOrder.LITTLE_ENDIAN);
             float[] posUv = b.posUv.elements();
             for (int v = 0; v < vertexCount; v++) {
@@ -168,7 +170,7 @@ final class NameTagFeature implements OverlayFeature {
                         OverlayPipelines.FontImage.create(device, (VulkanGpuTextureView) v));
                 push.putInt(80, image.index()).putInt(84, sampler.index().value());
                 pipeline.bind(cmd, push, width, height);
-                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(page.vbo.handle()), stack.longs(0L));
+                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(page.vbo.buffer()), stack.longs(0L));
                 VK10.vkCmdDraw(cmd, page.vertexCount, 1, 0, 0);
             }
             WorldOverlayPass.endRendering(cmd);

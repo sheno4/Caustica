@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.overlay;
 
+import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
+
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
@@ -50,11 +52,11 @@ final class BlockOutlineFeature implements OverlayFeature {
     private VmaImage2D mask;
     private boolean maskNeedsInitialization;
     private final Matrix4f viewProj = new Matrix4f();
-    private OverlayFramePool.Buffer vbo;
+    private VmaMappedHostBuffer vbo;
     private int edgeCount;
     private int tlasDescriptor;
 
-    @Override public boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
+    @Override public boolean prepare(GpuDevice device, OverlayFrameBuffers pool, FrameResources frameResources,
             int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height) {
         if (!CausticaConfig.get(MinecraftOptions.Rt.Overlay.BLOCK_OUTLINE_ENABLED) || worldTlasDescriptor == 0) return false;
         RtTerrain currentTerrain = terrain.currentOrNull();
@@ -118,7 +120,7 @@ final class BlockOutlineFeature implements OverlayFeature {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             if (maskNeedsInitialization) { WorldOverlayPass.initializeImage(cmd, stack, mask); maskNeedsInitialization = false; }
             WorldOverlayPass.beginColorRendering(cmd, stack, mask.view(), width, height, true);
-            VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0));
+            VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.buffer()), stack.longs(0));
             ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.LITTLE_ENDIAN);
             viewProj.get(0, push);
             push.putFloat(64, entities.glowCamOffsetX());

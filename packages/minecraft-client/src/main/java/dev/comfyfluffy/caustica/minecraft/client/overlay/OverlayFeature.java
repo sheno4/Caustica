@@ -10,16 +10,16 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
  * One world-space overlay effect rendered by {@link WorldOverlayPass} into the display-resolution UI
  * layer. Implementations create their pipelines through
  * {@link OverlayPipelines} (reusing an existing vertex-input/blend state where one fits) and take
- * per-frame vertex scratch from the shared {@link OverlayFramePool} — never own one-off pools.
+ * per-frame vertex scratch from {@link OverlayFrameBuffers}.
  */
 public interface OverlayFeature {
     /**
      * Gather this frame's CPU-side data, lazily create GPU resources, and upload vertex scratch via
      * {@code pool}. Runs before any command recording; return false to skip {@link #record} this frame.
-     * {@code graphicsUse} is the exact completion token for resources referenced by the recorded commands.
+     * {@code frameResources} retains resources until this frame's GPU work completes.
      * {@code width}/{@code height} are the composite target's (display-res) extent.
      */
-    boolean prepare(GpuDevice device, OverlayFramePool pool, FrameResources frameResources,
+    boolean prepare(GpuDevice device, OverlayFrameBuffers pool, FrameResources frameResources,
                     int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height);
 
     /**

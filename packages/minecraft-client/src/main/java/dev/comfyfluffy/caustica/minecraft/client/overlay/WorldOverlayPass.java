@@ -55,10 +55,10 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
         FrameResources frameResources = frame;
         int width = frame.layer().width();
         int height = frame.layer().height();
-        var framePool = new OverlayFramePool(resources, frameResources);
+        var frameBuffers = new OverlayFrameBuffers(resources, frameResources);
         List<OverlayFeature> ready = new ArrayList<>(features.size());
         for (OverlayFeature feature : features) {
-            if (feature.prepare(device, framePool, frameResources,
+            if (feature.prepare(device, frameBuffers, frameResources,
                     frame.entrySceneTlasDescriptor().index().value(),
                     new Matrix4f().set(frame.worldViewProjection()), width, height)) {
                 ready.add(feature);
