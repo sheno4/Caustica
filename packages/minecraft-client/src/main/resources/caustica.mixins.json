@@ -25,6 +25,7 @@
 		"ScreenshotMixin",
 		"SectionOcclusionGraphAccessor",
 		"TextureAtlasAccessor",
+		"TextureBindingAccessor",
 		"ParticleGroupAccessor",
 		"SpriteContentsAccessor",
 		"VideoSettingsScreenMixin",

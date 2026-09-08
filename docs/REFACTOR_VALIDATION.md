@@ -10,6 +10,7 @@ The project-wide aesthetic review includes interactive behavior and visual inspe
 
 ## Queued interactive exploration
 
+- Relaunch the rebuilt client after texture-binding accessor changes. Confirm successful mixin application and inspect textured entities, including their material maps, to verify primary texture resource lookup.
 - Use computer use to navigate pause/title/world-selection menus and inspect the settings screen. Check opening/closing screens, UI placement, readable text, transparency and correct input restoration.
 - Open a settings dropdown, press its row again to close it, and repeat using keyboard activation. Switch directly between two dropdowns; select an item and click outside the popup. Check that only one list stays open and row clicks do not immediately reopen it.
 - Navigate to a stepped slider by keyboard, toggle editing with Enter, and use left/right arrows. Check that arrows adjust by one step only while editing is enabled, and that hidden or unavailable rows cannot change values.

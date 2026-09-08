@@ -16,6 +16,7 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.client.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.minecraft.client.mixin.RenderTypeAccessor;
+import dev.comfyfluffy.caustica.minecraft.client.mixin.TextureBindingAccessor;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
@@ -24,7 +25,6 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.resources.Identifier;
 
-import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -48,13 +48,9 @@ public final class RtEntityTextures implements EntityTextureResolver {
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
     private final Map<MinecraftEntityMesh.Texture, VulkanGpuTextureView> contributions = new HashMap<>();
     private boolean loggedFailure;
-    private boolean loggedMaterialFailure;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons).
     private static final Identifier WHITE_LOCATION = Identifier.fromNamespaceAndPath("caustica", "rt_white");
     private boolean whiteRegistered;
-
-    // Cached RenderSetup.TextureBinding#location() (the class is package-private, the method public).
-    private Method locationMethod;
 
     public RtEntityTextures() {
     }
@@ -130,39 +126,16 @@ public final class RtEntityTextures implements EntityTextureResolver {
         contributions.clear();
     }
 
-    /** Recover the resource identifier used to select {@code renderType}'s material, or null. The
-     *  {@code RenderSetup.TextureBinding} class is package-private, so {@code location()} is reflective. */
+    /** Recover the primary texture's resource identifier, or null for a render type without Sampler0. */
     Identifier textureLocation(RenderType renderType) {
         if (renderType == null) return null;
         if (locationCache.containsKey(renderType)) return locationCache.get(renderType);
-        Identifier result = null;
-        try {
-            // RenderSetup is final, so the accessor cast must go through Object (the interface is only
-            // mixed in at runtime); RenderType is non-final so its cast is fine directly.
-            Object setup = ((RenderTypeAccessor) renderType).caustica$state();
-            Map<String, ?> textures = ((RenderSetupAccessor) setup).caustica$textures();
-            Object binding = textures.get("Sampler0");
-            if (binding == null) {
-                locationCache.put(renderType, null);
-                return null;
-            }
-            if (locationMethod == null) {
-                locationMethod = binding.getClass().getMethod("location");
-                locationMethod.setAccessible(true);
-            }
-            result = (Identifier) locationMethod.invoke(binding);
-        } catch (Throwable t) {
-            warnMaterialOnce("RT entity texture Identifier resolution failed for " + renderType, t);
-        }
+        Object setup = ((RenderTypeAccessor) renderType).caustica$state();
+        Map<String, ?> textures = ((RenderSetupAccessor) setup).caustica$textures();
+        var binding = (TextureBindingAccessor) textures.get("Sampler0");
+        Identifier result = binding == null ? null : binding.caustica$location();
         locationCache.put(renderType, result);
         return result;
-    }
-
-    private void warnMaterialOnce(String msg, Throwable t) {
-        if (!loggedMaterialFailure) {
-            loggedMaterialFailure = true;
-            CausticaMod.LOGGER.warn(msg, t);
-        }
     }
 
     private CapturedBinding resolveBinding(RenderType renderType) {
