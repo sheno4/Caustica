@@ -2,6 +2,8 @@ package dev.comfyfluffy.caustica.minecraft.client.screen.widget;
 
 import dev.comfyfluffy.caustica.minecraft.client.settings.SettingControl;
 import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.network.chat.Component;
 import org.junit.jupiter.api.Test;
 
@@ -9,6 +11,23 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.lwjgl.glfw.GLFW.*;
 
 final class CausticaSliderTest {
+    @Test
+    void availabilityCanChangeAfterConstructionAndDuringDragging() {
+        var control = new Range();
+        control.enabled = false;
+        var slider = new CausticaSlider(control, null, 0);
+        slider.setWidth(300);
+        assertFalse(slider.isActive());
+        control.enabled = true;
+        assertTrue(slider.isActive());
+        var pointer = new MouseButtonEvent(300, 5, new MouseButtonInfo(0, 0));
+        slider.onClick(pointer, false);
+        assertEquals(10, control.value);
+        control.enabled = false;
+        slider.onDrag(new MouseButtonEvent(0, 5, new MouseButtonInfo(0, 0)), -300, 0);
+        assertEquals(10, control.value);
+    }
+
     @Test
     void steppedKeysRespectEditingStateAndAvailability() {
         var control = new Range();

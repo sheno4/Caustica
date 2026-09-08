@@ -30,7 +30,6 @@ public final class CausticaSlider extends AbstractSliderButton {
         this.font = font;
         this.accent = accent;
         this.value = control.toSlider(control.get());
-        this.active = control.enabled();
         if (control.tooltip() != null) {
             setTooltip(net.minecraft.client.gui.components.Tooltip.create(control.tooltip()));
         }
@@ -43,7 +42,11 @@ public final class CausticaSlider extends AbstractSliderButton {
     /** Re-reads the store, for when something else changed the value — a section reset, say. */
     public void refresh() {
         value = control.toSlider(control.get());
-        active = control.enabled();
+    }
+
+    @Override
+    public boolean isActive() {
+        return super.isActive() && control.enabled();
     }
 
     @Override
@@ -62,7 +65,7 @@ public final class CausticaSlider extends AbstractSliderButton {
      */
     @Override
     public boolean keyPressed(KeyEvent event) {
-        if (!active || !visible || !control.enabled()) return false;
+        if (!isActive()) return false;
         if (canChangeValue && control.step() > 0.0 && (event.isLeft() || event.isRight())) {
             double span = control.sliderMaximum() - control.sliderMinimum();
             double delta = control.step() / span * (event.isLeft() ? -1.0 : 1.0);
@@ -103,6 +106,7 @@ public final class CausticaSlider extends AbstractSliderButton {
 
     /** Denominator matches the knob travel the paint uses, so the knob tracks the cursor exactly. */
     private void setValueFromMouse(double mouseX) {
+        if (!isActive()) return;
         double travel = CausticaTheme.SLIDER_WIDTH - CausticaTheme.KNOB_WIDTH;
         setValue((mouseX - trackLeft() - CausticaTheme.KNOB_WIDTH / 2.0) / travel);
     }

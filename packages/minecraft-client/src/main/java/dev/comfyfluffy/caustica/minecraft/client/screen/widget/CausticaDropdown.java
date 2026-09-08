@@ -41,7 +41,6 @@ public final class CausticaDropdown<T> extends AbstractButton {
         this.font = font;
         this.accent = accent;
         this.onToggled = onToggled;
-        this.active = control.enabled();
         if (control.tooltip() != null) {
             setTooltip(Tooltip.create(control.tooltip()));
         }
@@ -56,8 +55,13 @@ public final class CausticaDropdown<T> extends AbstractButton {
     }
 
     @Override
+    public boolean isActive() {
+        return super.isActive() && control.enabled();
+    }
+
+    @Override
     public void onPress(InputWithModifiers input) {
-        if (control.enabled()) {
+        if (isActive()) {
             onToggled.accept(this);
         }
     }
@@ -132,6 +136,7 @@ public final class CausticaDropdown<T> extends AbstractButton {
      * click elsewhere closes it without selecting, which is what the screen uses the false for.
      */
     public boolean clickPopup(double mouseX, double mouseY) {
+        if (!isActive()) return false;
         int left = popupLeft();
         int top = popupTop();
         if (mouseX < left || mouseX >= left + POPUP_WIDTH || mouseY < top || mouseY >= top + popupHeight()) {

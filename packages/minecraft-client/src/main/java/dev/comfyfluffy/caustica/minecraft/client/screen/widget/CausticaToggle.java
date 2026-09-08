@@ -30,7 +30,6 @@ public final class CausticaToggle extends AbstractButton {
         this.font = font;
         this.accent = accent;
         this.onChanged = onChanged;
-        this.active = control.enabled();
         if (control.tooltip() != null) {
             setTooltip(Tooltip.create(control.tooltip()));
         }
@@ -40,12 +39,14 @@ public final class CausticaToggle extends AbstractButton {
         return control;
     }
 
-    public void refresh() {
-        active = control.enabled();
+    @Override
+    public boolean isActive() {
+        return super.isActive() && control.enabled();
     }
 
     @Override
     public void onPress(InputWithModifiers input) {
+        if (!isActive()) return;
         control.set(!control.get());
         onChanged.run();
     }

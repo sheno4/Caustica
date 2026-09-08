@@ -42,7 +42,13 @@ public final class CausticaGroupHeader extends AbstractButton {
     }
 
     @Override
+    public boolean isActive() {
+        return super.isActive() && (group.header() == null || group.header().enabled());
+    }
+
+    @Override
     public void onPress(InputWithModifiers input) {
+        if (!isActive()) return;
         if (group.header() != null) {
             group.header().set(!group.header().get());
         } else {
@@ -56,28 +62,33 @@ public final class CausticaGroupHeader extends AbstractButton {
         int right = getX() + getWidth();
         int textY = CausticaPaint.textBaseline(font, getY(), getHeight());
         boolean open = rowsVisible();
+        boolean enabled = isActive();
 
-        if (isHovered) {
+        if (isHovered && enabled) {
             graphics.fill(getX(), getY(), right, getY() + getHeight(), CausticaTheme.ROW_HOVER);
         }
 
         int caretX = getX() + CausticaTheme.CONTENT_PAD;
-        caret(graphics, caretX, textY, open, accent);
+        caret(graphics, caretX, textY, open, enabled ? accent : CausticaTheme.TEXT_DISABLED);
 
         int titleX = caretX + 10;
-        graphics.text(font, group.title(), titleX, textY, CausticaTheme.TEXT_PRIMARY, false);
+        graphics.text(font, group.title(), titleX, textY,
+                enabled ? CausticaTheme.TEXT_PRIMARY : CausticaTheme.TEXT_DISABLED, false);
 
         // The header bool doubles as this row's switch, drawn where a row's control column sits.
         if (group.header() != null) {
             int switchX = right - CausticaTheme.CONTENT_PAD - CausticaTheme.TOGGLE_WIDTH;
             int switchY = getY() + (getHeight() - CausticaTheme.TOGGLE_HEIGHT) / 2;
             boolean on = group.header().get();
+            int trackColour = on ? accent : CausticaTheme.TOGGLE_OFF;
             graphics.fill(switchX, switchY, switchX + CausticaTheme.TOGGLE_WIDTH,
-                    switchY + CausticaTheme.TOGGLE_HEIGHT, on ? accent : CausticaTheme.TOGGLE_OFF);
+                    switchY + CausticaTheme.TOGGLE_HEIGHT,
+                    enabled ? trackColour : CausticaTheme.dimmed(trackColour));
             int knobX = on ? switchX + CausticaTheme.TOGGLE_WIDTH - CausticaTheme.TOGGLE_HEIGHT : switchX;
+            int knobColour = isHovered || isFocused() ? CausticaTheme.KNOB_HOVER : CausticaTheme.KNOB;
             graphics.fill(knobX, switchY, knobX + CausticaTheme.TOGGLE_HEIGHT,
                     switchY + CausticaTheme.TOGGLE_HEIGHT,
-                    isHovered || isFocused() ? CausticaTheme.KNOB_HOVER : CausticaTheme.KNOB);
+                    enabled ? knobColour : CausticaTheme.dimmed(knobColour));
         }
 
         graphics.fill(getX() + CausticaTheme.CONTENT_PAD, getY() + getHeight() - 1,
