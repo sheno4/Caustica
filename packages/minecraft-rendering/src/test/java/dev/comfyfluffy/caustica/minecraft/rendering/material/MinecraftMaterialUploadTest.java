@@ -1,15 +1,40 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.material;
 
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTexture;
+import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 final class MinecraftMaterialUploadTest {
+    @Test void stagingCleanupAttemptsEveryReleaseAndReportsFailure() {
+        var cleanup = new AssertionError("staging release");
+        var released = new ArrayList<Integer>();
+        var result = MinecraftMaterialUpload.retireStaging(new GpuComputeCompletion.Succeeded(),
+                () -> { released.add(1); throw cleanup; },
+                () -> { released.add(2); throw cleanup; },
+                () -> released.add(3));
+
+        assertEquals(List.of(1, 2, 3), released);
+        assertSame(cleanup, assertInstanceOf(GpuComputeCompletion.Failed.class, result).failure());
+    }
+
+    @Test void stagingCleanupPreservesTheUploadFailure() {
+        var primary = new IllegalStateException("upload");
+        var cleanup = new AssertionError("staging");
+        var failed = new GpuComputeCompletion.Failed(primary);
+
+        assertSame(failed, MinecraftMaterialUpload.retireStaging(failed, () -> { throw cleanup; }));
+        assertEquals(List.of(cleanup), List.of(primary.getSuppressed()));
+    }
+
     @Test
     void preparedTableCoversEveryRealMaterialOrdinalWithFallbackData() {
         var records = MinecraftProgramResources.fallbackRecords(37);

@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTexture;
 import dev.comfyfluffy.caustica.vulkan.VmaImageAllocation;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK13;
@@ -22,6 +23,8 @@ import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+
+import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure;
 
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.*;
@@ -39,6 +42,7 @@ final class MinecraftMaterialUpload {
     private final GpuComputeQueue compute;
     private final MinecraftProgramResources.Epoch epoch;
     private final Consumer<? super GpuComputeCompletion> completion;
+    private final ResourceLifetime staging;
     private List<ImageUpload> uploads;
     private GpuComputeJob job;
 
@@ -51,23 +55,21 @@ final class MinecraftMaterialUpload {
         java.util.Objects.requireNonNull(lookup, "lookup");
         this.completion = java.util.Objects.requireNonNull(completion, "completion");
         List<ImageUpload> allocated = allocateUploads(lookup.textures());
-        MinecraftProgramResources.Epoch prepared = null;
-        ResourceOwner jobOwner = null;
+        staging = new ResourceLifetime(allocated.stream().<Runnable>map(upload -> upload::destroyStaging)
+                .toArray(Runnable[]::new));
+        Runnable releaseEpoch = () -> {};
+        Runnable releaseJob = () -> {};
         try {
-            prepared = resources.createPreparedEpoch(lookup, allocated.stream()
+            epoch = resources.createPreparedEpoch(lookup, allocated.stream()
                     .map(upload -> (MinecraftProgramResources.UploadedImage) upload.image()).toList());
-            epoch = prepared;
+            releaseEpoch = epoch::close;
             uploads = allocated;
             resources.populateMaterialRecords(epoch, lookup);
-            jobOwner = epoch.retain();
+            ResourceOwner jobOwner = epoch.retain();
+            releaseJob = jobOwner::close;
             job = compute.submit(this::recordCopies, List.of(jobOwner), this::complete);
-            jobOwner = null;
         } catch (RuntimeException | Error failure) {
-            if (jobOwner != null) jobOwner.close();
-            allocated.forEach(ImageUpload::destroyStaging);
-            if (prepared != null) {
-                prepared.close();
-            }
+            closeAfterFailure(failure, releaseJob, staging::close, releaseEpoch);
             throw failure;
         }
     }
@@ -155,13 +157,14 @@ final class MinecraftMaterialUpload {
                 try {
                     result.add(new ImageUpload(texture, image, createStaging(texture)));
                 } catch (RuntimeException | Error failure) {
-                    image.close();
+                    closeAfterFailure(failure, image::close);
                     throw failure;
                 }
             }
             return List.copyOf(result);
         } catch (RuntimeException | Error failure) {
-            result.forEach(ImageUpload::destroy);
+            closeAfterFailure(failure, result.stream().<Runnable>map(upload -> upload::destroy)
+                    .toArray(Runnable[]::new));
             throw failure;
         }
     }
@@ -196,7 +199,7 @@ final class MinecraftMaterialUpload {
             staging.flush(0L, size);
             return staging;
         } catch (RuntimeException | Error failure) {
-            staging.close();
+            closeAfterFailure(failure, staging::close);
             throw failure;
         }
     }
@@ -221,16 +224,28 @@ final class MinecraftMaterialUpload {
     }
 
     private void complete(GpuComputeCompletion result) {
-        uploads.forEach(ImageUpload::destroyStaging);
         uploads = List.of();
-        completion.accept(result);
+        completion.accept(retireStaging(result, staging::close));
+    }
+
+    /** Cleanup must not prevent the owner from receiving a terminal upload result. */
+    static GpuComputeCompletion retireStaging(GpuComputeCompletion result, Runnable... releases) {
+        try {
+            new ResourceLifetime(releases).close();
+            return result;
+        } catch (RuntimeException | Error cleanup) {
+            if (result instanceof GpuComputeCompletion.Failed failed) {
+                if (failed.failure() != cleanup) failed.failure().addSuppressed(cleanup);
+                return result;
+            }
+            return new GpuComputeCompletion.Failed(cleanup);
+        }
     }
 
     private record ImageUpload(MinecraftMaterialTexture texture, Image image, VmaMappedHostBuffer staging) {
         void destroyStaging() { staging.close(); }
         void destroy() {
-            staging.close();
-            image.close();
+            new ResourceLifetime(staging::close, image::close).close();
         }
     }
 
