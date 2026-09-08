@@ -4,8 +4,8 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
-import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedGeometryPlan;
+import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedGeometryPlan.HitGroup;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -24,6 +24,8 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.*;
 
 /** Descriptor-heap-native world ray-tracing pipeline and shader binding table. */
 public final class RtPipeline {
+    // Pipeline creation and retained-table packing use the same private handle order.
+    private static final HitGroup[] HIT_GROUPS = HitGroup.values();
     static final int TLAS_DESCRIPTOR_SET = 0;
     static final int TLAS_DESCRIPTOR_BINDING = 0;
     private final VulkanDeviceContext context;
@@ -53,36 +55,28 @@ public final class RtPipeline {
                                     RtShaderCode closestHit, RtShaderCode radianceAnyHit,
                                     RtShaderCode shadowAnyHit) {
         if (raygen.length == 0 || miss.length == 0) throw new IllegalArgumentException("empty RT stage array");
-        boolean anyHit = radianceAnyHit != null || shadowAnyHit != null;
-        if (anyHit && (radianceAnyHit == null || shadowAnyHit == null)) {
-            throw new IllegalArgumentException("both any-hit shaders are required");
-        }
         for (RtShaderCode shader : raygen) requireDescriptorHeapCompatible(shader);
         for (RtShaderCode shader : miss) requireDescriptorHeapCompatible(shader);
         requireDescriptorHeapCompatible(closestHit);
-        if (anyHit) {
-            requireDescriptorHeapCompatible(radianceAnyHit);
-            requireDescriptorHeapCompatible(shadowAnyHit);
-        }
+        requireDescriptorHeapCompatible(radianceAnyHit);
+        requireDescriptorHeapCompatible(shadowAnyHit);
         VkDevice device = context.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             int raygenCount = raygen.length;
             int missCount = miss.length;
-            int hitCount = anyHit ? RtAccel.SBT_HIT_GROUP_COUNT : 1;
+            int hitCount = HIT_GROUPS.length;
             int closestStage = raygenCount + missCount;
             int radianceStage = closestStage + 1;
             int shadowStage = closestStage + 2;
-            int stageCount = closestStage + 1 + (anyHit ? 2 : 0);
+            int stageCount = closestStage + 3;
             int groupCount = raygenCount + missCount + hitCount;
             long[] modules = new long[stageCount];
             try {
                 for (int i = 0; i < raygenCount; i++) modules[i] = module(device, stack, raygen[i]);
                 for (int i = 0; i < missCount; i++) modules[raygenCount + i] = module(device, stack, miss[i]);
                 modules[closestStage] = module(device, stack, closestHit);
-                if (anyHit) {
-                    modules[radianceStage] = module(device, stack, radianceAnyHit);
-                    modules[shadowStage] = module(device, stack, shadowAnyHit);
-                }
+                modules[radianceStage] = module(device, stack, radianceAnyHit);
+                modules[shadowStage] = module(device, stack, shadowAnyHit);
 
                 ByteBuffer entry = stack.UTF8("main");
                 TlasPushIndexMapping tlasMapping = tlasPushIndexMapping(
@@ -100,12 +94,10 @@ public final class RtPipeline {
                         modules[raygenCount + i], entry, mappingInfo);
                 stage(stages.get(closestStage), VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, modules[closestStage], entry,
                         mappingInfo);
-                if (anyHit) {
-                    stage(stages.get(radianceStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[radianceStage], entry,
-                            mappingInfo);
-                    stage(stages.get(shadowStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[shadowStage], entry,
-                            mappingInfo);
-                }
+                stage(stages.get(radianceStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[radianceStage], entry,
+                        mappingInfo);
+                stage(stages.get(shadowStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[shadowStage], entry,
+                        mappingInfo);
 
                 VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(groupCount, stack);
                 for (int i = 0; i < raygenCount + missCount; i++) {
@@ -117,7 +109,7 @@ public final class RtPipeline {
                 for (int i = 0; i < hitCount; i++) {
                     groups.get(firstHit + i).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
                             .generalShader(VK_SHADER_UNUSED_KHR).closestHitShader(closestStage)
-                            .anyHitShader(anyHitStage(anyHit, i, radianceStage, shadowStage))
+                            .anyHitShader(anyHitStage(HIT_GROUPS[i], radianceStage, shadowStage))
                             .intersectionShader(VK_SHADER_UNUSED_KHR);
                 }
 
@@ -147,10 +139,9 @@ public final class RtPipeline {
                     sbt = VmaMappedBuffer.create(context, sbtSize,
                             VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
                             context.shaderGroupBaseAlignment(), "world shader binding table");
-                    long mappedAddress = MemoryUtil.memAddress(sbt.mapped());
+                    ByteBuffer mapped = sbt.mapped();
                     for (int i = 0; i < groupCount; i++) {
-                        MemoryUtil.memCopy(MemoryUtil.memAddress(handles) + (long) i * handleSize,
-                                mappedAddress + i * stride, handleSize);
+                        mapped.put(Math.toIntExact(i * stride), handles, i * handleSize, handleSize);
                     }
                     sbt.flush(0L, sbtSize);
                     return new RtPipeline(context, pipeline, sbt, stride, handleSize,
@@ -166,11 +157,6 @@ public final class RtPipeline {
         }
     }
 
-    /** Binds both heaps, publishes the complete world root with push data, and dispatches rays. */
-    public void trace(VkCommandBuffer commandBuffer, int width, int height, ByteBuffer roots, int raygenIndex) {
-        trace(commandBuffer, width, height, roots, raygenIndex, null);
-    }
-
     /** Dispatches with a scene-specific hit table while retaining the pipeline-owned raygen and miss tables. */
     public void trace(VkCommandBuffer commandBuffer, int width, int height, ByteBuffer roots,
                       int raygenIndex, HitTable retainedHits) {
@@ -181,7 +167,7 @@ public final class RtPipeline {
                     + RtBindings.WORLD_PUSH_CONSTANT_SIZE + " bytes");
         }
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, commandBuffer, "trace rays")) {
+             var ignored = RtDebugLabels.scope(context, commandBuffer, "trace rays")) {
             context.bindDescriptorHeaps(commandBuffer);
             context.pushData(commandBuffer, 0, roots);
             VK10.vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
@@ -190,11 +176,8 @@ public final class RtPipeline {
             VkStridedDeviceAddressRegionKHR rmiss = region(stack,
                     sbt.deviceRange().address().addBytes((long) raygenCount * stride),
                     stride, (long) missCount * stride);
-            VkStridedDeviceAddressRegionKHR hit = retainedHits == null
-                    ? region(stack, sbt.deviceRange().address().addBytes((long) (raygenCount + missCount) * stride),
-                            stride, (long) hitCount * stride)
-                    : region(stack, retainedHits.bytes().address(), retainedHits.stride(),
-                            retainedHits.bytes().byteSize());
+            VkStridedDeviceAddressRegionKHR hit = region(stack, retainedHits.bytes().address(),
+                    retainedHits.stride(), retainedHits.bytes().byteSize());
             vkCmdTraceRaysKHR(commandBuffer, rgen, rmiss, hit,
                     VkStridedDeviceAddressRegionKHR.calloc(stack), width, height, 1);
         }
@@ -223,9 +206,6 @@ public final class RtPipeline {
     /** CPU image for a scene-specific hit table; the caller owns uploading and retiring its SBT buffer. */
     public ByteBuffer retainedHitRecords(List<RtRetainedGeometryPlan.HitGroup> groups) {
         if (destroyed) throw new IllegalStateException("pipeline is destroyed");
-        if (hitCount != RtAccel.SBT_HIT_GROUP_COUNT) {
-            throw new IllegalStateException("pipeline has no coverage-class hit groups");
-        }
         ByteBuffer handles = ByteBuffer.allocate(hitCount * handleSize);
         ByteBuffer mapped = sbt.mapped();
         int firstHit = mapped.position() + Math.toIntExact((long) (raygenCount + missCount) * stride);
@@ -240,21 +220,11 @@ public final class RtPipeline {
         if (recordStride < handleSize) throw new IllegalArgumentException("record stride is smaller than a handle");
         ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(recordStride, groups.size()));
         for (int record = 0; record < groups.size(); record++) {
-            int source = fixedHitGroupIndex(groups.get(record)) * handleSize;
+            int source = groups.get(record).ordinal() * handleSize;
             int target = record * recordStride;
             packed.put(target, fixedHitHandles, source, handleSize);
         }
         return packed;
-    }
-
-    static int fixedHitGroupIndex(RtRetainedGeometryPlan.HitGroup group) {
-        return switch (group) {
-            case RADIANCE_OPAQUE -> RtAccel.SBT_RADIANCE_OFFSET + RtAccel.CLASS_OPAQUE;
-            case RADIANCE_CUTOUT -> RtAccel.SBT_RADIANCE_OFFSET + RtAccel.CLASS_MASKED;
-            case SHADOW_OPAQUE -> RtAccel.SBT_SHADOW_OFFSET + RtAccel.CLASS_OPAQUE;
-            case SHADOW_CUTOUT -> RtAccel.SBT_SHADOW_OFFSET + RtAccel.CLASS_MASKED;
-            case SHADOW_TRANSMISSIVE -> RtAccel.SBT_SHADOW_OFFSET + RtAccel.CLASS_TRANSMISSIVE;
-        };
     }
 
     static long align(long value, long alignment) {
@@ -351,15 +321,12 @@ public final class RtPipeline {
         info.sType$Default().pNext(mappingInfo).stage(stage).module(module).pName(entry);
     }
 
-    private static int anyHitStage(boolean enabled, int hitGroup, int radiance, int shadow) {
-        if (!enabled) return VK_SHADER_UNUSED_KHR;
-        int rayType = hitGroup / RtAccel.SBT_CLASSES;
-        int geometryClass = hitGroup % RtAccel.SBT_CLASSES;
-        boolean used = rayType == RtAccel.SBT_RAY_RADIANCE
-                ? geometryClass == RtAccel.CLASS_MASKED
-                : geometryClass != RtAccel.CLASS_OPAQUE;
-        if (!used) return VK_SHADER_UNUSED_KHR;
-        return rayType == RtAccel.SBT_RAY_RADIANCE ? radiance : shadow;
+    static int anyHitStage(HitGroup group, int radiance, int shadow) {
+        return switch (group) {
+            case RADIANCE_OPAQUE, SHADOW_OPAQUE -> VK_SHADER_UNUSED_KHR;
+            case RADIANCE_CUTOUT -> radiance;
+            case SHADOW_CUTOUT, SHADOW_TRANSMISSIVE -> shadow;
+        };
     }
 
     private static long module(VkDevice device, MemoryStack stack, RtShaderCode shader) {

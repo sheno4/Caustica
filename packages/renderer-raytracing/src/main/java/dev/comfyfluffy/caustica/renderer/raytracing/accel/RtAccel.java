@@ -47,8 +47,8 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructu
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureDeviceAddressKHR;
 
 /**
- * A built acceleration structure plus its backing buffer. BLAS factories and lifetime operations remain
- * here; {@link TlasBuilder} owns frame-level TLAS preparation and reuse.
+ * Owns an acceleration-structure handle and its backing buffer. BLAS factories live here;
+ * {@link TlasBuilder} owns frame-level TLAS preparation and reuse.
  */
 public final class RtAccel {
     private static GpuBuffer createScratchBuffer(VulkanDeviceContext ctx, long requiredSize, String label) {
@@ -69,21 +69,18 @@ public final class RtAccel {
     public final VulkanDeviceAddress deviceAddress;
 
     private final GpuBuffer backing;
-    private final boolean ownsBacking;
     private final VkDevice vk;
     private boolean destroyed;
 
     RtAccel(VkDevice vk, long handle, VulkanDeviceAddress deviceAddress, GpuBuffer backing) {
-        this(vk, handle, deviceAddress, backing, true);
-    }
-
-    private RtAccel(VkDevice vk, long handle, VulkanDeviceAddress deviceAddress, GpuBuffer backing,
-                    boolean ownsBacking) {
         this.vk = vk;
         this.handle = handle;
         this.deviceAddress = deviceAddress;
         this.backing = backing;
-        this.ownsBacking = ownsBacking;
+    }
+
+    public long sizeBytes() {
+        return backing.size();
     }
 
     public void destroy() {
@@ -93,38 +90,18 @@ public final class RtAccel {
         if (handle != 0L) {
             vkDestroyAccelerationStructureKHR(vk, handle, null);
         }
-        // Caller-owned backing is released separately from the acceleration-structure handle.
-        if (ownsBacking) {
-            backing.destroy();
-        }
+        // The handle must be destroyed before the storage it references.
+        backing.destroy();
         destroyed = true;
     }
-
-    // SBT hit-group classes, shared by retained and transient geometry alike. Geometry indices are fixed and
-    // double as SBT material record indices. Masked and masked-transmissive surfaces share one record because
-    // shadow any-hit reads the binding's transmissive flag, so these three classes cover every reachable
-    // combination of coverage and transmittance.
-    public static final int CLASS_OPAQUE = 0;       // no any-hit either ray type
-    public static final int CLASS_MASKED = 1;       // any-hit both ray types (cutout/stochastic coverage)
-    public static final int CLASS_TRANSMISSIVE = 2; // any-hit shadow only (opaque coverage, transmissive)
-    public static final int SBT_CLASSES = 3;
-    public static final int SBT_RAY_RADIANCE = 0;
-    public static final int SBT_RAY_SHADOW = 1;
-    public static final int SBT_RADIANCE_OFFSET = SBT_RAY_RADIANCE * SBT_CLASSES; // 0
-    public static final int SBT_SHADOW_OFFSET = SBT_RAY_SHADOW * SBT_CLASSES;     // 3
-    public static final int SBT_HIT_GROUP_COUNT = SBT_CLASSES * 2;
 
     /**
      * Pending BUILD or UPDATE. Scratch is released after GPU completion; the mesh owner retains
      * the acceleration structure and backing until its final release.
      */
-    public record PersistentBuild(RtAccel accel, GpuBuffer backing, GpuBuffer scratch,
+    public record PersistentBuild(RtAccel accel, GpuBuffer scratch,
                                   VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr,
                                   String label, BlasOperation operation) {
-    }
-
-    /** Caller-owned destination whose compact copy must complete before publication. */
-    public record CompactedBlas(RtAccel accel, GpuBuffer backing) {
     }
 
     /** One compacted-size query, retained until its recorded GPU work completes. */
@@ -170,13 +147,13 @@ public final class RtAccel {
         }
     }
 
-    /** Allocate a compact-copy destination with backing owned separately from its AS handle. */
-    public static CompactedBlas prepareCompactedBlas(VulkanDeviceContext ctx, long size, String label) {
+    /** Allocate a compact-copy destination that owns its backing buffer. */
+    public static RtAccel prepareCompactedBlas(VulkanDeviceContext ctx, long size, String label) {
         String debugLabel = labelOr(label, "compacted BLAS");
         GpuBuffer backing = ctx.createAsyncBuffer(size, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
                 false, debugLabel + " backing");
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            return new CompactedBlas(createBlasOn(ctx, stack, backing, size, debugLabel), backing);
+            return createBlasOn(ctx, stack, backing, size, debugLabel);
         } catch (Throwable failure) {
             backing.destroy();
             throw failure;
@@ -187,7 +164,7 @@ public final class RtAccel {
     public static void recordCompaction(VulkanDeviceContext ctx, VkCommandBuffer cmd, RtAccel source,
                                         RtAccel destination, String label) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, labelOr(label, "BLAS compact copy"))) {
+             var ignored = RtDebugLabels.scope(ctx, cmd, labelOr(label, "BLAS compact copy"))) {
             // Compact-copy source reads use the acceleration-structure build stage and access scope.
             VulkanBarriers.accelerationStructureBuildToUpdate(cmd, stack);
             VkCopyAccelerationStructureInfoKHR copy = VkCopyAccelerationStructureInfoKHR.calloc(stack)
@@ -313,19 +290,13 @@ public final class RtAccel {
                     ? sizes.updateScratchSize() : sizes.buildScratchSize();
             scratch = createScratchBuffer(ctx, scratchSize, debugLabel + " scratch");
             accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), debugLabel);
-            return new PersistentBuild(accel, backing, scratch, vertexAddr, indexAddr, debugLabel, operation);
+            return new PersistentBuild(accel, scratch, vertexAddr, indexAddr, debugLabel, operation);
         } catch (Throwable failure) {
             if (accel != null) accel.destroy();
+            else if (backing != null) backing.destroy();
             if (scratch != null) scratch.destroy();
-            if (backing != null) backing.destroy();
             throw failure;
         }
-    }
-
-    /** Destroy a caller-owned-backing persistent AS: destroy the handle, then its backing buffer. */
-    public static void destroyCallerOwnedAccel(RtAccel accel, GpuBuffer backing) {
-        accel.destroy(); // ownsBacking == false → handle only
-        backing.destroy();
     }
 
     static int buildFlags(boolean allowUpdate) {
@@ -350,7 +321,7 @@ public final class RtAccel {
                     .sType$Default().accelerationStructure(handle);
             VulkanDeviceAddress deviceAddress = new VulkanDeviceAddress(
                     vkGetAccelerationStructureDeviceAddressKHR(vk, addrInfo));
-            return new RtAccel(vk, handle, deviceAddress, backing, false);
+            return new RtAccel(vk, handle, deviceAddress, backing);
         } catch (Throwable t) {
             vkDestroyAccelerationStructureKHR(vk, handle, null);
             throw t;
@@ -437,7 +408,7 @@ public final class RtAccel {
     public static void recordBlasBuild(VulkanDeviceContext ctx, VkCommandBuffer cmd, PersistentBuild build) {
         String label = build.label + " " + build.operation.mode().name().toLowerCase(java.util.Locale.ROOT);
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, label)) {
+             var ignored = RtDebugLabels.scope(ctx, cmd, label)) {
             recordGeometryRangeBlasBuild(ctx, cmd, stack, build);
         }
     }

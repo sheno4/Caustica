@@ -87,7 +87,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
                     finish(result, owner, this::releaseBuildResources, new GpuComputeCompletion.Failed(failure));
                     return;
                 }
-                if (compactedSize < nativeBuild.backing().size()) {
+                if (compactedSize < nativeBuild.accel().sizeBytes()) {
                     try {
                         releaseBuildResources();
                         // The future keeps input ownership borrowed until the compacting copy completes.
@@ -96,7 +96,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
                         finish(result, owner, () -> {}, new GpuComputeCompletion.Failed(failure));
                     }
                 } else {
-                    recordCompactionSize(nativeBuild.backing().size());
+                    recordCompactionSize(nativeBuild.accel().sizeBytes());
                     finish(result, owner, this::releaseBuildResources, completion);
                 }
             } else {
@@ -111,10 +111,10 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
 
         void recordCompaction(org.lwjgl.vulkan.VkCommandBuffer command) {
             String label = "ready mesh " + mesh.identity() + " compact";
-            RtAccel.CompactedBlas compacted = RtAccel.prepareCompactedBlas(context, compactedSize, label);
+            RtAccel compacted = RtAccel.prepareCompactedBlas(context, compactedSize, label);
             compactedOwner = new RtPreparedMesh(context, mesh.build(), nativeBuild.operation(),
-                    compacted.accel(), compacted.backing());
-            RtAccel.recordCompaction(context, command, nativeBuild.accel(), compacted.accel(), label);
+                    compacted);
+            RtAccel.recordCompaction(context, command, nativeBuild.accel(), compacted, label);
         }
 
         void completeCompaction(GpuComputeCompletion completion) {
@@ -126,7 +126,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
             BlasCompactionEvent event = new BlasCompactionEvent();
             if (!event.isEnabled()) return;
             event.meshId = mesh.identity();
-            event.builtBytes = nativeBuild.backing().size();
+            event.builtBytes = nativeBuild.accel().sizeBytes();
             event.retainedBytes = retainedBytes;
             event.commit();
         }
