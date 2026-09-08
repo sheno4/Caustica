@@ -32,7 +32,7 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | --- | --- |
 | `schema` | Available operations, named views and raw image names |
 | `status` | World/player/camera, renderer state, settings and latest recorded counters. The player includes `currentFlyingSpeed`, `flying`, and `sprinting`. |
-| `settings.get` | Setting IDs, values and whether JVM overrides apply |
+| `settings.get` | Minecraft adapter and renderer setting IDs, encoded values and whether JVM overrides apply. Unset optional strings use an empty string; returned values can be passed to `settings.set`. |
 | `settings.set` | `values` mapping setting IDs to primitive values; JVM overrides cannot be changed |
 | `runtime.set` | Required `enabled` boolean applies the normal Minecraft RT toggle. Returns `requested`, `active`, `frameActive`, and `overridden`; the next client tick starts the lifecycle transition. JVM overrides cannot be changed. `status.runtime` reports the same fields. |
 | `resources.reload` | Reloads the currently selected resource packs through Minecraft's public reload entry point. Completes when the reload future completes, or reports its failure. RT recovery happens on subsequent client ticks; wait for active RT separately before capturing. Does not change selected packs. |

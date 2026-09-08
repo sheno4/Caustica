@@ -151,7 +151,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             }
             case "settings.set" -> {
                 var values = request.getAsJsonObject("values");
-                var options = RendererOptions.settings();
+                var options = MinecraftOptions.allSettings();
                 Map<Option<?>, Object> normalized = new LinkedHashMap<>();
                 for (var entry : values.entrySet()) {
                     var option = options.stream().filter(o -> o.id().equals(entry.getKey())).findFirst()
@@ -287,8 +287,9 @@ public final class MinecraftDebugService implements AutoCloseable {
 
     private Map<String, Object> settings() {
         Map<String, Object> result = new LinkedHashMap<>();
-        for (Option<?> option : RendererOptions.settings()) result.put(option.id(), Map.of(
-                "value", CausticaConfig.get(option), "overridden", CausticaConfig.store().overridden(CausticaConfig.FEATURE, option)));
+        for (Option<?> option : MinecraftOptions.allSettings()) result.put(option.id(), Map.of(
+                "value", option.encode(CausticaConfig.get(option)).orElse(""),
+                "overridden", CausticaConfig.store().overridden(CausticaConfig.FEATURE, option)));
         return result;
     }
 
