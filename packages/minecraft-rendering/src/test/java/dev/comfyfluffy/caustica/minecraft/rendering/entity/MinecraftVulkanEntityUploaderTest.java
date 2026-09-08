@@ -214,11 +214,17 @@ final class MinecraftVulkanEntityUploaderTest {
     }
 
     @Test void tangentBasisUsesIndexedPositionAndUvGradients() {
-        var basis = MinecraftVulkanEntityUploader.tangentBasis(
-                new float[]{0, 0, 0, 2, 0, 0, 0, 3, 0}, new int[]{0, 1, 2},
-                new float[]{0, 0, 1, 0, 0, 1}, 0);
+        var positions = java.nio.FloatBuffer.wrap(new float[]{0, 0, 0, 2, 0, 0, 0, 3, 0}).asReadOnlyBuffer();
+        var indices = java.nio.IntBuffer.wrap(new int[]{0, 1, 2}).asReadOnlyBuffer();
+        var uvs = java.nio.FloatBuffer.wrap(new float[]{0, 0, 1, 0, 0, 1}).asReadOnlyBuffer();
+        positions.position(positions.limit());
+        indices.position(indices.limit());
+        var basis = MinecraftVulkanEntityUploader.tangentBasis(positions, indices, uvs, 0);
         assertEquals(1, basis.tangent().x());
         assertEquals(1, basis.bitangent().y());
+        assertEquals(positions.limit(), positions.position());
+        assertEquals(indices.limit(), indices.position());
+        assertEquals(0, uvs.position());
     }
 
     @Test void adjacentCutoutTrianglesWithTheSameProgramShareOneRange() {

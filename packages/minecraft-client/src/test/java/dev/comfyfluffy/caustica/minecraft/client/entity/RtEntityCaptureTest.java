@@ -95,7 +95,7 @@ final class RtEntityCaptureTest {
         capture.currentOrder = 2;
         capture.addDirectQuad(X, Y, Z, U, V, 0, 2, 0, -1);
         capture.addDirectQuad(X, Y, Z, U, V, 0, 0, 0, -1);
-        float[] positions = capture.entityMesh().positions();
+        float[] positions = values(capture.entityMesh().positions());
         for (int i = 0; i < 4; i++) {
             assertEquals(Y[i] + 0.0004f, positions[i * 3 + 1], 1.0e-7f);
             assertEquals(0.0004f, positions[(i + 4) * 3 + 2], 1.0e-7f);
@@ -110,7 +110,7 @@ final class RtEntityCaptureTest {
             capture.addVertex(X[i], Y[i], Z[i], colors[i], U[i], V[i], 0, 0, 0, 0, 1);
         }
 
-        float[] captured = capture.entityMesh().vertexColors();
+        float[] captured = values(capture.entityMesh().vertexColors());
         assertEquals(0x20 / 255f, captured[3]);
         assertEquals(0x40 / 255f, captured[7]);
         assertEquals(0x80 / 255f, captured[11]);
@@ -139,18 +139,18 @@ final class RtEntityCaptureTest {
         assertEquals(MinecraftEntityMesh.Coverage.STOCHASTIC, first.coverage());
         assertEquals(1.25f, first.emission());
         float[] firstTint = ColorSpaces.srgbToAcesCg(128f / 255f, 64f / 255f, 32f / 255f);
-        assertEquals(firstTint[0], mesh.vertexColors()[0]);
-        assertEquals(firstTint[1], mesh.vertexColors()[1]);
-        assertEquals(firstTint[2], mesh.vertexColors()[2]);
-        assertEquals(1f, mesh.vertexColors()[3]);
+        assertEquals(firstTint[0], mesh.vertexColors().get(0));
+        assertEquals(firstTint[1], mesh.vertexColors().get(1));
+        assertEquals(firstTint[2], mesh.vertexColors().get(2));
+        assertEquals(1f, mesh.vertexColors().get(3));
         assertEquals(secondMaterial, second.material());
         assertEquals(MinecraftEntityMesh.Coverage.OPAQUE, second.coverage());
         assertEquals(2.5f, second.emission());
         float[] secondTint = ColorSpaces.srgbToAcesCg(16f / 255f, 32f / 255f, 64f / 255f);
-        assertEquals(secondTint[0], mesh.vertexColors()[16]);
-        assertEquals(secondTint[1], mesh.vertexColors()[17]);
-        assertEquals(secondTint[2], mesh.vertexColors()[18]);
-        assertEquals(1f, mesh.vertexColors()[19]);
+        assertEquals(secondTint[0], mesh.vertexColors().get(16));
+        assertEquals(secondTint[1], mesh.vertexColors().get(17));
+        assertEquals(secondTint[2], mesh.vertexColors().get(18));
+        assertEquals(1f, mesh.vertexColors().get(19));
     }
 
     @Test
@@ -247,10 +247,10 @@ final class RtEntityCaptureTest {
         capture.currentCoverage = MinecraftEntityMesh.Coverage.STOCHASTIC;
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
         MinecraftEntityMesh mesh = capture.entityMesh(31L);
-        float[] positions = mesh.positions();
-        int[] indices = mesh.indices();
-        float[] uvs = mesh.uvs();
-        float[] colors = mesh.vertexColors();
+        float[] positions = values(mesh.positions());
+        int[] indices = values(mesh.indices());
+        float[] uvs = values(mesh.uvs());
+        float[] colors = values(mesh.vertexColors());
         var triangles = mesh.triangles();
 
         capture.reset();
@@ -262,15 +262,15 @@ final class RtEntityCaptureTest {
 
         assertEquals(4, mesh.vertexCount());
         assertEquals(2, mesh.triangleCount());
-        assertEquals(12, mesh.positions().length);
-        assertEquals(6, mesh.indices().length);
-        assertEquals(8, mesh.uvs().length);
-        assertEquals(16, mesh.vertexColors().length);
+        assertEquals(12, mesh.positions().remaining());
+        assertEquals(6, mesh.indices().remaining());
+        assertEquals(8, mesh.uvs().remaining());
+        assertEquals(16, mesh.vertexColors().remaining());
         assertEquals(31L, mesh.indexRevision());
-        assertArrayEquals(positions, mesh.positions());
-        assertArrayEquals(indices, mesh.indices());
-        assertArrayEquals(uvs, mesh.uvs());
-        assertArrayEquals(colors, mesh.vertexColors());
+        assertArrayEquals(positions, values(mesh.positions()));
+        assertArrayEquals(indices, values(mesh.indices()));
+        assertArrayEquals(uvs, values(mesh.uvs()));
+        assertArrayEquals(colors, values(mesh.vertexColors()));
         assertEquals(triangles, mesh.triangles());
         assertEquals(material("first"), mesh.triangles().getFirst().material());
         assertEquals(MinecraftEntityMesh.Coverage.STOCHASTIC, mesh.triangles().getFirst().coverage());
@@ -282,22 +282,28 @@ final class RtEntityCaptureTest {
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
         MinecraftEntityMesh mesh = capture.entityMesh(23L);
 
-        float original = mesh.positions()[0];
-        float[] positions = mesh.positions();
+        float original = mesh.positions().get(0);
+        float[] positions = values(mesh.positions());
         positions[0] = 99f;
-        int[] indices = mesh.indices();
+        int[] indices = values(mesh.indices());
         indices[0] = 3;
-        float[] colors = mesh.vertexColors();
+        float[] colors = values(mesh.vertexColors());
         colors[3] = 0f;
 
-        assertEquals(original, mesh.positions()[0]);
-        assertEquals(0, mesh.indices()[0]);
-        assertEquals(1f, mesh.vertexColors()[3]);
+        assertEquals(original, mesh.positions().get(0));
+        assertEquals(0, mesh.indices().get(0));
+        assertEquals(1f, mesh.vertexColors().get(3));
         assertEquals(23L, mesh.indexRevision());
     }
 
     private static MinecraftEntityMesh.Material material(String path) {
         return new MinecraftEntityMesh.Material(ResourceId.of("test", path), null,
                 MinecraftEntityMesh.Program.MATERIAL);
+    }
+    private static float[] values(java.nio.FloatBuffer buffer) {
+        float[] result = new float[buffer.remaining()]; buffer.get(result); return result;
+    }
+    private static int[] values(java.nio.IntBuffer buffer) {
+        int[] result = new int[buffer.remaining()]; buffer.get(result); return result;
     }
 }

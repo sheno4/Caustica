@@ -29,15 +29,19 @@ final class MinecraftEntityMeshTest {
         uvs[0] = 9;
         colors[0] = 9;
         triangles.clear();
-        mesh.positions()[0] = 8;
-        mesh.indices()[0] = 1;
-        mesh.uvs()[0] = 8;
-        mesh.vertexColors()[0] = 8;
+        assertThrows(java.nio.ReadOnlyBufferException.class, () -> mesh.positions().put(0, 8));
+        assertThrows(java.nio.ReadOnlyBufferException.class, () -> mesh.indices().put(0, 1));
+        assertThrows(java.nio.ReadOnlyBufferException.class, () -> mesh.uvs().put(0, 8));
+        assertThrows(java.nio.ReadOnlyBufferException.class, () -> mesh.vertexColors().put(0, 8));
 
-        assertArrayEquals(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, mesh.positions());
-        assertArrayEquals(new int[]{0, 1, 2}, mesh.indices());
-        assertArrayEquals(new float[]{0, 0, 1, 0, 0, 1}, mesh.uvs());
-        assertArrayEquals(new float[]{1, 0, 0, .25f, 0, 1, 0, .5f, 0, 0, 1, .75f}, mesh.vertexColors());
+        assertArrayEquals(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, values(mesh.positions()));
+        assertArrayEquals(new int[]{0, 1, 2}, values(mesh.indices()));
+        assertArrayEquals(new float[]{0, 0, 1, 0, 0, 1}, values(mesh.uvs()));
+        assertArrayEquals(new float[]{1, 0, 0, .25f, 0, 1, 0, .5f, 0, 0, 1, .75f}, values(mesh.vertexColors()));
+        var reader = mesh.positions();
+        reader.position(3);
+        assertEquals(0, mesh.positions().position());
+        assertThrows(java.nio.ReadOnlyBufferException.class, reader::array);
         assertEquals(3, mesh.vertexCount());
         assertEquals(1, mesh.triangleCount());
         assertEquals(17L, mesh.indexRevision());
@@ -58,15 +62,21 @@ final class MinecraftEntityMeshTest {
                 new float[]{0, 0, 1, 0, 0, 1}, colors, List.of(triangle), 7L);
         positions[0] = 9;
 
-        assertEquals(0, mesh.positions()[0]);
+        assertEquals(0, mesh.positions().get(0));
         assertEquals(1, mesh.triangleCount());
         assertEquals(7L, mesh.indexRevision());
-        assertEquals(.75f, mesh.vertexColors()[11]);
+        assertEquals(.75f, mesh.vertexColors().get(11));
         assertThrows(IllegalArgumentException.class, () -> new MinecraftEntityMesh(
                 new float[]{0, 0, 0}, new int[]{0, 1, 2}, new float[]{0, 0},
                 new float[]{1, 1, 1, 1}, List.of(triangle), 0));
         assertThrows(IllegalArgumentException.class, () -> new MinecraftEntityMesh(
                 new float[]{0, 0, 0}, new int[]{0}, new float[]{0, 0}, new float[]{1, 1, 1},
                 List.of(triangle), 0));
+    }
+    private static float[] values(java.nio.FloatBuffer buffer) {
+        float[] result = new float[buffer.remaining()]; buffer.get(result); return result;
+    }
+    private static int[] values(java.nio.IntBuffer buffer) {
+        int[] result = new int[buffer.remaining()]; buffer.get(result); return result;
     }
 }

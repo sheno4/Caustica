@@ -24,6 +24,8 @@ import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -108,8 +110,8 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 releases.add(instance::close);
                 var positionValues = source.positions();
                 var indexValues = source.indices();
-                write(positions, (long) positionValues.length * 4, bytes -> bytes.asFloatBuffer().put(positionValues));
-                write(indices, (long) indexValues.length * 4, bytes -> bytes.asIntBuffer().put(indexValues));
+                write(positions, (long) positionValues.capacity() * 4, bytes -> bytes.asFloatBuffer().put(positionValues));
+                write(indices, (long) indexValues.capacity() * 4, bytes -> bytes.asIntBuffer().put(indexValues));
                 write(primitive, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
                         bytes -> writePrimitives(bytes, source, positionValues, indexValues, source.uvs(),
                                 source.vertexColors(), textures, materialIndices));
@@ -211,19 +213,19 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         return a.material().program() == b.material().program() && a.coverage() == b.coverage();
     }
 
-    private static void writePrimitives(ByteBuffer bytes, MinecraftEntityMesh source, float[] positions,
-                                 int[] indices, float[] uvs, float[] colors,
+    private static void writePrimitives(ByteBuffer bytes, MinecraftEntityMesh source, FloatBuffer positions,
+                                 IntBuffer indices, FloatBuffer uvs, FloatBuffer colors,
                                  TextureSet textureSet, Map<MinecraftEntityMesh.Material, Integer> materialIndices) {
         for (int t = 0; t < source.triangleCount(); t++) {
             var triangle = source.triangles().get(t);
             MinecraftPrimitiveData.Float2[] uv = new MinecraftPrimitiveData.Float2[3];
             MinecraftPrimitiveData.Float4[] vertexColors = new MinecraftPrimitiveData.Float4[3];
             for (int corner = 0; corner < 3; corner++) {
-                int vertex = indices[t * 3 + corner];
+                int vertex = indices.get(t * 3 + corner);
                 uv[corner] = new MinecraftPrimitiveData.Float2(
-                        uvs[vertex * 2], uvs[vertex * 2 + 1]);
-                vertexColors[corner] = new MinecraftPrimitiveData.Float4(colors[vertex * 4],
-                        colors[vertex * 4 + 1], colors[vertex * 4 + 2], colors[vertex * 4 + 3]);
+                        uvs.get(vertex * 2), uvs.get(vertex * 2 + 1));
+                vertexColors[corner] = new MinecraftPrimitiveData.Float4(colors.get(vertex * 4),
+                        colors.get(vertex * 4 + 1), colors.get(vertex * 4 + 2), colors.get(vertex * 4 + 3));
             }
             TextureBinding binding = triangle.material().texture() == null
                     ? null : textureSet.bindings.get(triangle.material().texture());
@@ -256,16 +258,16 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         return new MinecraftMaterialKey(material.material(), null, material.profile(), topology);
     }
 
-    static TangentBasis tangentBasis(float[] positions, int[] indices, float[] uvs, int triangle) {
-        int i0 = indices[triangle * 3], i1 = indices[triangle * 3 + 1], i2 = indices[triangle * 3 + 2];
-        float x1 = positions[i1 * 3] - positions[i0 * 3];
-        float y1 = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
-        float z1 = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
-        float x2 = positions[i2 * 3] - positions[i0 * 3];
-        float y2 = positions[i2 * 3 + 1] - positions[i0 * 3 + 1];
-        float z2 = positions[i2 * 3 + 2] - positions[i0 * 3 + 2];
-        float u1 = uvs[i1 * 2] - uvs[i0 * 2], v1 = uvs[i1 * 2 + 1] - uvs[i0 * 2 + 1];
-        float u2 = uvs[i2 * 2] - uvs[i0 * 2], v2 = uvs[i2 * 2 + 1] - uvs[i0 * 2 + 1];
+    static TangentBasis tangentBasis(FloatBuffer positions, IntBuffer indices, FloatBuffer uvs, int triangle) {
+        int i0 = indices.get(triangle * 3), i1 = indices.get(triangle * 3 + 1), i2 = indices.get(triangle * 3 + 2);
+        float x1 = positions.get(i1 * 3) - positions.get(i0 * 3);
+        float y1 = positions.get(i1 * 3 + 1) - positions.get(i0 * 3 + 1);
+        float z1 = positions.get(i1 * 3 + 2) - positions.get(i0 * 3 + 2);
+        float x2 = positions.get(i2 * 3) - positions.get(i0 * 3);
+        float y2 = positions.get(i2 * 3 + 1) - positions.get(i0 * 3 + 1);
+        float z2 = positions.get(i2 * 3 + 2) - positions.get(i0 * 3 + 2);
+        float u1 = uvs.get(i1 * 2) - uvs.get(i0 * 2), v1 = uvs.get(i1 * 2 + 1) - uvs.get(i0 * 2 + 1);
+        float u2 = uvs.get(i2 * 2) - uvs.get(i0 * 2), v2 = uvs.get(i2 * 2 + 1) - uvs.get(i0 * 2 + 1);
         float determinant = u1 * v2 - u2 * v1;
         if (Math.abs(determinant) <= 1.0e-8f) return TangentBasis.ZERO;
         float inverse = 1.0f / determinant;

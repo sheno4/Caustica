@@ -7,6 +7,8 @@ import dev.comfyfluffy.caustica.minecraft.rendering.texture.MinecraftTextureSamp
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 
 /** Immutable CPU geometry captured from one Minecraft entity, block entity, or particle group. */
 public final class MinecraftEntityMesh {
@@ -68,10 +70,11 @@ public final class MinecraftEntityMesh {
         this.indexRevision = indexRevision;
     }
 
-    public float[] positions() { return positions.clone(); }
-    public int[] indices() { return indices.clone(); }
-    public float[] uvs() { return uvs.clone(); }
-    public float[] vertexColors() { return vertexColors.clone(); }
+    // Each reader owns its cursor; the captured streams stay immutable and need no second copy.
+    public FloatBuffer positions() { return FloatBuffer.wrap(positions).asReadOnlyBuffer(); }
+    public IntBuffer indices() { return IntBuffer.wrap(indices).asReadOnlyBuffer(); }
+    public FloatBuffer uvs() { return FloatBuffer.wrap(uvs).asReadOnlyBuffer(); }
+    public FloatBuffer vertexColors() { return FloatBuffer.wrap(vertexColors).asReadOnlyBuffer(); }
     public List<Triangle> triangles() { return triangles; }
     public long indexRevision() { return indexRevision; }
 
