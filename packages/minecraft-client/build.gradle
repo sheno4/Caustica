@@ -434,18 +434,7 @@ def verifyMinecraftClientOwnership = tasks.register("verifyMinecraftClientOwners
 }
 
 tasks.named("check") {
-	dependsOn(verifyEmbeddedApi, verifyMinecraftClientOwnership,
-			project(":packages:features-builtin").tasks.named("check"),
-			project(":packages:config").tasks.named("check"),
-			project(":packages:engine-vulkan").tasks.named("check"),
-			project(":packages:minecraft-content").tasks.named("check"),
-			project(":packages:minecraft-rendering").tasks.named("check"),
-			project(":packages:nvidia-ngx").tasks.named("check"),
-			project(":packages:renderer-presentation").tasks.named("check"),
-			project(":packages:renderer-raytracing").tasks.named("check"),
-			project(":packages:renderer-runtime").tasks.named("check"),
-			project(":packages:slang-runtime").tasks.named("check"),
-			project(":packages:vulkan-support").tasks.named("check"))
+	dependsOn(verifyEmbeddedApi, verifyMinecraftClientOwnership)
 }
 
 tasks.register("examplesCheck") {

@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.slangtooling
 
 import groovy.json.JsonSlurper
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
@@ -20,6 +21,7 @@ import org.gradle.process.ExecOperations
 
 import javax.inject.Inject
 
+@DisableCachingByDefault(because = 'Uses locally installed shader compiler and validator binaries')
 abstract class GenerateShaderRecords extends DefaultTask {
     @InputDirectory
     @PathSensitive(PathSensitivity.RELATIVE)

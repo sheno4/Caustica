@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.slangtooling
 
 import groovy.json.JsonSlurper
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
@@ -18,6 +19,7 @@ import org.gradle.process.ExecOperations
 import javax.inject.Inject
 
 /** Generates world push-constant offsets and heap index locations from Slang reflection. */
+@DisableCachingByDefault(because = 'Uses locally installed shader compiler and validator binaries')
 abstract class GenerateRtBindings extends DefaultTask {
     @InputDirectory
     @PathSensitive(PathSensitivity.RELATIVE)

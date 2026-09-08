@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.slangtooling
 
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
@@ -16,6 +17,7 @@ import org.gradle.process.ExecOperations
 import javax.inject.Inject
 
 /** Compiles one Slang probe and publishes its raw reflection JSON plus validated SPIR-V. */
+@DisableCachingByDefault(because = 'Uses locally installed shader compiler and validator binaries')
 abstract class ReflectSlang extends DefaultTask {
     @InputFile @PathSensitive(PathSensitivity.RELATIVE)
     abstract RegularFileProperty getSourceFile()

@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.slangtooling
 
 import groovy.io.FileType
+import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.ConfigurableFileCollection
@@ -23,6 +24,7 @@ import java.nio.file.Path
 import java.nio.charset.StandardCharsets
 
 /** Compiles selected Slang entry-point sources to validated Vulkan SPIR-V. */
+@DisableCachingByDefault(because = 'Uses locally installed shader compiler and validator binaries')
 abstract class CompileSlangShaders extends DefaultTask {
     private static final byte[] SPIRV_DEBUG_INFO_IMPORT =
             "NonSemantic.Shader.DebugInfo.100\u0000".getBytes(StandardCharsets.US_ASCII)

@@ -37,6 +37,7 @@ def verifyJavaPackageOwnership = tasks.register("verifyJavaPackageOwnership") {
 
 subprojects { artifact ->
 	artifact.pluginManager.withPlugin("java") {
+		rootProject.tasks.named("check") { dependsOn(artifact.tasks.named("check")) }
 		def productionClasses = artifact.extensions.getByName("sourceSets").named("main").get().output.classesDirs
 		productionClassesByArtifact[artifact.path] = productionClasses
 		verifyJavaPackageOwnership.configure { inputs.files(productionClasses) }
@@ -48,7 +49,7 @@ tasks.named("assemble") {
 }
 
 tasks.named("check") {
-	dependsOn(":packages:minecraft-client:check", verifyJavaPackageOwnership)
+	dependsOn(verifyJavaPackageOwnership, gradle.includedBuild("slang-tooling").task(":check"))
 }
 
 tasks.named("publish") {
