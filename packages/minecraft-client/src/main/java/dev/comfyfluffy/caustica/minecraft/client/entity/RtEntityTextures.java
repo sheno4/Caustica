@@ -46,6 +46,8 @@ public final class RtEntityTextures implements EntityTextureResolver {
     // stay cached and skip the costly RenderType.prepare().
     private final Map<RenderType, CapturedBinding> bindingCache = new WeakHashMap<>();
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
+    // Minecraft sampler state is immutable; snapshots do not retain the source GPU object.
+    private final Map<GpuSampler, MinecraftTextureSampler> samplerCache = new WeakHashMap<>();
     private final Map<MinecraftEntityMesh.Texture, VulkanGpuTextureView> contributions = new HashMap<>();
     private boolean loggedFailure;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons).
@@ -121,6 +123,7 @@ public final class RtEntityTextures implements EntityTextureResolver {
     public void reset() {
         bindingCache.clear();
         locationCache.clear();
+        samplerCache.clear();
         contributions.clear();
     }
 
@@ -174,7 +177,11 @@ public final class RtEntityTextures implements EntityTextureResolver {
         return handle;
     }
 
-    static MinecraftTextureSampler sampler(GpuSampler sampler) {
+    MinecraftTextureSampler sampler(GpuSampler sampler) {
+        return samplerCache.computeIfAbsent(sampler, RtEntityTextures::snapshotSampler);
+    }
+
+    private static MinecraftTextureSampler snapshotSampler(GpuSampler sampler) {
         double sourceMaxLod = sampler.getMaxLod().orElse(1000.0);
         float maxLod = (float) Math.max(0.25, Math.min(sourceMaxLod, Float.MAX_VALUE));
         return new MinecraftTextureSampler(filter(sampler.getMinFilter()), filter(sampler.getMagFilter()),

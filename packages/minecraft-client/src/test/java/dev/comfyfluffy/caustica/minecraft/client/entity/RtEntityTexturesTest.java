@@ -23,6 +23,8 @@ import java.util.OptionalDouble;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -76,7 +78,13 @@ final class RtEntityTexturesTest {
             @Override public void close() { }
         };
 
-        MinecraftTextureSampler captured = RtEntityTextures.sampler(source);
+        var textures = new RtEntityTextures();
+        MinecraftTextureSampler captured = textures.sampler(source);
+        assertSame(captured, textures.sampler(source));
+        textures.reset();
+        MinecraftTextureSampler refreshed = textures.sampler(source);
+        assertNotSame(captured, refreshed);
+        assertEquals(captured, refreshed);
 
         assertEquals(MinecraftTextureSampler.Filter.NEAREST, captured.minFilter());
         assertEquals(MinecraftTextureSampler.Filter.LINEAR, captured.magFilter());
