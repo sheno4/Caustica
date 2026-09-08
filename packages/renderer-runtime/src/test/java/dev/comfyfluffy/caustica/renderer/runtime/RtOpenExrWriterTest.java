@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.renderer.runtime;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -9,8 +10,14 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TimeZone;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -19,6 +26,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtOpenExrWriterTest {
     @TempDir
     Path temp;
+
+    @Test
+    @ResourceLock("java.util.TimeZone.default")
+    void captureDateAndOffsetRecoverUtcInEveryTimeZone() throws IOException {
+        TimeZone original = TimeZone.getDefault();
+        try {
+            for (String zone : new String[]{"Asia/Tokyo", "America/Los_Angeles", "Asia/Kathmandu", "UTC"}) {
+                TimeZone.setDefault(TimeZone.getTimeZone(zone));
+                Instant before = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+                Path output = temp.resolve("timestamp.exr");
+                RtOpenExrWriter.write(output, 1, 1, halves(1, 1, 1, 1),
+                        new RtOpenExrWriter.Metadata(1, 1, 1, "manual", 0, 0, 0, 1));
+                Instant after = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+
+                ByteBuffer file = ByteBuffer.wrap(Files.readAllBytes(output)).order(ByteOrder.LITTLE_ENDIAN);
+                file.position(8);
+                Map<String, Attribute> attributes = readAttributes(file);
+                String date = StandardCharsets.UTF_8.decode(attributes.get("capDate").value()).toString();
+                assertEquals("float", attributes.get("utcOffset").type());
+                long offset = (long) attributes.get("utcOffset").value().getFloat();
+                Instant recovered = LocalDateTime.parse(date, DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss"))
+                        .toInstant(ZoneOffset.UTC).plusSeconds(offset);
+                assertTrue(!recovered.isBefore(before) && !recovered.isAfter(after),
+                        zone + ": EXR timestamp recovered as " + recovered);
+            }
+        } finally {
+            TimeZone.setDefault(original);
+        }
+    }
 
     @Test
     void writesValidUncompressedHalfScanlinesWithTopRowFirst() throws IOException {
