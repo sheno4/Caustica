@@ -12,21 +12,23 @@
  * <h2>Scenes and views</h2>
  *
  * {@link dev.comfyfluffy.caustica.api.scene.SceneId} is a non-owning target reference used by geometry,
- * lights, and views. Scene creation, environment selection, and removal are host authority rather than
- * extension capabilities. Multiple scenes may remain resident, while a
+ * lights, and views. The host creates and removes scenes; contributions select environments through their
+ * own scene slots. Multiple scenes may remain resident, while a
  * {@link dev.comfyfluffy.caustica.api.view.SceneView} associates one camera with its entry scene and
- * containing medium. A scene
- * never owns a camera.
+ * containing medium. A scene never owns a camera.
  *
  * <h2>Contributions</h2>
  *
- * Mesh, instance, and light mutation identities remain local to their issuing contribution. Scene, surface,
- * volume, and environment ids are non-owning same-session references which may be explicitly handed between
- * contributions without transferring removal authority or extending owner lifetime. Geometry independently
- * selects surface and interior-volume programs. Their shaders receive
- * extension-owned implementation, slot-binding, and instance data words; extensions keep their own shading
- * tables behind those roots. Retained changes use their thread-safe session channels and become visible at
- * renderer publication boundaries.
+ * Instance and light mutation identities remain local to their issuing contribution. Ready meshes are
+ * immutable owning claims, shareable across contributions and scenes. Scene, surface, volume and environment
+ * ids are non-owning same-session references; sharing them transfers no removal authority or lifetime.
+ * Geometry independently selects surface and interior-volume programs. Their shaders receive extension-owned
+ * implementation, slot-binding and instance data words; extensions keep their own shading tables behind
+ * those roots.
+ *
+ * <p>Preparation produces ready resource revisions before scene mutation. Each thread-safe scene edit
+ * publishes its entire batch atomically, without GPU work or changes to captured frames. Program registration
+ * compiles asynchronously and becomes active at a separate program publication boundary.
  *
  * <p>The renderer owns GPU queues and submission. Extensions prepare CPU data on their own executors,
  * submit asynchronous immutable-resource initialization through
