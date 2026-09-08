@@ -50,7 +50,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -174,8 +173,6 @@ public final class RtEntities {
     private final ArrayDeque<BeCandidate> beCandidatePool = new ArrayDeque<>();
     // (Re)builds recorded so far this frame, reset each beginFrame; gates new BE builds to BE_BUILDS_PER_FRAME.
     private int beBuildsThisFrame;
-    private long meshRevisionEpoch;
-    private final Set<MinecraftEntityGeometry.Key> pendingDrops = new java.util.LinkedHashSet<>();
     private MinecraftEntityGeometry geometry;
 
     public RtEntities(RtEntityTextures textures, MinecraftTelemetry.Instrumentation instrumentation) {
@@ -313,7 +310,7 @@ public final class RtEntities {
     };
 
     /** Mutable per-frame build state shared by the entity + block-entity capture passes. */
-    private final class FrameBuild {
+    private static final class FrameBuild {
         final MinecraftEntityGeometry geometry;
         final SceneOrigin origin;
         final long frameIndex;
@@ -331,7 +328,6 @@ public final class RtEntities {
 
         void put(MinecraftEntityGeometry.Key key, MinecraftEntityMesh mesh, GeometryTransform transform,
                  MinecraftEntityGeometry.MeshRevision revision, int mask, Runnable acknowledgment) {
-            pendingDrops.remove(key);
             Object extraction = telemetry.extraction(sourceKind(key), 1);
             geometry.put(key, revision, mesh, transform, mask, () -> {
                 telemetry.published(extraction);
@@ -340,13 +336,11 @@ public final class RtEntities {
         }
 
         void transform(MinecraftEntityGeometry.Key key, GeometryTransform transform, int mask) {
-            pendingDrops.remove(key);
             Object extraction = telemetry.extraction(MinecraftTelemetry.GeometrySource.ENTITY_PLACEMENT, 1);
             geometry.transform(key, transform, mask, () -> telemetry.published(extraction));
         }
 
         void drop(MinecraftEntityGeometry.Key key, Runnable acknowledgment) {
-            pendingDrops.remove(key);
             geometry.drop(key);
             if (acknowledgment != null) acknowledgment.run();
         }
@@ -376,20 +370,13 @@ public final class RtEntities {
         if (!build.settings.enabled()) {
             try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
                 clearResidents(build);
-                finishFrame(build);
                 updates.submit();
             }
             return;
         }
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
-        if (level == null) {
-            try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
-                finishFrame(build);
-                updates.submit();
-            }
-            return;
-        }
+        if (level == null) return;
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
 
@@ -414,23 +401,10 @@ public final class RtEntities {
             }
             evictStaleAccels(build);
             evictStaleBes(build);
-            finishFrame(build);
             updates.submit();
         } catch (RuntimeException | Error t) {
             shutdown();
             throw t;
-        }
-    }
-
-    private void finishFrame(FrameBuild build) {
-        List<MinecraftEntityGeometry.Key> drops = List.copyOf(pendingDrops);
-        pendingDrops.clear();
-        for (MinecraftEntityGeometry.Key key : drops) {
-            if (key.domain() == ENTITY_GEOMETRY) {
-                submitEntityRemoval(build, key, null);
-            } else {
-                build.drop(key, null);
-            }
         }
     }
 
@@ -833,9 +807,10 @@ public final class RtEntities {
 
     record MeshFingerprint(long contentHash, long topologyRevision) { }
 
-    private MinecraftEntityGeometry.MeshRevision revision(MeshFingerprint fingerprint) {
+    private static MinecraftEntityGeometry.MeshRevision revision(MeshFingerprint fingerprint) {
+        // Program replacement installs a fresh geometry owner, so these revisions are lease-local.
         return new MinecraftEntityGeometry.MeshRevision(
-                meshRevisionEpoch, fingerprint.contentHash(), fingerprint.topologyRevision());
+                0L, fingerprint.contentHash(), fingerprint.topologyRevision());
     }
 
     /** Computes content and topology fingerprints together during the capture's required change scan. */
@@ -932,7 +907,6 @@ public final class RtEntities {
             entityStates.put(entityId, state);
         }
         state.lastSeen = build.frameIndex;
-        pendingDrops.remove(key);
         MeshFingerprint fingerprint = meshFingerprint(capture);
         long capturedMeshHash = fingerprint.contentHash();
         boolean initial = !state.initialSubmitted;
@@ -1004,38 +978,6 @@ public final class RtEntities {
         cameraState.initialized = true;
     }
 
-    /** Drop CPU templates that retain resource-pack-owned model trees. */
-    public void onResourceReload() {
-        meshRevisionEpoch++;
-        clearParticleHistory();
-        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
-        for (int id : entityStates.keySet()) pendingDrops.add(key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id)));
-        for (long value : beCache.keySet()) pendingDrops.add(key(BLOCK_ENTITY_GEOMETRY, value));
-        pendingDrops.add(key(PARTICLE_GEOMETRY, PARTICLE_KEY));
-        entityStates.clear();
-        beCache.clear();
-        collector.clearCaches();
-    }
-
-    /** Prevent deferred profiling callbacks from outliving this contribution's retained-scene ownership. */
-    public void onSourceStopped() {
-        clearOverlays();
-        clearParticleHistory();
-        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
-    }
-
-    /** Clears CPU capture state before entity IDs can be reused by a new world. */
-    public void resetWorldState() {
-        clearOverlays();
-        meshRevisionEpoch++;
-        clearParticleHistory();
-        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
-        entityStates.clear();
-        beCache.clear();
-        pendingDrops.clear();
-        collector.clearCaches();
-    }
-
     /** Clear capture state; the bound geometry contribution tears down all GPU residents. */
     public void shutdown() {
         clearOverlays();
@@ -1046,7 +988,6 @@ public final class RtEntities {
         resetPoseStack(blockEntityPoseStack);
         beCandidates.clear();
         beCandidatePool.clear();
-        pendingDrops.clear();
         collector.clearCaches();
     }
 

@@ -212,18 +212,17 @@ final class RtEntitiesPublicationStateTest {
         return new RtEntities.EntityState(new UUID(1L, 2L));
     }
 
-    @org.junit.jupiter.api.Test
-    void lifecycleResetsDiscardCapturedOverlays() {
+    @Test
+    void shutdownDiscardsCapturedOverlays() {
         RtEntities entities = new RtEntities(new RtEntityTextures(), new TestTelemetry());
-        for (Runnable reset : java.util.List.<Runnable>of(
-                entities::onSourceStopped, entities::resetWorldState, entities::shutdown)) {
-            entities.glowBatches().add(new RtEntities.GlowEntity(new float[0], new int[0], -1));
-            entities.nameTagBatches().add(new RtEntities.NameTagEntity(
-                    net.minecraft.network.chat.Component.literal("stale"), 1, 2, 3));
-            reset.run();
-            assertEquals(0, entities.glowBatches().size());
-            assertEquals(0, entities.nameTagBatches().size());
-        }
+        entities.glowBatches().add(new RtEntities.GlowEntity(new float[0], new int[0], -1));
+        entities.nameTagBatches().add(new RtEntities.NameTagEntity(
+                net.minecraft.network.chat.Component.literal("stale"), 1, 2, 3));
+
+        entities.shutdown();
+
+        assertEquals(0, entities.glowBatches().size());
+        assertEquals(0, entities.nameTagBatches().size());
     }
 
     private static final class TestTelemetry implements MinecraftTelemetry.Instrumentation {
