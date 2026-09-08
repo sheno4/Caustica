@@ -24,7 +24,6 @@ final class MaterialPagePacker {
     }
 
     /** Writes only this placement's padded rectangle; aligned planner cells keep parallel writes disjoint. */
-    /** Writes only this placement's padded rectangle; aligned planner cells keep parallel writes disjoint. */
     void write(int x, int y, List<MaterialTextureLevels.Level> levels) {
         if (surface0 == null) return;
         for (int mip = 0; mip < levels.size(); mip++) {
@@ -62,20 +61,19 @@ final class MaterialPagePacker {
 
     private static void blit(byte[] dst, int dstWidth, int cx, int cy, int gutter,
                              int srcWidth, int srcHeight, float[] src) {
-        for (int dy = -gutter; dy < srcHeight + gutter; dy++) {
-            int sy = Math.clamp(dy, 0, srcHeight - 1);
-            int ty = cy + dy;
-            if (ty < 0 || ty >= dstWidth) continue;
-            for (int dx = -gutter; dx < srcWidth + gutter; dx++) {
-                int sx = Math.clamp(dx, 0, srcWidth - 1);
-                int tx = cx + dx;
-                if (tx < 0 || tx >= dstWidth) continue;
+        int left = Math.max(0, cx - gutter);
+        int top = Math.max(0, cy - gutter);
+        int right = Math.min(dstWidth, cx + srcWidth + gutter);
+        int bottom = Math.min(dstWidth, cy + srcHeight + gutter);
+        for (int y = top; y < bottom; y++) {
+            int sy = Math.clamp(y - cy, 0, srcHeight - 1);
+            for (int x = left; x < right; x++) {
+                int sx = Math.clamp(x - cx, 0, srcWidth - 1);
                 int si = (sy * srcWidth + sx) * 4;
-                int di = (ty * dstWidth + tx) * 4;
-                dst[di] = (byte) MaterialTextureLevels.unorm8(src[si]);
-                dst[di + 1] = (byte) MaterialTextureLevels.unorm8(src[si + 1]);
-                dst[di + 2] = (byte) MaterialTextureLevels.unorm8(src[si + 2]);
-                dst[di + 3] = (byte) MaterialTextureLevels.unorm8(src[si + 3]);
+                int di = (y * dstWidth + x) * 4;
+                for (int channel = 0; channel < 4; channel++) {
+                    dst[di + channel] = (byte) MaterialTextureLevels.unorm8(src[si + channel]);
+                }
             }
         }
     }
