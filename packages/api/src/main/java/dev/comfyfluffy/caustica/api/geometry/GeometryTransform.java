@@ -29,6 +29,7 @@ public record GeometryTransform(
         return new GeometryTransform(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, x, y, z);
     }
 
+    /** Row-major 3x4 GPU transform; subtract the scene origin before narrowing translation to floats. */
     public float[] relativeTo(double originX, double originY, double originZ) {
         return new float[]{
                 m00, m01, m02, (float) (translationX - originX),
