@@ -12,12 +12,8 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 /**
- * One numeric row: label, dot leader, track, and a right-aligned value.
- *
- * <p>Extends {@link AbstractSliderButton} for its behaviour only — normalized value, click-to-set, drag
- * tracking, the {@code canChangeValue} latch, click sound and narration — and paints every pixel itself.
- * The base class's own paint is overridden wholesale rather than extended, so no vanilla widget texture
- * appears; the {@code handleCursor} call the base would have made must therefore be made here.
+ * A numeric preference drawn as a label, track and value. Vanilla supplies focus, keyboard editing and
+ * drag delivery; pointer input maps to the track rather than the full row.
  */
 public final class CausticaSlider extends AbstractSliderButton {
     private final SettingControl.RangeControl control;
@@ -29,7 +25,7 @@ public final class CausticaSlider extends AbstractSliderButton {
         this.control = control;
         this.font = font;
         this.accent = accent;
-        this.value = control.toSlider(control.get());
+        refreshValue();
         if (control.tooltip() != null) {
             setTooltip(net.minecraft.client.gui.components.Tooltip.create(control.tooltip()));
         }
@@ -48,15 +44,21 @@ public final class CausticaSlider extends AbstractSliderButton {
     @Override
     protected void applyValue() {
         control.set(control.fromSlider(value));
+        refreshValue();
+    }
+
+    /** The base widget's normalized position mirrors the preference, including quantized writes. */
+    private void refreshValue() {
+        value = control.toSlider(control.get());
     }
 
     /**
-     * Vanilla moves by a fixed fraction of the span, which on a stepped range can land between steps and
-     * leave the knob off its grid. A stepped control moves by exactly one step instead.
+     * Stepped controls advance by one declared step; continuous controls use vanilla keyboard increments.
      */
     @Override
     public boolean keyPressed(KeyEvent event) {
         if (!isActive()) return false;
+        refreshValue();
         if (canChangeValue && control.step() > 0.0 && (event.isLeft() || event.isRight())) {
             double span = control.sliderMaximum() - control.sliderMinimum();
             double delta = control.step() / span * (event.isLeft() ? -1.0 : 1.0);
@@ -95,23 +97,24 @@ public final class CausticaSlider extends AbstractSliderButton {
         setValueFromMouse(event.x());
     }
 
-    /** Denominator matches the knob travel the paint uses, so the knob tracks the cursor exactly. */
+    /** Pointer mapping uses the painted knob's travel; stepped preferences snap to their declared grid. */
     private void setValueFromMouse(double mouseX) {
         if (!isActive()) return;
+        refreshValue();
         double travel = CausticaTheme.SLIDER_WIDTH - CausticaTheme.KNOB_WIDTH;
         setValue((mouseX - trackLeft() - CausticaTheme.KNOB_WIDTH / 2.0) / travel);
     }
 
     @Override
     public void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+        refreshValue();
         boolean enabled = control.enabled();
-        int trackRight = getX() + getWidth();
-        int valueLeft = trackRight - CausticaTheme.VALUE_WIDTH;
-        int trackLeft = valueLeft - CausticaTheme.SLIDER_WIDTH - CausticaTheme.GROUP_GAP;
+        int rowRight = getX() + getWidth();
+        int trackLeft = trackLeft();
         int textY = CausticaPaint.textBaseline(font, getY(), getHeight());
 
         if (isHovered && enabled) {
-            graphics.fill(getX(), getY(), trackRight, getY() + getHeight(), CausticaTheme.ROW_HOVER);
+            graphics.fill(getX(), getY(), rowRight, getY() + getHeight(), CausticaTheme.ROW_HOVER);
         }
 
         int labelColour = CausticaTheme.textColour(enabled, isHovered || isFocused());
@@ -140,7 +143,7 @@ public final class CausticaSlider extends AbstractSliderButton {
                 : CausticaTheme.dimmed(CausticaTheme.KNOB);
         graphics.fill(knobX, knobY, knobX + CausticaTheme.KNOB_WIDTH, knobY + CausticaTheme.KNOB_HEIGHT, knobColour);
 
-        CausticaPaint.textRight(graphics, font, control.format(control.get()), trackRight, textY,
+        CausticaPaint.textRight(graphics, font, control.format(control.get()), rowRight, textY,
                 enabled ? CausticaTheme.TEXT_VALUE : CausticaTheme.TEXT_DISABLED);
 
         if (isFocused()) {

@@ -12,6 +12,28 @@ import static org.lwjgl.glfw.GLFW.*;
 
 final class CausticaSliderTest {
     @Test
+    void keyboardEditingStartsFromTheCurrentPreference() {
+        var control = new Range();
+        var slider = new CausticaSlider(control, null, 0);
+        slider.keyPressed(new KeyEvent(GLFW_KEY_ENTER, 0, 0));
+
+        control.value = 8;
+        slider.keyPressed(new KeyEvent(GLFW_KEY_RIGHT, 0, 0));
+        assertEquals(9, control.value);
+    }
+
+    @Test
+    void clickingTheOldKnobPositionRestoresThatValueAfterAnExternalChange() {
+        var control = new Range();
+        var slider = new CausticaSlider(control, null, 0);
+        slider.setWidth(300);
+
+        control.value = 8;
+        slider.onClick(new MouseButtonEvent(190, 5, new MouseButtonInfo(0, 0)), false);
+        assertEquals(5, control.value);
+    }
+
+    @Test
     void availabilityCanChangeAfterConstructionAndDuringDragging() {
         var control = new Range();
         control.enabled = false;
