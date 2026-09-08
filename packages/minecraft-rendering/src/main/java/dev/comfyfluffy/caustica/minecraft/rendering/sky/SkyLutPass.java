@@ -19,8 +19,6 @@ import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.vulkan.*;
 import org.lwjgl.system.*;
 import org.lwjgl.vulkan.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.nio.*;
 import java.util.*;
@@ -31,7 +29,6 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Owns the Overworld atmosphere LUTs and publishes immutable environment binding revisions. */
 public final class SkyLutPass implements Pass<PassFrame> {
-    private static final Logger LOGGER = LoggerFactory.getLogger(SkyLutPass.class);
     public static final ResourceId ID = ResourceId.of("caustica", "sky_lut");
     private static final String SHADER_ROOT = "/caustica/shaders/pipelines/sky/";
     static final int TRANSMITTANCE_WIDTH = 256, TRANSMITTANCE_HEIGHT = 64;
@@ -65,7 +62,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private final VulkanSampler lutSampler, celestialSampler;
     private final VmaMappedBuffer skyInputs;
     private final ShaderObjectCompute transmittanceShader, multiScatterShader, skyViewShader;
-    private final SharedResource<AutoCloseable[]> resources;
+    private final SharedResource<ResourceLifetime> resources;
     private final AtomicLong resourcePackEpoch;
     private ResourceOwner bindingOwner;
     private SharedResource<AtlasEntry> atlas;
@@ -83,33 +80,36 @@ public final class SkyLutPass implements Pass<PassFrame> {
         this.selector = Objects.requireNonNull(selector, "selector");
         this.resourceFactory = Objects.requireNonNull(resourceFactory, "resourceFactory");
         resourcePackEpoch = new AtomicLong(epoch);
-        VmaImage2D t = null, m = null, v = null;
-        VulkanSampler ls = null, cs = null;
-        VmaMappedBuffer si = null;
-        ShaderObjectCompute ts = null, ms = null, vs = null;
+        List<Runnable> allocated = new ArrayList<>();
         try {
-            t = VmaImage2D.create(gpu, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT,
+            transmittance = VmaImage2D.create(gpu, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT,
                     VK_FORMAT_R16G16B16A16_SFLOAT, ID + " transmittance");
-            m = VmaImage2D.create(gpu, MULTISCATTER_WIDTH, MULTISCATTER_HEIGHT,
+            allocated.add(transmittance::close);
+            multiScatter = VmaImage2D.create(gpu, MULTISCATTER_WIDTH, MULTISCATTER_HEIGHT,
                     VK_FORMAT_R16G16B16A16_SFLOAT, ID + " multiscatter");
-            v = VmaImage2D.create(gpu, SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT,
+            allocated.add(multiScatter::close);
+            skyView = VmaImage2D.create(gpu, SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT,
                     VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
-            ls = VulkanSampler.linearClamp(gpu);
-            cs = VulkanSampler.nearestClamp(gpu);
-            si = createEmptyBuffer(gpu, SkyInputsData.BYTE_SIZE, "Minecraft sky inputs");
-            ts = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "transmittance.comp.spv");
-            ms = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "multiscatter.comp.spv");
-            vs = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "view.comp.spv");
+            allocated.add(skyView::close);
+            lutSampler = VulkanSampler.linearClamp(gpu);
+            allocated.add(lutSampler::close);
+            celestialSampler = VulkanSampler.nearestClamp(gpu);
+            allocated.add(celestialSampler::close);
+            skyInputs = createEmptyBuffer(gpu, SkyInputsData.BYTE_SIZE, "Minecraft sky inputs");
+            allocated.add(skyInputs::close);
+            transmittanceShader = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "transmittance.comp.spv");
+            allocated.add(transmittanceShader::close);
+            multiScatterShader = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "multiscatter.comp.spv");
+            allocated.add(multiScatterShader::close);
+            skyViewShader = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "view.comp.spv");
+            allocated.add(skyViewShader::close);
+            resources = SharedResource.owned(new ResourceLifetime(skyInputs::close, skyView::close,
+                    multiScatter::close, transmittance::close, celestialSampler::close, lutSampler::close),
+                    ResourceLifetime::close);
         } catch (RuntimeException | Error failure) {
-            closeAll(vs, ms, ts, si, cs, ls, v, m, t);
+            closeAfterFailure(failure, allocated.reversed().toArray(Runnable[]::new));
             throw failure;
         }
-        transmittance = t; multiScatter = m; skyView = v;
-        lutSampler = ls; celestialSampler = cs;
-        skyInputs = si;
-        transmittanceShader = ts; multiScatterShader = ms; skyViewShader = vs;
-        resources = SharedResource.owned(
-                new AutoCloseable[]{si, v, m, t, cs, ls}, SkyLutPass::closeAll);
     }
 
     public void invalidate(long epoch) { resourcePackEpoch.accumulateAndGet(epoch, Math::max); }
@@ -145,30 +145,29 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 snapshot.image().vkImage(), epoch)) return;
         SharedResource<AtlasEntry> replacement = AtlasEntry.create(
                 gpu, snapshot.image(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
-        BindingResources binding = null;
-        ResourceOwner owner = null;
-        boolean published = false;
+        Runnable releaseBinding = () -> { };
+        ResourceOwner owner;
         try {
-            binding = createBinding(replacement.retain());
-            owner = resourceFactory.create(binding::close);
+            BindingResources binding = createBinding(replacement.retain());
+            releaseBinding = binding::close;
+            owner = resourceFactory.create(releaseBinding);
+            // Once registered, the producer claim owns cleanup; published readers may retain it.
+            releaseBinding = owner::close;
             publishBinding(owner, environment, selector, binding.root.deviceRange().address().value());
-            published = true;
         } catch (RuntimeException | Error failure) {
-            if (owner != null) owner.close();
+            closeAfterFailure(failure, releaseBinding, replacement::close);
             throw failure;
-        } finally {
-            if (!published) {
-                if (binding != null && owner == null) binding.close();
-                replacement.close();
-            }
         }
         ResourceOwner previousOwner = bindingOwner;
         SharedResource<AtlasEntry> previousAtlas = atlas;
         bindingOwner = owner;
         atlas = replacement;
         baked = false;
-        if (previousOwner != null) previousOwner.close();
-        if (previousAtlas != null) previousAtlas.close();
+        new ResourceLifetime(() -> {
+            if (previousOwner != null) previousOwner.close();
+        }, () -> {
+            if (previousAtlas != null) previousAtlas.close();
+        }).close();
     }
 
     static void publishBinding(ResourceOwner owner,
@@ -194,8 +193,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
                             skyInputsAddress()).write(bytes));
             return new BindingResources(root, atlasLease, resources.retain());
         } catch (RuntimeException | Error failure) {
-            closeAll(root);
-            atlasLease.close();
+            VmaMappedBuffer allocatedRoot = root;
+            closeAfterFailure(failure, () -> {
+                if (allocatedRoot != null) allocatedRoot.close();
+            }, atlasLease::close);
             throw failure;
         }
     }
@@ -210,7 +211,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
             buffer.flush(0, size);
             return buffer;
         } catch (RuntimeException | Error failure) {
-            buffer.close();
+            closeAfterFailure(failure, buffer::close);
             throw failure;
         }
     }
@@ -223,7 +224,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
             buffer.flush(0, size);
             return buffer;
         } catch (RuntimeException | Error failure) {
-            buffer.close();
+            closeAfterFailure(failure, buffer::close);
             throw failure;
         }
     }
@@ -329,21 +330,28 @@ public final class SkyLutPass implements Pass<PassFrame> {
     @Override public void close() {
         if (closed) return;
         closed = true;
-        if (bindingOwner != null) bindingOwner.close();
+        ResourceOwner owner = bindingOwner;
+        SharedResource<AtlasEntry> previousAtlas = atlas;
         bindingOwner = null;
-        if (atlas != null) try { atlas.close(); }
-        catch (Throwable failure) { LOGGER.error("Sky atlas cleanup failed", failure); }
         atlas = null;
-        closeAll(skyViewShader, multiScatterShader, transmittanceShader);
-        resources.close();
+        new ResourceLifetime(() -> {
+            if (owner != null) owner.close();
+        }, () -> {
+            if (previousAtlas != null) previousAtlas.close();
+        }, skyViewShader::close, multiScatterShader::close, transmittanceShader::close,
+                resources::close).close();
     }
-    private static void closeAll(AutoCloseable... resources) {
-        for (AutoCloseable r : resources) if (r != null) try { r.close(); }
-        catch (Exception e) { LOGGER.error("Sky resource cleanup failed", e); }
+
+    static void closeAfterFailure(Throwable failure, Runnable... releases) {
+        try {
+            new ResourceLifetime(releases).close();
+        } catch (RuntimeException | Error cleanupFailure) {
+            if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
+        }
     }
 
     private record BindingResources(VmaMappedBuffer root, SharedResource<AtlasEntry> atlas,
-                                    SharedResource<AutoCloseable[]> resources) implements AutoCloseable {
+                                    SharedResource<ResourceLifetime> resources) implements AutoCloseable {
         @Override public void close() {
             new ResourceLifetime(root::close, atlas::close, resources::close).close();
         }
@@ -375,8 +383,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
                                 .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(d -> d.pImage(info)));
                 return SharedResource.owned(new AtlasEntry(image, epoch, allocated), AtlasEntry::close);
             } catch (RuntimeException | Error failure) {
-                if (range != null) range.destroy();
-                image.releaseViews();
+                GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = range;
+                closeAfterFailure(failure, () -> {
+                    if (allocated != null) allocated.destroy();
+                }, image::releaseViews);
                 throw failure;
             }
         }
