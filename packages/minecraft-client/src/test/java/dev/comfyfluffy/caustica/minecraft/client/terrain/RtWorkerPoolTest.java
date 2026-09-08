@@ -20,6 +20,7 @@ final class RtWorkerPoolTest {
         workers.submit(() -> {
             running.countDown();
             awaitUninterruptibly(release);
+            workers.state();
             finished.countDown();
         });
         assertTrue(running.await(2, TimeUnit.SECONDS));
@@ -42,6 +43,36 @@ final class RtWorkerPoolTest {
         workers.submit(restarted::countDown);
         assertTrue(restarted.await(2, TimeUnit.SECONDS));
         assertDoesNotThrow(workers::shutdown);
+    }
+
+    @Test
+    void coordinationIsSerialAndDoesNotWaitForExtractionOrPublication() throws Exception {
+        RtWorkerPool workers = new RtWorkerPool(1);
+        var extractionEntered = new CountDownLatch(1);
+        var publicationEntered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var mutations = new java.util.ArrayList<Integer>();
+        workers.submit(() -> {
+            extractionEntered.countDown();
+            awaitUninterruptibly(release);
+        });
+        workers.submitPublication(() -> {
+            publicationEntered.countDown();
+            awaitUninterruptibly(release);
+        }, () -> { });
+        try {
+            assertTrue(extractionEntered.await(2, TimeUnit.SECONDS));
+            assertTrue(publicationEntered.await(2, TimeUnit.SECONDS));
+            var coordinated = new CountDownLatch(1);
+            workers.submitCoordination(() -> mutations.add(1), () -> { });
+            workers.submitCoordination(() -> mutations.add(2), () -> { });
+            workers.submitCoordination(coordinated::countDown, () -> { });
+            assertTrue(coordinated.await(2, TimeUnit.SECONDS));
+            org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of(1, 2), mutations);
+        } finally {
+            release.countDown();
+            workers.shutdown();
+        }
     }
 
     private static void awaitUninterruptibly(CountDownLatch latch) {

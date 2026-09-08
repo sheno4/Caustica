@@ -18,6 +18,31 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class RtTerrainWorkerPreparationTest {
+    @Test void dirtyInvalidationDoesNotWaitForTheCoordinationStateLock() throws Exception {
+        try (var fixture = new Fixture()) {
+            var request = fixture.build().request();
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            Object lock = fixture.preparationLock();
+            fixture.workers.submitCoordination(() -> {
+                synchronized (lock) {
+                    entered.countDown();
+                    try { release.await(); }
+                    catch (InterruptedException failure) { Thread.currentThread().interrupt(); }
+                }
+            }, () -> { });
+            try (var render = Executors.newSingleThreadExecutor()) {
+                try {
+                    assertTrue(entered.await(5, TimeUnit.SECONDS));
+                    render.submit(() -> fixture.terrain.markBlocksDirty(1, 1, 1, 1, 1, 1))
+                            .get(2, TimeUnit.SECONDS);
+                    assertFalse(request.valid());
+                } finally { release.countDown(); }
+            }
+            fixture.awaitPublication();
+        }
+    }
+
     @Test void uploadsAndPublishesWithoutARenderPass() throws Exception {
         try (var fixture = new Fixture()) {
             fixture.submit();
@@ -236,10 +261,12 @@ final class RtTerrainWorkerPreparationTest {
             var extracted = new CountDownLatch(1);
             workers.submit(extracted::countDown);
             assertTrue(extracted.await(5, TimeUnit.SECONDS));
+            workers.coordinateAndWait(() -> { });
             for (int i = 0; i < 2; i++) {
                 var finished = new CountDownLatch(1);
                 workers.submitPublication(finished::countDown, () -> {});
                 assertTrue(finished.await(5, TimeUnit.SECONDS));
+                workers.coordinateAndWait(() -> { });
             }
         }
         @Override public void close() { terrain.shutdown(); geometry.close(); }

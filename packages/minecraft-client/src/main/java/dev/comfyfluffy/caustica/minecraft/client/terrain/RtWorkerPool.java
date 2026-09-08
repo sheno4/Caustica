@@ -2,8 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
-
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 
@@ -14,22 +12,25 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Daemon workers for terrain tessellation and buffer/BLAS preparation, with a separate serial
- * executor for ready publication. Workers may create distinct Vulkan/VMA objects and enqueue command recording onto
+ * Daemon workers for terrain tessellation and buffer/BLAS preparation, with separate serial
+ * executors for retained coordination, dispatch planning, and ready publication.
+ * Workers may create distinct Vulkan/VMA objects and enqueue command recording onto
  * {@code RtGpuExecutor}; they never access or submit the graphics queue. Each task delivers exactly one
  * terminal result through the terrain lifecycle barrier.
  *
- * <p>Sized at {@code -Dcaustica.rt.workerThreads} (default {@code clamp(cores/2, 1, 4)}) to leave
- * cores for Minecraft's own chunk meshers. Core threads time out when idle; all are daemon so they
- * never block JVM exit.
+ * <p>The configured worker count leaves cores for Minecraft's own chunk meshers. Core threads time
+ * out when idle; all are daemon so they never block JVM exit.
  */
 public final class RtWorkerPool {
     private final int threads;
     private ThreadPoolExecutor exec;
     private ThreadPoolExecutor publications;
+    private ThreadPoolExecutor planning;
+    private ThreadPoolExecutor coordination;
+    private boolean stopping;
 
     public RtWorkerPool() {
-        this(resolveThreads());
+        this(CausticaConfig.get(MinecraftOptions.Rt.WORKER_THREADS));
     }
 
     RtWorkerPool(int threads) {
@@ -37,11 +38,8 @@ public final class RtWorkerPool {
         this.threads = threads;
     }
 
-    private static int resolveThreads() {
-        return CausticaConfig.get(MinecraftOptions.Rt.WORKER_THREADS);
-    }
-
     private synchronized ThreadPoolExecutor executor() {
+        if (stopping) throw new java.util.concurrent.RejectedExecutionException("terrain workers are stopping");
         if (exec == null) {
             ThreadFactory factory = new ThreadFactory() {
                 private final AtomicInteger n = new AtomicInteger();
@@ -64,19 +62,53 @@ public final class RtWorkerPool {
 
     /** Ready publication cannot queue behind terrain tessellation and uploads. */
     public synchronized void submitPublication(Runnable job, Runnable cancelled) {
+        if (stopping) { cancelled.run(); return; }
         if (publications == null) {
-            publications = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
-                    new LinkedBlockingQueue<>(), work -> {
-                        Thread thread = new Thread(work, "rt-terrain-publication");
-                        thread.setDaemon(true);
-                        return thread;
-                    });
-            publications.allowCoreThreadTimeOut(true);
+            publications = serialExecutor("rt-terrain-publication");
         }
         publications.execute(new CancellableJob(job, cancelled));
     }
 
-    /** Submit worker-owned RT preparation; completion is delivered by the task itself. */
+    /** Priority selection has its own lane so it cannot delay ready geometry publication. */
+    synchronized void submitPlanning(Runnable job, Runnable cancelled) {
+        if (stopping) { cancelled.run(); return; }
+        if (planning == null) {
+            planning = serialExecutor("rt-terrain-dispatch");
+        }
+        planning.execute(new CancellableJob(job, cancelled));
+    }
+
+    /** Retained window and request mutations run independently of extraction and edit preparation. */
+    synchronized void submitCoordination(Runnable job, Runnable cancelled) {
+        if (stopping) { cancelled.run(); return; }
+        if (coordination == null) {
+            coordination = serialExecutor("rt-terrain-coordination");
+        }
+        coordination.execute(new CancellableJob(job, cancelled));
+    }
+
+    private static ThreadPoolExecutor serialExecutor(String name) {
+        var executor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(), work -> {
+                    var thread = new Thread(work, name);
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    /** Lifecycle callers may wait for previously queued coordination without holding terrain locks. */
+    void coordinateAndWait(Runnable action) {
+        var completion = new java.util.concurrent.CompletableFuture<Void>();
+        submitCoordination(() -> {
+            try { action.run(); completion.complete(null); }
+            catch (Throwable failure) { completion.completeExceptionally(failure); }
+        }, () -> completion.complete(null));
+        completion.join();
+    }
+
+    /** Observe CPU worker activity without including the three serial executors. */
     synchronized State state() {
         return exec == null ? new State(threads, 0, 0) : new State(threads,
                 exec.getActiveCount(), exec.getQueue().size());
@@ -97,11 +129,24 @@ public final class RtWorkerPool {
      * Stop all workers, close queued-job lifecycles, and join running jobs. Once this returns no worker
      * can enqueue additional GPU work, so the session may take a stable GPU-drain snapshot.
      */
-    public synchronized void shutdown() {
-        stop(publications);
-        publications = null;
-        stop(exec);
-        exec = null;
+    public void shutdown() {
+        ThreadPoolExecutor stoppedPlanning, stoppedPublications, stoppedCoordination, stoppedWorkers;
+        synchronized (this) {
+            stopping = true;
+            stoppedPlanning = planning;
+            stoppedPublications = publications;
+            stoppedCoordination = coordination;
+            stoppedWorkers = exec;
+            planning = publications = coordination = exec = null;
+        }
+        try {
+            stop(stoppedPlanning);
+            stop(stoppedCoordination);
+            stop(stoppedPublications);
+            stop(stoppedWorkers);
+        } finally {
+            synchronized (this) { stopping = false; }
+        }
     }
 
     private static void stop(ThreadPoolExecutor executor) {

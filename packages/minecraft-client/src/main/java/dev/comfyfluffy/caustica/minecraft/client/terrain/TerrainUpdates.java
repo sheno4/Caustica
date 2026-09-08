@@ -7,20 +7,42 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Comparator;
-import java.util.PriorityQueue;
-import java.util.function.Predicate;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
-/** State guarded by the terrain preparation lock. Request identity rejects results from superseded extraction groups. */
+/** Workers own section/group bookkeeping; render reads readiness and reserves atomic extraction tokens. */
 final class TerrainUpdates<T> {
     final Long2ObjectOpenHashMap<Section<T>> sections = new Long2ObjectOpenHashMap<>();
     private final LinkedHashSet<Group<T>> groups = new LinkedHashSet<>();
     private final LinkedHashSet<Group<T>> ready = new LinkedHashSet<>();
-    private final LinkedHashSet<Request<T>> pending = new LinkedHashSet<>();
-
-    private final java.util.function.Consumer<T> discard;
+    private final ConcurrentHashMap<Long, Request<T>> current = new ConcurrentHashMap<>();
+    private final Set<Long> published = ConcurrentHashMap.newKeySet();
+    private final Consumer<T> discard;
+    private final BiConsumer<Long, Request<T>> pending;
     TerrainUpdates() { this(value -> { }); }
-    TerrainUpdates(java.util.function.Consumer<T> discard) { this.discard = discard; }
+    TerrainUpdates(Consumer<T> discard) { this(discard, (key, request) -> { }); }
+    TerrainUpdates(Consumer<T> discard, BiConsumer<Long, Request<T>> pending) {
+        this.discard = discard;
+        this.pending = pending;
+    }
+
+    boolean isReady(long key) { return published.contains(key); }
+
+    /** Invalidations reject extraction immediately; the coordination worker rebuilds neighboring groups. */
+    void invalidate(Collection<Long> keys) {
+        for (long key : keys) {
+            var request = current.get(key);
+            while (request != null) {
+                request.invalidate();
+                var latest = current.get(key);
+                if (latest == request) break;
+                request = latest;
+            }
+        }
+    }
 
     void want(long key) {
         Section<T> section = sections.get(key);
@@ -64,7 +86,8 @@ final class TerrainUpdates<T> {
                 if (groups.remove(old)) {
                     ready.remove(old);
                     for (Request<T> request : old.requests) {
-                        pending.remove(request);
+                        request.invalidate();
+                        pending.accept(request.section.key, null);
                         if (request.result != null) discard.accept(request.result);
                     }
                 }
@@ -77,9 +100,10 @@ final class TerrainUpdates<T> {
             Section<T> section = sections.get(key);
             Request<T> request = new Request<>(section, group);
             section.request = request;
+            current.put(key, request);
             group.requests.add(request);
             if (section.wanted) {
-                pending.add(request);
+                pending.accept(key, request);
                 group.remaining++;
             }
         }
@@ -88,46 +112,56 @@ final class TerrainUpdates<T> {
     }
 
     boolean complete(Request<T> request, T result) {
-        if (request.section.request != request) return false;
-        pending.remove(request);
+        if (request.section.request != request || !request.acceptResult()) return false;
+        pending.accept(request.section.key, null);
         request.result = result;
-        request.complete = true;
         if (--request.group.remaining == 0) ready.add(request.group);
         return true;
     }
 
-    /** Only current requests awaiting extraction participate in dispatch selection. */
-    Collection<Request<T>> pending() {
-        return pending;
-    }
-
-    /** Selects the best available requests without probing availability for requests that cannot win. */
-    List<Request<T>> selectPending(int slots, Comparator<Request<T>> order, Predicate<Request<T>> available) {
-        var candidates = new PriorityQueue<Request<T>>(slots, order.reversed());
-        for (var request : pending) {
-            if (candidates.size() == slots && order.compare(request, candidates.peek()) >= 0) continue;
-            if (!available.test(request)) continue;
-            if (candidates.size() == slots) candidates.poll();
-            candidates.add(request);
-        }
-        var ordered = new ArrayList<>(candidates);
-        ordered.sort(order);
-        return ordered;
+    /** Advisory plans contain independently invalidatable tokens, with no mutable-map read on render. */
+    boolean awaitingExtraction(Request<T> request) {
+        return request.awaitingExtraction();
     }
 
     void dispatched(Request<T> request) {
-        pending.remove(request);
-        request.dispatched = true;
+        if (request.section.request != request || !request.markDispatched()) return;
+        pending.accept(request.section.key, null);
     }
 
     void retry(Request<T> request) {
-        request.dispatched = false;
-        pending.add(request);
+        if (request.section.request != request || !request.retry()) return;
+        pending.accept(request.section.key, request);
     }
 
     /** Complete groups are available for worker publication; unfinished neighbors remain atomic. */
     List<Group<T>> ready() {
-        return List.copyOf(ready);
+        var result = new ArrayList<Group<T>>(ready.size());
+        for (var group : ready) if (group.availableForPublication()) result.add(group);
+        return result;
+    }
+
+    /** Scheduling probes readiness without collecting groups or constructing per-group stream state. */
+    boolean hasReadyGroup() {
+        for (var group : ready) if (group.availableForPublication()) return true;
+        return false;
+    }
+
+    /** Each successful claim accepts one atomic group; later dirtiness requests its next revision. */
+    boolean claimPublication(List<Group<T>> candidates) {
+        int claimed = 0;
+        for (var group : candidates) {
+            if (!group.publication.compareAndSet(0, Group.CLAIMED)) {
+                for (int i = 0; i < claimed; i++) candidates.get(i).releasePublication();
+                return false;
+            }
+            claimed++;
+        }
+        return true;
+    }
+
+    void releasePublication(List<Group<T>> candidates) {
+        candidates.forEach(Group::releasePublication);
     }
 
     void published(List<Group<T>> published) {
@@ -136,8 +170,12 @@ final class TerrainUpdates<T> {
             ready.remove(group);
             for (Request<T> request : group.requests) {
                 Section<T> section = request.section;
+                request.invalidate();
+                current.remove(section.key, request);
                 section.request = null;
                 section.ready = section.wanted;
+                if (section.ready) this.published.add(section.key);
+                else this.published.remove(section.key);
                 if (!section.wanted) sections.remove(section.key);
             }
         }
@@ -149,11 +187,16 @@ final class TerrainUpdates<T> {
                 if (request.result != null) discard.accept(request.result);
             }
         }
-        for (Section<T> section : sections.values()) section.request = null;
+        for (Section<T> section : sections.values()) {
+            if (section.request != null) section.request.invalidate();
+            section.request = null;
+            pending.accept(section.key, null);
+        }
         sections.clear();
         groups.clear();
         ready.clear();
-        pending.clear();
+        current.clear();
+        published.clear();
     }
 
     static final class Section<T> {
@@ -165,20 +208,51 @@ final class TerrainUpdates<T> {
     }
 
     static final class Group<T> {
+        private static final int INVALID = 1, CLAIMED = 2;
+        private final AtomicInteger publication = new AtomicInteger();
         final List<Request<T>> requests = new ArrayList<>();
         int remaining;
+        boolean valid() { return (publication.get() & INVALID) == 0; }
+        boolean availableForPublication() { return publication.get() == 0; }
+        // Invalidation rejects future claims without revoking an already accepted publication.
+        void invalidate() { publication.getAndUpdate(state -> state | INVALID); }
+        void releasePublication() { publication.getAndUpdate(state -> state & ~CLAIMED); }
     }
 
     static final class Request<T> {
+        private static final int PENDING = 0, CAPTURING = 1, DISPATCHED = 2, COMPLETE = 3, INVALID = 4;
+        private final AtomicInteger extraction;
         final Section<T> section;
         final Group<T> group;
-        boolean dispatched;
-        boolean complete;
         T result;
         Request(Section<T> section, Group<T> group) {
             this.section = section;
             this.group = group;
-            complete = !section.wanted;
+            extraction = new AtomicInteger(section.wanted ? PENDING : COMPLETE);
+        }
+        boolean complete() { return extraction.get() == COMPLETE; }
+        boolean dispatched() { return extraction.get() == DISPATCHED; }
+        boolean awaitingExtraction() { return group.valid() && extraction.get() == PENDING; }
+        boolean reserve() { return group.valid() && extraction.compareAndSet(PENDING, CAPTURING); }
+        boolean extracted() { return group.valid() && extraction.compareAndSet(CAPTURING, DISPATCHED); }
+        boolean valid() { return group.valid() && extraction.get() != INVALID; }
+        void invalidate() { group.invalidate(); extraction.set(INVALID); }
+        private boolean markDispatched() {
+            if (!group.valid()) return false;
+            return extraction.compareAndSet(PENDING, DISPATCHED) || extraction.get() == DISPATCHED;
+        }
+        private boolean retry() {
+            if (!group.valid()) return false;
+            return extraction.compareAndSet(DISPATCHED, PENDING) || extraction.compareAndSet(CAPTURING, PENDING);
+        }
+        private boolean acceptResult() {
+            if (!group.valid()) return false;
+            int state = extraction.get();
+            while (state != INVALID && state != COMPLETE) {
+                if (extraction.compareAndSet(state, COMPLETE)) return true;
+                state = extraction.get();
+            }
+            return false;
         }
     }
 }

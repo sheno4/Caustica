@@ -28,14 +28,13 @@ import net.minecraft.world.level.biome.Biome;
  * Each region's decoded state cache belongs exclusively to the worker processing that region.
  */
 final class RtSectionSnapshots {
-    // Bounds worst-case cache memory to ~16 MB (palette copies run ~2-4 KB). Dispatch is column-coherent
-    // nearest-first, so the live working set (in-flight neighbourhoods) is far smaller than this.
+    // Cache retention is bounded independently of palettes still owned by queued or running jobs.
     private static final int MAX_ENTRIES = 4096;
     /** Cache/region marker for a section with no copyable states (all air, unloaded, or out of range). */
     static final Object AIR = new Object();
 
     private final MinecraftTelemetry.Instrumentation instrumentation;
-    private final Long2ObjectLinkedOpenHashMap<Object> cache = new Long2ObjectLinkedOpenHashMap<>();
+    private final Cache cache = new Cache(MAX_ENTRIES);
 
     RtSectionSnapshots(MinecraftTelemetry.Instrumentation instrumentation) {
         this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
@@ -44,10 +43,15 @@ final class RtSectionSnapshots {
     /** Snapshot the 3×3×3 neighbourhood of a section, reusing cached palette copies (render thread). */
     Region createRegion(ClientLevel level, int scx, int scy, int scz) {
         Object[] sections = new Object[27];
+        LevelChunk[] columns = new LevelChunk[9];
+        for (int z = -1; z <= 1; z++) {
+            for (int x = -1; x <= 1; x++) columns[(x + 1) + (z + 1) * 3] = level.getChunk(scx + x, scz + z);
+        }
         for (int z = -1; z <= 1; z++) {
             for (int y = -1; y <= 1; y++) {
                 for (int x = -1; x <= 1; x++) {
-                    sections[(x + 1) + (y + 1) * 3 + (z + 1) * 9] = section(level, scx + x, scy + y, scz + z);
+                    sections[(x + 1) + (y + 1) * 3 + (z + 1) * 9] = section(
+                            columns[(x + 1) + (z + 1) * 3], scx + x, scy + y, scz + z);
                 }
             }
         }
@@ -56,29 +60,25 @@ final class RtSectionSnapshots {
 
     /** Drop a stale entry (edited section, or its column unloaded / left the window). Render thread. */
     void invalidate(long sectionKey) {
-        cache.remove(sectionKey);
+        cache.invalidate(sectionKey);
     }
 
     void clear() {
         cache.clear();
     }
 
-    private Object section(ClientLevel level, int scx, int scy, int scz) {
+    private Object section(LevelChunk chunk, int scx, int scy, int scz) {
         long key = RtTerrain.sectionKey(scx, scy, scz);
-        Object cached = cache.getAndMoveToLast(key);
+        Object cached = cache.get(key, chunk);
         if (cached != null) {
             return cached;
         }
-        Object copy = copySection(level, scx, scy, scz);
-        cache.putAndMoveToLast(key, copy);
-        if (cache.size() > MAX_ENTRIES) {
-            cache.removeFirst();
-        }
+        Object copy = copySection(chunk, scy);
+        cache.put(key, chunk, copy);
         return copy;
     }
 
-    private Object copySection(ClientLevel level, int scx, int scy, int scz) {
-        LevelChunk chunk = level.getChunk(scx, scz);
+    private Object copySection(LevelChunk chunk, int scy) {
         if (chunk instanceof EmptyLevelChunk) {
             return AIR;
         }
@@ -93,6 +93,29 @@ final class RtSectionSnapshots {
         }
         instrumentation.count("sectionCopies", 1);
         return section.getStates().copy();
+    }
+
+    /** Palette reuse follows exact column identity without retaining unloaded live Minecraft columns. */
+    static final class Cache {
+        private final int capacity;
+        private final Long2ObjectLinkedOpenHashMap<Entry> entries = new Long2ObjectLinkedOpenHashMap<>();
+
+        Cache(int capacity) { this.capacity = capacity; }
+
+        Object get(long key, Object column) {
+            var entry = entries.getAndMoveToLast(key);
+            return entry != null && entry.column.get() == column ? entry.palette : null;
+        }
+
+        void put(long key, Object column, Object palette) {
+            entries.putAndMoveToLast(key, new Entry(new java.lang.ref.WeakReference<>(column), palette));
+            if (entries.size() > capacity) entries.removeFirst();
+        }
+
+        void invalidate(long key) { entries.remove(key); }
+        void clear() { entries.clear(); }
+
+        private record Entry(java.lang.ref.WeakReference<Object> column, Object palette) { }
     }
 
     /** Immutable section revisions with a lazy, worker-confined cache of the center and one-block halo. */
