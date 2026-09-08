@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.presentation;
 
-
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
@@ -9,12 +8,8 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.renderer.presentation.gen.PresentPushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 
 /** Composites a sampled sRGB UI image over a PQ HDR image in place. */
@@ -29,13 +24,13 @@ public final class RtHdrCompositePipeline {
     }
 
     public static RtHdrCompositePipeline create(VulkanDeviceContext context) {
-        return new RtHdrCompositePipeline(context, load(context));
+        return new RtHdrCompositePipeline(context, PresentationShaders.load(context, SHADER));
     }
 
     public void dispatch(VkCommandBuffer command, GpuImage output,
                          GpuDescriptorIndex.Resource source, float uiNits) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command, "hdr ui composite")) {
+             var ignored = RtDebugLabels.scope(context, command, "hdr ui composite")) {
             ByteBuffer push = stack.malloc(PresentPushData.BYTE_SIZE);
             new PresentPushData(output.descriptor(GpuImageDescriptorKind.STORAGE).index().value(),
                     source.value(), uiNits).write(push);
@@ -45,13 +40,4 @@ public final class RtHdrCompositePipeline {
 
     public void destroy() { shader.close(); }
 
-    private static ShaderObjectCompute load(VulkanDeviceContext context) {
-        try (InputStream input = RtHdrCompositePipeline.class.getResourceAsStream(SHADER)) {
-            if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
-            byte[] bytes = input.readAllBytes();
-            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
-            try { spirv.put(bytes).flip(); return ShaderObjectCompute.create(context, spirv, "main"); }
-            finally { MemoryUtil.memFree(spirv); }
-        } catch (IOException failure) { throw new UncheckedIOException(failure); }
-    }
 }

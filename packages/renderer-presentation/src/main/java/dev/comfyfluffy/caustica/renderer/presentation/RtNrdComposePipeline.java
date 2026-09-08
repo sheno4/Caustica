@@ -7,12 +7,8 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.presentation.gen.NrdComposePushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 
 /** Prepares one stable plane for NRD and merges its remodulated output into scene radiance. */
@@ -49,7 +45,7 @@ public final class RtNrdComposePipeline {
     }
 
     public static RtNrdComposePipeline create(VulkanDeviceContext context) {
-        return new RtNrdComposePipeline(context, load(context));
+        return new RtNrdComposePipeline(context, PresentationShaders.load(context, SHADER));
     }
 
     public void prepare(VkCommandBuffer command, long stablePlaneAddress, long frameAddress,
@@ -65,7 +61,7 @@ public final class RtNrdComposePipeline {
     private void dispatch(VkCommandBuffer command, long stablePlaneAddress, long frameAddress,
                           int plane, int signalEncoding, int mode, Exchange exchange) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command,
+             var ignored = RtDebugLabels.scope(context, command,
                      mode == 0 ? "NRD plane prepare" : "NRD plane merge")) {
             ByteBuffer push = stack.malloc(NrdComposePushData.BYTE_SIZE);
             new NrdComposePushData(stablePlaneAddress, frameAddress, storage(exchange.output()),
@@ -87,19 +83,4 @@ public final class RtNrdComposePipeline {
         shader.close();
     }
 
-    private static ShaderObjectCompute load(VulkanDeviceContext context) {
-        try (InputStream input = RtNrdComposePipeline.class.getResourceAsStream(SHADER)) {
-            if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
-            byte[] bytes = input.readAllBytes();
-            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
-            try {
-                spirv.put(bytes).flip();
-                return ShaderObjectCompute.create(context, spirv, "main");
-            } finally {
-                MemoryUtil.memFree(spirv);
-            }
-        } catch (IOException failure) {
-            throw new UncheckedIOException(failure);
-        }
-    }
 }

@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.presentation;
 
-
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
@@ -10,12 +9,8 @@ import dev.comfyfluffy.caustica.renderer.presentation.gen.ExposureHistPushData;
 import dev.comfyfluffy.caustica.renderer.presentation.gen.ExposureResolvePushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 
 /** Descriptor-heap shader objects for histogram auto exposure. */
@@ -33,10 +28,10 @@ final class RtExposurePipeline {
     }
 
     static RtExposurePipeline create(VulkanDeviceContext context) {
-        ShaderObjectCompute histogram = load(context, "exposure_hist/main.comp.spv");
+        ShaderObjectCompute histogram = PresentationShaders.load(context, ROOT + "exposure_hist/main.comp.spv");
         try {
             return new RtExposurePipeline(context, histogram,
-                    load(context, "exposure_resolve/main.comp.spv"));
+                    PresentationShaders.load(context, ROOT + "exposure_resolve/main.comp.spv"));
         } catch (RuntimeException | Error failure) {
             histogram.close();
             throw failure;
@@ -76,23 +71,6 @@ final class RtExposurePipeline {
 
     private static int storage(GpuImage image) {
         return image.descriptor(GpuImageDescriptorKind.STORAGE).index().value();
-    }
-
-    private static ShaderObjectCompute load(VulkanDeviceContext context, String name) {
-        String resource = ROOT + name;
-        try (InputStream input = RtExposurePipeline.class.getResourceAsStream(resource)) {
-            if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + resource);
-            byte[] bytes = input.readAllBytes();
-            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
-            try {
-                spirv.put(bytes).flip();
-                return ShaderObjectCompute.create(context, spirv, "main");
-            } finally {
-                MemoryUtil.memFree(spirv);
-            }
-        } catch (IOException failure) {
-            throw new UncheckedIOException(failure);
-        }
     }
 
     void destroy() {
