@@ -233,15 +233,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	}
 
 	/**
-	 * Chain {@code VkSwapchainLatencyCreateInfoNV{latencyModeEnable=true}} into the swapchain's pNext at
-	 * creation. {@code vkSetLatencySleepModeNV} only takes effect on a swapchain created with this flag,
-	 * so it has to be set here,
-	 * before there's any other reason to touch swapchain creation. Preserves whatever pNext was already
-	 * there (currently nothing else chains one). The extra struct is stack-allocated and only needs to
-	 * survive this call — Vulkan reads pNext chains synchronously during {@code vkCreateSwapchainKHR}, it
-	 * doesn't retain the pointer afterward, so freeing it when this method's stack frame pops is safe even
-	 * though {@code pCreateInfo} isn't touched again after this point in {@code configure()}. No-op (calls
-	 * through unchanged) when Reflex isn't enabled + device-supported.
+	 * Enables latency configuration on supported swapchains. Vulkan consumes the added pNext structure
+	 * synchronously; restore the caller's chain before releasing its temporary storage.
 	 */
 	@Redirect(method = "configure",
 			at = @At(value = "INVOKE",
@@ -257,7 +250,11 @@ public abstract class VulkanGpuSurfaceMixin {
 			latency.pNext(pCreateInfo.pNext());
 			latency.latencyModeEnable(true);
 			pCreateInfo.pNext(latency.address());
-			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+			try {
+				return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+			} finally {
+				pCreateInfo.pNext(latency.pNext());
+			}
 		}
 	}
 
@@ -320,7 +317,11 @@ public abstract class VulkanGpuSurfaceMixin {
 						.swapchainCount(1)
 						.pPresentIds(stack.longs(presentId));
 				presentInfo.pNext(vkPresentId.address());
-				result = KHRSwapchain.vkQueuePresentKHR(queue, presentInfo);
+				try {
+					result = KHRSwapchain.vkQueuePresentKHR(queue, presentInfo);
+				} finally {
+					presentInfo.pNext(vkPresentId.pNext());
+				}
 			}
 		} else {
 			result = KHRSwapchain.vkQueuePresentKHR(queue, presentInfo);
