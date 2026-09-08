@@ -50,7 +50,7 @@ public final class ShaderSource {
     }
 
     public InputStream openModule(String module) {
-        SlangIdentifier.requireModule(module);
+        SlangIdentifier.require(module, "module");
         String modulePath = module.replace('.', '/');
         InputStream direct = resourceAnchor.getResourceAsStream(classpathRoot + '/' + modulePath + ".slang");
         if (direct != null) {

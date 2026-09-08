@@ -50,7 +50,7 @@ final class WorldShaderFallbackTest {
         ProgramComposition registered = new ProgramComposition(List.of(
                 new ProgramComposition.Surface(surface, SurfaceDefinition.opaque(
                         shader("caustica_error_surface", "ErrorSurface"), ROOT.data(1), BINDING, INSTANCE)),
-                new ProgramComposition.Volume(volume, VolumeDefinition.of(
+                new ProgramComposition.Volume(volume, new VolumeDefinition<>(
                         shader("caustica_error_surface", "ErrorSurface"), ROOT.data(2), BINDING, INSTANCE))));
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache.resolve("registered"),

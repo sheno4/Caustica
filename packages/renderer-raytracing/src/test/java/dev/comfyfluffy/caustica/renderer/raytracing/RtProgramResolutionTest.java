@@ -107,7 +107,7 @@ final class RtProgramResolutionTest {
                 builder.surface(SurfaceDefinition.opaque(
                         new ShaderDefinition(source, "test", "test." + name + "Surface"),
                         DATA.data(0), DATA, DATA)),
-                builder.volume(VolumeDefinition.of(
+                builder.volume(new VolumeDefinition<>(
                         new ShaderDefinition(source, "test", "test." + name + "Volume"),
                         DATA.data(0), DATA, DATA)),
                 builder.environment(new EnvironmentDefinition<>(

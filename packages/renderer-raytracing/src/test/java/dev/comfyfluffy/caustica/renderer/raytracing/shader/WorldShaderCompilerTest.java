@@ -58,7 +58,7 @@ final class WorldShaderCompilerTest {
                 List.of(new ProgramComposition.Surface(surfaceKey, SurfaceDefinition.of(
                                 shader("caustica_error_surface", "ErrorSurface"),
                                 shader("caustica_error_coverage", "ErrorCoverage"), DATA.data(41), BINDING, INSTANCE)),
-                        new ProgramComposition.Volume(volumeKey, VolumeDefinition.of(
+                        new ProgramComposition.Volume(volumeKey, new VolumeDefinition<>(
                                 shader("caustica_water_surface", "WaterVolume"), DATA.data(42), BINDING, INSTANCE)),
                         new ProgramComposition.Environment(environmentKey, new EnvironmentDefinition<>(
                                 shader("caustica_builtin_sky", "BuiltinEnvironment"), BINDING))));

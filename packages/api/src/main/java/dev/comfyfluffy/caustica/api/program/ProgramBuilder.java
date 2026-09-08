@@ -10,7 +10,7 @@ package dev.comfyfluffy.caustica.api.program;
 public interface ProgramBuilder {
     /**
      * Declare one surface implementation and its optional coverage implementation.
-     * A geometry using cutout coverage may select the returned id only when the definition supplies coverage.
+     * Cutout and stochastic geometry may select the returned id only when the definition supplies coverage.
      */
     <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition);
 

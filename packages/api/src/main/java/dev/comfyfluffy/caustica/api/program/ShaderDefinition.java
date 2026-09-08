@@ -16,7 +16,7 @@ import java.util.Objects;
 public record ShaderDefinition(ShaderSource source, String module, String type) {
     public ShaderDefinition {
         Objects.requireNonNull(source, "source");
-        SlangIdentifier.requireModule(module);
-        SlangIdentifier.requireType(type);
+        SlangIdentifier.require(module, "module");
+        SlangIdentifier.require(type, "type");
     }
 }

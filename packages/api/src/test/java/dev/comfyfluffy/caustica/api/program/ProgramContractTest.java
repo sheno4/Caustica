@@ -100,7 +100,7 @@ final class ProgramContractTest {
         SurfaceDefinition.of(surface, coverage, implementationData, bindingType, instanceType);
         assertNull(SurfaceDefinition.opaque(surface, implementationData, bindingType, instanceType)
                 .coverage());
-        VolumeDefinition.of(volume, implementationData, bindingType, instanceType);
+        new VolumeDefinition<>(volume, implementationData, bindingType, instanceType);
     }
 
     @Test

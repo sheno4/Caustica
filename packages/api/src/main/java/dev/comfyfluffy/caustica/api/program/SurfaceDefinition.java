@@ -6,7 +6,7 @@ import java.util.Objects;
  * One surface implementation, its optional traversal-safe coverage implementation, and their
  * extension-owned data root. Each implementation carries its own module resolver. Coverage is nullable
  * for a surface used only with {@link dev.comfyfluffy.caustica.api.geometry.MeshBuild.CoveragePolicy.Opaque};
- * geometry using {@code Cutout} requires it. A volume is an independent geometry slot registered with
+ * geometry using {@code Cutout} or {@code Stochastic} requires it. A volume is an independent geometry slot registered with
  * {@link ProgramBuilder#volume}.
  *
  * <p>{@code implementationData} reaches both implementations unchanged. It is commonly a device address for the

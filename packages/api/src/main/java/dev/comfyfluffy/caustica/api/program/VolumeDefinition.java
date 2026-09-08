@@ -23,11 +23,4 @@ public record VolumeDefinition<B, N>(ShaderDefinition implementation, ShaderData
         Objects.requireNonNull(instanceDataType, "instanceDataType");
     }
 
-    /** Creates a volume definition. */
-    public static <B, N> VolumeDefinition<B, N> of(
-            ShaderDefinition implementation, ShaderData<?> implementationData,
-            ShaderDataType<B> bindingDataType, ShaderDataType<N> instanceDataType) {
-        return new VolumeDefinition<>(implementation, implementationData, bindingDataType,
-                instanceDataType);
-    }
 }

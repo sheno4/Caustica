@@ -294,7 +294,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                             SHADERS.definition("caustica_portal_surface", "PortalSurface"),
                             coverage, roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                             MinecraftProgramTypes.INSTANCE_DATA)),
-                    builder.volume(VolumeDefinition.of(
+                    builder.volume(new VolumeDefinition<>(
                             SHADERS.definition("caustica_water_surface", "WaterVolume"),
                             roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                             MinecraftProgramTypes.INSTANCE_DATA)),
