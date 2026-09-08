@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
+import dev.comfyfluffy.caustica.engine.session.EnvironmentSelectionScope;
 import dev.comfyfluffy.caustica.engine.session.ContributionScope;
 import dev.comfyfluffy.caustica.engine.session.ContributionScopeFactory;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
@@ -134,7 +135,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
             report(owner, MinecraftSessionFailure.Stage.CREATE_SCOPE, failure);
             return;
         }
-        MinecraftEnvironmentScope environment;
+        EnvironmentSelectionScope environment;
         try {
             environment = Objects.requireNonNull(environments.create(owner, scene),
                     "environment scope factory returned null");
@@ -146,7 +147,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
         MinecraftWorldSessionContribution contribution;
         try {
             contribution = Objects.requireNonNull(registration.factory().open(
-                    new Context(new CoreContext(scope), scene, dimension, resourcePackEpoch, environment)),
+                    new Context(new CoreContext(scope), scene, dimension, resourcePackEpoch, environment::select)),
                     "Minecraft world-session factory returned null");
         } catch (Throwable failure) {
             teardown(List.of(new ActiveContribution(owner, scope, environment, null)), false);
@@ -210,7 +211,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
     }
 
     private record ActiveContribution(ContributionOwner owner, ContributionScope scope,
-                                      MinecraftEnvironmentScope environment,
+                                      EnvironmentSelectionScope environment,
                                       MinecraftWorldSessionContribution contribution) { }
 
     private record Context(RenderSessionContext renderSession, SceneId scene,

@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.adapter.session;
 
+import dev.comfyfluffy.caustica.engine.session.EnvironmentSelectionScope;
 import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
@@ -171,8 +172,8 @@ final class MinecraftWorldSessionHostTest {
         };
     }
 
-    private static MinecraftEnvironmentScope environmentScope(List<EnvironmentBinding<?>> selected) {
-        return new MinecraftEnvironmentScope() {
+    private static EnvironmentSelectionScope environmentScope(List<EnvironmentBinding<?>> selected) {
+        return new EnvironmentSelectionScope() {
             @Override public void select(
                     EnvironmentBinding<?> binding) {
                 selected.add(binding);

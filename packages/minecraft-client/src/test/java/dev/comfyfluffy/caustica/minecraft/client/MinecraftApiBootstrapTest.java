@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
+import dev.comfyfluffy.caustica.engine.session.EnvironmentSelectionScope;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
 import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
@@ -12,7 +13,6 @@ import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
 import dev.comfyfluffy.caustica.engine.session.ContributionScope;
 import dev.comfyfluffy.caustica.engine.session.EngineRenderSession;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
-import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftEnvironmentScope;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSession;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
@@ -61,7 +61,7 @@ final class MinecraftApiBootstrapTest {
                 minecraftHost, List.of(new MinecraftOnly(), dual), generic);
 
         MinecraftWorldSession session = minecraftHost.openSession(
-                owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
+                owner -> new EmptyScope(), (owner, scene) -> new EnvironmentSelectionScope() {
                     @Override public void select(
                             dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
                     }
@@ -110,7 +110,7 @@ final class MinecraftApiBootstrapTest {
         });
         session.processPendingChanges();
         MinecraftWorldSession minecraftSession = minecraftHost.openSession(
-                owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
+                owner -> new EmptyScope(), (owner, scene) -> new EnvironmentSelectionScope() {
                     @Override public void select(
                             dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
                     }
