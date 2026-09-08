@@ -54,8 +54,7 @@ public final class VulkanDiagnostics {
             new ConcurrentSkipListMap<>((left, right) -> Long.compareUnsigned(left.value(), right.value()));
     private static volatile boolean deviceFaultRequested;
     private static volatile boolean deviceFaultEnabled;
-    private static volatile VkQueue lastCausticaQueue;
-    private static volatile String lastCausticaQueueLabel;
+    private static volatile QueueCheckpointSource lastQueue;
     private static int memoryHeapCount;
     private static volatile long allocator;
     private static boolean startupLogged;
@@ -66,6 +65,8 @@ public final class VulkanDiagnostics {
                               String deviceUuid, String driverUuid, String conformance,
                               String selectedQueues) {
     }
+
+    private record QueueCheckpointSource(VkQueue queue, String label) { }
 
     private record BufferRange(VulkanDeviceAddressRange bytes, long handle, String label) {
         boolean contains(VulkanDeviceAddress value) {
@@ -106,7 +107,7 @@ public final class VulkanDiagnostics {
                         VkLayerProperties layer = layers.get(i);
                         LOGGER.info(
                                 "Vulkan instance layer[{}]: name='{}', spec={}, implementation={} (0x{}), description='{}'",
-                                i, layer.layerNameString(), version(layer.specVersion()),
+                                i, layer.layerNameString(), VulkanRequiredProfile.formatApiVersion(layer.specVersion()),
                                 Integer.toUnsignedLong(layer.implementationVersion()),
                                 Integer.toUnsignedString(layer.implementationVersion(), 16),
                                 layer.descriptionString());
@@ -174,8 +175,7 @@ public final class VulkanDiagnostics {
 
     /** Remember the queue before submission so a later device-loss report queries the relevant queue. */
     public static void noteQueueSubmission(VkQueue queue, String label) {
-        lastCausticaQueue = queue;
-        lastCausticaQueueLabel = label;
+        lastQueue = new QueueCheckpointSource(queue, label);
     }
 
     public static void registerBuffer(VulkanDeviceAddressRange bytes, long handle, String label) {
@@ -192,9 +192,9 @@ public final class VulkanDiagnostics {
             return;
         }
         LOGGER.error("Vulkan device lost while {}", operation);
-        VkQueue queue = lastCausticaQueue;
-        if (queue != null) {
-            logNvQueueCheckpoints(queue, lastCausticaQueueLabel);
+        QueueCheckpointSource source = lastQueue;
+        if (source != null) {
+            logNvQueueCheckpoints(source.queue(), source.label());
         }
         logRuntimeSnapshot();
         if (!deviceFaultEnabled || device == null || device.getCapabilities().vkGetDeviceFaultInfoEXT == 0L) {
@@ -221,6 +221,7 @@ public final class VulkanDiagnostics {
             VkDeviceFaultVendorInfoEXT.Buffer vendors = vendorCount == 0
                     ? null : VkDeviceFaultVendorInfoEXT.calloc(vendorCount, stack);
             VkDeviceFaultInfoEXT info = VkDeviceFaultInfoEXT.calloc(stack).sType$Default();
+            // LWJGL exposes these output pointer fields as getters only; Vulkan requires caller-owned arrays.
             MemoryUtil.memPutAddress(info.address() + VkDeviceFaultInfoEXT.PADDRESSINFOS,
                     addresses == null ? 0L : addresses.address());
             MemoryUtil.memPutAddress(info.address() + VkDeviceFaultInfoEXT.PVENDORINFOS,
@@ -359,7 +360,7 @@ public final class VulkanDiagnostics {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             java.nio.IntBuffer version = stack.mallocInt(1);
             if (VK11.vkEnumerateInstanceVersion(version) == VK10.VK_SUCCESS) {
-                loaderVersion = version(version.get(0));
+                loaderVersion = VulkanRequiredProfile.formatApiVersion(version.get(0));
             }
         }
         LOGGER.info(
@@ -376,7 +377,7 @@ public final class VulkanDiagnostics {
             LOGGER.info(
                     "Vulkan GPU: name='{}', vendor={} (0x{}), deviceId=0x{}, type={}, api={}, driver='{}' info='{}' driverId={}, driverVersion=0x{}",
                     info.deviceName(), info.vendorName(), Integer.toHexString(properties.vendorID()),
-                    Integer.toHexString(properties.deviceID()), info.deviceType(), version(properties.apiVersion()),
+                    Integer.toHexString(properties.deviceID()), info.deviceType(), VulkanRequiredProfile.formatApiVersion(properties.apiVersion()),
                     info.driverName(), info.driverInfo(), info.driverId(),
                     Integer.toHexString(properties.driverVersion()));
             LOGGER.info("Vulkan IDs: deviceUUID={}, driverUUID={}, conformance={}",
@@ -420,11 +421,6 @@ public final class VulkanDiagnostics {
                         i, queue.queueCount(), queueFlags(queue.queueFlags()), queue.timestampValidBits());
             }
         }
-    }
-
-    private static String version(int packed) {
-        return String.format(Locale.ROOT, "%d.%d.%d", VK10.VK_API_VERSION_MAJOR(packed),
-                VK10.VK_API_VERSION_MINOR(packed), VK10.VK_API_VERSION_PATCH(packed));
     }
 
     private static String formatBytes(long bytes) {
