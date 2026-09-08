@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import it.unimi.dsi.fastutil.longs.Long2IntFunction;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntMaps;
 
@@ -12,8 +13,8 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
-import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -42,9 +43,21 @@ final class RtRetainedContentPlanTest {
     void primitiveEmitterIdentityResolvesAgainstEachContentRevision() {
         var emitters = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(2, 3, 42L));
 
-        assertEquals(1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Long2IntMaps.singleton(42L, 1)));
-        assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Long2IntMaps.EMPTY_MAP));
-        assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 1, Long2IntMaps.singleton(42L, 1)));
+        var builder = new RtEmitterRuns.Builder();
+        builder.addSpan(0, 1, 3, emitters);
+        var runs = builder.build();
+        var output = ByteBuffer.allocate(3 * Integer.BYTES).order(ByteOrder.nativeOrder());
+        runs.resolve(new Object(), Long2IntMaps.singleton(42L, 1));
+        runs.pack(output);
+        assertEquals(-1, output.getInt(0));
+        assertEquals(1, output.getInt(4));
+        assertEquals(1, output.getInt(8));
+        runs.resolve(new Object(), Long2IntMaps.EMPTY_MAP);
+        runs.pack(output);
+        for (int offset = 0; offset < output.capacity(); offset += Integer.BYTES) {
+            assertEquals(-1, output.getInt(offset));
+        }
+        assertArrayEquals(new int[0], runs.linked());
     }
 
     @Test
@@ -52,15 +65,14 @@ final class RtRetainedContentPlanTest {
         var ranges = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(2, 2, 42L),
                 new RetainedSceneSnapshot.PrimitiveEmitter(5, 2, 84L));
         ByteBuffer output = ByteBuffer.allocate(7 * Integer.BYTES).order(ByteOrder.nativeOrder());
-        boolean[] linked = new boolean[2];
 
-        RtRetainedSceneBackend.putEmitterIndices(output, 0, 7, ranges,
-                new Long2IntOpenHashMap(new long[]{42, 84}, new int[]{0, 1}), linked);
+        var runs = pack(output, 0, 7, ranges,
+                new Long2IntOpenHashMap(new long[]{42, 84}, new int[]{0, 1}));
         output.flip();
 
         assertEquals(List.of(-1, -1, 0, 0, -1, 1, 1),
                 java.util.stream.IntStream.range(0, 7).map(ignored -> output.getInt()).boxed().toList());
-        assertEquals(List.of(true, true), List.of(linked[0], linked[1]));
+        assertArrayEquals(new int[]{0, 1}, runs.linked());
     }
 
     @Test
@@ -80,15 +92,14 @@ final class RtRetainedContentPlanTest {
                 .mapToObj(index -> new RetainedSceneSnapshot.PrimitiveEmitter(index * 4, 2, 42L)).toList();
         int first = 2040 * 4 + 1;
         var output = ByteBuffer.allocate(19 * Integer.BYTES).order(ByteOrder.nativeOrder());
-        boolean[] linked = new boolean[1];
-        RtRetainedSceneBackend.putEmitterIndices(output, first, 19, ranges, Long2IntMaps.singleton(42L, 0), linked);
+        var runs = pack(output, first, 19, ranges, Long2IntMaps.singleton(42L, 0));
         output.flip();
         for (int primitive = first; primitive < first + 19; primitive++) {
             assertEquals(primitive % 4 < 2 ? 0 : -1, output.getInt());
             assertEquals(primitive % 4 < 2,
                     RtRetainedSceneBackend.hasEmitterMapping(ranges, primitive, 1));
         }
-        assertTrue(linked[0]);
+        assertArrayEquals(new int[]{0}, runs.linked());
         assertFalse(RtRetainedSceneBackend.hasEmitterMapping(ranges, 8190, 10));
     }
 
@@ -100,18 +111,28 @@ final class RtRetainedContentPlanTest {
         for (int first = 0; first < 9; first++) {
             for (int count = 0; count <= 9 - first; count++) {
                 var output = ByteBuffer.allocate(count * Integer.BYTES).order(ByteOrder.nativeOrder());
-                boolean[] linked = new boolean[1];
-                RtRetainedSceneBackend.putEmitterIndices(output, first, count, ranges, indices, linked);
+                var runs = pack(output, first, count, ranges, indices);
                 assertEquals(count * Integer.BYTES, output.position());
                 output.flip();
                 boolean expectedLinked = false;
                 for (int primitive = first; primitive < first + count; primitive++) {
-                    int expected = RtRetainedSceneBackend.emitterIndex(ranges, primitive, indices);
+                    int expected = EmitterReference.index(primitive, ranges, indices);
                     assertEquals(expected, output.getInt());
                     expectedLinked |= expected >= 0;
                 }
-                assertEquals(expectedLinked, linked[0]);
+                assertArrayEquals(expectedLinked ? new int[]{0} : new int[0], runs.linked());
             }
         }
+    }
+
+    private static RtEmitterRuns pack(ByteBuffer output, int first, int count,
+                                      List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
+                                      Long2IntFunction indices) {
+        var builder = new RtEmitterRuns.Builder();
+        builder.addSpan(0, first, count, ranges);
+        var runs = builder.build();
+        runs.resolve(new Object(), indices);
+        runs.pack(output);
+        return runs;
     }
 }

@@ -1,36 +1,34 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntFunction;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 /** Stable primitive runs resolve their unique light identities once per light revision. */
 final class RtEmitterRuns {
-    private static final int RUN_BYTE_OFFSET = 0;
-    private static final int RUN_PRIMITIVE_COUNT = 1;
-    private static final int RUN_LIGHT_ORDINAL = 2;
-    private static final int RUN_INTS = 3;
-    private final int[] runs;
+    private record Run(int byteOffset, int primitiveCount, int lightOrdinal) { }
+
+    private final List<Run> runs;
     private final long[] identities;
     private final int[] dense;
     private Object revision;
     private Object generation;
     private int[] linked = new int[0];
 
-    private RtEmitterRuns(int[] runs, long[] identities) {
+    private RtEmitterRuns(List<Run> runs, long[] identities) {
         this.runs = runs;
         this.identities = identities;
         dense = new int[identities.length];
         Arrays.fill(dense, -1);
     }
 
-    static RtEmitterRuns empty() { return new RtEmitterRuns(new int[0], new long[0]); }
+    static RtEmitterRuns empty() { return new RtEmitterRuns(List.of(), new long[0]); }
 
     boolean hasRevision(Object revision) { return generation != null && this.revision == revision; }
     Object generation() { return generation; }
@@ -58,18 +56,16 @@ final class RtEmitterRuns {
     }
 
     void pack(ByteBuffer target) {
-        for (int run = 0; run < runs.length; run += RUN_INTS) {
-            target.position(runs[run + RUN_BYTE_OFFSET]);
-            int ordinal = runs[run + RUN_LIGHT_ORDINAL];
-            int value = ordinal < 0 ? -1 : dense[ordinal];
-            int count = runs[run + RUN_PRIMITIVE_COUNT];
-            for (int index = 0; index < count; index++) target.putInt(value);
+        for (Run run : runs) {
+            target.position(run.byteOffset);
+            int value = run.lightOrdinal < 0 ? -1 : dense[run.lightOrdinal];
+            for (int index = 0; index < run.primitiveCount; index++) target.putInt(value);
         }
     }
 
-    /** Reusable worker scratch contains primitive values only; builds copy their own topology arrays. */
+    /** Reusable worker scratch; builds retain immutable runs and copy the light identities. */
     static final class Builder {
-        private final IntArrayList runs = new IntArrayList();
+        private final List<Run> runs = new ArrayList<>();
         private final Long2IntOpenHashMap ordinals = new Long2IntOpenHashMap();
         private final LongArrayList identities = new LongArrayList();
 
@@ -82,9 +78,7 @@ final class RtEmitterRuns {
         }
 
         private void addRun(int byteOffset, int count, int ordinal) {
-            runs.add(byteOffset);
-            runs.add(count);
-            runs.add(ordinal);
+            runs.add(new Run(byteOffset, count, ordinal));
         }
 
         void addSpan(int byteOffset, int firstPrimitive, int primitiveCount,
@@ -112,6 +106,6 @@ final class RtEmitterRuns {
                     end - primitive, -1);
         }
 
-        RtEmitterRuns build() { return new RtEmitterRuns(runs.toIntArray(), identities.toLongArray()); }
+        RtEmitterRuns build() { return new RtEmitterRuns(List.copyOf(runs), identities.toLongArray()); }
     }
 }

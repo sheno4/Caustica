@@ -37,7 +37,7 @@ class RtEmitterRunsTest {
         assertEquals(3, secondBytes.getInt(8));
     }
 
-    @Test void clippedRunsGapsAndRepeatedIdentitiesMatchExistingWriter() {
+    @Test void clippedRunsGapsAndRepeatedIdentitiesMatchPrimitiveReference() {
         var ranges = List.of(new PrimitiveEmitter(0, 3, 10), new PrimitiveEmitter(4, 2, 20),
                 new PrimitiveEmitter(7, 2, 10), new PrimitiveEmitter(10, 2, 30));
         var indices = new Long2IntOpenHashMap(new long[]{10, 20}, new int[]{1_000_000, 2});
@@ -53,9 +53,9 @@ class RtEmitterRunsTest {
             actual.put(index, (byte) 0x5a);
         }
         expected.position(4);
-        RtRetainedSceneBackend.putEmitterIndices(expected, 1, 12, ranges, indices, ignored -> {});
+        EmitterReference.pack(expected, 1, 12, ranges, indices);
         expected.position(52);
-        RtRetainedSceneBackend.putEmitterIndices(expected, 5, 3, ranges, indices, ignored -> {});
+        EmitterReference.pack(expected, 5, 3, ranges, indices);
         runs.pack(actual);
         expected.clear();
         actual.clear();
