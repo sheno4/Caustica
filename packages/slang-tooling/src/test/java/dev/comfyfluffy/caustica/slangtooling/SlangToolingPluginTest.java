@@ -33,7 +33,7 @@ final class SlangToolingPluginTest {
                 Map.of("name", "array", "type", arrayType, "binding", Map.of("offset", 24))));
 
         assertEquals(List.of(List.of(4, 8), List.of(20, 24), List.of(28, 32), List.of(36, 40)),
-                GenerateShaderRecords.paddingRanges(root, 40));
+                ShaderRecordSource.paddingRanges(root, 40));
     }
 
     @Test
