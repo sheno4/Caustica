@@ -128,20 +128,29 @@ def bundleNrdNative = tasks.register("bundleNrdNative") {
     }
 }
 
+def nrdNativeInputRoot = providers.gradleProperty("nrdNativeInputRoot")
+        .map { rootProject.file(it) }
 def nrdNativeJar = tasks.register("nrdNativeJar", Jar) {
     group = "build"
-    description = "Builds the consumable nvidia-nrd JAR with the current platform native shim."
-    dependsOn bundleNrdNative, tasks.named("classes")
-    archiveClassifier = "${currentPlatform?.name ?: 'unsupported'}"
+    description = "Packages NRD classes with prepared runtimes or the current platform native build."
+    dependsOn tasks.named("classes")
+    if (nrdNativeInputRoot.present) {
+        inputs.dir(nrdNativeInputRoot)
+        from(nrdNativeInputRoot)
+        archiveClassifier = "natives"
+    } else {
+        dependsOn bundleNrdNative
+        from(nativeResourceRoot)
+        archiveClassifier = "${currentPlatform?.name ?: 'unsupported'}"
+    }
     from(sourceSets.main.output)
-    from(nativeResourceRoot)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 configurations {
     nrdNatives {
         canBeConsumed = true
         canBeResolved = false
-        description = "Pinned current-platform NRD/NRI native runtime artifact"
+        description = "Pinned NRD/NRI native runtime artifact"
     }
 }
 artifacts { nrdNatives(nrdNativeJar) }

@@ -38,6 +38,7 @@ env:
   SLANG_VERSION: 2026.14.1
   SLANG_WINDOWS_SHA256: 5ed0a59d650a0af0aca45d5db4e083b3d8fb5cea05748747dd95dfbe9c580658
   SLANG_LINUX_SHA256: d7c02e044b5f2f4ceb8e220a2cf8f7d053418db1877da2656fb59e1ce545f8dd
+  CMAKE_VERSION: 3.30.5
 
 jobs:
   native-windows:
@@ -56,6 +57,24 @@ jobs:
           repository: NVIDIA/DLSS
           ref: ${{ env.DLSS_SDK_REF }}
           path: ${{ env.DLSS_SDK_PATH }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CMake
+        shell: pwsh
+        run: python -m pip install "cmake==$env:CMAKE_VERSION"
 
       - name: Install Vulkan SDK
         uses: humbletim/install-vulkan-sdk@v1.2
@@ -121,6 +140,21 @@ jobs:
           path: build/native/ngx_shim/release/ngxshim.dll
           if-no-files-found: error
 
+      - name: Prepare NRD build dependencies
+        shell: pwsh
+        run: .\gradlew.bat :packages:nvidia-nrd:prepareNrdNativeDependencies
+
+      - name: Build Windows NRD runtime
+        shell: pwsh
+        run: .\gradlew.bat :packages:nvidia-nrd:bundleNrdNative
+
+      - name: Upload Windows NRD runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: nrd-runtime-windows-x64
+          path: packages/nvidia-nrd/build/generated/nrd-natives
+          if-no-files-found: error
+
       - name: Upload Windows Slang runtime
         uses: actions/upload-artifact@v4
         with:
@@ -148,7 +182,24 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+          sudo apt-get install -y ninja-build
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CMake
+        run: python -m pip install "cmake==${CMAKE_VERSION}"
 
       - name: Install Vulkan SDK
         uses: humbletim/install-vulkan-sdk@v1.2
@@ -203,6 +254,19 @@ jobs:
         with:
           name: ngxshim-linux-x64
           path: build/native/ngx_shim/release/libngxshim.so
+          if-no-files-found: error
+
+      - name: Prepare NRD build dependencies
+        run: bash ./gradlew :packages:nvidia-nrd:prepareNrdNativeDependencies
+
+      - name: Build Linux NRD runtime
+        run: bash ./gradlew :packages:nvidia-nrd:bundleNrdNative
+
+      - name: Upload Linux NRD runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: nrd-runtime-linux-x64
+          path: packages/nvidia-nrd/build/generated/nrd-natives
           if-no-files-found: error
 
       - name: Upload Linux Slang runtime
@@ -283,8 +347,12 @@ jobs:
           path: build/slang-runtime-input
           merge-multiple: true
 
-      - name: Prepare NRD build dependencies
-        run: bash ./gradlew :packages:nvidia-nrd:prepareNrdNativeDependencies
+      - name: Download NRD runtimes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nrd-runtime-*
+          path: build/nrd-runtime-input
+          merge-multiple: true
 
       - name: Build Fabric jar
         env:
@@ -299,6 +367,7 @@ jobs:
           -PngxShimInputRoot=build/native/ngx_shim
           -PslangPlatforms=windows-x64,linux-x64
           -PslangRuntimeInputRoot=build/slang-runtime-input
+          -PnrdNativeInputRoot=build/nrd-runtime-input
 
       - name: Build NeoForge jar
         env:
@@ -313,6 +382,7 @@ jobs:
           -PngxShimInputRoot=build/native/ngx_shim
           -PslangPlatforms=windows-x64,linux-x64
           -PslangRuntimeInputRoot=build/slang-runtime-input
+          -PnrdNativeInputRoot=build/nrd-runtime-input
 
       - name: Upload bundled jars
         uses: actions/upload-artifact@v4

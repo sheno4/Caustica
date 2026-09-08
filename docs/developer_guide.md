@@ -131,6 +131,12 @@ libraries, and the Slang standard module:
   -PslangRuntimeInputRoot=build/slang-runtime-input
 ```
 
+For NRD, run `:packages:nvidia-nrd:bundleNrdNative` on each target platform after dependency preparation.
+Merge the resulting `packages/nvidia-nrd/build/generated/nrd-natives` trees into one directory,
+preserving `caustica/natives/nrd/<revision>/<platform>/` and its library and license files. Package that
+directory with `-PnrdNativeInputRoot=build/nrd-runtime-input`; this skips the local NRD native build.
+CI uses this path to include both Windows and Linux runtimes in each loader artifact.
+
 For local compiler development, `-Dcaustica.slang.path=/path/to/runtime` loads
 an unpacked runtime directory instead of extracting the bundled copy.
 
