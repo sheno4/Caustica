@@ -56,7 +56,7 @@
 	"caustica.setting.denoising.route.temporal_denoiser": "NRD Temporal Denoiser",
 	"caustica.setting.denoising.route.raw": "Raw Path Trace",
 	"caustica.setting.denoising.method": "NRD Method",
-	"caustica.setting.denoising.method.tooltip": "RELAX uses linear radiance and absolute hit distance; REBLUR uses YCoCg radiance and normalized hit distance.",
+	"caustica.setting.denoising.method.tooltip": "Choose which NRD denoiser to use with the temporal denoising route.",
 	"caustica.setting.denoising.method.relax": "RELAX",
 	"caustica.setting.denoising.method.reblur": "REBLUR",
 	"caustica.setting.dlss-rr.quality": "DLSS Quality",
