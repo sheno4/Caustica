@@ -14,6 +14,7 @@ The project-wide aesthetic review includes interactive behavior and visual inspe
 - Inspect a stationary workbench camera, then move through terrain and look at cutout surfaces, emissive geometry, water/reflections and moving entities. Compare final output with relevant normal/depth/radiance views when a visual defect appears.
 - Exercise window resizing and reconstruction-mode changes where available; inspect resolution transitions, stale targets, ghosting and exposure settling.
 - Verify the NGX RR diagnostic overlay's axis controls with a before/after capture. Do not alter world/UI orientation to compensate for the native indicator.
+- After native integration changes, relaunch with the rebuilt libraries and exercise RR, SR, RELAX and REBLUR transitions at a repeatable camera. Inspect LUT presentation and temporal history; exercise frame generation where supported.
 
 Use named debug operations for repeatable state checks and computer use for actual UI exploration. Save evidence under `tmp/` and `run/caustica-debug/`; restore changed settings, input state and views. Make checkpoint commits after verified coherent changes. Each run must record actual results and limits rather than marking a queued check complete from intent.
 

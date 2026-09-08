@@ -99,6 +99,7 @@ public final class DlssSuperResolution {
         }
     }
 
+    /** Prior GPU uses must complete before a size or preset change releases the feature. */
     public boolean ensureFeature(VkCommandBuffer commandBuffer, int renderWidth, int renderHeight,
                                  int displayWidth, int displayHeight) {
         if (!configured() || failed) return false;
@@ -108,11 +109,11 @@ public final class DlssSuperResolution {
             int preset = settings.preset();
             if (featureRenderWidth != renderWidth || featureRenderHeight != renderHeight
                     || featureDisplayWidth != displayWidth || featureDisplayHeight != displayHeight
-                    || featureQuality != quality || featurePreset != preset || isNull(feature)) {
+                    || featureQuality != quality || featurePreset != preset || feature.equals(MemorySegment.NULL)) {
                 releaseFeature();
                 feature = lib.createDlss(commandBuffer.address(), renderWidth, renderHeight,
                         displayWidth, displayHeight, quality, FEATURE_FLAGS, preset);
-                if (isNull(feature)) {
+                if (feature.equals(MemorySegment.NULL)) {
                     throw new IllegalStateException("ngxshim_create_dlss failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
                 }
@@ -138,7 +139,7 @@ public final class DlssSuperResolution {
                             GpuImage output, int renderWidth, int renderHeight,
                             int displayWidth, int displayHeight, float jitterX, float jitterY,
                             boolean reset, float preExposure) {
-        if (!initialized || failed || isNull(feature)) return false;
+        if (!initialized || failed || feature.equals(MemorySegment.NULL)) return false;
         try {
             long now = System.nanoTime();
             float frameMs = lastFrameNanos == 0L ? 16.6f
@@ -178,6 +179,7 @@ public final class DlssSuperResolution {
         initialized = true;
     }
 
+    /** Release the feature after all submitted uses have completed. */
     public void destroyAfterDeviceIdle() {
         releaseFeature();
         initialized = false;
@@ -187,7 +189,7 @@ public final class DlssSuperResolution {
     }
 
     private void releaseFeature() {
-        if (!isNull(feature)) {
+        if (!feature.equals(MemorySegment.NULL)) {
             lib.release(feature);
             feature = MemorySegment.NULL;
         }
@@ -197,9 +199,5 @@ public final class DlssSuperResolution {
         featureDisplayHeight = -1;
         featureQuality = Integer.MIN_VALUE;
         featurePreset = Integer.MIN_VALUE;
-    }
-
-    private static boolean isNull(MemorySegment segment) {
-        return segment == null || segment.equals(MemorySegment.NULL);
     }
 }

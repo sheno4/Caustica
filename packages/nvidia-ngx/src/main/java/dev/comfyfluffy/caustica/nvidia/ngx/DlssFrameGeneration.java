@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.nvidia.ngx;
 
 import org.joml.Matrix4fc;
-import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteOrder;
 import java.util.Objects;
 
 /**
@@ -31,7 +31,6 @@ public final class DlssFrameGeneration {
 
     private NgxLibrary lib;
     private MemorySegment feature = MemorySegment.NULL;
-    private boolean initialized;
     private boolean failed;
     private boolean probed;
     private boolean available;
@@ -56,7 +55,7 @@ public final class DlssFrameGeneration {
     }
 
     public boolean isReady() {
-        return initialized && !failed && !isNull(feature);
+        return !failed && !feature.equals(MemorySegment.NULL);
     }
 
     /** Whether a live feature already matches these dimensions/format (no recreate needed). */
@@ -74,17 +73,12 @@ public final class DlssFrameGeneration {
         if (probed || failed) {
             return;
         }
-        NgxLibrary l = runtime.acquire();
-        if (l == null) {
+        lib = runtime.acquire();
+        if (lib == null) {
             return;
         }
         probed = true;
-        lib = l;
-        if (!l.hasDlssg()) {
-            LOGGER.warn("DLSS-FG: loaded ngxshim has no DLSSG ABI");
-            return;
-        }
-        available = l.dlssgAvailable();
+        available = lib.dlssgAvailable();
         LOGGER.info("DLSS Frame Generation available: {}", available);
     }
 
@@ -95,29 +89,19 @@ public final class DlssFrameGeneration {
      */
     public boolean ensureFeature(VkCommandBuffer commandBuffer, int width, int height,
                                  int renderWidth, int renderHeight, int backbufferFormat) {
-        if (!enabled() || failed) {
+        if (!enabled()) {
             return false;
         }
         try {
-            if (lib == null) {
-                lib = runtime.acquire();
-            }
-            if (lib == null || !lib.hasDlssg()) {
-                throw new IllegalStateException("NGX/DLSSG unavailable; cannot create FG feature");
-            }
-            if (!probed) {
-                probeAvailabilityOnce();
-            }
+            probeAvailabilityOnce();
             if (!available) {
                 throw new IllegalStateException("DLSS Frame Generation is not available on this system");
             }
-            if (featureWidth != width || featureHeight != height
-                    || featureRenderWidth != renderWidth || featureRenderHeight != renderHeight
-                    || featureBackbufferFormat != backbufferFormat || isNull(feature)) {
+            if (!featureReadyFor(width, height, renderWidth, renderHeight, backbufferFormat)) {
                 releaseFeature();
                 feature = lib.createDlssg(commandBuffer.address(), width, height,
                         renderWidth, renderHeight, backbufferFormat);
-                if (isNull(feature)) {
+                if (feature.equals(MemorySegment.NULL)) {
                     throw new IllegalStateException("ngxshim_create_dlssg failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
                 }
@@ -126,7 +110,6 @@ public final class DlssFrameGeneration {
                 featureRenderWidth = renderWidth;
                 featureRenderHeight = renderHeight;
                 featureBackbufferFormat = backbufferFormat;
-                initialized = true;
                 LOGGER.info("DLSS-FG feature created: {}x{} (render {}x{}, backbuffer format {})",
                         width, height, renderWidth, renderHeight, backbufferFormat);
             }
@@ -144,7 +127,7 @@ public final class DlssFrameGeneration {
      * {@code outputInterp}. {@code hudless} (the main scene before the combined UI overlay) and {@code ui}
      * (premultiplied combined overlay: RT world overlays, hand/screen effects and GUI) help the driver avoid
      * ghosting/smearing screen-fixed content in the generated frame; both are optional — pass 0 handles
-     * (view/image/format) to skip, same as {@code outputReal}. Matrices are jitter-free (NGX left-multiply
+     * (view/image/format) to skip. The host presents the real frame itself. Matrices are jitter-free (NGX left-multiply
      * layout); pass {@code null} to leave one out. Returns false on failure.
      */
     public boolean evaluate(VkCommandBuffer commandBuffer,
@@ -194,29 +177,13 @@ public final class DlssFrameGeneration {
             return MemorySegment.NULL;
         }
         MemorySegment seg = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 0, m.m00());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 1, m.m01());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 2, m.m02());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 3, m.m03());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 4, m.m10());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 5, m.m11());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 6, m.m12());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 7, m.m13());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 8, m.m20());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 9, m.m21());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 10, m.m22());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 11, m.m23());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 12, m.m30());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 13, m.m31());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 14, m.m32());
-        seg.setAtIndex(ValueLayout.JAVA_FLOAT, 15, m.m33());
+        m.get(seg.asByteBuffer().order(ByteOrder.nativeOrder()));
         return seg;
     }
 
     /** Release the FG feature after all submitted work that can reference it has completed. */
     public void destroyAfterDeviceIdle() {
         releaseFeature();
-        initialized = false;
         failed = false;
         probed = false;
         available = false;
@@ -224,7 +191,7 @@ public final class DlssFrameGeneration {
     }
 
     private void releaseFeature() {
-        if (lib != null && !isNull(feature)) {
+        if (!feature.equals(MemorySegment.NULL)) {
             lib.release(feature);
         }
         feature = MemorySegment.NULL;
@@ -235,7 +202,4 @@ public final class DlssFrameGeneration {
         featureBackbufferFormat = Integer.MIN_VALUE;
     }
 
-    private static boolean isNull(MemorySegment segment) {
-        return segment == null || segment.equals(MemorySegment.NULL);
-    }
 }

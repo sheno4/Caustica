@@ -1,9 +1,7 @@
 // Flat C ABI shim over the NVIDIA NGX DLSS Vulkan API used by the Java package.
 //
-// The NGX SDK ships only as a static library (nvsdk_ngx_d.lib) plus a C++/macro
-// helper layer that fiddles with parameter blocks and resource structs. Java's
-// FFM can only bind a clean flat-C ABI, so this tiny DLL links the static lib,
-// uses the helpers internally, and exposes ~10 primitive-argument functions.
+// Java FFM calls a primitive-argument C ABI; NGX parameter blocks and resource
+// structures stay here with the statically linked SDK and its C++ helpers.
 //
 // Built as a SHARED library; every exported symbol is undecorated extern "C".
 
@@ -63,8 +61,7 @@ struct DlssFeature {
 static NVSDK_NGX_Resource_VK makeImageResource(VkImageView view, VkImage image, int format,
                                                unsigned int width, unsigned int height,
                                                VkImageAspectFlags aspect, bool readWrite) {
-    VkImageSubresourceRange range;
-    std::memset(&range, 0, sizeof(range));
+    VkImageSubresourceRange range{};
     range.aspectMask = aspect;
     range.baseMipLevel = 0;
     range.levelCount = 1;
@@ -97,8 +94,7 @@ NGX_SHIM_EXPORT int ngxshim_init(unsigned long long appId, const wchar_t* dataPa
             getInstanceProcAddr, getDeviceProcAddr, (void*) featureDllPath);
     g_device = device;
 
-    NVSDK_NGX_FeatureCommonInfo info;
-    std::memset(&info, 0, sizeof(info));
+    NVSDK_NGX_FeatureCommonInfo info{};
     const wchar_t* paths[1] = { featureDllPath };
     info.PathListInfo.Path = paths;
     info.PathListInfo.Length = featureDllPath ? 1u : 0u;
@@ -128,6 +124,12 @@ NGX_SHIM_EXPORT int ngxshim_init(unsigned long long appId, const wchar_t* dataPa
     r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&g_capabilityParams);
     g_lastResult = (int) r;
     NGX_LOG("init: GetCapabilityParameters r=0x%08x g_capabilityParams=%p", (unsigned) r, (void*) g_capabilityParams);
+    if (NVSDK_NGX_FAILED(r)) {
+        // Java retains the runtime only after this entire initialization succeeds.
+        NVSDK_NGX_VULKAN_Shutdown1(device);
+        g_capabilityParams = nullptr;
+        g_device = VK_NULL_HANDLE;
+    }
     return (int) r;
 }
 
@@ -190,8 +192,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlss(VkCommandBuffer cmd,
     NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, preset);
     NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, preset);
 
-    NVSDK_NGX_DLSS_Create_Params createParams;
-    std::memset(&createParams, 0, sizeof(createParams));
+    NVSDK_NGX_DLSS_Create_Params createParams{};
     createParams.Feature.InWidth = renderWidth;
     createParams.Feature.InHeight = renderHeight;
     createParams.Feature.InTargetWidth = displayWidth;
@@ -219,7 +220,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlss(VkCommandBuffer cmd,
 
 // Records a DLSS evaluation into cmd. All images are VkImageView+VkImage+VkFormat
 // triples backed by storage-capable images, so NGX requires ReadWrite resources even for inputs.
-// The linear-depth guide is an R32 color-aspect image, not a depth attachment.
+// The reverse hardware-depth guide is an R32 color-aspect image, not a depth attachment.
 NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
                                      VkImageView colorView, VkImage colorImage, int colorFormat,
                                      VkImageView depthView, VkImage depthImage, int depthFormat,
@@ -245,8 +246,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
     NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
     NVSDK_NGX_Resource_VK output = makeImageResource(outputView, outputImage, outputFormat, displayWidth, displayHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
 
-    NVSDK_NGX_VK_DLSS_Eval_Params eval;
-    std::memset(&eval, 0, sizeof(eval));
+    NVSDK_NGX_VK_DLSS_Eval_Params eval{};
     eval.Feature.pInColor = &color;
     eval.Feature.pInOutput = &output;
     eval.pInDepth = &depth;
@@ -328,8 +328,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
     NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, preset);
     NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality, preset);
 
-    NVSDK_NGX_DLSSD_Create_Params createParams;
-    std::memset(&createParams, 0, sizeof(createParams));
+    NVSDK_NGX_DLSSD_Create_Params createParams{};
     createParams.InDenoiseMode = NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;
     createParams.InRoughnessMode = NVSDK_NGX_DLSS_Roughness_Mode_Packed; // roughness from normals.w
     createParams.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_HW;
@@ -369,11 +368,11 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
     return feature;
 }
 
-// Records a DLSS Ray Reconstruction evaluation. Guide buffers are HDR color, linear depth, motion
+// Records a DLSS Ray Reconstruction evaluation. Guide buffers are HDR color, reverse hardware depth, motion
 // vectors, diffuse albedo, specular albedo, world-space normals with roughness packed in normals.w,
 // and reflection motion vectors. Specular hit distance remains optional and is omitted. Every
 // supplied image is storage-capable and must be declared ReadWrite to NGX. All guides use the
-// color aspect; depth is a linear value carried in a color image, not a depth-aspect attachment.
+// color aspect; hardware depth is carried in a color image, not a depth-aspect attachment.
 NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
                                            VkImageView colorView, VkImage colorImage, int colorFormat,
                                            VkImageView depthView, VkImage depthImage, int depthFormat,
@@ -412,8 +411,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     NVSDK_NGX_Resource_VK specularMotion = makeImageResource(specularMotionView, specularMotionImage, specularMotionFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
     NVSDK_NGX_Resource_VK output = makeImageResource(outputView, outputImage, outputFormat, displayWidth, displayHeight, VK_IMAGE_ASPECT_COLOR_BIT, true);
 
-    NVSDK_NGX_VK_DLSSD_Eval_Params eval;
-    std::memset(&eval, 0, sizeof(eval));
+    NVSDK_NGX_VK_DLSSD_Eval_Params eval{};
     eval.pInColor = &color;
     eval.pInOutput = &output;
     eval.pInDepth = &depth;
@@ -456,7 +454,7 @@ NGX_SHIM_EXPORT int ngxshim_dlssg_available() {
 
 // Creates a DLSS Frame Generation (DLSSG) feature. Width/Height are the backbuffer (present) size;
 // render size is the upscaled-but-pre-FG size (== backbuffer when no dynamic-res). nativeBackbufferFormat
-// is the VkFormat of the presented swapchain image. Like DLSSD, FG must be created with the shared
+// is the VkFormat of the presented swapchain image. FG uses the shared
 // capability parameter block (it carries the snippet callbacks), so the feature does not own it.
 NGX_SHIM_EXPORT void* ngxshim_create_dlssg(VkCommandBuffer cmd,
                                            unsigned int width, unsigned int height,
@@ -468,8 +466,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssg(VkCommandBuffer cmd,
         return nullptr;
     }
 
-    NVSDK_NGX_DLSSG_Create_Params createParams;
-    std::memset(&createParams, 0, sizeof(createParams));
+    NVSDK_NGX_DLSSG_Create_Params createParams{};
     createParams.Width = width;
     createParams.Height = height;
     createParams.NativeBackbufferFormat = (unsigned int) nativeBackbufferFormat;
@@ -527,8 +524,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssg_2x(VkCommandBuffer cmd, void* feature
     NVSDK_NGX_Resource_VK outputInterp = makeImageResource(outputInterpView, outputInterpImage, outputInterpFormat, width, height, VK_IMAGE_ASPECT_COLOR_BIT, true);
     NVSDK_NGX_Resource_VK outputReal = makeImageResource(outputRealView, outputRealImage, outputRealFormat, width, height, VK_IMAGE_ASPECT_COLOR_BIT, true);
 
-    NVSDK_NGX_VK_DLSSG_Eval_Params eval;
-    std::memset(&eval, 0, sizeof(eval));
+    NVSDK_NGX_VK_DLSSG_Eval_Params eval{};
     eval.pBackbuffer = &backbuffer;
     eval.pDepth = &depth;
     eval.pMVecs = &mvec;

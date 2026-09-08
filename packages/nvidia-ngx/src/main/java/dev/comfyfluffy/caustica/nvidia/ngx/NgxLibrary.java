@@ -68,7 +68,7 @@ final class NgxLibrary {
 		this.dlssdAvailable = handle(lookup, "ngxshim_dlssd_available",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT));
 		// int ngxshim_query_optimal_dlssd(u32 dispW, u32 dispH, int quality, u32* outRW, u32* outRH, float* outSharp)
-		this.queryOptimalDlssd = optionalHandle(lookup, "ngxshim_query_optimal_dlssd",
+		this.queryOptimalDlssd = handle(lookup, "ngxshim_query_optimal_dlssd",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
 						ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.createDlssd = handle(lookup, "ngxshim_create_dlssd",
@@ -90,16 +90,16 @@ final class NgxLibrary {
 						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
 						ValueLayout.JAVA_INT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT));
-		// DLSS Frame Generation (DLSSG). Optional: a stale shim without these exports still loads (FG off).
-		this.dlssgAvailable = optionalHandle(lookup, "ngxshim_dlssg_available",
+		// DLSS Frame Generation (DLSSG).
+		this.dlssgAvailable = handle(lookup, "ngxshim_dlssg_available",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT));
 		// void* ngxshim_create_dlssg(cmd, u32 w, u32 h, u32 rw, u32 rh, int nativeBackbufferFormat)
-		this.createDlssg = optionalHandle(lookup, "ngxshim_create_dlssg",
+		this.createDlssg = handle(lookup, "ngxshim_create_dlssg",
 				FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
 						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
 		// int ngxshim_evaluate_dlssg_2x(cmd, feature, [backbuffer/depth/mvec/hudless/ui/outInterp/outReal: view,img,fmt]*7,
 		//   w,h, mvecDepthW, mvecDepthH, mvScaleX, mvScaleY, depthInv, hdr, camMotion, reset, 4 matrices)
-		this.evaluateDlssg = optionalHandle(lookup, "ngxshim_evaluate_dlssg_2x",
+		this.evaluateDlssg = handle(lookup, "ngxshim_evaluate_dlssg_2x",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
 						ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
@@ -129,11 +129,6 @@ final class NgxLibrary {
 		return LINKER.downcallHandle(
 				lookup.find(name).orElseThrow(() -> new IllegalStateException("ngxshim missing export " + name)),
 				desc);
-	}
-
-	// Optional feature exports may be absent from a selected shim and report that feature unavailable.
-	private static MethodHandle optionalHandle(SymbolLookup lookup, String name, FunctionDescriptor desc) {
-		return lookup.find(name).map(sym -> LINKER.downcallHandle(sym, desc)).orElse(null);
 	}
 
 	public int init(long appId, MemorySegment dataPath, long vkInstance, long vkPhysicalDevice, long vkDevice,
@@ -203,16 +198,8 @@ final class NgxLibrary {
 		}
 	}
 
-	/** Whether the loaded shim exposes the DLSSD optimal-settings query (false for a stale, pre-query shim). */
-	public boolean hasQueryOptimalDlssd() {
-		return queryOptimalDlssd != null;
-	}
-
 	public int queryOptimalDlssd(int displayWidth, int displayHeight, int quality,
 	                             MemorySegment outRenderWidth, MemorySegment outRenderHeight, MemorySegment outSharpness) {
-		if (queryOptimalDlssd == null) {
-			return -1;
-		}
 		try {
 			return (int) this.queryOptimalDlssd.invokeExact(displayWidth, displayHeight, quality,
 					outRenderWidth, outRenderHeight, outSharpness);
@@ -262,15 +249,7 @@ final class NgxLibrary {
 		}
 	}
 
-	/** Whether the loaded shim exposes the complete supported 2x DLSSG ABI. */
-	public boolean hasDlssg() {
-		return dlssgAvailable != null && createDlssg != null && evaluateDlssg != null;
-	}
-
 	public boolean dlssgAvailable() {
-		if (dlssgAvailable == null) {
-			return false;
-		}
 		try {
 			return ((int) this.dlssgAvailable.invokeExact()) != 0;
 		} catch (Throwable t) {

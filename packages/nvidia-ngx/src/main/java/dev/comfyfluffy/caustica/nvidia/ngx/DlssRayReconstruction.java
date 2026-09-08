@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.nvidia.ngx;
 
-
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -51,10 +50,6 @@ public final class DlssRayReconstruction {
     private static final int FEATURE_FLAG_DEPTH_INVERTED = 1 << 3;
     private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES
             | FEATURE_FLAG_DEPTH_INVERTED;
-    // 0 = let the RR DLL pick its per-mode default preset.
-    private int renderPreset() {
-        return settings.preset();
-    }
 
     public int quality() {
         return settings.quality();
@@ -90,7 +85,7 @@ public final class DlssRayReconstruction {
     }
 
     public boolean isReady() {
-        return initialized && !failed && !isNull(feature);
+        return initialized && !failed && !feature.equals(MemorySegment.NULL);
     }
 
     /** Discard temporal reconstruction state before the next evaluation. */
@@ -146,20 +141,14 @@ public final class DlssRayReconstruction {
     }
 
     /**
-     * Asks NGX what render resolution the current quality mode expects for the given display size.
-     * Returns {@code null} only when RR is off (or already disabled from an earlier failure elsewhere)
-     * — in that state there is no feature to query and the caller should trace at full resolution.
-     * Once RR is active, a failed query (stale shim, old driver, bad NGX result) throws instead of
-     * silently falling back, so a broken render/display sync is never masked.
+     * Query the render resolution required by the selected quality mode. Returns {@code null} when
+     * RR is disabled. An active RR feature requires this exact size, so query failures propagate.
      */
     public int[] queryOptimalRenderSize(int displayWidth, int displayHeight) {
         if (!configured() || failed) {
             return null;
         }
         ensureInitialized();
-        if (!lib.hasQueryOptimalDlssd()) {
-            throw new IllegalStateException("ngxshim is missing ngxshim_query_optimal_dlssd (stale native shim)");
-        }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment outWidth = arena.allocate(ValueLayout.JAVA_INT);
             MemorySegment outHeight = arena.allocate(ValueLayout.JAVA_INT);
@@ -180,9 +169,9 @@ public final class DlssRayReconstruction {
     }
 
     public boolean featureReadyFor(int renderWidth, int renderHeight, int displayWidth, int displayHeight) {
-        return !isNull(feature) && featureRenderWidth == renderWidth && featureRenderHeight == renderHeight
+        return !feature.equals(MemorySegment.NULL) && featureRenderWidth == renderWidth && featureRenderHeight == renderHeight
                 && featureDisplayWidth == displayWidth && featureDisplayHeight == displayHeight
-                && featureQuality == quality() && featurePreset == renderPreset();
+                && featureQuality == quality() && featurePreset == settings.preset();
     }
 
     /**
@@ -192,18 +181,18 @@ public final class DlssRayReconstruction {
      */
     public boolean ensureFeature(VkCommandBuffer commandBuffer, int renderWidth, int renderHeight,
                                  int displayWidth, int displayHeight) {
-        if (!enabled() || failed) {
+        if (!enabled()) {
             return false;
         }
         try {
             ensureInitialized();
             int quality = quality();
-            int preset = renderPreset();
+            int preset = settings.preset();
             if (!featureReadyFor(renderWidth, renderHeight, displayWidth, displayHeight)) {
                 releaseFeature();
                 feature = lib.createDlssd(commandBuffer.address(), renderWidth, renderHeight,
                         displayWidth, displayHeight, quality, FEATURE_FLAGS, preset);
-                if (isNull(feature)) {
+                if (feature.equals(MemorySegment.NULL)) {
                     throw new IllegalStateException("ngxshim_create_dlssd failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
                 }
@@ -213,7 +202,7 @@ public final class DlssRayReconstruction {
                 featureDisplayHeight = displayHeight;
                 featureQuality = quality;
                 featurePreset = preset;
-                resetHistory = true; // a fresh feature has no temporal history
+                resetHistory();
                 LOGGER.info("DLSS-RR feature created: {}x{} -> {}x{} (quality {}, preset {})",
                         renderWidth, renderHeight, displayWidth, displayHeight, quality, preset);
             }
@@ -254,12 +243,11 @@ public final class DlssRayReconstruction {
         initialized = false;
         failed = false;
         lib = null;
-        resetHistory = true;
-        lastFrameNanos = 0L;
+        resetHistory();
     }
 
     private void releaseFeature() {
-        if (!isNull(feature)) {
+        if (!feature.equals(MemorySegment.NULL)) {
             lib.release(feature);
             feature = MemorySegment.NULL;
         }
@@ -269,10 +257,6 @@ public final class DlssRayReconstruction {
         featureDisplayHeight = -1;
         featureQuality = Integer.MIN_VALUE;
         featurePreset = Integer.MIN_VALUE;
-    }
-
-    private static boolean isNull(MemorySegment segment) {
-        return segment == null || segment.equals(MemorySegment.NULL);
     }
 
 }
