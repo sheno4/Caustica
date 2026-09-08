@@ -4,8 +4,7 @@ package dev.comfyfluffy.caustica.minecraft.content.material;
  * Adapter from the LabPBR 1.3 specular texture into the engine's OpenPBR vocabulary. LabPBR is a source
  * format, not a material model: it authors normal-incidence reflectance and perceptual smoothness, where
  * the supported OpenPBR subset authors {@code specular_ior}, conductor {@code base_color}, and
- * {@code specular_roughness}. Inverting that is this class's job, and it is the only place the source
- * format's conventions are known.
+ * {@code specular_roughness}.
  */
 public final class MinecraftLabPbr {
     private MinecraftLabPbr() {
@@ -90,21 +89,7 @@ public final class MinecraftLabPbr {
      * {@code F0 = ((ior - 1) / (ior + 1))^2} inverted for the side of it a source format authors.
      */
     public static float iorFromF0(float f0) {
-        return decodeIor((float) Math.sqrt(clamp01(f0)));
-    }
-
-    /**
-     * Page storage encoding of {@code specular_ior}: its amplitude reflectance {@code (ior-1)/(ior+1)}.
-     * Monotonic and bounded, so the whole dielectric range fits a unorm8 with a step of about 0.008 in
-     * IOR where real materials sit. {@code canonicalIor} in the registered adapter is the decode.
-     */
-    public static float encodeIor(float ior) {
-        float amplitude = (ior - 1.0f) / (ior + 1.0f);
-        return Math.max(0.0f, Math.min(MAX_AMPLITUDE, amplitude));
-    }
-
-    public static float decodeIor(float encoded) {
-        float amplitude = Math.max(0.0f, Math.min(MAX_AMPLITUDE, encoded));
+        float amplitude = Math.min(MAX_AMPLITUDE, (float) Math.sqrt(clamp01(f0)));
         return (1.0f + amplitude) / (1.0f - amplitude);
     }
 

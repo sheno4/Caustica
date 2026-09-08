@@ -80,6 +80,7 @@ final class MaterialPagePacker {
         }
     }
 
+    /** Store amplitude reflectance; one unorm8 step below one keeps decoded IOR finite. */
     static float encodeIor(float ior) {
         return Math.clamp((ior - 1.0f) / (ior + 1.0f), 0.0f, 254.0f / 255.0f);
     }

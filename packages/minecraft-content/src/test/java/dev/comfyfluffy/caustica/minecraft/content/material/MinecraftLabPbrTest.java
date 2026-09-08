@@ -66,15 +66,13 @@ final class MinecraftLabPbrTest {
     }
 
     /**
-     * The F0 inversion must round-trip: what the adapter stores as an index, decoded and pushed back
-     * through the Fresnel relation, has to be the reflectance the pack authored.
+     * The decoder's IOR, encoded by the material page writer as amplitude reflectance, must preserve F0.
      */
     @Test
-    void authoredReflectanceRoundTripsThroughTheStoredIndex() {
+    void authoredReflectanceSurvivesPageEncoding() {
         for (float f0 : new float[]{0.0f, 0.02f, 0.04f, 0.08f, 0.2f, 0.5f, 0.89f}) {
             float ior = MinecraftLabPbr.iorFromF0(f0);
-            float decoded = MinecraftLabPbr.decodeIor(MinecraftLabPbr.encodeIor(ior));
-            float amplitude = (decoded - 1.0f) / (decoded + 1.0f);
+            float amplitude = MaterialPagePacker.encodeIor(ior);
             assertEquals(f0, amplitude * amplitude, 1.0e-4f);
         }
     }
