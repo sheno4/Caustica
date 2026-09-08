@@ -9,10 +9,12 @@ import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.input.InputWithModifiers;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.List;
 import java.util.function.Consumer;
+import static org.lwjgl.glfw.GLFW.*;
 
 /**
  * A closed set of values as one row plus a list that opens on click, rather than one row per value. A
@@ -20,9 +22,8 @@ import java.util.function.Consumer;
  * scroll past.
  *
  * <p>The open list would be clipped by the scroll pane's scissor, so the pane does not draw it: the screen
- * holds whichever dropdown is open and draws its list after everything else, and offers it pointer events
- * first. This widget therefore exposes {@link #extractPopup} and {@link #clickPopup} instead of handling
- * either itself.
+ * holds whichever dropdown is open, draws its list after everything else, and routes pointer and keyboard
+ * events to the popup before the underlying rows. Keyboard navigation is tentative until confirmation.
  */
 public final class CausticaDropdown<T> extends AbstractButton {
     private static final int POPUP_ROW_HEIGHT = 12;
@@ -35,6 +36,7 @@ public final class CausticaDropdown<T> extends AbstractButton {
     private final Tooltip tooltip;
     private boolean expanded;
     private int popupTop;
+    private int keyboardChoice;
 
     public CausticaDropdown(SettingControl.ChoiceControl<T> control, Font font, int accent,
                             Consumer<CausticaDropdown<?>> onToggled) {
@@ -52,6 +54,7 @@ public final class CausticaDropdown<T> extends AbstractButton {
         int below = getY() + getHeight();
         popupTop = below + popupHeight() <= screenHeight ? below : Math.max(0, getY() - popupHeight());
         expanded = true;
+        keyboardChoice = control.choices().indexOf(control.get());
         setTooltip(null);
     }
 
@@ -74,6 +77,24 @@ public final class CausticaDropdown<T> extends AbstractButton {
 
     private int popupLeft() {
         return getX() + getWidth() - CausticaTheme.CONTENT_PAD - POPUP_WIDTH;
+    }
+
+    /** The screen routes popup keys here before focus navigation can reach the rows underneath. */
+    public boolean keyPressedPopup(KeyEvent event) {
+        if (!expanded || !isActive()) return false;
+        switch (event.key()) {
+            case GLFW_KEY_UP, GLFW_KEY_DOWN -> {
+                keyboardChoice = Math.floorMod(keyboardChoice + (event.key() == GLFW_KEY_UP ? -1 : 1),
+                        control.choices().size());
+                return true;
+            }
+            case GLFW_KEY_ENTER, GLFW_KEY_KP_ENTER, GLFW_KEY_SPACE -> {
+                control.set(control.choices().get(keyboardChoice));
+                onToggled.accept(this);
+                return true;
+            }
+            default -> { return false; }
+        }
     }
 
     private int popupHeight() {
@@ -116,7 +137,9 @@ public final class CausticaDropdown<T> extends AbstractButton {
         graphics.outline(left, top, POPUP_WIDTH, height, accent);
 
         int y = top + 1;
-        for (T choice : control.choices()) {
+        List<T> choices = control.choices();
+        for (int index = 0; index < choices.size(); index++) {
+            T choice = choices.get(index);
             boolean selected = choice.equals(control.get());
             boolean hovered = mouseX >= left && mouseX < left + POPUP_WIDTH
                     && mouseY >= y && mouseY < y + POPUP_ROW_HEIGHT;
@@ -125,6 +148,9 @@ public final class CausticaDropdown<T> extends AbstractButton {
             }
             if (selected) {
                 graphics.fill(left + 1, y, left + 3, y + POPUP_ROW_HEIGHT, accent);
+            }
+            if (index == keyboardChoice) {
+                graphics.outline(left + 1, y, POPUP_WIDTH - 2, POPUP_ROW_HEIGHT, accent);
             }
             graphics.text(font, control.labelOf(choice), left + 7,
                     CausticaPaint.textBaseline(font, y, POPUP_ROW_HEIGHT),

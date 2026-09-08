@@ -410,3 +410,11 @@ Used the independent debug API for actual portal-triggered travel. Verified an a
 The original cleanup order attempted block removal while its Overworld chunk was unloaded. Returned to the original position and waited for that chunk before removing the portal; recovery verified original air, exact player state and settings. Updated the local script's cleanup order; that revised full script has not been rerun. Graceful client stop completed with Gradle exit 0 after four minutes; no device-loss match in this run. No production change was required.
 
 Evidence: `tmp/aesthetic-end-portal-entry.py`, `.json`, `.log`, `tmp/aesthetic-end-portal-restore.py`, `.log`, and `tmp/aesthetic-cu-settings-runtime.log`. Viewed image: `run/screenshots/caustica-debug-7622b041-8f05-4dbf-95e5-54488ffc3351.png`.
+
+## Dropdown keyboard selection (2026-09-09)
+
+Review of the slider, range contract, dropdown and screen event routing found that a dropdown could open from keyboard activation but had no popup keyboard selection handler. Added Up/Down navigation with wrapping, Enter/keypad Enter/Space confirmation, and a visible outline for the pending choice. Navigation does not change the preference until confirmation. The screen offers keys to the open popup before underlying focus navigation; Escape closes only the popup, and an unhandled key closes it before normal screen dispatch, including Tab navigation.
+
+Behavioral widget regressions cover both wrapping directions, tentative selection, confirmation, collapse discarding a pending choice, and a prerequisite disabling the control before confirmation. Existing pointer tests remain passing. Full root check passed with 187 tasks in 40 seconds, terminal exit 0 (`tmp/aesthetic-dropdown-keyboard-check.log`); a final Javadoc-only update describes the current routing contract. No locale changes.
+
+Computer Use was not retried after the prior turn's two white captures. The new outline and actual screen-level Escape/Tab routing still need live visual/keyboard verification; widget tests and source routing inspection do not establish that pass. No client was launched in this turn.

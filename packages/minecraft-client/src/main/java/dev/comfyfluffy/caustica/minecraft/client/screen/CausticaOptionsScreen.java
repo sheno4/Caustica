@@ -19,6 +19,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -187,6 +188,19 @@ public final class CausticaOptionsScreen extends Screen {
             openDropdown.collapse();
             openDropdown = null;
         }
+    }
+
+    @Override
+    public boolean keyPressed(KeyEvent event) {
+        if (openDropdown != null) {
+            if (event.key() == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+                closeDropdown();
+                return true;
+            }
+            if (openDropdown.keyPressedPopup(event)) return true;
+            closeDropdown();
+        }
+        return super.keyPressed(event);
     }
 
     /**
