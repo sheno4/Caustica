@@ -164,6 +164,7 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "caustica/shaders/minecraft/surface/caustica_portal_surface.slang",
                 "caustica/shaders/minecraft/surface/caustica_water_surface.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_celestial_dressing.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_dimension_skies.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_overworld_sky.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_sky_atmosphere.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_sky_bindings.slang",

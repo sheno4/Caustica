@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.client.program;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.api.pass.*;
 import dev.comfyfluffy.caustica.api.program.*;
+import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
@@ -38,6 +39,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private static final ShaderSource SHADERS = ShaderSource.classpath(
             MinecraftProgramSession.class, "/caustica/shaders/minecraft", "surface", "sky");
     private static final ResourceId OVERWORLD = ResourceId.of("minecraft", "overworld");
+    private static final ResourceId NETHER = ResourceId.of("minecraft", "the_nether");
+    private static final ResourceId END = ResourceId.of("minecraft", "the_end");
 
     private final MinecraftWorldSessionContext context;
     private final MinecraftProgramResources resources;
@@ -179,7 +182,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         try {
             resources.seal(request.prepared.gpu());
             request.registration = registerPrograms(
-                    context.renderSession().program(), roots(request.prepared.gpu()));
+                    context.renderSession().program(), roots(request.prepared.gpu()), context.dimension().id());
             request.registration.whenComplete(result -> completed(request, result));
         } catch (RuntimeException | Error failure) {
             pending = null;
@@ -262,6 +265,12 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         request.prepared = null;
         pending = null;
         active = replacement;
+        if (context.dimension().id().equals(NETHER) || context.dimension().id().equals(END)) {
+            // Procedural dimension skies have no textures or frame data to retain.
+            try (var data = MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(0L)) {
+                context.environment().select(new EnvironmentBinding<>(programs.environment(), data));
+            }
+        }
         if (sky == null) replacement.releaseDisplacedPrograms();
     }
 
@@ -284,7 +293,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                 epoch.fallbackInstanceData());
     }
 
-    static ProgramRegistration<MinecraftPrograms> registerPrograms(ProgramChannel channel, Roots roots) {
+    static ProgramRegistration<MinecraftPrograms> registerPrograms(ProgramChannel channel, Roots roots,
+                                                                  ResourceId dimension) {
         return channel.register(builder -> {
             var coverage = SHADERS.definition("caustica_minecraft_coverage", "MinecraftCoverage");
             var material = new SurfaceDefinition<>(
@@ -305,7 +315,11 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                             roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                             MinecraftProgramTypes.INSTANCE_DATA)),
                     builder.environment(new EnvironmentDefinition<>(
-                            SHADERS.definition("caustica_minecraft_overworld_sky", "MinecraftOverworldSky"),
+                            dimension.equals(NETHER)
+                                    ? SHADERS.definition("caustica_minecraft_dimension_skies", "MinecraftNetherSky")
+                                    : dimension.equals(END)
+                                    ? SHADERS.definition("caustica_minecraft_dimension_skies", "MinecraftEndSky")
+                                    : SHADERS.definition("caustica_minecraft_overworld_sky", "MinecraftOverworldSky"),
                             MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA)));
         });
     }

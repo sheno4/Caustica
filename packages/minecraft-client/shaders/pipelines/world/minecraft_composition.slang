@@ -14,6 +14,7 @@ import caustica_minecraft_coverage;
 import caustica_water_surface;
 import caustica_portal_surface;
 import caustica_minecraft_overworld_sky;
+import caustica_minecraft_dimension_skies;
 
 public struct MinecraftSurfaces : ISurfaceDispatch {
     public OpenPbrSurface evaluateSurface(uint implementation, SurfaceInput input) {
@@ -59,6 +60,8 @@ public struct MinecraftEnvironments : IEnvironmentDispatch {
     public float3 evaluateEnvironment(uint implementation, EnvironmentQuery query) {
         switch (implementation) {
             case 1u: { MinecraftOverworldSky value; return value.evaluateEnvironment(query); }
+            case 2u: { MinecraftNetherSky value; return value.evaluateEnvironment(query); }
+            case 3u: { MinecraftEndSky value; return value.evaluateEnvironment(query); }
             default: { BuiltinEnvironment value; return value.evaluateEnvironment(query); }
         }
     }

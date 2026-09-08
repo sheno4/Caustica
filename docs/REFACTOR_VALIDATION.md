@@ -4,12 +4,16 @@ The project-wide aesthetic review includes interactive behavior and visual inspe
 
 ## Queued lifecycle checks
 
+- Cross dimensions in one process: Overworld → Nether → Overworld → End → Overworld, then Nether → End directly. Wait for visible terrain and active RT at each arrival; check scene/sky/light replacement, exposure and temporal-history settling, stale geometry, crashes and cleanup. Repeat with RT disabled during travel and re-enabled after arrival; include portal travel when computer-use input is verified.
+
 - Reload resources with RT active through F3+T or the resource-pack screen. Verify renderer detachment before atlas replacement and recovery after the reload future completes; repeat a reload to exercise generation ordering after the method-wrapper refactor.
 - Enter the debug workbench, wait for active RT and visible geometry, exit to the title screen, enter a different existing test world in the same client process, and return to the first world. Check coherent scene replacement, camera/history reset, stale geometry, errors and shutdown.
 - Toggle RT off/on five times in one world, waiting for the requested state and fresh rendered frames each time. Inspect vanilla terrain while disabled and world, hand, HUD and transparency after enabling. Repeat a toggle after switching worlds.
 - Leave a world while RT preparation is active, then open another world. Check that completed jobs from the old world cannot publish into the new session.
 
 ## Queued interactive exploration
+
+- Inspect the Nether's ember-lit ash dome from open terrain and above the roof, and the End's violet nebula and stars from the central island and open void. Turn through the entire dome, inspect horizons and reflections, and watch exposure after arrival. Check that neither dimension inherits Overworld celestial lights or sky textures. Repeat RT toggles and a resource reload in each dimension.
 
 - Relaunch the rebuilt client after texture-binding accessor changes. Confirm successful mixin application and inspect textured entities, including their material maps, to verify primary texture resource lookup.
 - Use computer use to navigate pause/title/world-selection menus and inspect the settings screen. Check opening/closing screens, UI placement, readable text, transparency and correct input restoration.
@@ -122,3 +126,8 @@ Use named debug operations for repeatable state checks and computer use for actu
 - Added development option -PvulkanValidation=true, forwarding Minecraft's --vulkanValidation argument. Actual RR launch requested VK_LAYER_KHRONOS_validation (installed version 1.4.357) and startup confirmed it enabled. Full root check passed (187 tasks, 10 seconds; tmp/aesthetic-validation-option-check.log). The shared client argument list serves both loader configurations; this live launch tested Fabric.
 - With validation enabled, RR Performance at 1920x1056 -> 3840x2112 completed 2400 ticks (586 to 2987, frames 1189 to 6963) without a device loss or logged VUID/Validation Error. Client stopped gracefully, Gradle exited 0. Evidence: tmp/aesthetic-rr-validation-status.json and tmp/aesthetic-rr-validation-runtime.log. Validation overhead and the recent unused-pipeline cleanup both differ from the earlier failing runs; neither is established as the explanation. Repeat unvalidated RR on the current code before changing presets or attributing a fix.
 - All route/method/quality overrides were launch-only; fullscreen:false and renderDistance:32 remain unchanged. No new computer-use interaction or cross-world claim follows from these renderer runs.
+
+## Current RR reproduction and renewed computer-use probe (7872aacb)
+
+- The unvalidated aligned-window RR run still failed after about 98 active seconds (graphics retirement `vkGetSemaphoreCounterValue`, frame 4565; 235 fault addresses, first WRITE_INVALID at zero). The unused NRD pipeline cleanup is not a fix for this fault. Evidence: `tmp/aesthetic-rr-current-runtime.log`, `tmp/aesthetic-rr-current-status.json`, crash `crash-2026-09-09_00.44.38-client.txt`.
+- A fresh 854×480 workbench client produced an actual Minecraft computer-use capture after fresh window selection and activation. The subsequent Escape attempt returned “foreground window did not report a process id”; fresh inventory found no Minecraft window. The client independently logged compute-submit device loss at 00:51:10 and exited 1. Capture availability improved; interactive input remains unverified. Evidence: `tmp/aesthetic-cua-renewed-runtime.log`, crash `crash-2026-09-09_00.51.11-client.txt`.

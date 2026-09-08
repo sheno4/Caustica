@@ -16,6 +16,7 @@ import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.api.pass.Pass;
@@ -77,7 +78,7 @@ final class MinecraftProgramSessionTest {
             @Override public void close() { }
         };
 
-        MinecraftProgramSession.registerPrograms(channel, roots);
+        MinecraftProgramSession.registerPrograms(channel, roots, ResourceId.of("minecraft", "overworld"));
         events.add("registered");
         upload.record(null);
 
@@ -94,7 +95,7 @@ final class MinecraftProgramSessionTest {
                 MinecraftProgramTypes.INSTANCE_DATA.data(33L));
 
         ProgramRegistration<MinecraftPrograms> registration =
-                MinecraftProgramSession.registerPrograms(channel, roots);
+                MinecraftProgramSession.registerPrograms(channel, roots, ResourceId.of("minecraft", "overworld"));
 
         assertEquals(1, channel.registrations);
         assertEquals(List.of("caustica_minecraft_surface", "caustica_water_surface",
@@ -105,6 +106,24 @@ final class MinecraftProgramSessionTest {
         assertEquals("caustica_minecraft_overworld_sky",
                 channel.environments.getFirst().implementation().module());
         assertSame(registration.exports().environment(), channel.environmentId);
+    }
+
+    @Test
+    void dimensionProgramsChooseTheirOwnSkyOnEveryRegistration() {
+        var roots = new MinecraftProgramSession.Roots(
+                MinecraftProgramTypes.IMPLEMENTATION_DATA.data(11L),
+                MinecraftProgramTypes.PRIMITIVE_DATA.data(22L),
+                MinecraftProgramTypes.INSTANCE_DATA.data(33L));
+        var dimensions = List.of("overworld", "the_nether", "the_end", "overworld");
+        var types = List.of("MinecraftOverworldSky", "MinecraftNetherSky", "MinecraftEndSky", "MinecraftOverworldSky");
+        for (int i = 0; i < dimensions.size(); i++) {
+            var channel = new CapturingChannel();
+            var registration = MinecraftProgramSession.registerPrograms(channel, roots,
+                    ResourceId.of("minecraft", dimensions.get(i)));
+            assertEquals(1, channel.environments.size());
+            assertEquals(types.get(i), channel.environments.getFirst().implementation().type());
+            assertSame(registration.exports().environment(), channel.environmentId);
+        }
     }
 
     @Test
