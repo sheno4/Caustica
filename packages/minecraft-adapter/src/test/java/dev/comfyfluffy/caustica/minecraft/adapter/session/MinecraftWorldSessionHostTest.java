@@ -27,6 +27,31 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftWorldSessionHostTest {
     @Test
+    void factoriesRegisteredDuringOpenSettleInTheSameControlPass() {
+        var events = new ArrayList<String>();
+        try (var host = new MinecraftWorldSessionHost()) {
+            host.api().sessions().add(context -> {
+                events.add("first:open");
+                host.api().sessions().add(next -> {
+                    events.add("second:open");
+                    return MinecraftWorldSessionContribution.EMPTY;
+                });
+                return MinecraftWorldSessionContribution.EMPTY;
+            });
+            try (var session = host.openSession(owner -> new TestScope("scope", events),
+                    (owner, scene) -> environmentScope(new ArrayList<>()), new SceneId() { },
+                    MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
+                    failure -> { throw new AssertionError(failure); })) {
+                session.processPendingChanges();
+                assertEquals(List.of("first:open", "second:open"), events);
+                assertEquals(2, session.contributionCount());
+                session.processPendingChanges();
+                assertEquals(List.of("first:open", "second:open"), events);
+            }
+        }
+    }
+
+    @Test
     void borrowsOneWorldEpochAndOwnsDistinctCoreScopesThroughFullLifecycle() {
         List<String> events = new ArrayList<>();
         List<TestScope> scopes = new ArrayList<>();

@@ -64,21 +64,22 @@ public final class MinecraftWorldSession implements AutoCloseable {
     /** Applies process registration changes at the host's world-session control boundary. */
     public void processPendingChanges() {
         requireOpen();
-        if (!reconcileRequested) return;
-        reconcileRequested = false;
-        List<MinecraftWorldSessionHost.Channel.Registration> desired = channel.snapshot();
-        attempted.retainAll(desired);
-        List<ActiveContribution> removed = new ArrayList<>();
-        active.entrySet().removeIf(entry -> {
-            if (desired.contains(entry.getKey())) return false;
-            removed.add(entry.getValue());
-            return true;
-        });
-        teardown(removed, true);
-        for (MinecraftWorldSessionHost.Channel.Registration registration : desired) {
-            if (attempted.add(registration)) open(registration);
+        while (reconcileRequested) {
+            requireOpen();
+            reconcileRequested = false;
+            List<MinecraftWorldSessionHost.Channel.Registration> desired = channel.snapshot();
+            attempted.retainAll(desired);
+            List<ActiveContribution> removed = new ArrayList<>();
+            active.entrySet().removeIf(entry -> {
+                if (desired.contains(entry.getKey())) return false;
+                removed.add(entry.getValue());
+                return true;
+            });
+            teardown(removed, true);
+            for (MinecraftWorldSessionHost.Channel.Registration registration : desired) {
+                if (attempted.add(registration)) open(registration);
+            }
         }
-        if (reconcileRequested) processPendingChanges();
     }
 
     /** Delivers one newly applied resource-pack epoch in host generation order. */
