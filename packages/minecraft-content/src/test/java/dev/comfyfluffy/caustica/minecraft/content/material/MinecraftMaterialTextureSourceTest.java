@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class MinecraftMaterialTextureSourceTest {
     @Test
@@ -24,6 +25,35 @@ final class MinecraftMaterialTextureSourceTest {
         MaterialImageSource broken = () -> { throw new IOException("broken"); };
         assertThrows(IOException.class,
                 () -> new MinecraftMaterialTextureSource(image, image, broken, false).open());
+        assertEquals(2, closes.get());
+    }
+
+    @Test
+    void sharedCloseFailureDoesNotSkipTheAlbedoImage() throws Exception {
+        var closes = new AtomicInteger();
+        var failure = new AssertionError("image close failed");
+        MaterialImageSource broken = () -> new MinecraftMaterialImage((x, y) -> -1, 1, 1, () -> {
+            closes.incrementAndGet();
+            throw failure;
+        });
+        var bundle = new MinecraftMaterialTextureSource(image(closes), broken, broken, false).open();
+
+        assertSame(failure, assertThrows(AssertionError.class, bundle::close));
+        assertEquals(3, closes.get());
+    }
+
+    @Test
+    void sharedOpenAndCloseFailurePreservesTheOriginalErrorAndReleasesAllImages() {
+        var closes = new AtomicInteger();
+        var failure = new AssertionError("image failure");
+        MaterialImageSource brokenClose = () -> new MinecraftMaterialImage((x, y) -> -1, 1, 1, () -> {
+            closes.incrementAndGet();
+            throw failure;
+        });
+        MaterialImageSource brokenOpen = () -> { throw failure; };
+        var source = new MinecraftMaterialTextureSource(image(closes), brokenClose, brokenOpen, false);
+
+        assertSame(failure, assertThrows(AssertionError.class, source::open));
         assertEquals(2, closes.get());
     }
 

@@ -34,29 +34,23 @@ public final class MinecraftMaterialTextureSource implements MaterialTextureSour
             s = specular == null ? null : specular.open();
             n = normal == null ? null : normal.open();
             return new Image(a, s, n, inferEmission, alphaFrames, alphaFrameRowSize);
-        } catch (Throwable failure) {
-            close(n, failure);
-            close(s, failure);
-            close(a, failure);
-            if (failure instanceof java.io.IOException io) {
-                throw io;
-            }
-            if (failure instanceof RuntimeException runtime) {
-                throw runtime;
-            }
-            throw new java.io.IOException(failure);
+        } catch (java.io.IOException | RuntimeException | Error failure) {
+            closeImages(failure, n, s, a);
+            throw failure;
         }
     }
 
-    private static void close(MaterialImage image, Throwable failure) {
-        if (image == null) {
-            return;
+    private static Throwable closeImages(Throwable failure, MaterialImage... images) {
+        for (MaterialImage image : images) {
+            if (image == null) continue;
+            try {
+                image.close();
+            } catch (RuntimeException | Error close) {
+                if (failure == null) failure = close;
+                else if (failure != close) failure.addSuppressed(close);
+            }
         }
-        try {
-            image.close();
-        } catch (Throwable close) {
-            failure.addSuppressed(close);
-        }
+        return failure;
     }
 
     private record Image(MaterialImage albedo, MaterialImage specular, MaterialImage normal,
@@ -130,27 +124,9 @@ public final class MinecraftMaterialTextureSource implements MaterialTextureSour
 
         @Override
         public void close() {
-            Throwable failure = null;
-            for (MaterialImage image : new MaterialImage[]{normal, specular, albedo}) {
-                if (image == null) {
-                    continue;
-                }
-                try {
-                    image.close();
-                } catch (Throwable close) {
-                    if (failure == null) {
-                        failure = close;
-                    } else {
-                        failure.addSuppressed(close);
-                    }
-                }
-            }
-            if (failure instanceof RuntimeException runtime) {
-                throw runtime;
-            }
-            if (failure != null) {
-                throw new RuntimeException(failure);
-            }
+            Throwable failure = closeImages(null, normal, specular, albedo);
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
         }
 
         private static int sample(MaterialImage image, int x, int y, int width, int height) {
