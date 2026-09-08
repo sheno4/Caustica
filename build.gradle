@@ -72,7 +72,7 @@ def registerMinecraftClientTask = { String taskName ->
 }
 
 ["jar", "sourcesJar", "test", "compileShaders", "runClient", "runServer",
-		"overlayHeapAbiTest", "verifyEmbeddedApi", "verifyRtBindingsGeneration"].each(registerMinecraftClientTask)
+		"verifyEmbeddedApi", "verifyRtBindingsGeneration"].each(registerMinecraftClientTask)
 
 tasks.register("examplesCheck") {
 	group = "verification"

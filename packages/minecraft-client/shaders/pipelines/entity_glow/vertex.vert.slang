@@ -1,6 +1,6 @@
 import overlay_common;
 
-[[vk::push_constant]] OverlayPush pc;
+[[vk::push_constant]] GlowMaskPush pc;
 
 struct VertexInput {
     [[vk::location(0)]] float3 position;

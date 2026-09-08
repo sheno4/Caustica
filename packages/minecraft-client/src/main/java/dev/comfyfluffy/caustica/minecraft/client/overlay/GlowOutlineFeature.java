@@ -41,8 +41,8 @@ final class GlowOutlineFeature implements OverlayFeature {
     GlowOutlineFeature(RtEntities entities, ResourceFactory resources) {
         this.entities = entities; this.resources = resources;
     }
-    // View projection at 0, camera offset at 64, color at 80, and TLAS index at 96; padded to 112 bytes.
-    private static final int MASK_PUSH_BYTES = 112;
+    // GlowMaskPush: view projection at 0, camera offset at 64, and color at 80.
+    private static final int MASK_PUSH_BYTES = 96;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
     private ShaderObjectGraphics maskPipeline;
@@ -170,7 +170,6 @@ final class GlowOutlineFeature implements OverlayFeature {
                     push.putFloat(64, camOffX).putFloat(68, camOffY).putFloat(72, camOffZ);
                     push.putFloat(80, colorRgba[i * 4]).putFloat(84, colorRgba[i * 4 + 1])
                             .putFloat(88, colorRgba[i * 4 + 2]).putFloat(92, colorRgba[i * 4 + 3]);
-                    push.putInt(96, 0);
                     maskPipeline.bind(cmd, push, width, height);
                     VK10.vkCmdDrawIndexed(cmd, indexCount[i], 1, firstIndex[i], 0, 0);
                 }

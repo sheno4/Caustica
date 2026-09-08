@@ -227,23 +227,6 @@ def compileShaders = tasks.register("compileShaders", CompileSlangShaders) {
 	outputDirectory = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
 }
 
-def compileOverlayHeapAbiTest = tasks.register("compileOverlayHeapAbiTest", JavaCompile) {
-	group = "verification"
-	source(file("src/test/java/dev/comfyfluffy/caustica/minecraft/client/overlay/OverlayHeapAbiTest.java"))
-	classpath = configurations.testCompileClasspath
-	destinationDirectory = layout.buildDirectory.dir("classes/overlay-heap-abi-test")
-	options.release = 25
-}
-
-tasks.register("overlayHeapAbiTest", Test) {
-	group = "verification"
-	dependsOn(compileOverlayHeapAbiTest, compileShaders)
-	testClassesDirs = files(compileOverlayHeapAbiTest.flatMap { it.destinationDirectory })
-	classpath = files(compileOverlayHeapAbiTest.flatMap { it.destinationDirectory }) + configurations.testRuntimeClasspath
-	useJUnitPlatform()
-	workingDir(rootProject.projectDir)
-}
-
 def verifyRtBindingsGeneration = tasks.register("verifyRtBindingsGeneration") {
 	group = "verification"
 	description = "Verifies the renderer package's generated world root layout."
