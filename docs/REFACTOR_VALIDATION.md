@@ -474,3 +474,15 @@ Repeated the same city camera under REBLUR/SR at 854x480, with a 400-tick pre-re
 The observer restored exact player/settings and exited 0. Graceful client stop exited 0 after 2m07s; no device-loss, entity-publication-failure or bounds-exception matches. Added the composite-versus-terrain-readiness distinction to the debug guide. No production fix was justified by this reproduction. Allocation/timing comparison against the previous array-access implementation remains outstanding.
 
 Evidence: `tmp/aesthetic-reload-convergence.{py,json,log}` and `tmp/aesthetic-reload-convergence-runtime.log`; all five screenshot paths are recorded in the JSON. The run did not use Computer Use and does not close pending keyboard/visual interaction checks.
+
+## Prior-array versus immutable-view upload comparison (2026-09-09)
+
+Temporarily built the exact MinecraftEntityMesh and MinecraftVulkanEntityUploader sources from 786fc55b's parent, leaving other production sources unchanged. Repeated the stationary city-copy workload with REBLUR/SR at 854x480 and 600 recorded ticks. Compared against the view run: recorded player state and settings match exactly. Start frame and event mix differ, so this is not a controlled frame-rate comparison. Arrays recorded 56,427 uploads versus 66,859 for views; particle uploads appear only in the array sample.
+
+For block-entity domain 2, arrays recorded 41,751 uploads and views 44,032. Median allocation was 36,416 versus 33,536 bytes per upload (2,880 bytes / about 7.9% lower with views); p95 was 36,432 versus 33,568. Mean worker duration was 0.0266 versus 0.0207 ms, but scheduling, warmup and workload variation prevent a general timing-gain claim. Entity-domain medians also fell, but its different event distribution makes aggregate comparison weaker. These observations support the allocation reduction while retaining the standard read-only buffer design; they do not establish an FPS improvement.
+
+All three baseline images were inspected. The old implementation also showed incomplete distant towers in its early post-reload image, further supporting the settled-run finding that 100 composites do not establish terrain convergence. Baseline observer and client exited 0; exact player/settings restoration passed and graceful client lifetime was 1m32s.
+
+Restored both production sources from HEAD after the baseline process exited. Verified the uploader's content hash equals HEAD despite a transient working-tree stat marker. Rebuilt the restored view implementation: full check passed, 187 tasks in 6 seconds, exit 0. No baseline source changes belong in this checkpoint.
+
+Evidence: `tmp/aesthetic-mesh-arrays-live.{py,json,log}`, `tmp/aesthetic-mesh-arrays-runtime.log`, `tmp/aesthetic-mesh-arrays-upload-summary.json`, `tmp/aesthetic-mesh-access-comparison.json`, and `tmp/aesthetic-mesh-access-restored-check.log`. Baseline recording: `run/caustica-debug/recording-c94b44f5-1641-42a8-9b30-aaed687af5c4.jfr`.
