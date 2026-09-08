@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
 import dev.comfyfluffy.caustica.support.SharedResource;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
@@ -31,13 +32,10 @@ public final class MinecraftVulkanImage implements OwnedGpuImage {
         this.gpu = gpu; this.view = view; this.texture = texture; this.descriptor = descriptor;
         this.width = width; this.height = height; this.format = format;
         this.nativeView = nativeView;
-        owner = SharedResource.owned(descriptor,
-                range -> gpu.deferDestroy(() -> {
-                    try {
-                        range.destroy();
-                        VK10.vkDestroyImageView(gpu.vk(), nativeView, null);
-                    } finally { MinecraftTextureLifetime.release(texture); }
-                }));
+        var lifetime = new ResourceLifetime(descriptor::destroy,
+                () -> VK10.vkDestroyImageView(gpu.vk(), nativeView, null),
+                () -> MinecraftTextureLifetime.release(texture));
+        owner = SharedResource.owned(descriptor, ignored -> gpu.deferDestroy(lifetime::close));
     }
 
     public static MinecraftVulkanImage sampled(VulkanDeviceContext gpu, VulkanGpuTextureView view,
@@ -64,9 +62,17 @@ public final class MinecraftVulkanImage implements OwnedGpuImage {
             gpu.descriptorHeap().writer().writeResource(range, 0, resource);
             return new MinecraftVulkanImage(gpu, view, texture, range, width, height, format, nativeView);
         } catch (RuntimeException | Error failure) {
-            if (range != null) range.destroy();
-            if (nativeView != 0L) VK10.vkDestroyImageView(gpu.vk(), nativeView, null);
-            MinecraftTextureLifetime.release(texture);
+            var allocatedRange = range;
+            long allocatedView = nativeView;
+            var lifetime = new ResourceLifetime(
+                    () -> { if (allocatedRange != null) allocatedRange.destroy(); },
+                    () -> { if (allocatedView != 0L) VK10.vkDestroyImageView(gpu.vk(), allocatedView, null); },
+                    () -> MinecraftTextureLifetime.release(texture));
+            try {
+                lifetime.close();
+            } catch (RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
             throw failure;
         }
     }

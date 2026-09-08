@@ -2,12 +2,15 @@ package dev.comfyfluffy.caustica.vulkan;
 
 import java.util.List;
 
-/** Executes an owned resource's already-drained destruction actions once, in dependency order. */
-final class ResourceLifetime implements AutoCloseable {
+/**
+ * Executes an owned resource's already-drained destruction actions once, in dependency order.
+ * The owner serializes calls to close; every action is attempted even if an earlier action fails.
+ */
+public final class ResourceLifetime implements AutoCloseable {
     private final List<Runnable> destroy;
     private boolean closed;
 
-    ResourceLifetime(Runnable... destroy) {
+    public ResourceLifetime(Runnable... destroy) {
         this.destroy = List.of(destroy);
     }
 
