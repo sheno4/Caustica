@@ -110,7 +110,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                 pending.computeIfAbsent(change.key(), ignored -> new PendingChanges()).merge(change, discarded);
             if (!drainScheduled) {
                 drainScheduled = true;
-                publicationExecutor.execute(this::drain);
+                executePublication(this::drain);
             }
         }
         if (!discarded.isEmpty()) executePacking(() -> {
@@ -134,8 +134,15 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             if (delta.transform != null) changes.add(delta.transform);
         });
         if (failure != null) { closeCaptures(changes); return; }
-        try { apply(changes); }
-        catch (Throwable thrown) { failure = thrown; }
+        apply(changes);
+    }
+
+    /** Worker failures invalidate subsequent host submissions, including failures during abandoned-input cleanup. */
+    private void executePublication(Runnable action) {
+        publicationExecutor.execute(() -> {
+            try { action.run(); }
+            catch (Throwable thrown) { failure = thrown; }
+        });
     }
 
     private void executePacking(Runnable action) {
@@ -280,10 +287,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         synchronized (submissionLock) {
             if (accepting) {
                 try {
-                    publicationExecutor.execute(() -> {
-                        try { publishPrepared(key, request, generation, thrown, readyNanos); }
-                        catch (Throwable rejected) { failure = rejected; }
-                    });
+                    executePublication(() -> publishPrepared(key, request, generation, thrown, readyNanos));
                 } catch (RuntimeException | Error rejected) {
                     failure = cleanup(rejected, generation::close);
                 }
@@ -427,7 +431,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                 var abandoned = List.copyOf(changes);
                 finished = true;
                 group = null;
-                publicationExecutor.execute(() -> closeCaptures(abandoned));
+                executePublication(() -> closeCaptures(abandoned));
             }
         }
     }

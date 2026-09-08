@@ -123,14 +123,12 @@ final class MinecraftEntityShutdownTest {
             geometry.put(new MinecraftEntityGeometry.Key(1, key), revision(1), mesh(),
                     GeometryTransform.translation(0, 0, 0), 255);
         }
-        assertSame(rejected, assertThrows(IllegalStateException.class, group::close));
+        group.close();
         assertEquals(2, closes.get());
         group.close();
         assertEquals(2, closes.get());
-        try (var next = geometry.beginUpdateGroup()) {
-            assertThrows(IllegalStateException.class, group::submit);
-            next.submit();
-        }
+        assertSame(rejected, assertThrows(IllegalStateException.class, geometry::beginUpdateGroup).getCause());
+        assertThrows(IllegalStateException.class, group::submit);
         geometry.close();
     }
 

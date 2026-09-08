@@ -26,6 +26,37 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftEntityGeometryTest {
+    @Test void abandonedCaptureCleanupFailureIsReportedByTheNextSubmission() {
+        var scene = new PreparedScene();
+        var publication = new java.util.ArrayDeque<Runnable>();
+        var cleanupFailure = new IllegalStateException("capture cleanup failed");
+        int[] closed = {0};
+        var uploader = new MinecraftEntityUploader() {
+            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
+            @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
+                return new UploadJob() {
+                    @Override public UploadedEntity finish() { throw new AssertionError(); }
+                    @Override public void close() {
+                        if (++closed[0] == 1) throw cleanupFailure;
+                    }
+                };
+            }
+        };
+        var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {}, uploader,
+                Runnable::run, publication::add);
+        try (var group = geometry.beginUpdateGroup()) {
+            geometry.put(new MinecraftEntityGeometry.Key(1, 1), revision(1), mesh(),
+                    GeometryTransform.translation(0, 0, 0), 255);
+            geometry.put(new MinecraftEntityGeometry.Key(1, 2), revision(1), mesh(),
+                    GeometryTransform.translation(0, 0, 0), 255);
+        }
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(publication.removeFirst()::run);
+        assertEquals(2, closed[0]);
+        assertTrue(scene.jobs.isEmpty());
+        assertSame(cleanupFailure,
+                assertThrows(IllegalStateException.class, geometry::beginUpdateGroup).getCause());
+    }
+
     @Test void coalescedRemovalAndRecreationKeepDistinctInstanceIdentity() throws Exception {
         var scene = new PreparedScene();
         var release = new java.util.concurrent.CountDownLatch(1);
