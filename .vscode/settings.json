@@ -1,14 +1,22 @@
 {
   "slang.additionalSearchPaths": [
-    "src/main/resources/caustica/shaders/api",
-    "src/main/resources/caustica/shaders/world",
-    "src/main/resources/caustica/shaders/builtin/sky",
-    "src/main/resources/caustica/shaders/builtin/surface",
-    "src/main/resources/caustica/shaders/builtin/bloom",
-    "src/main/resources/caustica/shaders/builtin/common",
-    "shaders/common",
-    "shaders/pipelines"
+    "packages/shader-api/src/main/resources/caustica/shaders/api",
+    "packages/renderer-raytracing/src/main/resources/caustica/shaders/world",
+    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/sky",
+    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/surface",
+    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/bloom",
+    "packages/minecraft-rendering/src/main/resources/caustica/shaders/minecraft/sky",
+    "packages/minecraft-rendering/src/main/resources/caustica/shaders/minecraft/surface",
+    "packages/minecraft-client/shaders/common",
+    "packages/minecraft-client/shaders/pipelines/world",
+    "packages/renderer-presentation/shaders/common",
+    "packages/examples/api-showcase/src/main/resources/api_showcase/shaders",
+    "packages/examples/api-showcase/src/main/resources/api_showcase/shaders/passes",
+    "packages/examples/api-showcase/src/main/resources/api_showcase/shaders/world",
+    "packages/examples/gltf-content/src/main/resources/caustica_gltf_viewer/shaders"
   ],
   "slang.enableCommitCharactersInAutoCompletion": "off",
-  "files.associations": { "*.slang": "slang" }
+  "files.associations": {
+    "*.slang": "slang"
+  }
 }
