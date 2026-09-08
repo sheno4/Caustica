@@ -337,6 +337,6 @@ final class MinecraftVulkanEntityUploaderTest {
 
     private static MinecraftEntityMesh.Triangle triangle(MinecraftEntityMesh.Material material,
                                                           MinecraftEntityMesh.Coverage coverage) {
-        return new MinecraftEntityMesh.Triangle(material, coverage, 0, 1, 0, 2.5f);
+        return new MinecraftEntityMesh.Triangle(material, coverage, 2.5f);
     }
 }

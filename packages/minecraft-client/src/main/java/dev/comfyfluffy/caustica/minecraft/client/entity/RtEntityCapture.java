@@ -240,7 +240,7 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.add(base + 2);
         idx.add(base + 3);
         MinecraftEntityMesh.Triangle surface = new MinecraftEntityMesh.Triangle(
-                currentMaterial, currentCoverage, nx, ny, nz, emission);
+                currentMaterial, currentCoverage, emission);
         surfaces.add(surface);
         surfaces.add(surface);
     }

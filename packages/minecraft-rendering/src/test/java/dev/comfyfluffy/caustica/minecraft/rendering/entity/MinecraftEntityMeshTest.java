@@ -20,7 +20,7 @@ final class MinecraftEntityMeshTest {
         var material = new MinecraftEntityMesh.Material(ResourceId.of("minecraft", "stone"), null,
                 MinecraftEntityMesh.Program.MATERIAL);
         var triangle = new MinecraftEntityMesh.Triangle(material, MinecraftEntityMesh.Coverage.OPAQUE,
-                0, 1, 0, 0);
+                0);
         var triangles = new ArrayList<>(List.of(triangle));
 
         var mesh = MinecraftEntityMesh.copyOfRanges(positions, indices, uvs, colors, 3, 3, triangles, 17L);
@@ -51,7 +51,7 @@ final class MinecraftEntityMeshTest {
         var material = new MinecraftEntityMesh.Material(ResourceId.of("minecraft", "stone"), null,
                 MinecraftEntityMesh.Program.MATERIAL);
         var triangle = new MinecraftEntityMesh.Triangle(material, MinecraftEntityMesh.Coverage.OPAQUE,
-                0, 1, 0, 0);
+                0);
         float[] colors = {1, 0, 0, .25f, 0, 1, 0, .5f, 0, 0, 1, .75f};
 
         var mesh = new MinecraftEntityMesh(positions, new int[]{0, 1, 2},

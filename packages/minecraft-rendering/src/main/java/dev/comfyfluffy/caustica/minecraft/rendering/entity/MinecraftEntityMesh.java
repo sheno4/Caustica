@@ -127,7 +127,6 @@ public final class MinecraftEntityMesh {
 
     /** Per-triangle source data consumed by Minecraft's primitive-record uploader. */
     public record Triangle(Material material, Coverage coverage,
-                           float normalX, float normalY, float normalZ,
                            float emission) {
         public Triangle {
             Objects.requireNonNull(material, "material");

@@ -49,6 +49,6 @@ final class MinecraftEntityUploaderTest {
                 MinecraftEntityMesh.Program.MATERIAL);
         return new MinecraftEntityMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 new float[6], new float[12], List.of(new MinecraftEntityMesh.Triangle(material,
-                MinecraftEntityMesh.Coverage.OPAQUE, 0, 0, 1, 0)), 1);
+                MinecraftEntityMesh.Coverage.OPAQUE, 0)), 1);
     }
 }

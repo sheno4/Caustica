@@ -62,6 +62,19 @@ final class RtEntityCaptureTest {
     }
 
     @Test
+    void decalOffsetsUseAuthoredOrGeometricNormalsWithoutRetainingThem() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.currentOrder = 2;
+        capture.addDirectQuad(X, Y, Z, U, V, 0, 2, 0, -1);
+        capture.addDirectQuad(X, Y, Z, U, V, 0, 0, 0, -1);
+        float[] positions = capture.entityMesh().positions();
+        for (int i = 0; i < 4; i++) {
+            assertEquals(Y[i] + 0.0004f, positions[i * 3 + 1], 1.0e-7f);
+            assertEquals(0.0004f, positions[(i + 4) * 3 + 2], 1.0e-7f);
+        }
+    }
+
+    @Test
     void preservesPerVertexAndDrawAlpha() {
         RtEntityCapture capture = new RtEntityCapture();
         int[] colors = {0x20FF0000, 0x4000FF00, 0x800000FF, 0xFFFFFFFF};
@@ -96,9 +109,6 @@ final class RtEntityCaptureTest {
         assertNotSame(first, second);
         assertEquals(firstMaterial, first.material());
         assertEquals(MinecraftEntityMesh.Coverage.STOCHASTIC, first.coverage());
-        assertEquals(0f, first.normalX());
-        assertEquals(0f, first.normalY());
-        assertEquals(1f, first.normalZ());
         assertEquals(1.25f, first.emission());
         float[] firstTint = ColorSpaces.srgbToAcesCg(128f / 255f, 64f / 255f, 32f / 255f);
         assertEquals(firstTint[0], mesh.vertexColors()[0]);
@@ -107,9 +117,6 @@ final class RtEntityCaptureTest {
         assertEquals(1f, mesh.vertexColors()[3]);
         assertEquals(secondMaterial, second.material());
         assertEquals(MinecraftEntityMesh.Coverage.OPAQUE, second.coverage());
-        assertEquals(0f, second.normalX());
-        assertEquals(1f, second.normalY());
-        assertEquals(0f, second.normalZ());
         assertEquals(2.5f, second.emission());
         float[] secondTint = ColorSpaces.srgbToAcesCg(16f / 255f, 32f / 255f, 64f / 255f);
         assertEquals(secondTint[0], mesh.vertexColors()[16]);
@@ -170,16 +177,14 @@ final class RtEntityCaptureTest {
         RtEntities.MeshFingerprint shared = RtEntities.meshFingerprint(capture);
 
         MinecraftEntityMesh.Triangle equalSurface = new MinecraftEntityMesh.Triangle(
-                surface.material(), surface.coverage(), surface.normalX(), surface.normalY(),
-                surface.normalZ(), surface.emission());
+                surface.material(), surface.coverage(), surface.emission());
         assertNotSame(surface, equalSurface);
         assertEquals(surface, equalSurface);
         capture.surfaces.set(1, equalSurface);
         assertEquals(shared, RtEntities.meshFingerprint(capture));
 
         capture.surfaces.set(1, new MinecraftEntityMesh.Triangle(
-                surface.material(), surface.coverage(), surface.normalX(), surface.normalY(),
-                surface.normalZ(), surface.emission() + 1f));
+                surface.material(), surface.coverage(), surface.emission() + 1f));
         RtEntities.MeshFingerprint changed = RtEntities.meshFingerprint(capture);
         assertNotEquals(shared.contentHash(), changed.contentHash());
         assertEquals(shared.topologyRevision(), changed.topologyRevision());

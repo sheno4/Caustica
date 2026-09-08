@@ -493,7 +493,7 @@ final class MinecraftEntityGeometryTest {
         var material = new MinecraftEntityMesh.Material(ResourceId.of("test", "entity"), null,
                 MinecraftEntityMesh.Program.MATERIAL);
         var triangle = new MinecraftEntityMesh.Triangle(material, MinecraftEntityMesh.Coverage.OPAQUE,
-                0, 0, 1, 0);
+                0);
         return new MinecraftEntityMesh(new float[] {0, 0, 0, 1, 0, 0, 0, 1, 0},
                 new int[] {0, 1, 2}, new float[] {0, 0, 1, 0, 0, 1},
                 new float[] {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, List.of(triangle), 17);
