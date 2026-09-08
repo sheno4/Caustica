@@ -179,14 +179,19 @@ public final class RtPipeline {
             VkStridedDeviceAddressRegionKHR rmiss = region(stack,
                     sbt.deviceRange().address().addBytes((long) raygenCount * stride),
                     stride, (long) missCount * stride);
-            VkStridedDeviceAddressRegionKHR hit = region(stack, retainedHits.bytes().address(),
-                    retainedHits.stride(), retainedHits.bytes().byteSize());
+            VkStridedDeviceAddressRegionKHR hit = hitRegion(stack, retainedHits);
             vkCmdTraceRaysKHR(commandBuffer, rgen, rmiss, hit,
                     VkStridedDeviceAddressRegionKHR.calloc(stack), width, height, 1);
         }
     }
 
     public int retainedHitRecordStride() { return Math.toIntExact(stride); }
+
+    /** An empty scene has no hit records; Vulkan consumes a zero-sized SBT region for its miss-only rays. */
+    static VkStridedDeviceAddressRegionKHR hitRegion(MemoryStack stack, HitTable hits) {
+        return hits == null ? VkStridedDeviceAddressRegionKHR.calloc(stack)
+                : region(stack, hits.bytes().address(), hits.stride(), hits.bytes().byteSize());
+    }
 
     public long retainedHitTableAlignment() { return context.shaderGroupBaseAlignment(); }
 

@@ -168,8 +168,9 @@ public abstract class GameRendererMixin {
 					ordinal = 1,
 					shift = At.Shift.AFTER))
 	private void caustica$endWorldCompositeBeforeHand(DeltaTracker deltaTracker, CallbackInfo ci) {
-		CausticaClientComposition.current().worldComposite().end(this.mainRenderTarget);
-		if (!CausticaClientComposition.current().runtime().frameActive()) {
+		// A dimension transition may have an active runtime while its new scene is still preparing.
+		// UI extensions require the retained frame produced by a successful world composite.
+		if (!CausticaClientComposition.current().worldComposite().end(this.mainRenderTarget)) {
 			return;
 		}
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI

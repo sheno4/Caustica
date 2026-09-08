@@ -29,26 +29,28 @@ public final class WorldRenderComposite {
 	 * Run the RT composite once, at the before-hand seam (the safety-net end() then no-ops because the
 	 * window is already closed). In cancel-vanilla mode, this is where the skipped world is replaced.
 	 */
-	public void end(RenderTarget mainTarget) {
-		this.end(mainTarget, true);
+	public boolean end(RenderTarget mainTarget) {
+		return this.end(mainTarget, true);
 	}
 
 	public void endSafetyNet(RenderTarget mainTarget) {
 		this.end(mainTarget, false);
 	}
 
-	private void end(RenderTarget mainTarget, boolean beforeHandSeam) {
+	private boolean end(RenderTarget mainTarget, boolean beforeHandSeam) {
 		if (this.rtWindowOpen) {
 			this.rtWindowOpen = false;
 			if (!beforeHandSeam && renderController.wasWorldSkippedThisFrame()) {
 				renderController.markMissedBeforeHandSeam();
-				return;
+				return false;
 			}
 			long image = mainTarget.getColorTexture() instanceof VulkanGpuTexture texture ? texture.vkImage() : 0L;
 			boolean success = image != 0L
 					&& CausticaClientComposition.current().runtime().composite(image, mainTarget.width, mainTarget.height);
 			renderController.markRtFrameResult(success);
+			return success;
 		}
+		return false;
 	}
 
 	public void destroy() {
