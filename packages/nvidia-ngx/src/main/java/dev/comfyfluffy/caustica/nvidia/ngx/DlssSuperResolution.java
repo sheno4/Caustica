@@ -17,8 +17,10 @@ public final class DlssSuperResolution {
     private static final int FEATURE_FLAG_IS_HDR = 1 << 0;
     private static final int FEATURE_FLAG_MV_LOW_RES = 1 << 1;
     private static final int FEATURE_FLAG_DEPTH_INVERTED = 1 << 3;
+    // Pre-exposure describes input scaling; SR still needs exposure estimation without an exposure texture.
+    private static final int FEATURE_FLAG_AUTO_EXPOSURE = 1 << 6;
     private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES
-            | FEATURE_FLAG_DEPTH_INVERTED;
+            | FEATURE_FLAG_DEPTH_INVERTED | FEATURE_FLAG_AUTO_EXPOSURE;
 
     public record Settings(boolean enabled, int quality, int preset) {
         public Settings {
