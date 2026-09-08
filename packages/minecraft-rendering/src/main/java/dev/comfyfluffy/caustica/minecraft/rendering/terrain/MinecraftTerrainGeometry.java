@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.scene.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
@@ -157,7 +158,10 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                 release = published;
                 published = false;
             }
-            if (release) displaced.forEach(Prepared::close);
+            if (release) {
+                new ResourceLifetime(displaced.stream().<Runnable>map(value -> value::close)
+                        .toArray(Runnable[]::new)).close();
+            }
         }
     }
 
@@ -165,8 +169,11 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     public synchronized List<Long> sectionKeys() { return List.copyOf(sections.keySet()); }
 
     @Override public synchronized void close() {
-        edit(sectionKeys().stream().map(Drop::new).toList());
-        uploader.close();
+        var edit = prepareEdit(sectionKeys().stream().map(Drop::new).toList());
+        edit.publish();
+        // A rejected publication leaves sections and uploader available for retry. Once removal is
+        // published, every displaced claim and the uploader must retire even if a release fails.
+        new ResourceLifetime(edit::close, uploader::close).close();
     }
 
     public sealed interface ReadyChange permits Prepared, Drop { long sectionKey(); }
@@ -178,14 +185,16 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         private final Placement placement;
         private final MinecraftTerrainUploader.UploadedSection uploaded;
         private final ReadyMesh<MinecraftProgramTypes.InstanceData> mesh;
+        private final ResourceLifetime lifetime;
         private Prepared(Placement placement, MinecraftTerrainUploader.UploadedSection uploaded,
                          ReadyMesh<MinecraftProgramTypes.InstanceData> mesh) {
             this.placement = placement;
             this.uploaded = uploaded;
             this.mesh = mesh;
+            this.lifetime = new ResourceLifetime(mesh::close, uploaded::close);
         }
         @Override public long sectionKey() { return placement.sectionKey(); }
-        @Override public void close() { mesh.close(); uploaded.close(); }
+        @Override public void close() { lifetime.close(); }
     }
 
     public record Put(long sectionKey, int originX, int originY, int originZ,

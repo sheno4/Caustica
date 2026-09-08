@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.rendering.terrain;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
+import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
+import dev.comfyfluffy.caustica.api.geometry.ReadyMesh;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
@@ -25,10 +27,77 @@ import java.util.List;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftTerrainGeometryTest {
+    @Test void preparedSectionReleasesUploadWhenMeshRetirementFails() {
+        var failure = new AssertionError("mesh cleanup failed");
+        var uploaded = new Uploaded(0x1000);
+        var meshes = new MeshPreparer() {
+            @Override public <N> CompletableFuture<ReadyMesh<N>> prepare(
+                    ShaderDataType<N> type, MeshBuild<N> build, ReadyMesh<N> source) {
+                return CompletableFuture.completedFuture(new ReadyMesh<>() {
+                    @Override public ShaderDataType<N> instanceDataType() { return type; }
+                    @Override public ReadyMesh<N> retain() { throw new AssertionError("not published"); }
+                    @Override public void close() { throw failure; }
+                });
+            }
+        };
+        var terrain = new MinecraftTerrainGeometry(meshes, new PreparedScene(), new SceneId() {},
+                ignored -> uploaded);
+        var prepared = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 0, 0, 0, mesh())).join();
+
+        assertSame(failure, assertThrows(AssertionError.class, prepared::close));
+
+        assertTrue(uploaded.closed);
+        assertDoesNotThrow(prepared::close);
+        terrain.close();
+    }
+
+    @Test void shutdownDrainsEverySectionAndUploaderWhenReleasesFail() {
+        var scene = new PreparedScene();
+        var failure = new AssertionError("section cleanup failed");
+        var releases = new ArrayList<String>();
+        var uploader = new MinecraftTerrainUploader() {
+            private int next;
+
+            @Override public UploadedSection upload(MinecraftTerrainMesh source) {
+                int section = next++;
+                var uploaded = new Uploaded(0x1000);
+                return new UploadedSection() {
+                    @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
+                        return uploaded.build();
+                    }
+                    @Override public dev.comfyfluffy.caustica.api.program.ShaderData<
+                            MinecraftProgramTypes.InstanceData> instanceData() {
+                        return uploaded.instanceData();
+                    }
+                    @Override public void close() {
+                        releases.add("section " + section);
+                        throw failure;
+                    }
+                };
+            }
+
+            @Override public void close() { releases.add("uploader"); }
+        };
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, uploader);
+        var first = prepared(terrain, scene, 7);
+        var second = prepared(terrain, scene, 8);
+        terrain.edit(List.of(first, second));
+
+        assertSame(failure, assertThrows(AssertionError.class, terrain::close));
+
+        assertTrue(terrain.sectionKeys().isEmpty());
+        assertEquals(List.of("section 0", "section 1", "uploader"), releases);
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+        first.close();
+        second.close();
+        assertEquals(3, releases.size());
+    }
+
     @Test void equivalentEmittersKeepTheirIdentitiesAcrossMeshRevisionsAndRangeChanges() {
         var scene = new PreparedScene();
         var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> new Uploaded(0x1000));
