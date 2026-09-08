@@ -90,20 +90,37 @@ float2 causticLanding(float2 xz, float t, float3 incident, float height, float i
     return xz + refracted.xz * (height / max(-refracted.y, 0.05));
 }
 
+struct CausticProjection {
+    float2 landing;
+    float2 columnX;
+    float2 columnZ;
+    float determinant;
+};
+
+// Finite differences map horizontal surface offsets to offsets on the receiver plane.
+CausticProjection causticProjection(float2 surface, float t,
+        float3 incident, float height, float ior) {
+    float2 p0 = causticLanding(surface, t, incident, height, ior);
+    float2 px = causticLanding(surface + float2(CAUSTIC_EPS, 0.0), t,
+            incident, height, ior);
+    float2 pz = causticLanding(surface + float2(0.0, CAUSTIC_EPS), t,
+            incident, height, ior);
+    CausticProjection projection;
+    projection.landing = p0;
+    projection.columnX = (px - p0) / CAUSTIC_EPS;
+    projection.columnZ = (pz - p0) / CAUSTIC_EPS;
+    projection.determinant = projection.columnX.x * projection.columnZ.y
+            - projection.columnX.y * projection.columnZ.x;
+    return projection;
+}
+
 float2 backsolveCausticSurface(float2 initialSurface, float2 receiver, float t,
         float3 incident, float height, float ior) {
-    float2 p0 = causticLanding(initialSurface, t, incident, height, ior);
-    float2 px = causticLanding(initialSurface + float2(CAUSTIC_EPS, 0.0), t,
-            incident, height, ior);
-    float2 pz = causticLanding(initialSurface + float2(0.0, CAUSTIC_EPS), t,
-            incident, height, ior);
-    float2 columnX = (px - p0) / CAUSTIC_EPS;
-    float2 columnZ = (pz - p0) / CAUSTIC_EPS;
-    float determinant = columnX.x * columnZ.y - columnX.y * columnZ.x;
-    if (abs(determinant) < 1.0e-5) return initialSurface;
-    float2 error = p0 - receiver;
-    float2 step = float2(error.x * columnZ.y - error.y * columnZ.x,
-            columnX.x * error.y - columnX.y * error.x) / determinant;
+    CausticProjection projection = causticProjection(initialSurface, t, incident, height, ior);
+    if (abs(projection.determinant) < 1.0e-5) return initialSurface;
+    float2 error = projection.landing - receiver;
+    float2 step = float2(error.x * projection.columnZ.y - error.y * projection.columnZ.x,
+            projection.columnX.x * error.y - projection.columnX.y * error.x) / projection.determinant;
     float maximumStep = max(height, CAUSTIC_EPS);
     step *= min(1.0, maximumStep / max(length(step), 1.0e-5));
     return initialSurface - step;
@@ -136,12 +153,7 @@ public struct WaterSurface : ISurfaceModel {
 public struct WaterVolume : IVolumeModel {
     public override VolumeProperties evaluateVolume(VolumeInput input) {
         VolumeProperties properties = {};
-        MinecraftInstanceData instance = {};
-        if (input.instanceData != 0u) {
-            instance = ShaderDataPtr<MinecraftInstanceData>(input.instanceData)[0];
-        } else {
-            instance.tint = float3(1.0);
-        }
+        MinecraftInstanceData instance = minecraftInstanceData(input.instanceData);
         properties.absorptionCoefficient = MEDIUM_ABSORB_FLOOR
                 + MEDIUM_DENSITY * (float3(1.0) - clamp(instance.tint, 0.0, 1.0));
         properties.indexOfRefraction = 1.333;
@@ -160,14 +172,10 @@ public struct WaterVolume : IVolumeModel {
                 + receiverPosition - input.volume.boundaryPosition).xz;
         float2 base = backsolveCausticSurface(input.volume.proceduralPosition.xz, receiver,
                 input.volume.time, incident, height, input.interiorIor);
-        float2 p0 = causticLanding(base, input.volume.time, incident, height, input.interiorIor);
-        float2 px = causticLanding(base + float2(CAUSTIC_EPS, 0.0), input.volume.time,
+        CausticProjection projection = causticProjection(base, input.volume.time,
                 incident, height, input.interiorIor);
-        float2 pz = causticLanding(base + float2(0.0, CAUSTIC_EPS), input.volume.time,
-                incident, height, input.interiorIor);
-        float determinant = abs((px.x - p0.x) * (pz.y - p0.y)
-                - (px.y - p0.y) * (pz.x - p0.x));
-        float focus = (CAUSTIC_EPS * CAUSTIC_EPS) / max(determinant, 1.0e-5);
+        float focus = 1.0 / max(abs(projection.determinant),
+                1.0e-5 / (CAUSTIC_EPS * CAUSTIC_EPS));
         // This biased cap trades rare near-singular energy spikes for bounded firefly variance.
         return float3(lerp(1.0, min(focus, CAUSTIC_MAX), fade));
     }

@@ -73,6 +73,13 @@ float minecraftIor(float encoded) {
     return (1.0 + amplitude) / (1.0 - amplitude);
 }
 
+public MinecraftInstanceData minecraftInstanceData(uint64_t address) {
+    if (address != 0u) return ShaderDataPtr<MinecraftInstanceData>(address)[0];
+    MinecraftInstanceData instance = {};
+    instance.tint = float3(1.0);
+    return instance;
+}
+
 public MinecraftHitData minecraftHitData(uint64_t implementationData, uint64_t bindingData,
         uint64_t instanceData, uint primitiveIndex, float2 barycentrics) {
     MinecraftHitData hit = {};
@@ -80,11 +87,7 @@ public MinecraftHitData minecraftHitData(uint64_t implementationData, uint64_t b
     hit.primitive = ShaderDataPtr<MinecraftPrimitiveData>(bindingData)[primitiveIndex];
     hit.material = ShaderDataPtr<MinecraftMaterialRecord>(hit.implementation.materialsAddress)
             [hit.primitive.materialIndex];
-    if (instanceData != 0u) {
-        hit.instance = ShaderDataPtr<MinecraftInstanceData>(instanceData)[0];
-    } else {
-        hit.instance.tint = float3(1.0);
-    }
+    hit.instance = minecraftInstanceData(instanceData);
     float3 weights = float3(1.0 - barycentrics.x - barycentrics.y,
             barycentrics.x, barycentrics.y);
     hit.textureCoordinate = hit.primitive.textureCoordinates[0] * weights.x
