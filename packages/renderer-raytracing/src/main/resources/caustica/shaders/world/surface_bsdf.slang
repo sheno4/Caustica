@@ -1,6 +1,4 @@
-// The engine's one OpenPBR BSDF: authored parameters become a closure here, and direct and indirect
-// lighting both evaluate this same closure. Keeping lobe values and PDFs together is what makes their
-// mixture weights load-bearing rather than conventions duplicated by each lighting backend.
+// Direct lighting and path sampling share one closure and the same lobe probabilities.
 module surface_bsdf;
 
 import world_common;
@@ -57,14 +55,12 @@ public struct BsdfQuery {
     public float3 incomingDirection;
 };
 
+// Each denoiser signal carries its own value and mixture PDF, conditional on continuous transport.
 public struct BsdfEvaluation {
-    public float3 value;
     public float3 diffuseValue;
     public float3 specularValue;
     public float diffusePdf;
     public float specularPdf;
-    public float pdf;
-    public uint eventFlags;
 };
 public struct BsdfSampleQuery {
     public SurfaceClosure surface;
@@ -216,87 +212,43 @@ public void surfaceDenoiserEstimates(SurfaceClosure surface, float3 outgoingDire
 }
 
 BsdfEvaluation evaluateBsdf(BsdfQuery query, float4 probabilities) {
-    BsdfEvaluation result;
-    result.value = float3(0.0);
-    result.diffuseValue = float3(0.0);
-    result.specularValue = float3(0.0);
-    result.diffusePdf = 0.0;
-    result.specularPdf = 0.0;
-    result.pdf = 0.0;
-    result.eventFlags = EVENT_NONE;
-
+    BsdfEvaluation result = {};
     float3 n = query.surface.shadingNormal;
     float ndv = dot(n, query.outgoingDirection);
     float ndl = dot(n, query.incomingDirection);
-    if (ndv <= 0.0) return result;
-
-    float alpha = query.surface.alphaRoughness;
-    if (ndl > 0.0) {
-        float3 halfVector = normalize(query.incomingDirection + query.outgoingDirection);
-        float ndh = max(0.0, dot(n, halfVector));
-        float vdh = max(0.0, dot(query.outgoingDirection, halfVector));
-        float distribution = surfaceGgxD(ndh, alpha);
-        float geometry = surfaceGgxG1(ndv, alpha) * surfaceGgxG1(ndl, alpha);
-        float3 fresnel = surfaceFresnelSchlick(vdh, query.surface.specularF0);
-        float3 sheetReflection;
-        float3 sheetTransmission;
-        thinSheetFactors(fresnel, query.surface.thinTransmissionColor,
-                sheetReflection, sheetTransmission);
-        float thinWeight = clamp(query.surface.thinTransmissionWeight, 0.0, 1.0);
-        float3 reflectedFresnel = lerp(fresnel, sheetReflection, thinWeight);
-        float3 layerTransmission = surfaceLayerTransmission(query.surface.specularF0, ndv, ndl);
-        float3 diffuseReflection = max(query.surface.diffuseAlbedo
-                - query.surface.diffuseTransmissionAlbedo, float3(0.0));
-        float3 diffuse = diffuseReflection * layerTransmission * SURFACE_INV_PI;
-        float3 specular = query.surface.deltaSurface ? float3(0.0)
-                : distribution * geometry * reflectedFresnel * (1.0 - query.surface.boundaryWeight)
-                / max(4.0 * ndv * ndl, 1.0e-6);
-        float diffusePdf = ndl * SURFACE_INV_PI * probabilities.y;
-        float specularPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6)
-                * probabilities.x;
-        result.value = diffuse + specular;
-        result.diffuseValue = diffuse;
-        result.specularValue = specular;
-        result.diffusePdf = diffusePdf;
-        result.specularPdf = specularPdf;
-        result.pdf = diffusePdf + specularPdf;
-        result.eventFlags = EVENT_DIFFUSE | EVENT_GLOSSY | EVENT_REFLECTION;
-        return result;
-    }
-
-    float backNdl = -ndl;
-    if (backNdl <= 0.0) return result;
-    float3 layerTransmission = surfaceLayerTransmission(query.surface.specularF0, ndv, backNdl);
-    float3 diffuse = query.surface.diffuseTransmissionAlbedo
-            * layerTransmission * SURFACE_INV_PI;
-    float diffusePdf = backNdl * SURFACE_INV_PI * probabilities.z;
+    if (ndv <= 0.0 || ndl == 0.0) return result;
+    bool reflection = ndl > 0.0;
+    float incomingCosine = abs(ndl);
 
     // Mirror the far-side direction into the view hemisphere. A GGX reflection around the resulting
-    // half vector becomes an un-deflected straight-through event when the microfacet normal is n.
-    float3 mirroredIncoming = reflect(query.incomingDirection, n);
-    float3 halfVector = normalize(mirroredIncoming + query.outgoingDirection);
+    // half vector becomes a straight-through event when the microfacet normal is n.
+    float3 incoming = reflection ? query.incomingDirection : reflect(query.incomingDirection, n);
+    float3 halfVector = normalize(incoming + query.outgoingDirection);
     float ndh = max(0.0, dot(n, halfVector));
     float vdh = max(0.0, dot(query.outgoingDirection, halfVector));
+    float alpha = query.surface.alphaRoughness;
     float distribution = surfaceGgxD(ndh, alpha);
-    float geometry = surfaceGgxG1(ndv, alpha) * surfaceGgxG1(backNdl, alpha);
+    float geometry = surfaceGgxG1(ndv, alpha) * surfaceGgxG1(incomingCosine, alpha);
     float3 fresnel = surfaceFresnelSchlick(vdh, query.surface.specularF0);
     float3 sheetReflection;
     float3 sheetTransmission;
     thinSheetFactors(fresnel, query.surface.thinTransmissionColor,
             sheetReflection, sheetTransmission);
     float thinWeight = clamp(query.surface.thinTransmissionWeight, 0.0, 1.0);
-    float3 glossyTransmission = query.surface.deltaSurface ? float3(0.0)
-            : distribution * geometry * sheetTransmission * thinWeight
-            / max(4.0 * ndv * backNdl, 1.0e-6);
-    float glossyPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6) * probabilities.w;
+    float3 glossyColor = reflection ? lerp(fresnel, sheetReflection, thinWeight) : sheetTransmission;
+    float glossyWeight = reflection ? 1.0 - query.surface.boundaryWeight : thinWeight;
+    float3 diffuseAlbedo = reflection
+            ? max(query.surface.diffuseAlbedo - query.surface.diffuseTransmissionAlbedo, float3(0.0))
+            : query.surface.diffuseTransmissionAlbedo;
+    float3 layerTransmission = surfaceLayerTransmission(query.surface.specularF0, ndv, incomingCosine);
 
-    result.value = diffuse + glossyTransmission;
-    result.diffuseValue = diffuse;
-    result.specularValue = glossyTransmission;
-    result.diffusePdf = diffusePdf;
-    result.specularPdf = glossyPdf;
-    result.pdf = diffusePdf + glossyPdf;
-    result.eventFlags = EVENT_DIFFUSE | EVENT_GLOSSY | EVENT_TRANSMISSION;
+    result.diffuseValue = diffuseAlbedo * layerTransmission * SURFACE_INV_PI;
+    result.specularValue = query.surface.deltaSurface ? float3(0.0)
+            : distribution * geometry * glossyColor * glossyWeight
+            / max(4.0 * ndv * incomingCosine, 1.0e-6);
+    result.diffusePdf = incomingCosine * SURFACE_INV_PI * (reflection ? probabilities.y : probabilities.z);
+    result.specularPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6)
+            * (reflection ? probabilities.x : probabilities.w);
     return result;
 }
 

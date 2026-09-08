@@ -12,7 +12,7 @@ import path_queue_types;
 public static const float TRACE_MAX_DISTANCE = 10000.0;
 
 public float traceLuminance(float3 value) {
-    return dot(max(value, float3(0.0)), float3(0.27222872, 0.67408177, 0.05368952));
+    return dot(max(value, float3(0.0)), ACESCG_LUMA);
 }
 
 public float traceEpsilon() {
