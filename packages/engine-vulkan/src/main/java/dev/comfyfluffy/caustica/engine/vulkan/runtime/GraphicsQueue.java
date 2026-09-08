@@ -12,11 +12,8 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 public final class GraphicsQueue {
     private final VulkanDeviceContext ctx;
     private final long graphicsTimeline;
-    private final ScheduledExecutorService retirement = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "Caustica graphics retirement");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ScheduledExecutorService retirement = Executors.newSingleThreadScheduledExecutor(
+            Thread.ofPlatform().daemon().name("Caustica graphics retirement").factory());
     private final ArrayList<DestroyJob> destroyJobs = new ArrayList<>();
     private long nextGraphicsValue;
     private volatile Throwable executorFailure;
@@ -44,9 +41,7 @@ public final class GraphicsQueue {
     public void resolveGraphicsUse(GraphicsSubmission submission, GraphicsUse use) {
         assertRenderThread();
         if (use.owner() != this) throw new IllegalArgumentException("Graphics use belongs to another device");
-        use.resolveSubmission(() -> {
-            enqueueGraphicsSignal(submission, graphicsTimeline, use.value());
-        });
+        use.resolveSubmission(() -> enqueueGraphicsSignal(submission, graphicsTimeline, use.value()));
     }
 
     static void enqueueGraphicsSignal(GraphicsSubmission submission, long semaphore, long value) {
@@ -187,16 +182,14 @@ public final class GraphicsQueue {
             adopt(graphicsUse);
         }
 
-        /** The device-independent half of {@link #mark}, so its ordering is testable without a device. */
+        /** Defers adoption until command acceptance and clears the pending mark after resolution. */
         void adopt(GraphicsUse graphicsUse) {
             if (owner != null && owner != graphicsUse.owner()) {
                 throw new IllegalArgumentException("Tracked graphics use belongs to a different Vulkan device");
             }
             owner = graphicsUse.owner();
             pending = graphicsUse;
-            graphicsUse.whenSubmitted(() -> {
-                value = Math.max(value, graphicsUse.value());
-            });
+            graphicsUse.whenSubmitted(() -> value = Math.max(value, graphicsUse.value()));
             graphicsUse.whenResolved(() -> pending = null);
         }
 

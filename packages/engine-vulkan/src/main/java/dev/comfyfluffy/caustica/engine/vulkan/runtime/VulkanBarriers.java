@@ -112,12 +112,7 @@ public final class VulkanBarriers {
     }
 
     static VkDependencyInfo passDependency(MemoryStack stack) {
-        VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
-                .srcStageMask(PASS_STAGES)
-                .srcAccessMask(PASS_WRITE_ACCESS)
-                .dstStageMask(PASS_STAGES)
-                .dstAccessMask(PASS_READ_WRITE_ACCESS);
-        return VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier);
+        return dependency(stack, PASS_STAGES, PASS_WRITE_ACCESS, PASS_STAGES, PASS_READ_WRITE_ACCESS);
     }
 
     static void transitionUndefinedImage(VkCommandBuffer commandBuffer, MemoryStack stack, long image,

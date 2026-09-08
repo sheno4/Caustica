@@ -68,9 +68,9 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
                     .sType$Default().pNext(heapProperties);
             VK12.vkGetPhysicalDeviceProperties2(vk.getPhysicalDevice(), properties2);
 
-            long resourceAlignment = max(heapProperties.imageDescriptorAlignment(),
+            long resourceAlignment = Math.max(heapProperties.imageDescriptorAlignment(),
                     heapProperties.bufferDescriptorAlignment());
-            long resourceSize = max(heapProperties.imageDescriptorSize(), heapProperties.bufferDescriptorSize(),
+            long resourceSize = Math.max(Math.max(heapProperties.imageDescriptorSize(), heapProperties.bufferDescriptorSize()),
                     EXTDescriptorHeap.vkGetPhysicalDeviceDescriptorSizeEXT(vk.getPhysicalDevice(),
                             KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR));
             long resourceStride = alignUp(resourceSize, resourceAlignment);
@@ -102,15 +102,13 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
         this.vk = vk;
         this.properties = properties;
         this.allocations = allocations;
-        NativeStorage resourceStorage = null;
+        this.resources = NativeStorage.create(vk, vma, allocations.resources().layout(),
+                nonCoherentAtomSize, graphicsQueueFamily, computeQueueFamily);
         try {
-            resourceStorage = NativeStorage.create(vk, vma, allocations.resources().layout(),
-                    nonCoherentAtomSize, graphicsQueueFamily, computeQueueFamily);
-            this.resources = resourceStorage;
             this.samplers = NativeStorage.create(vk, vma, allocations.samplers().layout(),
                     nonCoherentAtomSize, graphicsQueueFamily, computeQueueFamily);
         } catch (Throwable failure) {
-            if (resourceStorage != null) resourceStorage.close();
+            resources.close();
             throw failure;
         }
         this.resourceBinding = new DescriptorHeapBinding(allocations.resources().layout(), resources);
@@ -290,18 +288,12 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
             throw new IllegalStateException(kind + " descriptor heap cannot fit an application descriptor");
         }
         long supported = (maximumHeapSize - reserved) / stride;
-        return (int) Math.min(target, Math.min(supported, Integer.MAX_VALUE));
+        return (int) Math.min(target, supported);
     }
 
     private static long alignUp(long value, long alignment) {
         long remainder = value % alignment;
         return remainder == 0 ? value : Math.addExact(value, alignment - remainder);
-    }
-
-    private static long max(long... values) {
-        long maximum = 0L;
-        for (long value : values) maximum = Math.max(maximum, value);
-        return maximum;
     }
 
     private static final class NativeStorage implements DescriptorHeapStorage {

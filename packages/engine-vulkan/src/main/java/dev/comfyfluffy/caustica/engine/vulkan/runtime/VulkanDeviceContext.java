@@ -433,7 +433,7 @@ public final class VulkanDeviceContext implements GpuDevice {
         });
         try {
             return new VmaGpuImage(vma, vk, descriptorHeap, image, allocation, view,
-                    width, height, format, usage, label);
+                    width, height, format, usage);
         } catch (Throwable failure) {
             if (view != 0L) VK10.vkDestroyImageView(vk, view, null);
             if (image != 0L) Vma.vmaDestroyImage(vma, image, allocation);

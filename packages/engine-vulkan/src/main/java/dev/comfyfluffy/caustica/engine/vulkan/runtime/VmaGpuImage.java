@@ -27,7 +27,7 @@ final class VmaGpuImage implements GpuImage {
     private boolean destroyed;
 
     VmaGpuImage(long vma, VkDevice vk, VulkanDescriptorHeap heap, long image, long allocation, long view,
-                int width, int height, int format, int usage, String label) {
+                int width, int height, int format, int usage) {
         this.vma = vma;
         this.vk = vk;
         this.image = image;
@@ -40,20 +40,16 @@ final class VmaGpuImage implements GpuImage {
         boolean sampled = (usage & VK10.VK_IMAGE_USAGE_SAMPLED_BIT) != 0;
         int descriptorCount = (storage ? 1 : 0) + (sampled ? 1 : 0);
         descriptors = descriptorCount == 0 ? null : heap.allocateResources(descriptorCount);
-        GpuImageDescriptor createdStorage;
-        GpuImageDescriptor createdSampled;
         try {
             int slot = 0;
-            createdStorage = storage ? writeDescriptor(heap, slot++, GpuImageDescriptorKind.STORAGE,
+            storageDescriptor = storage ? writeDescriptor(heap, slot++, GpuImageDescriptorKind.STORAGE,
                     VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) : null;
-            createdSampled = sampled ? writeDescriptor(heap, slot, GpuImageDescriptorKind.SAMPLED,
+            sampledDescriptor = sampled ? writeDescriptor(heap, slot, GpuImageDescriptorKind.SAMPLED,
                     VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) : null;
         } catch (Throwable failure) {
             if (descriptors != null) descriptors.destroy();
             throw failure;
         }
-        storageDescriptor = createdStorage;
-        sampledDescriptor = createdSampled;
     }
 
     @Override public long image() { return image; }

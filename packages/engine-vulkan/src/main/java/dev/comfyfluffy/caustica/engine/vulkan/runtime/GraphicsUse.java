@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -72,39 +71,37 @@ public final class GraphicsUse implements GpuFrameUse {
         if (submittedResolved) {
             throw new IllegalStateException("graphics submission callbacks are resolved");
         }
-        boolean signal = commandsAccepted;
+        submittedResolved = true;
         Throwable failure = null;
         try {
-            if (signal) fireSubmittedCallbacks();
-            else discardSubmittedCallbacks();
+            if (commandsAccepted) runCallbacks(submittedCallbacks);
+            else submittedCallbacks.clear();
         } catch (Throwable callbackFailure) {
             failure = callbackFailure;
         }
-        for (Runnable callback : resolvedCallbacks) {
-            try { callback.run(); }
-            catch (Throwable callbackFailure) {
-                if (failure == null) failure = callbackFailure;
-                else failure.addSuppressed(callbackFailure);
-            }
+        try {
+            runCallbacks(resolvedCallbacks);
+        } catch (Throwable callbackFailure) {
+            if (failure == null) failure = callbackFailure;
+            else if (failure != callbackFailure) failure.addSuppressed(callbackFailure);
         }
-        resolvedCallbacks.clear();
         Runnable releaseKeepAlives = takeKeepAliveRelease();
         if (releaseKeepAlives != null) {
             try {
-                if (signal) retireAcceptedKeepAlive.accept(releaseKeepAlives);
+                if (commandsAccepted) retireAcceptedKeepAlive.accept(releaseKeepAlives);
                 else if (owner != null) owner.releaseAbandoned(releaseKeepAlives);
                 else releaseKeepAlives.run();
             } catch (Throwable releaseFailure) {
                 if (failure == null) failure = releaseFailure;
-                else failure.addSuppressed(releaseFailure);
+                else if (failure != releaseFailure) failure.addSuppressed(releaseFailure);
             }
         }
-        if (signal) {
+        if (commandsAccepted) {
             try {
                 signalAcceptedCommands.run();
             } catch (Throwable signalFailure) {
                 if (failure == null) failure = signalFailure;
-                else failure.addSuppressed(signalFailure);
+                else if (failure != signalFailure) failure.addSuppressed(signalFailure);
             }
         }
         if (failure instanceof RuntimeException runtime) throw runtime;
@@ -123,7 +120,7 @@ public final class GraphicsUse implements GpuFrameUse {
                     release.close();
                 } catch (Throwable releaseFailure) {
                     if (failure == null) failure = releaseFailure;
-                    else failure.addSuppressed(releaseFailure);
+                    else if (failure != releaseFailure) failure.addSuppressed(releaseFailure);
                 }
             }
             if (failure instanceof RuntimeException runtime) throw runtime;
@@ -132,36 +129,20 @@ public final class GraphicsUse implements GpuFrameUse {
         };
     }
 
-    private void fireSubmittedCallbacks() {
-        if (!commandsAccepted || submittedResolved) {
-            throw new IllegalStateException("graphics commands were not accepted exactly once");
-        }
-        submittedResolved = true;
-        runSubmittedCallbacks();
-    }
-
-    private void discardSubmittedCallbacks() {
-        if (commandsAccepted || submittedResolved) {
-            throw new IllegalStateException("graphics commands are already resolved");
-        }
-        submittedResolved = true;
-        submittedCallbacks.clear();
-    }
-
-    private void runSubmittedCallbacks() {
+    private static void runCallbacks(List<Runnable> callbacks) {
         Throwable failure = null;
-        for (Runnable callback : submittedCallbacks) {
+        for (Runnable callback : callbacks) {
             try {
                 callback.run();
             } catch (Throwable callbackFailure) {
                 if (failure == null) failure = callbackFailure;
-                else failure.addSuppressed(callbackFailure);
+                else if (failure != callbackFailure) failure.addSuppressed(callbackFailure);
             }
         }
-        submittedCallbacks.clear();
+        callbacks.clear();
         if (failure instanceof RuntimeException runtime) throw runtime;
         if (failure instanceof Error error) throw error;
-        if (failure != null) throw new IllegalStateException("graphics submission callback failed", failure);
+        if (failure != null) throw new IllegalStateException("graphics callback failed", failure);
     }
 
     @Override

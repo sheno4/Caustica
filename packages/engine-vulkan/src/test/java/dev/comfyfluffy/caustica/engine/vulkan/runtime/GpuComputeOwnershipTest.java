@@ -32,6 +32,23 @@ final class GpuComputeOwnershipTest {
         assertEquals(List.of(), events);
     }
 
+    @Test
+    void sharedReleaseFailureDoesNotSkipRemainingDependencies() {
+        var queue = new Queue();
+        var failure = new IllegalStateException("shared release failure");
+        List<Integer> released = new ArrayList<>();
+        queue.submit(cmd -> {}, List.of(
+                () -> { released.add(1); throw failure; },
+                () -> { released.add(2); throw failure; },
+                () -> released.add(3)), result -> {});
+
+        var reported = assertThrows(IllegalStateException.class,
+                () -> queue.completion.accept(new GpuComputeCompletion.Succeeded()));
+
+        assertSame(failure, reported.getCause());
+        assertEquals(List.of(1, 2, 3), released);
+    }
+
     private static final class Queue implements GpuComputeQueue {
         Consumer<? super GpuComputeCompletion> completion;
         boolean reject;

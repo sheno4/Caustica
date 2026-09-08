@@ -45,7 +45,7 @@ public interface GpuComputeQueue {
             try { owner.close(); }
             catch (Throwable error) {
                 if (failure == null) failure = error;
-                else failure.addSuppressed(error);
+                else if (failure != error) failure.addSuppressed(error);
             }
         }
         if (failure != null) throw new IllegalStateException("GPU dependency release failed", failure);

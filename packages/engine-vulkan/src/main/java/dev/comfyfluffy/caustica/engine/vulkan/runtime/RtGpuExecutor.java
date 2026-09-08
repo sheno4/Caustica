@@ -19,7 +19,8 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 public final class RtGpuExecutor implements GpuComputeQueue {
     private final VulkanDeviceContext ctx;
     private final long jobTimeline;
-    private final ExecutorService compute = Executors.newSingleThreadExecutor(r -> daemon(r, "Caustica GPU compute"));
+    private final ExecutorService compute = Executors.newSingleThreadExecutor(
+            Thread.ofPlatform().daemon().name("Caustica GPU compute").factory());
     private final ConcurrentLinkedQueue<Job> jobs = new ConcurrentLinkedQueue<>();
     private long nextJobValue;
     private volatile Throwable executorFailure;
@@ -28,12 +29,6 @@ public final class RtGpuExecutor implements GpuComputeQueue {
     RtGpuExecutor(VulkanDeviceContext ctx) {
         this.ctx = ctx;
         jobTimeline = createTimeline("GPU compute completion");
-    }
-
-    private static Thread daemon(Runnable action, String name) {
-        Thread thread = new Thread(action, name);
-        thread.setDaemon(true);
-        return thread;
     }
 
     @Override
