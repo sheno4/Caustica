@@ -61,7 +61,7 @@ final class RtFrameResourceOwnershipTest {
         RetainedSceneSnapshot.Instance placement = new RetainedSceneSnapshot.Instance(2, 2, SCENE, 1,
                 GeometryTransform.translation(1, 2, 3), 0xff,
                 new ShaderData<>(INSTANCE, 0x3333, instance), List.of());
-        EnvironmentBinding<Binding> environmentBinding = EnvironmentBinding.of(ENVIRONMENT,
+        EnvironmentBinding<Binding> environmentBinding = new EnvironmentBinding<>(ENVIRONMENT,
                 new ShaderData<>(BINDING, 0x4444, environment));
         List<dev.comfyfluffy.caustica.api.resource.ResourceOwner> references = List.of(
                 positions, indices, surface, volume,

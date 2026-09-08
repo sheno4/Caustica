@@ -43,13 +43,13 @@ final class MinecraftWorldSessionHostTest {
             assertEquals(new ResourcePackEpoch(4), context.resourcePackEpoch());
             assertSame(scopes.get(0).program, context.renderSession().program());
             var type = ShaderDataType.<Object>create("environment test");
-            context.environment().select(EnvironmentBinding.of(new EnvironmentId<>() { }, type.data(7)));
+            context.environment().select(new EnvironmentBinding<>(new EnvironmentId<>() { }, type.data(7)));
             return contribution("one", events, false);
         });
         host.api().sessions().add(context -> {
             assertSame(scopes.get(1).program, context.renderSession().program());
             var type = ShaderDataType.<Object>create("second environment test");
-            context.environment().select(EnvironmentBinding.of(new EnvironmentId<>() { }, type.data(8)));
+            context.environment().select(new EnvironmentBinding<>(new EnvironmentId<>() { }, type.data(8)));
             return contribution("two", events, true);
         });
 

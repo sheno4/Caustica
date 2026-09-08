@@ -48,7 +48,7 @@ final class RtFrameRendererWorldRootsTest {
     @Test
     void activeEnvironmentWritesTypedImplementationAndBindingData() {
         ShaderDataType<Object> type = ShaderDataType.create("environment binding");
-        EnvironmentBinding<Object> binding = EnvironmentBinding.of(
+        EnvironmentBinding<Object> binding = new EnvironmentBinding<>(
                 new EnvironmentId<>() { }, type.data(0x1234_5678L));
 
         RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(binding, 9);
@@ -68,7 +68,7 @@ final class RtFrameRendererWorldRootsTest {
     @Test
     void staleEnvironmentUsesVisibleErrorWithoutReadingBindingData() {
         ShaderDataType<Object> type = ShaderDataType.create("stale environment binding");
-        EnvironmentBinding<Object> binding = EnvironmentBinding.of(
+        EnvironmentBinding<Object> binding = new EnvironmentBinding<>(
                 new EnvironmentId<>() { }, type.data(0x1234_5678L));
 
         RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(binding, 0);

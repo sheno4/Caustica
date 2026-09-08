@@ -25,7 +25,7 @@ final class SceneContractTest {
         assertSame(ShaderData.class,
                 EnvironmentBinding.class.getMethod("bindingData").getReturnType());
         ShaderDataType<Sky> sky = ShaderDataType.create("sky");
-        EnvironmentBinding<Sky> binding = EnvironmentBinding.of(
+        EnvironmentBinding<Sky> binding = new EnvironmentBinding<>(
                 new EnvironmentId<>() { }, sky.data(3L));
         assertSame(sky, binding.bindingData().type());
     }

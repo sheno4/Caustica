@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.api.scene;
 
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
+
 import java.util.Objects;
 
 /**
@@ -18,9 +19,4 @@ public record EnvironmentBinding<B>(EnvironmentId<B> implementation, ShaderData<
         Objects.requireNonNull(bindingData, "bindingData");
     }
 
-    /** Creates an environment binding. */
-    public static <B> EnvironmentBinding<B> of(EnvironmentId<B> implementation,
-                                                ShaderData<B> bindingData) {
-        return new EnvironmentBinding<>(implementation, bindingData);
-    }
 }
