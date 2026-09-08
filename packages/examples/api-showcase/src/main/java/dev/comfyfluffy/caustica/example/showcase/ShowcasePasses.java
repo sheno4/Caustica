@@ -55,9 +55,9 @@ final class ShowcasePasses {
                             VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK10.VK_BLEND_OP_ADD,
                             VK10.VK_BLEND_FACTOR_ONE, VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                             VK10.VK_BLEND_OP_ADD, COLOR_WRITE_RGBA));
-    static final PassId BLOOM = PassId.of("caustica", "bloom");
-    static final PassId POST_EFFECT = PassId.of("caustica_showcase", "colour_grade");
-    static final PassId UI = PassId.of("caustica_showcase", "world_marker");
+    static final PassId BLOOM = new PassId("caustica", "bloom");
+    static final PassId POST_EFFECT = new PassId("caustica_showcase", "colour_grade");
+    static final PassId UI = new PassId("caustica_showcase", "world_marker");
     static final PassPlacement POST_EFFECT_PLACEMENT = PassPlacement.after(BLOOM);
     static final ShaderObjectGraphics.PushIndexedResourceMapping UI_SCENE_MAPPING =
             ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 0, 0);

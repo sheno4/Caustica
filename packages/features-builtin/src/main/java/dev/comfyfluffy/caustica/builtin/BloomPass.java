@@ -32,7 +32,7 @@ import java.util.function.Supplier;
 
 /** Scene-referred Bloom implemented as a descriptor-heap-native shader-object compute pass. */
 public final class BloomPass implements Pass<PostEffectFrame> {
-    public static final PassId ID = PassId.of("caustica", "bloom");
+    public static final PassId ID = new PassId("caustica", "bloom");
     private static final String SHADER = "/caustica/shaders/pipelines/bloom/main.comp.spv";
     private static final int MAX_LEVELS = 8;
     private static final int MODE_PREFILTER = 0;

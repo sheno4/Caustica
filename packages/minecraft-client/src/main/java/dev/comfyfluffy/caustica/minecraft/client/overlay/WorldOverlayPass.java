@@ -30,7 +30,7 @@ import java.util.List;
  * The engine supplies the rendered camera, entry-scene TLAS descriptor, command buffer, and frame resource ownership through {@link UiFrame}; the pass owns only feature pipelines and transient vertex storage.
  */
 public final class WorldOverlayPass implements Pass<UiFrame> {
-    public static final PassId ID = PassId.of("caustica", "world_overlay");
+    public static final PassId ID = new PassId("caustica", "world_overlay");
 
     /** Renderer UI-layer VkFormat. */
     public static final int TARGET_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;

@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api.pass;
 
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * Stable, namespaced identity of one addressable pass within its stage. Live ids are unique within a post
@@ -8,45 +9,18 @@ import java.util.Objects;
  * registration stops recording.
  */
 public record PassId(String namespace, String path) implements Comparable<PassId> {
+    private static final Pattern NAMESPACE = Pattern.compile("[a-z0-9_.-]+");
+    private static final Pattern PATH = Pattern.compile("[a-z0-9/_.-]+");
+
     public PassId {
         Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(path, "path");
-        if (!validNamespace(namespace)) {
+        if (!NAMESPACE.matcher(namespace).matches()) {
             throw new IllegalArgumentException("invalid pass namespace: " + namespace);
         }
-        if (!validPath(path)) {
+        if (!PATH.matcher(path).matches()) {
             throw new IllegalArgumentException("invalid pass path: " + path);
         }
-    }
-
-    public static PassId of(String namespace, String path) {
-        return new PassId(namespace, path);
-    }
-
-    private static boolean validNamespace(String value) {
-        if (value.isEmpty()) return false;
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                    || c == '_' || c == '.' || c == '-') {
-                continue;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    private static boolean validPath(String value) {
-        if (value.isEmpty()) return false;
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                    || c == '/' || c == '_' || c == '.' || c == '-') {
-                continue;
-            }
-            return false;
-        }
-        return true;
     }
 
     @Override

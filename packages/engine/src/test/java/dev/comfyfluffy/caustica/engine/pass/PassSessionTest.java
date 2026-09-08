@@ -322,7 +322,7 @@ final class PassSessionTest {
     }
 
     private static PassId id(String path) {
-        return PassId.of("test", path);
+        return new PassId("test", path);
     }
 
     private static void await(CountDownLatch latch) {

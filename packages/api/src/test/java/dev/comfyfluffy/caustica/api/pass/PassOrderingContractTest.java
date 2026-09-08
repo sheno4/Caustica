@@ -8,17 +8,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class PassOrderingContractTest {
     @Test
     void passIdsAreValidatedNamespacedValues() {
-        PassId id = PassId.of("example.mod", "post/colour-grade");
+        PassId id = new PassId("example.mod", "post/colour-grade");
 
         assertEquals("example.mod:post/colour-grade", id.toString());
-        assertThrows(IllegalArgumentException.class, () -> PassId.of("Example", "post"));
-        assertThrows(IllegalArgumentException.class, () -> PassId.of("example", ""));
-        assertThrows(NullPointerException.class, () -> PassId.of(null, "post"));
+        assertEquals("mod_2.test-name:post/grade_2.test-name",
+                new PassId("mod_2.test-name", "post/grade_2.test-name").toString());
+        assertThrows(IllegalArgumentException.class, () -> new PassId("example/mod", "post"));
+        assertThrows(IllegalArgumentException.class, () -> new PassId("example", "post\n"));
+        assertThrows(IllegalArgumentException.class, () -> new PassId("example", "post effect"));
+        assertThrows(IllegalArgumentException.class, () -> new PassId("Example", "post"));
+        assertThrows(IllegalArgumentException.class, () -> new PassId("example", ""));
+        assertThrows(NullPointerException.class, () -> new PassId(null, "post"));
     }
 
     @Test
     void placementsRetainTheirTypedAnchor() {
-        PassId anchor = PassId.of("example", "bloom");
+        PassId anchor = new PassId("example", "bloom");
 
         assertEquals(anchor, PassPlacement.before(anchor).anchor());
         assertEquals(anchor, PassPlacement.after(anchor).anchor());
