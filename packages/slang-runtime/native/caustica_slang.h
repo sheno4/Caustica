@@ -31,6 +31,7 @@ enum
 CAUSTICA_SLANG_API uint32_t caustica_slang_abi_version(void);
 CAUSTICA_SLANG_API const char* caustica_slang_compiler_version(void);
 
+// The runtime must outlive its sessions. Destroy handles only after their outstanding calls return.
 CAUSTICA_SLANG_API int32_t caustica_slang_runtime_create(
     CausticaSlangRuntime** out_runtime,
     CausticaSlangBlob** out_diagnostics);
@@ -45,6 +46,8 @@ CAUSTICA_SLANG_API int32_t caustica_slang_session_create(
     CausticaSlangBlob** out_diagnostics);
 CAUSTICA_SLANG_API void caustica_slang_session_destroy(CausticaSlangSession* session);
 
+// Reflection and diagnostics outputs are optional. Every returned blob belongs to the caller,
+// including outputs from failed compilations, and must be released with caustica_slang_blob_destroy.
 CAUSTICA_SLANG_API int32_t caustica_slang_compile_entry_point(
     CausticaSlangSession* session,
     const char* module_name,

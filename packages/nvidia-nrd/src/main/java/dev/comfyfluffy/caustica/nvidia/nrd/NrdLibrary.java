@@ -21,15 +21,12 @@ public final class NrdLibrary implements NrdNative {
     private static final Linker LINKER = Linker.nativeLinker();
     private static final String NRD_REVISION = "b233cc3ec5b1db2763e45fd18c9bb19793016355";
     private final MethodHandle create;
-    private final MethodHandle resize;
     private final MethodHandle record;
     private final MethodHandle destroy;
     private final MethodHandle lastError;
 
     private NrdLibrary(SymbolLookup lookup) {
         create = handle(lookup, "nrdshim_create", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-        resize = handle(lookup, "nrdshim_resize", FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
         record = handle(lookup, "nrdshim_record", FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
         destroy = handle(lookup, "nrdshim_destroy", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
@@ -62,11 +59,6 @@ public final class NrdLibrary implements NrdNative {
     @Override public MemorySegment create(MemorySegment description) {
         try { return (MemorySegment) create.invokeExact(description); }
         catch (Throwable failure) { throw invocationFailure("nrdshim_create", failure); }
-    }
-
-    @Override public int resize(MemorySegment instance, int width, int height) {
-        try { return (int) resize.invokeExact(instance, width, height); }
-        catch (Throwable failure) { throw invocationFailure("nrdshim_resize", failure); }
     }
 
     @Override public int record(MemorySegment instance, long commandBuffer, MemorySegment common, MemorySegment resources) {

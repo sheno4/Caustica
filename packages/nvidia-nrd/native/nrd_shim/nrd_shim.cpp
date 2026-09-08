@@ -39,15 +39,14 @@ void clearLastError() noexcept {
 }
 
 struct State {
-    NrdShimCreateDesc description{};
+    const uint16_t width;
+    const uint16_t height;
     nrd::Integration integration;
 
-    explicit State(const NrdShimCreateDesc& value) : description(value) {}
+    explicit State(const NrdShimCreateDesc& description)
+        : width(static_cast<uint16_t>(description.width)), height(static_cast<uint16_t>(description.height)) {}
 
-    bool recreate(uint32_t width, uint32_t height) {
-        description.width = width;
-        description.height = height;
-
+    bool initialize(const NrdShimCreateDesc& description) {
         const nrd::DenoiserDesc denoiser = {
             kDenoiser,
             description.method == 0 ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR
@@ -60,8 +59,8 @@ struct State {
         nrd::IntegrationCreationDesc integrationCreation{};
         constexpr char integrationName[] = "Caustica NRD";
         std::memcpy(integrationCreation.name, integrationName, sizeof(integrationName));
-        integrationCreation.resourceWidth = static_cast<uint16_t>(width);
-        integrationCreation.resourceHeight = static_cast<uint16_t>(height);
+        integrationCreation.resourceWidth = width;
+        integrationCreation.resourceHeight = height;
         integrationCreation.queuedFrameNum = static_cast<uint8_t>(description.queuedFrames);
         integrationCreation.autoWaitForIdle = true;
 
@@ -169,18 +168,11 @@ void* create(const NrdShimCreateDesc* description) {
         return nullptr;
     }
     auto state = std::make_unique<State>(*description);
-    if (!state->recreate(description->width, description->height)) {
+    if (!state->initialize(*description)) {
         fail("NRD integration creation failed");
         return nullptr;
     }
     return state.release();
-}
-
-int32_t resize(void* instance, uint32_t width, uint32_t height) {
-    if (!instance || !width || width > UINT16_MAX || !height || height > UINT16_MAX) {
-        return fail("invalid resize description");
-    }
-    return static_cast<State*>(instance)->recreate(width, height) ? 0 : fail("NRD resize failed");
 }
 
 int32_t record(void* instance, uint64_t commandBuffer,
@@ -223,14 +215,9 @@ int32_t record(void* instance, uint64_t commandBuffer,
     settings.enableValidation = (common->flags & 4u) != 0;
     settings.accumulationMode = (common->flags & 8u) != 0
             ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
-    settings.resourceSize[0] = static_cast<uint16_t>(state.description.width);
-    settings.resourceSize[1] = static_cast<uint16_t>(state.description.height);
-    settings.resourceSizePrev[0] = static_cast<uint16_t>(state.description.width);
-    settings.resourceSizePrev[1] = static_cast<uint16_t>(state.description.height);
-    settings.rectSize[0] = static_cast<uint16_t>(state.description.width);
-    settings.rectSize[1] = static_cast<uint16_t>(state.description.height);
-    settings.rectSizePrev[0] = static_cast<uint16_t>(state.description.width);
-    settings.rectSizePrev[1] = static_cast<uint16_t>(state.description.height);
+    // A backend owns one fixed extent, including all temporal history.
+    settings.resourceSize[0] = settings.resourceSizePrev[0] = settings.rectSize[0] = settings.rectSizePrev[0] = state.width;
+    settings.resourceSize[1] = settings.resourceSizePrev[1] = settings.rectSize[1] = settings.rectSizePrev[1] = state.height;
 
     state.integration.NewFrame();
     if (state.integration.SetCommonSettings(settings) != nrd::Result::SUCCESS) return fail("NRD common settings rejected");
@@ -268,18 +255,6 @@ void* nrdshim_create(const NrdShimCreateDesc* description) noexcept {
         setLastError("unexpected exception while creating NRD");
     }
     return nullptr;
-}
-
-int32_t nrdshim_resize(void* instance, uint32_t width, uint32_t height) noexcept {
-    clearLastError();
-    try {
-        return resize(instance, width, height);
-    } catch (const std::exception& failure) {
-        setLastError(failure.what());
-    } catch (...) {
-        setLastError("unexpected exception while resizing NRD");
-    }
-    return -1;
 }
 
 int32_t nrdshim_record(void* instance, uint64_t commandBuffer,

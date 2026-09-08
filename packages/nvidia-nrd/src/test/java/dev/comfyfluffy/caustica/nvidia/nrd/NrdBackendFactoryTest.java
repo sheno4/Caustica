@@ -27,7 +27,6 @@ class NrdBackendFactoryTest {
 
     private static final class FakeNative implements NrdNative {
         @Override public MemorySegment create(MemorySegment description) { return MemorySegment.ofAddress(1); }
-        @Override public int resize(MemorySegment instance, int width, int height) { return 0; }
         @Override public int record(MemorySegment instance, long commandBuffer, MemorySegment common,
                                     MemorySegment resources) { return 0; }
         @Override public void destroy(MemorySegment instance) {}

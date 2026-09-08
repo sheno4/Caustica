@@ -53,7 +53,7 @@ final class NrdAbi {
     }
 
     private static void putMatrix(MemorySegment target, long offset, float[] matrix) {
-        for (int i = 0; i < 16; i++) target.set(ValueLayout.JAVA_FLOAT, offset + i * 4L, matrix[i]);
+        MemorySegment.copy(matrix, 0, target, ValueLayout.JAVA_FLOAT, offset, 16);
     }
 
     private static void writeImage(MemorySegment target, long offset, DenoiserImage image) {

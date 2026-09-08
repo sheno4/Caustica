@@ -18,6 +18,7 @@ struct CausticaSlangBlob
 struct CausticaSlangRuntime
 {
     Slang::ComPtr<slang::IGlobalSession> global_session;
+    // Sessions share global compiler state; serialize compilation and session creation here.
     std::mutex mutex;
 };
 
@@ -25,7 +26,6 @@ struct CausticaSlangSession
 {
     CausticaSlangRuntime* runtime = nullptr;
     Slang::ComPtr<slang::ISession> session;
-    std::mutex mutex;
 };
 
 namespace
@@ -320,14 +320,11 @@ int32_t caustica_slang_compile_entry_point(
 
     try
     {
-        std::scoped_lock lock(session->runtime->mutex, session->mutex);
+        std::lock_guard lock(session->runtime->mutex);
         std::string diagnostics_text;
         Slang::ComPtr<slang::IBlob> diagnostics;
 
-        // Borrowed, never owned: the session's module cache holds every module it loads for the session's
-        // lifetime and returns the pointer without adding a reference. Wrapping one in a ComPtr releases a
-        // reference this call never took, which frees a cached module out from under later loads and faults
-        // inside Slang on a subsequent compile rather than at the site of the mistake.
+        // The session owns loaded modules and returns borrowed pointers without adding a reference.
         slang::IModule* module = session->session->loadModuleFromSourceString(
             module_name,
             source_path,
@@ -399,13 +396,11 @@ int32_t caustica_slang_compile_specialized_entry_point(
 
     try
     {
-        std::scoped_lock lock(session->runtime->mutex, session->mutex);
+        std::lock_guard lock(session->runtime->mutex);
         std::string diagnostics_text;
         Slang::ComPtr<slang::IBlob> diagnostics;
 
-        // Borrowed, not owned — see caustica_slang_compile_entry_point. This path reloads the same
-        // composition module on every stage, so an extra release here is the one that actually kills the
-        // process once enough stages share a session.
+        // Both modules are borrowed from the session's module cache.
         slang::IModule* engine = session->session->loadModule(engine_module, diagnostics.writeRef());
         append_diagnostics(diagnostics_text, diagnostics);
         if (!engine)

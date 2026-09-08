@@ -26,7 +26,6 @@ class NrdBackendTest {
         assertEquals(1, nativeApi.creates);
         assertEquals(DenoiserSignalEncoding.LINEAR_RGB_ABSOLUTE_HIT_DISTANCE,
                 backend.descriptor().signalEncoding());
-        assertEquals(0, nativeApi.resizes);
         assertEquals(1, nativeApi.records);
         assertEquals(1, nativeApi.destroys);
         assertThrows(IllegalStateException.class, () -> backend.record(frame()));
@@ -56,9 +55,8 @@ class NrdBackendTest {
     }
 
     private static final class FakeNative implements NrdNative {
-        int creates, resizes, records, destroys;
+        int creates, records, destroys;
         @Override public MemorySegment create(MemorySegment description) { creates++; return MemorySegment.ofAddress(1); }
-        @Override public int resize(MemorySegment instance, int width, int height) { resizes++; return 0; }
         @Override public int record(MemorySegment instance, long commandBuffer, MemorySegment common, MemorySegment resources) { records++; return 0; }
         @Override public void destroy(MemorySegment instance) { destroys++; }
         @Override public String lastError() { return ""; }

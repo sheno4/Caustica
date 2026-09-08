@@ -4,7 +4,6 @@ import java.lang.foreign.MemorySegment;
 
 interface NrdNative {
     MemorySegment create(MemorySegment description);
-    int resize(MemorySegment instance, int width, int height);
     int record(MemorySegment instance, long commandBuffer, MemorySegment common, MemorySegment resources);
     void destroy(MemorySegment instance);
     String lastError();

@@ -64,7 +64,6 @@ struct NrdShimResources {
 };
 
 NRDSHIM_EXPORT void* nrdshim_create(const NrdShimCreateDesc* description) NRDSHIM_NOEXCEPT;
-NRDSHIM_EXPORT int32_t nrdshim_resize(void* instance, uint32_t width, uint32_t height) NRDSHIM_NOEXCEPT;
 NRDSHIM_EXPORT int32_t nrdshim_record(void* instance, uint64_t commandBuffer,
                                      const NrdShimCommonSettings* common,
                                      const NrdShimResources* resources) NRDSHIM_NOEXCEPT;

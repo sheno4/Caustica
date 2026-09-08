@@ -27,11 +27,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * A baked ACES color-pipeline 3D LUT (scene-referred look or display transform; see
- * {@code tools/bake_display_lut.py}). RGBA16F, one mip, loaded whole from a classpath
- * resource and uploaded once via a staging buffer
- * but 3D and self-describing (the resource carries its own size + shaper range in a small header,
- * see {@link #load}).
+ * A baked ACES look or display transform: one RGBA16F 3D mip uploaded from a classpath resource.
+ * The resource header carries its size and shaper range; see {@code tools/bake_display_lut.py}.
  */
 public final class RtToneLut {
     private static final int MAGIC = 0x54554C43; // "CLUT" little-endian
@@ -75,39 +72,34 @@ public final class RtToneLut {
         if (path == null || !path.startsWith("/")) {
             throw new IllegalArgumentException("LUT resource path must be absolute: " + path);
         }
-        ByteBuffer data = readResource(path);
-        try {
-            data.order(ByteOrder.LITTLE_ENDIAN);
-            int magic = data.getInt(0);
-            if (magic != MAGIC) {
-                throw new IllegalStateException(path + ": bad magic 0x" + Integer.toHexString(magic));
-            }
-            int version = data.getInt(4);
-            if (version != 1) {
-                throw new IllegalStateException(path + ": unsupported version " + version);
-            }
-            int size = data.getInt(8);
-            float loStops = data.getFloat(12);
-            float hiStops = data.getFloat(16);
-            if (size < 2) {
-                throw new IllegalStateException(path + ": invalid LUT size " + size);
-            }
-            if (loStops != SHADER_SHAPER_LO_STOPS || hiStops != SHADER_SHAPER_HI_STOPS) {
-                throw new IllegalStateException(path + ": LUT shaper " + loStops + ".." + hiStops
-                        + " does not match display shader " + SHADER_SHAPER_LO_STOPS + ".."
-                        + SHADER_SHAPER_HI_STOPS);
-            }
-            long texelCount = (long) size * size * size;
-            long expectedBytes = HEADER_BYTES + texelCount * 4L * 2L; // RGBA16F
-            if (data.remaining() != expectedBytes) {
-                throw new IllegalStateException(path + ": expected " + expectedBytes + " bytes, got "
-                        + data.remaining() + " (size=" + size + ")");
-            }
-            ByteBuffer texels = data.slice(HEADER_BYTES, (int) (expectedBytes - HEADER_BYTES));
-            return upload(ctx, size, texels, path);
-        } finally {
-            MemoryUtil.memFree(data);
+        ByteBuffer data = readResource(path).order(ByteOrder.LITTLE_ENDIAN);
+        int magic = data.getInt(0);
+        if (magic != MAGIC) {
+            throw new IllegalStateException(path + ": bad magic 0x" + Integer.toHexString(magic));
         }
+        int version = data.getInt(4);
+        if (version != 1) {
+            throw new IllegalStateException(path + ": unsupported version " + version);
+        }
+        int size = data.getInt(8);
+        float loStops = data.getFloat(12);
+        float hiStops = data.getFloat(16);
+        if (size < 2) {
+            throw new IllegalStateException(path + ": invalid LUT size " + size);
+        }
+        if (loStops != SHADER_SHAPER_LO_STOPS || hiStops != SHADER_SHAPER_HI_STOPS) {
+            throw new IllegalStateException(path + ": LUT shaper " + loStops + ".." + hiStops
+                    + " does not match display shader " + SHADER_SHAPER_LO_STOPS + ".."
+                    + SHADER_SHAPER_HI_STOPS);
+        }
+        long texelCount = (long) size * size * size;
+        long expectedBytes = HEADER_BYTES + texelCount * 4L * 2L; // RGBA16F
+        if (data.remaining() != expectedBytes) {
+            throw new IllegalStateException(path + ": expected " + expectedBytes + " bytes, got "
+                    + data.remaining() + " (size=" + size + ")");
+        }
+        ByteBuffer texels = data.slice(HEADER_BYTES, (int) (expectedBytes - HEADER_BYTES));
+        return upload(ctx, size, texels, path);
     }
 
     private static RtToneLut upload(VulkanDeviceContext ctx, int size, ByteBuffer texels, String label) {
@@ -187,10 +179,7 @@ public final class RtToneLut {
                             .sType$Default().srcBuffer(uploadBuffer).dstImage(uploadImage)
                             .dstImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL).pRegions(copy));
 
-                    // GENERAL, not SHADER_READ_ONLY_OPTIMAL, to match every other sampled/storage
-                    // image in this codebase (see VulkanDeviceContext.createStorageImage)
-                    // — the descriptor write below must use the same layout or validation flags a
-                    // mismatch.
+                    // Keep GENERAL to match the sampled-image descriptor while making the upload visible.
                     VkImageMemoryBarrier2.Buffer toRead = VkImageMemoryBarrier2.calloc(1, uploadStack);
                     toRead.get(0).sType$Default()
                             .oldLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
@@ -233,11 +222,7 @@ public final class RtToneLut {
             if (in == null) {
                 throw new IllegalStateException("missing LUT resource: " + path);
             }
-            byte[] bytes = in.readAllBytes();
-            ByteBuffer buf = MemoryUtil.memAlloc(bytes.length);
-            buf.put(bytes);
-            buf.flip();
-            return buf;
+            return ByteBuffer.wrap(in.readAllBytes());
         } catch (IOException e) {
             throw new IllegalStateException("failed to read LUT resource: " + path, e);
         }
