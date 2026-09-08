@@ -308,7 +308,7 @@ public final class RtFrameRenderer {
             } finally {
                 passes.endFrame();
             }
-            commands.submit(context.backend().createGraphicsSubmission(), execution.graphicsUse);
+            commands.submit(context.backend().createGraphicsSubmission());
         }
     }
 
@@ -436,7 +436,7 @@ public final class RtFrameRenderer {
                     traceResources(), presentationResources());
             recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
                     graphicsUse, output, nativeColorImage, debugView);
-            commands.submit(submission, graphicsUse);
+            commands.submit(submission);
             debugCaptureFrameSerial = telemetry.frameSerial();
             debugCapturePreExposure = execution.frame.preExposure();
             debugCaptureDenoising = reconstruction.settings();
@@ -539,19 +539,19 @@ public final class RtFrameRenderer {
             }
             VulkanBarriers.worldResourcesToPrimary(cmd, stack);
 
-            try (RtFrameCommands.Timing gpu = commands.time("build stable planes");
+            try (var gpu = commands.time("build stable planes");
                  RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "build stable planes");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.buildStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                         roots, 0, trace.hitTable());
             }
-            try (RtFrameCommands.Timing gpu = commands.time("local NEE bake");
+            try (var gpu = commands.time("local NEE bake");
                  RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "local NEE bake");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.bakeLocal")) {
                 scenes.bakeLocal(entryScene, cmd,
                         storageIndex(traceImages().nrdViewZ()), storageIndex(traceImages().motion()));
             }
-            try (RtFrameCommands.Timing gpu = commands.time("fill stable planes");
+            try (var gpu = commands.time("fill stable planes");
                  RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fill stable planes");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.fillStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),

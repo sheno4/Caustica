@@ -90,7 +90,7 @@ final class RtGpuTiming implements AutoCloseable {
         return ticks * periodNanos;
     }
 
-    final class Stage {
+    final class Stage implements AutoCloseable {
         private final VkCommandBuffer command;
         private final long pool;
         private final long frameId;
@@ -104,7 +104,8 @@ final class RtGpuTiming implements AutoCloseable {
             this.label = label;
         }
 
-        void end() {
+        /** Ends timestamp recording; the graphics completion callback owns query-pool recycling. */
+        @Override public void close() {
             VK13.vkCmdWriteTimestamp2(command, VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, pool, 1);
         }
 

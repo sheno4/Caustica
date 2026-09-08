@@ -13,12 +13,18 @@ import java.util.ArrayList;
 /** Ordered frame stages, each with its own descriptor state and command-pool lifetime. */
 final class RtFrameCommands implements AutoCloseable {
     private final VulkanDeviceContext context;
-    private final ArrayList<OwnedCommandBuffer> stages = new ArrayList<>();
-    private final ArrayList<RtGpuTiming.Stage> timings = new ArrayList<>();
+    private final ArrayList<Stage> stages = new ArrayList<>();
     private ArrayList<RtGpuTiming.Stage> passTimings;
     private final RtGpuTiming gpuTiming;
     private final GraphicsUse graphicsUse;
     private final long frameId;
+
+    private static final class Stage {
+        final OwnedCommandBuffer commands;
+        RtGpuTiming.Stage timing;
+
+        Stage(OwnedCommandBuffer commands) { this.commands = commands; }
+    }
 
     RtFrameCommands(VulkanDeviceContext context, RtGpuTiming gpuTiming, GraphicsUse graphicsUse, long frameId) {
         this.context = context;
@@ -35,46 +41,40 @@ final class RtFrameCommands implements AutoCloseable {
         return begin(label, false);
     }
 
-    interface Timing extends AutoCloseable {
-        Timing DISABLED = () -> { };
-        @Override void close();
-    }
-
-    Timing time(String label) {
-        RtGpuTiming.Stage timing = gpuTiming.begin(stages.getLast().commandBuffer(), frameId, label);
-        if (timing == null) return Timing.DISABLED;
+    RtGpuTiming.Stage time(String label) {
+        RtGpuTiming.Stage timing = gpuTiming.begin(stages.getLast().commands.commandBuffer(), frameId, label);
+        if (timing == null) return null;
         if (passTimings == null) passTimings = new ArrayList<>();
         passTimings.add(timing);
         graphicsUse.whenComplete(timing::complete);
-        return timing::end;
+        return timing;
     }
 
     private VkCommandBuffer begin(String label, boolean heaps) {
         if (!stages.isEmpty()) endLastStage();
-        OwnedCommandBuffer stage = context.beginGraphicsCommands(label, heaps);
+        Stage stage = new Stage(context.beginGraphicsCommands(label, heaps));
         stages.add(stage);
         // Queue order alone does not make writes visible across command buffers.
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VulkanBarriers.memoryBarrier(stage.commandBuffer(), stack);
+            VulkanBarriers.memoryBarrier(stage.commands.commandBuffer(), stack);
         }
-        RtGpuTiming.Stage timing = gpuTiming.begin(stage.commandBuffer(), frameId, label);
-        timings.add(timing);
+        RtGpuTiming.Stage timing = gpuTiming.begin(stage.commands.commandBuffer(), frameId, label);
+        stage.timing = timing;
         if (timing != null) graphicsUse.whenComplete(timing::complete);
-        return stage.commandBuffer();
+        return stage.commands.commandBuffer();
     }
 
     private void endLastStage() {
-        RtGpuTiming.Stage timing = timings.getLast();
-        if (timing != null) timing.end();
-        stages.getLast().end();
+        Stage stage = stages.getLast();
+        if (stage.timing != null) stage.timing.close();
+        stage.commands.end();
     }
 
-    void submit(GraphicsSubmission submission, GraphicsUse use) {
+    void submit(GraphicsSubmission submission) {
         endLastStage();
-        for (int i = 0; i < stages.size(); i++) {
-            stages.get(i).submit(submission, use);
-            RtGpuTiming.Stage timing = timings.get(i);
-            if (timing != null) timing.submitted();
+        for (Stage stage : stages) {
+            stage.commands.submit(submission, graphicsUse);
+            if (stage.timing != null) stage.timing.submitted();
         }
         if (passTimings != null) {
             for (RtGpuTiming.Stage timing : passTimings) timing.submitted();
@@ -83,6 +83,6 @@ final class RtFrameCommands implements AutoCloseable {
 
     @Override
     public void close() {
-        for (OwnedCommandBuffer stage : stages) stage.close();
+        for (Stage stage : stages) stage.commands.close();
     }
 }
