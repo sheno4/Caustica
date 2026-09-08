@@ -106,6 +106,10 @@ For raw inspection, run `uv run python tools/debug/inspect_buffer.py CAPTURE.exr
 
 Under the NRD temporal route, normal/roughness and NRD signal buffers contain the final plane 0 inputs after per-plane preparation. They do not contain every plane or original material texture values. NRD signal radiance uses the documented fixed scale in capture metadata, not the ordinary trace pre-exposure scale. Generic motion/depth/albedo remain trace guides.
 
+With NRD followed by DLSS-SR, `trace-color` is reused for the composed denoised input to SR;
+it no longer contains the original noisy trace output when captured at frame end.
+`reconstructed-color` contains the SR result, including any NGX debug indicator.
+
 - **NRD guides:** capture normal/roughness, NRD view Z and diffuse/specular signals together. Inspect finite values, edges and packing before blaming denoising. Named views help inspect spatial errors quickly.
 - **Periodic darkness:** record stationary-camera exposure; find jumps in Python, then compare trace/reconstructed radiance. Stable controller exposure alone does not prove stable lighting. Use short capture bursts only for visual diagnosis.
 - **Streaming:** issue repeated teleports with tick waits, inspect screenshots and geometry queue/resident counters, then stop and let work drain. Counts can suggest leaks or stalls but do not prove exact chunk coverage.
