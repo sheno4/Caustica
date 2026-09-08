@@ -595,9 +595,9 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         capture.currentMaterial = new MinecraftEntityMesh.Material(MinecraftMaterialIds.PARTICLE_BILLBOARD,
                 null, MinecraftEntityMesh.Program.MATERIAL);
         capture.currentCoverage = MinecraftEntityMesh.Coverage.CUTOUT;
-        // extract() emits camera-relative positions; shift them into rebased space (identity instance).
+        // extract() emits camera-relative positions; the instance transform restores the rebase origin.
         Vec3 camPos = cam.position();
-        particleCapture.setOffset((float) (camPos.x - rbx), (float) (camPos.y - rby), (float) (camPos.z - rbz));
+        particleCapture.beginCapture((float) (camPos.x - rbx), (float) (camPos.y - rby), (float) (camPos.z - rbz));
         // Reject particles whose world-space bounds are wholly outside before paying extract/build-layer
         // cost. The center test after extraction retains the existing exact inclusion behavior for bounds
         // which intersect the frustum.

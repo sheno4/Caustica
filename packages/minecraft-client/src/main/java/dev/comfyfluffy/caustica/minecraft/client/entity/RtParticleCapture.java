@@ -10,8 +10,8 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
  * letting particles reuse the entity mesh layout and retained upload path.
  *
  * <p>Positions arrive camera-relative ({@code SingleQuadParticle.extract} subtracts the camera position);
- * a per-frame {@link #setOffset offset} (camPos − rebaseOrigin) shifts them into the renderer's rebased
- * space so the TLAS instance transform is identity, exactly like captured entities. The per-particle colour
+ * a per-frame offset (camera position minus rebase origin) shifts them into the renderer's rebased
+ * space; the instance transform restores the rebase origin. The per-particle colour
  * rides through as raw base color; raygen applies RT direct/indirect lighting instead of baking vanilla's
  * lightmap here. The caller assigns a source material for each extracted layer.
  */
@@ -19,29 +19,25 @@ public final class RtParticleCapture implements VertexConsumer {
     private final RtEntityCapture out;
     private float ox, oy, oz;
 
-    // Fully-lit packed lightmap (block 15 << 4 | sky 15 << 20) — default so a particle that never calls
-    // setLight renders at full brightness rather than black.
-    private static final int FULL_BRIGHT = 0xF000F0;
-
     // One buffered vertex: the chained protocol calls addVertex first, then setUv/setColor/setLight for the
     // SAME vertex, so the vertex is only complete at the next addVertex (or flush()).
     private boolean pending;
     private float x, y, z, u, v;
     private int color = 0xFFFFFFFF;
-    private int light = FULL_BRIGHT;
 
     public RtParticleCapture(RtEntityCapture out) {
         this.out = out;
     }
 
-    /** Camera-relative → rebased-space offset (camPos − rebaseOrigin), added to every captured vertex. */
-    public void setOffset(float ox, float oy, float oz) {
+    /** Start a capture with the camera-to-rebase offset, discarding any unfinished prior vertex. */
+    public void beginCapture(float ox, float oy, float oz) {
+        pending = false;
         this.ox = ox;
         this.oy = oy;
         this.oz = oz;
     }
 
-    /** Forward the buffered vertex to the entity capture (zero normal -> geometric; ARGB -> tint; slot). */
+    /** Forward the buffered vertex with its ARGB tint and a normal derived from the quad edges. */
     public void flush() {
         if (!pending) {
             return;
@@ -59,7 +55,6 @@ public final class RtParticleCapture implements VertexConsumer {
         u = 0f;
         v = 0f;
         color = 0xFFFFFFFF;
-        light = FULL_BRIGHT;
         pending = true;
         return this;
     }
@@ -70,7 +65,8 @@ public final class RtParticleCapture implements VertexConsumer {
         color = (a << 24) | (r << 16) | (g << 8) | b;
         return this;
     }
-    @Override public VertexConsumer setLight(int packed) { light = packed; return this; }
+    // Lighting comes from the RT integrator rather than the vanilla lightmap.
+    @Override public VertexConsumer setLight(int packed) { return this; }
 
     // Unused VertexConsumer surface (buildLayer only calls addVertex/setUv/setColor/setLight).
     @Override public VertexConsumer setUv1(int u1, int v1) { return this; }

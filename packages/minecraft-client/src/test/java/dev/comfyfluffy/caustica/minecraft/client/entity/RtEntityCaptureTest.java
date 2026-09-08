@@ -23,6 +23,29 @@ final class RtEntityCaptureTest {
     private static final float[] V = {0f, 0f, 1f, 1f};
 
     @Test
+    void particleCaptureDiscardsAnInterruptedVertexBeforeTheNextFrame() {
+        RtEntityCapture capture = new RtEntityCapture();
+        RtParticleCapture particles = new RtParticleCapture(capture);
+        particles.beginCapture(100, 100, 100);
+        particles.addVertex(9, 9, 9).setUv(0.5f, 0.5f).setColor(0);
+        capture.reset();
+
+        particles.beginCapture(10, 20, 30);
+        for (int i = 0; i < 4; i++) {
+            particles.addVertex(X[i], Y[i], Z[i]).setUv(U[i], V[i]).setLight(0);
+        }
+        particles.flush();
+        particles.flush();
+
+        capture.requireCompleteQuads("particles");
+        assertEquals(6, capture.idx.size());
+        assertArrayEquals(new float[]{10, 20, 30, 11, 20, 30, 11, 21, 30, 10, 21, 30},
+                capture.verts.toFloatArray());
+        assertArrayEquals(new float[]{0, 0, 1, 0, 1, 1, 0, 1}, capture.uvList.toFloatArray());
+        for (int i = 0; i < 4; i++) assertEquals(1f, capture.colorList.getFloat(i * 4 + 3));
+    }
+
+    @Test
     void capturesOneNeutralSurfaceForEachTriangle() {
         RtEntityCapture capture = new RtEntityCapture();
         capture.currentMaterial = material("entity");
