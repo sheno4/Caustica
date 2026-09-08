@@ -136,9 +136,19 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames(),
                     "operations", List.of("schema", "status",
-                    "settings.get", "settings.set", "view.set", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
+                    "settings.get", "settings.set", "runtime.set", "view.set", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
             case "status" -> future.complete(status());
             case "settings.get" -> future.complete(settings());
+            case "runtime.set" -> {
+                var enabled = request.get("enabled");
+                if (enabled == null || !enabled.isJsonPrimitive() || !enabled.getAsJsonPrimitive().isBoolean())
+                    throw new IllegalArgumentException("enabled must be a boolean");
+                var option = MinecraftOptions.Rt.ENABLED;
+                if (CausticaConfig.store().overridden(CausticaConfig.FEATURE, option))
+                    throw new IllegalArgumentException("Setting has a JVM override: " + option.id());
+                CausticaConfig.store().apply(CausticaConfig.FEATURE, option, enabled.getAsBoolean());
+                future.complete(runtimeStatus());
+            }
             case "settings.set" -> {
                 var values = request.getAsJsonObject("values");
                 var options = RendererOptions.settings();
@@ -217,7 +227,8 @@ public final class MinecraftDebugService implements AutoCloseable {
                 } else {
                     events.addAll(List.of("Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
                             "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
-                            "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication"));
+                            "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication",
+                            "TerrainDispatchPlan"));
                 }
                 for (String name : events)
                     recording.enable("dev.comfyfluffy.caustica." + name).withThreshold(java.time.Duration.ZERO);
@@ -286,6 +297,7 @@ public final class MinecraftDebugService implements AutoCloseable {
         result.put("frames", frames);
         result.put("ticks", ticks);
         result.put("frameActive", CausticaClientComposition.current().runtime().frameActive());
+        result.put("runtime", runtimeStatus());
         if (client.level != null) result.put("world", Map.of("dimension", client.level.dimension().toString(),
                 "gameTime", client.level.getGameTime()));
         if (client.player != null) result.put("player", Map.of("x", client.player.getX(), "y", client.player.getY(),
@@ -300,6 +312,14 @@ public final class MinecraftDebugService implements AutoCloseable {
         result.put("settings", settings());
         result.put("latestFrame", CausticaClientComposition.current().runtime().telemetry().latestFrame());
         return result;
+    }
+
+    private Map<String, Object> runtimeStatus() {
+        var runtime = CausticaClientComposition.current().runtime();
+        var option = MinecraftOptions.Rt.ENABLED;
+        return Map.of("requested", CausticaConfig.get(option), "active", runtime.active(),
+                "frameActive", runtime.frameActive(),
+                "overridden", CausticaConfig.store().overridden(CausticaConfig.FEATURE, option));
     }
 
     private Object captureImage(String name) throws IOException {

@@ -119,7 +119,7 @@ public final class MinecraftHdr {
         int query(IntBuffer count, VkSurfaceFormat2KHR.Buffer formats);
     }
 
-    /** Logs the resolved HDR config once (cheap; safe to call repeatedly — guarded by the surface log). */
+    /** Logs the resolved HDR configuration for the surface capability report. */
     public static void logConfig() {
         CausticaMod.LOGGER.info(
                 "HDR config: enabled={} ui={}nits peak={}nits -> {}",
@@ -146,21 +146,21 @@ public final class MinecraftHdr {
                 return;
             }
 
-            boolean anyHdr = false;
+            boolean supportsPq = false;
             CausticaMod.LOGGER.info("HDR: chosen swapchain image format={} ({}); surface advertises {} (format,colorSpace) pair(s):",
                     chosenFormat, formatName(chosenFormat), formats.size());
             for (int i = 0; i < formats.size(); i++) {
                 SurfaceFormat f = formats.get(i);
                 int cs = f.colorSpace();
-                boolean hdr = isHdrColorSpace(cs);
-                anyHdr |= hdr;
+                boolean pq = cs == CS_HDR10_ST2084;
+                supportsPq |= pq;
                 CausticaMod.LOGGER.info("  [{}] format={} ({}), colorSpace={} ({}){}",
-                        i, f.format(), formatName(f.format()), cs, colorSpaceName(cs), hdr ? "  <-- HDR-capable" : "");
+                        i, f.format(), formatName(f.format()), cs, colorSpaceName(cs), pq ? "  <-- HDR10/PQ" : "");
             }
-            if (anyHdr) {
-                CausticaMod.LOGGER.info("HDR: at least one HDR-capable color space is exposed; PQ/HDR10 presentation is available.");
+            if (supportsPq) {
+                CausticaMod.LOGGER.info("HDR: the surface advertises HDR10/PQ presentation.");
             } else {
-                CausticaMod.LOGGER.warn("HDR: only SDR color spaces are exposed by this Vulkan surface. Enable OS/display HDR; on Linux, use native Wayland with HDR enabled in the compositor.");
+                CausticaMod.LOGGER.warn("HDR: the surface does not advertise HDR10/PQ. Check OS/display HDR and compositor support.");
             }
         } catch (Throwable t) {
             CausticaMod.LOGGER.warn("HDR: surface capability enumeration failed: {}", t.toString());
@@ -207,12 +207,6 @@ public final class MinecraftHdr {
                 return List.copyOf(resultFormats);
             }
         }
-    }
-
-    private static boolean isHdrColorSpace(int cs) {
-        return cs == CS_EXTENDED_SRGB_LINEAR || cs == CS_EXTENDED_SRGB_NONLINEAR
-                || cs == CS_HDR10_ST2084 || cs == CS_HDR10_HLG || cs == CS_DOLBYVISION
-                || cs == CS_BT2020_LINEAR || cs == CS_DISPLAY_P3_LINEAR;
     }
 
     private static String colorSpaceName(int cs) {
