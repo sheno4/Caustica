@@ -632,7 +632,8 @@ public final class MinecraftRtRuntime {
                      boolean starting) {
             frameGeneration.configure(frameGenerationSettings());
             ResourcePackEpoch applied = lifecycle.resourcePackEpoch();
-            if (requestedWorldEpoch == 0L || dimension == null || applied == null) {
+            if (requestedWorldEpoch == 0L || dimension == null || applied == null
+                    || lifecycle.pendingResourcePackEpoch() != null) {
                 closeWorld();
                 return false;
             }
@@ -703,11 +704,12 @@ public final class MinecraftRtRuntime {
         }
 
         private void resourceReloadStarting() {
-            if (renderer != null) renderer.resetSceneHistory();
+            // Host atlases and model sets are replaced in place. Drain every borrower before that starts.
+            closeWorld();
         }
 
         private void resourceReloadFailed(Throwable failure) {
-            LOGGER.warn("Resource-pack reload failed; keeping the active engine epoch", failure);
+            LOGGER.warn("Resource-pack reload failed; rebuilding from the prior resource-pack epoch", failure);
         }
 
         private void closeWorld() {
