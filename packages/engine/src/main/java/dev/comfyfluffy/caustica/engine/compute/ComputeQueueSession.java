@@ -47,7 +47,6 @@ public final class ComputeQueueSession implements AutoCloseable {
     public final class ComputeContributionQueue implements GpuComputeQueue {
         private final Set<Task> tasks = new HashSet<>();
         private boolean accepting = true;
-        private boolean completionAvailable;
 
         @Override
         public synchronized GpuComputeJob submit(Consumer<? super VkCommandBuffer> recorder,
@@ -61,7 +60,6 @@ public final class ComputeQueueSession implements AutoCloseable {
                 task.backendJob = backend.submit(recorder, result -> {
                     synchronized (this) {
                         completions.add(() -> deliver(task, callback, result));
-                        completionAvailable = true;
                         notifyAll();
                     }
                 });
@@ -105,10 +103,8 @@ public final class ComputeQueueSession implements AutoCloseable {
                 progress();
                 synchronized (this) {
                     if (tasks.isEmpty()) return;
-                    if (completionAvailable) {
-                        completionAvailable = false;
-                        continue;
-                    }
+                    // Check under the same channel lock used to enqueue and signal terminal results.
+                    if (!completions.isEmpty()) continue;
                     try { wait(); }
                     catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();

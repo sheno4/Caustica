@@ -10,6 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
 
@@ -19,8 +22,39 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ComputeQueueSessionTest {
+    @Test
+    void drainWaitsForAlreadyRunningWorkAndDeliversItsCompletion() throws Exception {
+        var cancelled = new CountDownLatch(1);
+        var complete = new AtomicReference<Consumer<? super GpuComputeCompletion>>();
+        GpuComputeQueue backend = new GpuComputeQueue() {
+            @Override public GpuComputeJob submit(Consumer<? super VkCommandBuffer> recorder,
+                    Consumer<? super GpuComputeCompletion> completion) {
+                complete.set(completion);
+                return cancelled::countDown;
+            }
+            @Override public int[] sharedQueueFamilyIndices() { return new int[]{0}; }
+        };
+        var session = new ComputeQueueSession(backend, failure -> { throw new AssertionError(failure); });
+        var queue = session.openChannel();
+        var delivered = new AtomicInteger();
+        queue.submit(command -> {}, result -> delivered.incrementAndGet());
+        var drained = CompletableFuture.runAsync(queue::drain);
+        try {
+            assertTrue(cancelled.await(5, TimeUnit.SECONDS));
+            assertFalse(drained.isDone());
+        } finally {
+            complete.get().accept(new GpuComputeCompletion.Succeeded());
+            drained.get(5, TimeUnit.SECONDS);
+        }
+        assertEquals(1, delivered.get());
+        queue.closeChannel();
+        session.close();
+    }
+
     @Test
     void ownedDependenciesSurviveUntilPublicCompletionReturns() {
         Backend backend = new Backend();
