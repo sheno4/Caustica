@@ -11,6 +11,7 @@ The project-wide aesthetic review includes interactive behavior and visual inspe
 ## Queued interactive exploration
 
 - Use computer use to navigate pause/title/world-selection menus and inspect the settings screen. Check opening/closing screens, UI placement, readable text, transparency and correct input restoration.
+- Open a settings dropdown, press its row again to close it, and repeat using keyboard activation. Switch directly between two dropdowns; select an item and click outside the popup. Check that only one list stays open and row clicks do not immediately reopen it.
 - Inspect a stationary workbench camera, then move through terrain and look at cutout surfaces, emissive geometry, water/reflections and moving entities. Compare final output with relevant normal/depth/radiance views when a visual defect appears.
 - Exercise window resizing and reconstruction-mode changes where available; inspect resolution transitions, stale targets, ghosting and exposure settling.
 - Compare bloom enabled/disabled around bright emitters while exposure settles in bright and dark scenes. The exposed bloom pyramid must return to the scene's scale before composition; inspect highlight strength for an extra exposure-dependent gain.

@@ -8,10 +8,8 @@ import java.util.Objects;
 /**
  * One page of the settings screen: an entry in the sidebar and the groups it shows.
  *
- * <p>This is the extensibility seam. A third-party extension gets a page by registering a {@code Feature}
- * with grouped options — it contributes data, not widgets, so nothing about the screen's construction is
- * public API yet. That is deliberate: exporting a widget-contribution interface before the widget set has
- * shipped once would freeze the wrong shape.
+ * <p>Extensions contribute pages by registering grouped options. The screen constructs the widgets from
+ * those declarations.
  *
  * @param accent the section's colour, used for its sidebar bar, slider fills and focus rings — never for
  *               body text, and never as brightness, since the UI is composited at a fixed nit level in HDR

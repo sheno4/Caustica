@@ -141,9 +141,7 @@ public final class CausticaOptionsScreen extends Screen {
             entries.add(new CausticaScrollPane.Entry(header, first ? 0 : CausticaTheme.GROUP_GAP));
             first = false;
             for (SettingControl row : group.rows()) {
-                for (AbstractWidget widget : widgetsFor(row)) {
-                    entries.add(new CausticaScrollPane.Entry(widget));
-                }
+                entries.add(new CausticaScrollPane.Entry(widgetFor(row)));
             }
         }
         content.setEntries(entries);
@@ -164,24 +162,21 @@ public final class CausticaOptionsScreen extends Screen {
         content.reflow();
     }
 
-    /**
-     * The widgets one control contributes. A choice is one dropdown row: a ten-entry debug view or a
-     * five-step quality mode is a list to pick from, not a column of radio rows to scroll past.
-     */
-    private List<AbstractWidget> widgetsFor(SettingControl control) {
+    private AbstractWidget widgetFor(SettingControl control) {
         return switch (control) {
             case SettingControl.BoolControl bool ->
-                    List.of(new CausticaToggle(bool, font, section().accent(), this::refreshVisibility));
+                    new CausticaToggle(bool, font, section().accent(), this::refreshVisibility);
             case SettingControl.RangeControl range ->
-                    List.of(new CausticaSlider(range, font, section().accent()));
+                    new CausticaSlider(range, font, section().accent());
             case SettingControl.ChoiceControl<?> choice ->
-                    List.of(new CausticaDropdown<>(choice, font, section().accent(), this::toggleDropdown));
+                    new CausticaDropdown<>(choice, font, section().accent(), this::toggleDropdown);
         };
     }
 
     private void toggleDropdown(CausticaDropdown<?> dropdown) {
+        boolean wasOpen = openDropdown == dropdown;
         closeDropdown();
-        if (openDropdown != dropdown) {
+        if (!wasOpen) {
             openDropdown = dropdown;
             dropdown.setExpanded(true);
         }
@@ -201,9 +196,10 @@ public final class CausticaOptionsScreen extends Screen {
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         if (openDropdown != null) {
+            boolean insideRow = openDropdown.isMouseOver(event.x(), event.y());
             boolean insideList = openDropdown.clickPopup(event.x(), event.y());
             closeDropdown();
-            if (insideList) {
+            if (insideList || insideRow) {
                 return true;
             }
         }
@@ -223,9 +219,7 @@ public final class CausticaOptionsScreen extends Screen {
     }
 
     /**
-     * All three background paths are suppressed. Vanilla picks between them on {@link #isInGameUi()}, and the
-     * in-game one washes the entire window — which is what hid the scene this screen exists to let you watch.
-     * No blur either: it is a full-window effect, and there is no full-window surface here to justify it.
+     * Suppresses vanilla backgrounds and blur so the world remains visible beside the settings panel.
      */
     @Override
     protected void extractBlurredBackground(GuiGraphicsExtractor graphics) {
