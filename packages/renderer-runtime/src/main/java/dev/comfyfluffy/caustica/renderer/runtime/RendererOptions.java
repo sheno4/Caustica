@@ -1,23 +1,11 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.settings.DisplayText;
-import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
-import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import java.util.List;
-import java.util.Objects;
 
 /** Renderer-owned option declarations; registration and persistence belong to the host. */
 public final class RendererOptions {
     private RendererOptions() { }
-
-    public static FeatureSettings register(SettingsRegistry registry) {
-        var options = settings();
-        var feature = registry.feature(CausticaConfig.FEATURE).title(DisplayText.literal("Caustica"));
-        options.stream().map(Option::group).filter(Objects::nonNull).distinct().forEach(feature::group);
-        return feature.options(options).register();
-    }
 
     public static List<Option<?>> settings() {
         return List.of(
@@ -48,22 +36,22 @@ public final class RendererOptions {
         public static final class DlssRr {
             private DlssRr() { }
             public static final List<Integer> PRESET_STEPS = List.of(0, 4, 5);
-            public static final Option<Integer> PRESET = intChoice( "caustica.rt.dlssRr.preset", "dlss-rr.preset", 5, PRESET_STEPS);
+            public static final Option<Integer> PRESET = intChoice("caustica.rt.dlssRr.preset", "dlss-rr.preset", 5, PRESET_STEPS);
             public static final List<Integer> QUALITY_STEPS = List.of(3, 0, 1, 2, 5);
             public static final Option<Integer> QUALITY = intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 1, QUALITY_STEPS).inGroup("upscaling");
         }
 
         public static final class DlssSr {
             private DlssSr() { }
-            public static final Option<Integer> PRESET = intChoice( "caustica.rt.dlssSr.preset", "dlss-sr.preset", 0, List.of(0, 10, 11, 12, 13));
+            public static final Option<Integer> PRESET = intChoice("caustica.rt.dlssSr.preset", "dlss-sr.preset", 0, List.of(0, 10, 11, 12, 13));
             public static final List<Integer> QUALITY_STEPS = List.of(3, 0, 1, 2, 5);
-            public static final Option<Integer> QUALITY = intChoice( "caustica.rt.dlssSr.quality", "dlss-sr.quality", 2, QUALITY_STEPS).inGroup("upscaling");
+            public static final Option<Integer> QUALITY = intChoice("caustica.rt.dlssSr.quality", "dlss-sr.quality", 2, QUALITY_STEPS).inGroup("upscaling");
         }
 
         public static final class Denoising {
             private Denoising() { }
-            public static final Option<String> ROUTE = stringChoice( "caustica.rt.denoisingRoute", "denoising.route", "ray_reconstruction", List.of("ray_reconstruction", "temporal_denoiser", "raw")).inGroup("upscaling");
-            public static final Option<String> METHOD = stringChoice( "caustica.rt.denoisingMethod", "denoising.method", "reblur", List.of("relax", "reblur")).inGroup("upscaling");
+            public static final Option<String> ROUTE = stringChoice("caustica.rt.denoisingRoute", "denoising.route", "ray_reconstruction", List.of("ray_reconstruction", "temporal_denoiser", "raw")).inGroup("upscaling");
+            public static final Option<String> METHOD = stringChoice("caustica.rt.denoisingMethod", "denoising.method", "reblur", List.of("relax", "reblur")).inGroup("upscaling");
         }
 
         public static final class Fg {
@@ -98,10 +86,8 @@ public final class RendererOptions {
 
         public static final class Tonemap {
             private Tonemap() { }
-            public static final Option<Float> GAMMA = clampedFloat("caustica.rt.tonemap.gamma", "tonemap.gamma", 1.0f, 0.1f, 5.0f) .inGroup("look").sliderRange(0.5f, 1.5f);
+            public static final Option<Float> GAMMA = clampedFloat("caustica.rt.tonemap.gamma", "tonemap.gamma", 1.0f, 0.1f, 5.0f).inGroup("look").sliderRange(0.5f, 1.5f);
         }
-
-
 
         public static final class Screenshots {
             private Screenshots() { }

@@ -97,16 +97,10 @@ public final class MinecraftOptions {
         return Option.bool(path, fallback).storage(path, key);
     }
     private static Option<Integer> intAtLeast(String key, String path, int fallback, int min) {
-        return clampedInt(key, path, fallback, min, Integer.MAX_VALUE);
-    }
-    private static Option<Integer> clampedInt(String key, String path, int fallback, int min, int max) {
-        return Option.integer(path, min, max, fallback).storage(path, key);
+        return Option.integer(path, min, Integer.MAX_VALUE, fallback).storage(path, key);
     }
     private static Option<Float> finiteFloat(String key, String path, float fallback) {
-        return clampedFloat(key, path, fallback, -Float.MAX_VALUE, Float.MAX_VALUE);
-    }
-    private static Option<Float> clampedFloat(String key, String path, float fallback, float min, float max) {
-        return Option.range(path, min, max, fallback).storage(path, key);
+        return Option.range(path, -Float.MAX_VALUE, Float.MAX_VALUE, fallback).storage(path, key);
     }
     private static Option<Optional<String>> optionalString(String key, String path) {
         return Option.optionalString(path).storage(path, key);
