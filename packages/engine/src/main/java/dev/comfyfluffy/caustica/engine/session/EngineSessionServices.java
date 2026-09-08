@@ -78,11 +78,10 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
     /** Host resource validation and renderer lease acquisition. */
     public ResourceDirectory resources() { return resources; }
 
-    /** Advances compute terminals, compiler publication, retained retirements, and eligible pass closes. */
+    /** Advances compute terminals, compiler publication, and eligible pass closes. */
     public void progress() {
         compute.progress();
         programs.progress();
-        scenes.progress();
         passes.progress();
     }
 

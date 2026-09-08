@@ -5,11 +5,8 @@ import java.util.function.Supplier;
 
 /** Frame execution pulls an owning snapshot from the retained database. */
 public interface RetainedSceneBackend {
-    /** Capture runs at the frame boundary on the program publication/control thread. */
+    /** Supplies atomic scene captures to renderer preparation. */
     void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture);
-
-    default void progress() {
-    }
 
     default void settleFrameUses() {
     }

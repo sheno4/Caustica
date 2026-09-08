@@ -119,8 +119,6 @@ final class EngineWorldSessionTest {
     }
 
     private static final class AsyncSceneBackend implements RetainedSceneBackend {
-        private final List<Runnable> pending = new ArrayList<>();
-        private final List<Runnable> completed = new ArrayList<>();
         private boolean prepared;
 
         @Override public synchronized void bind(Supplier<SharedResource<RetainedSceneSnapshot>> capture) {
@@ -128,16 +126,6 @@ final class EngineWorldSessionTest {
         }
         @Override public synchronized void prepareForSessionClose() {
             prepared = true;
-            completed.addAll(pending);
-            pending.clear();
-        }
-        @Override public void progress() {
-            List<Runnable> ready;
-            synchronized (this) {
-                ready = List.copyOf(completed);
-                completed.clear();
-            }
-            ready.forEach(Runnable::run);
         }
     }
 

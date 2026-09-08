@@ -403,8 +403,6 @@ public final class SceneDirectory {
         backend.settleFrameUses();
     }
 
-    public void progress() { backend.progress(); }
-
     public void settleFrameUses() { backend.settleFrameUses(); }
 
     public void prepareForSessionClose() { backend.prepareForSessionClose(); }
