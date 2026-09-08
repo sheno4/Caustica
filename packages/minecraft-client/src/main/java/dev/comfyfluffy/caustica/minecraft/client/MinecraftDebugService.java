@@ -344,9 +344,9 @@ public final class MinecraftDebugService implements AutoCloseable {
         });
     }
 
-    public static void frameRendered(boolean active) {
+    public static void frameRendered(boolean composited) {
         if (instance == null) return;
-        if (active && instance.client.level != null) instance.frames++;
+        if (composited && instance.client.level != null) instance.frames++;
         var pending = List.copyOf(instance.captures);
         instance.captures.clear();
         pending.forEach(Runnable::run);

@@ -23,6 +23,7 @@ import org.joml.Matrix4fc;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
@@ -38,10 +39,13 @@ public abstract class GameRendererMixin {
 	@Final
 	private RenderTarget mainRenderTarget;
 
+	@Unique private boolean caustica$worldComposited;
+
 	// Reset the UI overlay's per-frame clear latch at the very start of the frame (before the world, hand,
 	// or GUI render into it).
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("HEAD"))
 	private void caustica$beginOverlayFrame(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
+		caustica$worldComposited = false;
 		CausticaClientComposition.current().runtime().beginRenderFrame();
 		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
@@ -67,9 +71,9 @@ public abstract class GameRendererMixin {
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("TAIL"))
 	private void caustica$endRtFrameStats(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
 		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.frameRendered(
-				CausticaClientComposition.current().runtime().frameActive());
+				caustica$worldComposited);
 		MinecraftDebugCapture.poll(Minecraft.getInstance(),
-				CausticaClientComposition.current().runtime().frameActive());
+				caustica$worldComposited);
 	}
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V",
@@ -170,7 +174,8 @@ public abstract class GameRendererMixin {
 	private void caustica$endWorldCompositeBeforeHand(DeltaTracker deltaTracker, CallbackInfo ci) {
 		// A dimension transition may have an active runtime while its new scene is still preparing.
 		// UI extensions require the retained frame produced by a successful world composite.
-		if (!CausticaClientComposition.current().worldComposite().end(this.mainRenderTarget)) {
+		caustica$worldComposited = CausticaClientComposition.current().worldComposite().end(this.mainRenderTarget);
+		if (!caustica$worldComposited) {
 			return;
 		}
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
