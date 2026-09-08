@@ -11,8 +11,6 @@ import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 
-import java.io.IOException;
-
 /** Coordinates trace and presentation resource owners at the root renderer lifetime. */
 final class RtFrameResources {
     private final RtFramePresenter presenter;
@@ -37,10 +35,6 @@ final class RtFrameResources {
 
     PresentationResources presentation() {
         return presentation;
-    }
-
-    void ensurePresentationPipelines(VulkanDeviceContext context, int peakNits) throws IOException {
-        presentation.ensurePipelines(context, peakNits);
     }
 
     /** Resizes both owners after one shared drain of all prior frame use. */

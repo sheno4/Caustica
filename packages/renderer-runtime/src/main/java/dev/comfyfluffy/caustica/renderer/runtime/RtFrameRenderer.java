@@ -417,7 +417,7 @@ public final class RtFrameRenderer {
     private void ensurePresentationResources(int width, int height)
             throws IOException {
         presentationResources().configureExposure(settings.exposure());
-        frameResources.ensurePresentationPipelines(context, settings.peakNits());
+        frameResources.presentation().ensurePipelines(context, settings.peakNits());
         if (frameResources.ensureSized(context, width, height, reconstruction.settings().route(),
                 reconstruction::closeBackendAfterIdle)) {
             resetSceneHistory();
