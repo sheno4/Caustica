@@ -38,7 +38,7 @@ public abstract class ScreenshotMixin {
                 && CausticaConfig.get(RendererOptions.Rt.Screenshots.EXR_ENABLED)) {
             String pairedPngName = RtScreenshotExporter.exportPaired(workDir, callback);
             if (pairedPngName != null) {
-                // Re-enter vanilla's named path with our reserved PNG name. The non-null name bypasses
+                // Re-enter vanilla's named path with the paired PNG name. The non-null name bypasses
                 // this hook on the nested call and makes both outputs use exactly one basename.
                 Screenshot.grab(workDir, pairedPngName, target, downscaleFactor, callback);
                 ci.cancel();
