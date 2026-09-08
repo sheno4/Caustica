@@ -7,8 +7,8 @@ import showcase_environment;
 [numthreads(1, 1, 1)]
 void main() {
     api_showcase.OpaqueSurface opaque;
-    api_showcase.TexturedSurface textured;
-    api_showcase.TextureCoverage coverage;
+    api_showcase.CutoutSurface cutout;
+    api_showcase.StripedCoverage coverage;
     api_showcase.AbsorbingVolume volume;
     api_showcase.OverworldSky overworld;
     api_showcase.NetherSky nether;

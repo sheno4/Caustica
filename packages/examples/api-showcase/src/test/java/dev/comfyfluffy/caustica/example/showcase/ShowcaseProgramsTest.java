@@ -66,9 +66,9 @@ final class ShowcaseProgramsTest {
 
         assertEquals(List.of(
                 "api_showcase.OpaqueSurface",
-                "api_showcase.TexturedSurface"),
+                "api_showcase.CutoutSurface"),
                 channel.surfaces.stream().map(value -> value.surface().type()).toList());
-        assertEquals("api_showcase.TextureCoverage", channel.surfaces.getLast().coverage().type());
+        assertEquals("api_showcase.StripedCoverage", channel.surfaces.getLast().coverage().type());
         assertEquals("api_showcase.AbsorbingVolume", channel.volumes.getFirst().implementation().type());
         assertEquals(List.of(
                         "api_showcase.OverworldSky",

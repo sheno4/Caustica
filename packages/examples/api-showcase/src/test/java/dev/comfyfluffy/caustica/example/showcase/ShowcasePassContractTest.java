@@ -1,19 +1,14 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
 import dev.comfyfluffy.caustica.api.pass.PassPlacement;
-import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
 import dev.comfyfluffy.caustica.settings.OptionValues;
-import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
-import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import org.junit.jupiter.api.Test;
 
-import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,35 +21,47 @@ final class ShowcasePassContractTest {
     }
 
     @Test
-    void worldResourcePassWaitsForProgramsAndPublicationVisibility() {
+    void worldResourcePassWaitsForProgramsAndPublishesOnce() {
         AtomicBoolean ready = new AtomicBoolean();
-        AtomicBoolean submitted = new AtomicBoolean();
-        AtomicBoolean visible = new AtomicBoolean();
-        AtomicBoolean closed = new AtomicBoolean();
-        java.util.concurrent.atomic.AtomicInteger publishCalls = new java.util.concurrent.atomic.AtomicInteger();
-        ShowcasePasses.WorldMeshHandoff handoff = new ShowcasePasses.WorldMeshHandoff() {
-            @Override public boolean published() { return submitted.get() && visible.get(); }
-            @Override public void recordAndPublish(dev.comfyfluffy.caustica.api.pass.PassFrame frame) {
-                if (submitted.compareAndSet(false, true)) publishCalls.incrementAndGet();
-            }
-            @Override public void close() { closed.set(true); }
-        };
-        var pass = ShowcasePasses.worldResource(ready::get, handoff);
+        var publication = new java.util.concurrent.CompletableFuture<Void>();
+        var publishCalls = new java.util.concurrent.atomic.AtomicInteger();
+        var pass = ShowcasePasses.worldResource(ready::get, () -> {
+            publishCalls.incrementAndGet();
+            return publication;
+        });
 
         pass.record(null);
-        org.junit.jupiter.api.Assertions.assertFalse(submitted.get());
+        assertEquals(0, publishCalls.get());
         ready.set(true);
         pass.record(null);
         pass.record(null);
-        assertTrue(submitted.get());
-        org.junit.jupiter.api.Assertions.assertFalse(handoff.published());
-        visible.set(true);
+        assertEquals(1, publishCalls.get());
+        publication.complete(null);
+        pass.record(null);
+        assertEquals(1, publishCalls.get());
+        pass.close();
+    }
+
+    @Test
+    void worldResourcePassCancelsPendingPublicationOnClose() {
+        var publication = new java.util.concurrent.CompletableFuture<Void>();
+        var pass = ShowcasePasses.worldResource(() -> true, () -> publication);
         pass.record(null);
         pass.close();
+        assertTrue(publication.isCancelled());
+    }
 
-        assertTrue(handoff.published());
-        org.junit.jupiter.api.Assertions.assertEquals(1, publishCalls.get());
-        assertTrue(closed.get());
+    @Test
+    void worldResourcePassReportsPublicationFailure() {
+        var publication = new java.util.concurrent.CompletableFuture<Void>();
+        var pass = ShowcasePasses.worldResource(() -> true, () -> publication);
+        pass.record(null);
+        var failure = new IllegalStateException("publication failed");
+        publication.completeExceptionally(failure);
+        var reported = org.junit.jupiter.api.Assertions.assertThrows(
+                java.util.concurrent.CompletionException.class, () -> pass.record(null));
+        assertSame(failure, reported.getCause());
+        pass.close();
     }
 
     @Test
@@ -82,18 +89,6 @@ final class ShowcasePassContractTest {
 
         assertEquals(0.75f, ShowcasePasses.colourGradeStrength(lookup));
         assertTrue(snapshotted.get());
-    }
-
-    @Test
-    void shaderObjectFactoryUsesThePublishedVulkanSupportType() throws Exception {
-        assertNotNull(ShowcasePasses.class.getDeclaredMethod(
-                "createComputeShader", GpuDevice.class, ByteBuffer.class));
-        assertSame(ShaderObjectCompute.class, ShowcasePasses.class.getDeclaredMethod(
-                "createComputeShader", GpuDevice.class, ByteBuffer.class).getReturnType());
-        assertSame(ShaderObjectGraphics.class, ShowcasePasses.class.getDeclaredMethod(
-                "createGraphicsShaders", GpuDevice.class, ByteBuffer.class, ByteBuffer.class).getReturnType());
-        assertSame(ShaderObjectGraphics.class, ShowcasePasses.class.getDeclaredMethod(
-                "createUiGraphicsShaders", GpuDevice.class, ByteBuffer.class, ByteBuffer.class).getReturnType());
     }
 
     @Test

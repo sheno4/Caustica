@@ -1,7 +1,6 @@
 module showcase_surface;
 
 import caustica_surface;
-import caustica_resources;
 import caustica_types;
 
 namespace api_showcase {
@@ -15,7 +14,7 @@ public struct OpaqueSurface : ISurfaceModel {
     }
 };
 
-public struct TexturedSurface : ISurfaceModel {
+public struct CutoutSurface : ISurfaceModel {
     public override OpenPbrSurface evaluateSurface(SurfaceInput input) {
         OpenPbrSurface surface = {};
         surface.base_color = float3(0.2, 0.7, 0.25);

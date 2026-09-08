@@ -47,8 +47,8 @@ final class ShowcasePrograms {
                         SOURCE.definition("showcase_surface", "api_showcase.OpaqueSurface"),
                         IMPLEMENTATION.data(0L), SURFACE_BINDING, INSTANCE)),
                 builder.surface(SurfaceDefinition.of(
-                        SOURCE.definition("showcase_surface", "api_showcase.TexturedSurface"),
-                        SOURCE.definition("showcase_coverage", "api_showcase.TextureCoverage"),
+                        SOURCE.definition("showcase_surface", "api_showcase.CutoutSurface"),
+                        SOURCE.definition("showcase_coverage", "api_showcase.StripedCoverage"),
                         IMPLEMENTATION.data(0L), SURFACE_BINDING, INSTANCE)),
                 builder.volume(VolumeDefinition.of(
                         SOURCE.definition("showcase_volume", "api_showcase.AbsorbingVolume"),

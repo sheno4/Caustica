@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CancellationException;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
@@ -23,7 +21,7 @@ import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VkOffset2D;
+import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
@@ -34,11 +32,18 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 
 final class ShowcasePasses {
+    private static final int POSITION_BYTES = 4 * 3 * Float.BYTES;
+    private static final int INDEX_BYTES = 12 * Integer.BYTES;
+    private static final int INDEX_OFFSET = POSITION_BYTES;
+    private static final int TOTAL_BYTES = INDEX_OFFSET + INDEX_BYTES;
     private static final int COLOR_WRITE_RGBA = VK10.VK_COLOR_COMPONENT_R_BIT | VK10.VK_COLOR_COMPONENT_G_BIT
             | VK10.VK_COLOR_COMPONENT_B_BIT | VK10.VK_COLOR_COMPONENT_A_BIT;
     private static final ShaderObjectGraphics.GraphicsState FULLSCREEN_ALPHA =
@@ -61,129 +66,89 @@ final class ShowcasePasses {
 
     static Pass<PassFrame> worldResource(GpuDevice gpu, ResourceFactory resources, GpuComputeQueue compute,
                                          BooleanSupplier programReady, ShowcaseScene scene) {
-        return worldResource(programReady, new VulkanWorldMeshHandoff(gpu, resources, compute, scene));
+        return worldResource(programReady, () -> uploadMesh(gpu, resources, compute, scene));
     }
 
-    static Pass<PassFrame> worldResource(BooleanSupplier programReady, WorldMeshHandoff handoff) {
+    static Pass<PassFrame> worldResource(BooleanSupplier programReady,
+                                       Supplier<CompletableFuture<Void>> publish) {
         return new Pass<>() {
+            private CompletableFuture<Void> publication;
+
             @Override
             public void record(PassFrame frame) {
-                if (programReady.getAsBoolean() && !handoff.published()) handoff.recordAndPublish(frame);
+                if (publication == null && programReady.getAsBoolean()) publication = publish.get();
+                // Observe upload/publication failures without waiting on the render thread.
+                if (publication != null && publication.isDone()) publication.join();
             }
 
             @Override
             public void close() {
-                handoff.close();
+                if (publication != null) publication.cancel(false);
             }
         };
     }
 
-    interface WorldMeshHandoff extends AutoCloseable {
-        /** True after the prepared geometry has been placed in the scene. */
-        boolean published();
-        /** Starts asynchronous upload and mesh preparation once. */
-        void recordAndPublish(PassFrame frame);
-        @Override void close();
-    }
-
-    private static final class VulkanWorldMeshHandoff implements WorldMeshHandoff {
-        private static final int POSITION_BYTES = 4 * 3 * Float.BYTES;
-        private static final int INDEX_BYTES = 12 * Integer.BYTES;
-        private static final int INDEX_OFFSET = POSITION_BYTES;
-        private static final int TOTAL_BYTES = INDEX_OFFSET + INDEX_BYTES;
-
-        private final GpuDevice gpu;
-        private final ResourceFactory resources;
-        private final ShowcaseScene scene;
-        private final GpuComputeQueue compute;
-        private CompletableFuture<Void> publication;
-
-        private VulkanWorldMeshHandoff(GpuDevice gpu, ResourceFactory resources,
-                                       GpuComputeQueue compute, ShowcaseScene scene) {
-            this.gpu = gpu;
-            this.resources = resources;
-            this.compute = compute;
-            this.scene = scene;
+    private static CompletableFuture<Void> uploadMesh(GpuDevice gpu, ResourceFactory resources,
+                                                      GpuComputeQueue compute, ShowcaseScene scene) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        VmaMappedBuffer upload = VmaMappedBuffer.createAsync(gpu, TOTAL_BYTES,
+                VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                        | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                "API showcase retained mesh");
+        ResourceOwner pending;
+        try {
+            pending = resources.create(upload::close);
+        } catch (Throwable failure) {
+            upload.close();
+            result.completeExceptionally(failure);
+            return result;
         }
-
-        @Override public boolean published() {
-            if (publication == null || !publication.isDone()) return false;
-            publication.join();
-            return true;
-        }
-
-        @Override
-        public void recordAndPublish(PassFrame frame) {
-            if (publication != null) return;
-            CompletableFuture<Void> result = new CompletableFuture<>();
-            publication = result;
-            VmaMappedBuffer upload = VmaMappedBuffer.createAsync(gpu, TOTAL_BYTES,
-                    VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                            | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                    "API showcase retained mesh");
-            ResourceOwner producer;
-            try { producer = resources.create(upload::close); }
-            catch (Throwable failure) {
-                upload.close();
-                result.completeExceptionally(failure);
-                return;
-            }
-            try (producer) {
-                ResourceOwner pending = producer.retain();
-                try {
-                    compute.submit(commandBuffer -> {
-                        try (MemoryStack stack = MemoryStack.stackPush()) {
-                            ByteBuffer data = stack.calloc(TOTAL_BYTES);
-                            putTrianglePositions(data, 0);
-                            for (int triangle = 0; triangle < 4; triangle++) {
-                                int base = INDEX_OFFSET + triangle * 3 * Integer.BYTES;
-                                data.putInt(base, 0).putInt(base + Integer.BYTES, 1)
-                                        .putInt(base + Integer.BYTES * 2, 2);
-                            }
-                            VK10.vkCmdUpdateBuffer(commandBuffer, upload.buffer(), 0L, data);
-                        }
-                    }, List.of(pending), completion -> {
-                        if (result.isCancelled()) return;
-                        if (completion instanceof GpuComputeCompletion.Failed failed) {
-                            result.completeExceptionally(failed.failure());
-                        } else if (completion instanceof GpuComputeCompletion.Cancelled) {
-                            result.completeExceptionally(new CancellationException("Mesh upload cancelled"));
-                        } else {
-                            try {
-                                scene.publishMesh(upload.deviceRange().slice(0, POSITION_BYTES),
-                                        upload.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), pending.retain())
-                                        .whenComplete((ignored, failure) -> {
-                                            if (failure == null) result.complete(null);
-                                            else result.completeExceptionally(failure);
-                                        });
-                            } catch (Throwable failure) {
-                                result.completeExceptionally(failure);
-                            }
-                        }
-                    });
-                } catch (Throwable failure) {
-                    pending.close();
-                    result.completeExceptionally(failure);
+        try {
+            compute.submit(commandBuffer -> {
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    ByteBuffer data = stack.calloc(TOTAL_BYTES);
+                    data.asFloatBuffer().put(new float[] {
+                            -0.75f, 0.0f, 0.0f,
+                            0.75f, 0.0f, 0.0f,
+                            0.0f, 1.25f, 0.0f,
+                            0.0f, 0.0f, 0.0f });
+                    // Each geometry slot exercises a distinct surface/volume combination.
+                    for (int triangle = 0; triangle < 4; triangle++) {
+                        int base = INDEX_OFFSET + triangle * 3 * Integer.BYTES;
+                        data.putInt(base, 0).putInt(base + Integer.BYTES, 1)
+                                .putInt(base + Integer.BYTES * 2, 2);
+                    }
+                    VK10.vkCmdUpdateBuffer(commandBuffer, upload.buffer(), 0L, data);
                 }
-            }
+            }, List.of(pending), completion -> {
+                if (result.isCancelled()) return;
+                if (completion instanceof GpuComputeCompletion.Failed failed) {
+                    result.completeExceptionally(failed.failure());
+                } else if (completion instanceof GpuComputeCompletion.Cancelled) {
+                    result.completeExceptionally(new CancellationException("Mesh upload cancelled"));
+                } else {
+                    try {
+                        // The mesh build retains its input before the upload job releases its claim.
+                        scene.publishMesh(upload.deviceRange().slice(0, POSITION_BYTES),
+                                upload.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), pending.retain())
+                                .whenComplete((ignored, failure) -> {
+                                    if (failure == null) result.complete(null);
+                                    else result.completeExceptionally(failure);
+                                });
+                    } catch (Throwable failure) {
+                        result.completeExceptionally(failure);
+                    }
+                }
+            });
+        } catch (Throwable failure) {
+            pending.close();
+            result.completeExceptionally(failure);
         }
-
-        private static void putTrianglePositions(ByteBuffer target, int offset) {
-            float[] positions = { -0.75f, 0.0f, 0.0f, 0.75f, 0.0f, 0.0f,
-                    0.0f, 1.25f, 0.0f, 0.0f, 0.0f, 0.0f };
-            for (int index = 0; index < positions.length; index++) {
-                target.putFloat(offset + index * Float.BYTES, positions[index]);
-            }
-        }
-
-        @Override
-        public void close() {
-            if (publication != null) publication.cancel(false);
-        }
+        return result;
     }
 
     static Pass<PostEffectFrame> postEffect(GpuDevice gpu, OptionLookup options) {
-        ShaderObjectCompute shader = createComputeShader(gpu, shader("passes/post.comp.spv"));
+        ShaderObjectCompute shader = ShaderObjectCompute.create(gpu, shader("passes/post.comp.spv"), "main");
         return new Pass<>() {
             @Override
             public void record(PostEffectFrame frame) {
@@ -197,7 +162,7 @@ final class ShowcasePasses {
                     ByteBuffer pushBytes = stack.calloc(ShowcasePostPushData.BYTE_SIZE);
                     push.write(pushBytes);
                     shader.dispatch(frame.commandBuffer(), pushBytes,
-                            divideRoundUp(output.width(), 8), divideRoundUp(output.height(), 8), 1);
+                            Math.ceilDiv(output.width(), 8), Math.ceilDiv(output.height(), 8), 1);
                 }
             }
 
@@ -208,34 +173,15 @@ final class ShowcasePasses {
         };
     }
 
-    /** Creates a pass-owned compute shader object from tooling-produced direct SPIR-V. */
-    static ShaderObjectCompute createComputeShader(GpuDevice gpu, ByteBuffer spirv) {
-        return ShaderObjectCompute.create(gpu, spirv, "main");
-    }
-
-    /** Creates pass-owned graphics shader objects with a fully dynamic triangle-list draw contract. */
-    static ShaderObjectGraphics createGraphicsShaders(GpuDevice gpu, ByteBuffer vertexSpirv,
-                                                       ByteBuffer fragmentSpirv) {
-        return ShaderObjectGraphics.create(gpu, vertexSpirv, fragmentSpirv,
-                "main", "main", FULLSCREEN_ALPHA);
-    }
-
-    /** Creates the UI shaders with its static scene binding sourced from pushed descriptor index zero. */
-    static ShaderObjectGraphics createUiGraphicsShaders(GpuDevice gpu, ByteBuffer vertexSpirv,
-                                                         ByteBuffer fragmentSpirv) {
-        return ShaderObjectGraphics.create(gpu, vertexSpirv, fragmentSpirv,
-                "main", "main", FULLSCREEN_ALPHA,
-                List.of(), List.of(UI_SCENE_MAPPING));
-    }
-
     static float colourGradeStrength(OptionLookup options) {
         return options.snapshot().options(ApiShowcaseExtension.ID)
                 .get(ApiShowcaseExtension.COLOUR_GRADE_STRENGTH);
     }
 
     static Pass<UiFrame> ui(GpuDevice gpu) {
-        ShaderObjectGraphics shaders = createUiGraphicsShaders(gpu,
-                shader("passes/ui_marker.vert.spv"), shader("passes/ui_marker.frag.spv"));
+        ShaderObjectGraphics shaders = ShaderObjectGraphics.create(gpu,
+                shader("passes/ui_marker.vert.spv"), shader("passes/ui_marker.frag.spv"),
+                "main", "main", FULLSCREEN_ALPHA, List.of(), List.of(UI_SCENE_MAPPING));
         return new Pass<>() {
             @Override
             public void record(UiFrame frame) {
@@ -258,13 +204,12 @@ final class ShowcasePasses {
         };
     }
 
-    private static void beginColorRendering(org.lwjgl.vulkan.VkCommandBuffer commandBuffer,
+    private static void beginColorRendering(VkCommandBuffer commandBuffer,
                                             MemoryStack stack, GpuImage layer) {
         VkRenderingAttachmentInfo.Buffer color = VkRenderingAttachmentInfo.calloc(1, stack).sType$Default()
                 .imageView(layer.view()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                 .loadOp(VK10.VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK10.VK_ATTACHMENT_STORE_OP_STORE);
         VkRect2D area = VkRect2D.calloc(stack);
-        area.offset(VkOffset2D.calloc(stack).set(0, 0));
         area.extent().set(layer.width(), layer.height());
         VK14.vkCmdBeginRendering(commandBuffer, VkRenderingInfo.calloc(stack).sType$Default()
                 .renderArea(area).layerCount(1).pColorAttachments(color));
@@ -281,7 +226,4 @@ final class ShowcasePasses {
         }
     }
 
-    private static int divideRoundUp(int value, int divisor) {
-        return (value + divisor - 1) / divisor;
-    }
 }

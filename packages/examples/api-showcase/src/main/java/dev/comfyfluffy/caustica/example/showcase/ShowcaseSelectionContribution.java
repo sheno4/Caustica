@@ -8,7 +8,6 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContext;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Owns program and light mutation while exporting only non-owning selections to the geometry contribution. */
 final class ShowcaseSelectionContribution implements MinecraftWorldSessionContribution {
@@ -17,7 +16,7 @@ final class ShowcaseSelectionContribution implements MinecraftWorldSessionContri
     private final ShowcasePrograms programs;
     private final ShowcaseHandoff.Selections selections;
     private final List<LightId> lights;
-    private final AtomicBoolean environmentPublished = new AtomicBoolean();
+    private boolean environmentPublished;
     private boolean stopped;
 
     ShowcaseSelectionContribution(MinecraftWorldSessionContext context, ShowcaseHandoff handoff) {
@@ -39,7 +38,8 @@ final class ShowcaseSelectionContribution implements MinecraftWorldSessionContri
     }
 
     private synchronized void publishEnvironment() {
-        if (!stopped && environmentPublished.compareAndSet(false, true)) {
+        if (!stopped && !environmentPublished) {
+            environmentPublished = true;
             ShowcaseMinecraftSky sky = new ShowcaseMinecraftSky(
                     context.dimension(), context.resourcePackEpoch());
             context.environment().select(sky.binding(programs));
@@ -52,8 +52,7 @@ final class ShowcaseSelectionContribution implements MinecraftWorldSessionContri
         stopped = true;
         handoff.remove(context.scene(), selections);
         context.renderSession().scene().edit(lights.stream()
-                .map(SceneEdit.DropLight::new)
-                .map(SceneEdit.class::cast)
+                .<SceneEdit>map(SceneEdit.DropLight::new)
                 .toList());
         programs.close();
     }

@@ -18,8 +18,67 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ShowcaseDescriptorTableTest {
+    @Test
+    void failedReplacementReleasesPartialAllocationAndKeepsPublishedGeneration() {
+        for (String stage : List.of("sampler allocation", "resource write", "sampler write", "factory")) {
+            Device device = new Device();
+            var failure = new IllegalStateException(stage);
+            try (var directory = new dev.comfyfluffy.caustica.engine.resource.ResourceDirectory(
+                    cleanup -> { throw new AssertionError(cleanup); });
+                 MemoryStack stack = MemoryStack.stackPush()) {
+                var factory = directory.openFactory(new dev.comfyfluffy.caustica.engine.session.ContributionOwner(1));
+                try (var table = new ShowcaseDescriptorTable(device, retired -> {
+                    if ("factory".equals(device.heap.failureStage)) throw failure;
+                    return factory.create(retired);
+                })) {
+                    var resource = VkResourceDescriptorInfoEXT.calloc(stack);
+                    var sampler = VkSamplerCreateInfo.calloc(stack).sType$Default();
+                    var first = table.replace(resource, sampler);
+                    device.heap.failureStage = stage;
+                    device.heap.failure = failure;
+                    assertSame(failure, assertThrows(IllegalStateException.class,
+                            () -> table.replace(resource, sampler)));
+                    assertFalse(device.heap.resources.getFirst().destroyed);
+                    assertTrue(device.heap.resources.getLast().destroyed);
+                    assertEquals(stage.equals("sampler allocation") ? 1 : 2, device.heap.samplers.size());
+                    if (!stage.equals("sampler allocation")) assertTrue(device.heap.samplers.getLast().destroyed);
+                    Frame frame = new Frame();
+                    assertEquals(first, table.capture(frame));
+                    frame.complete();
+                }
+                directory.awaitRetirements();
+                assertTrue(device.heap.resources.getFirst().destroyed);
+                assertTrue(device.heap.samplers.getFirst().destroyed);
+            }
+        }
+    }
+
+    @Test
+    void retiringGenerationDestroysBothRangesEvenWhenBothThrowTheSameFailure() {
+        Device device = new Device();
+        var failures = new ArrayList<Throwable>();
+        var failure = new IllegalStateException("destruction");
+        try (var directory = new dev.comfyfluffy.caustica.engine.resource.ResourceDirectory(failures::add);
+             var table = new ShowcaseDescriptorTable(device,
+                     directory.openFactory(new dev.comfyfluffy.caustica.engine.session.ContributionOwner(1)));
+             MemoryStack stack = MemoryStack.stackPush()) {
+            table.replace(VkResourceDescriptorInfoEXT.calloc(stack), VkSamplerCreateInfo.calloc(stack));
+            device.heap.resources.getFirst().destroyFailure = failure;
+            device.heap.samplers.getFirst().destroyFailure = failure;
+            table.close();
+            table.close();
+            directory.awaitRetirements();
+            assertEquals(1, device.heap.resources.getFirst().destroyCalls);
+            assertEquals(1, device.heap.samplers.getFirst().destroyCalls);
+            assertEquals(List.of(failure), failures);
+            assertEquals(0, failure.getSuppressed().length);
+        }
+    }
+
     @Test
     void replacementRetainsEachGenerationUntilItsLastFrameCompletes() {
         Device device = new Device();
@@ -74,6 +133,8 @@ final class ShowcaseDescriptorTableTest {
     }
 
     private static final class Heap implements GpuDescriptorHeap, GpuDescriptorWriter {
+        private String failureStage;
+        private RuntimeException failure;
         private final List<Range<GpuDescriptorIndex.Resource>> resources = new ArrayList<>();
         private final List<Range<GpuDescriptorIndex.Sampler>> samplers = new ArrayList<>();
         private final List<String> writes = new ArrayList<>();
@@ -84,6 +145,7 @@ final class ShowcaseDescriptorTableTest {
             return range;
         }
         @Override public GpuDescriptorRange<GpuDescriptorIndex.Sampler> allocateSamplers(int count) {
+            if ("sampler allocation".equals(failureStage)) throw failure;
             var range = new Range<>(new GpuDescriptorIndex.Sampler(samplers.size()), count);
             samplers.add(range);
             return range;
@@ -91,6 +153,7 @@ final class ShowcaseDescriptorTableTest {
         @Override public GpuDescriptorWriter writer() { return this; }
         @Override public void writeSampler(GpuDescriptorRange<GpuDescriptorIndex.Sampler> destination,
                                            int relativeIndex, VkSamplerCreateInfo sampler) {
+            if ("sampler write".equals(failureStage)) throw failure;
             writes.add("sampler:" + destination.firstIndex().value());
         }
         @Override public void writeSamplers(GpuDescriptorRange<GpuDescriptorIndex.Sampler> destination,
@@ -103,6 +166,7 @@ final class ShowcaseDescriptorTableTest {
         }
         @Override public void writeResource(GpuDescriptorRange<GpuDescriptorIndex.Resource> destination,
                                             int relativeIndex, VkResourceDescriptorInfoEXT resource) {
+            if ("resource write".equals(failureStage)) throw failure;
             writes.add("resource:" + destination.firstIndex().value());
         }
         @Override public void writeAccelerationStructure(
@@ -115,9 +179,15 @@ final class ShowcaseDescriptorTableTest {
         private final I first;
         private final int count;
         private boolean destroyed;
+        private int destroyCalls;
+        private RuntimeException destroyFailure;
         private Range(I first, int count) { this.first = first; this.count = count; }
         @Override public I firstIndex() { return first; }
         @Override public int descriptorCount() { return count; }
-        @Override public void destroy() { destroyed = true; }
+        @Override public void destroy() {
+            destroyed = true;
+            destroyCalls++;
+            if (destroyFailure != null) throw destroyFailure;
+        }
     }
 }

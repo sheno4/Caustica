@@ -11,6 +11,18 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class ShowcaseSceneApiTest {
+    @Test void rejectedRemovalStillReleasesTheProducerMeshClaim() {
+        var engine = new TestScene();
+        var retired = new AtomicBoolean();
+        var scene = new ShowcaseScene(exports(), lights(), new SceneId() {}, engine, engine);
+        scene.publishMesh(range(0x1000, 48), range(0x3000, 48),
+                TestResource.create(() -> retired.set(true))).join();
+        engine.rejectNext = true;
+        assertThrows(IllegalArgumentException.class, scene::stop);
+        assertTrue(retired.get());
+        scene.stop();
+    }
+
     @Test void preparationDoesNotMutateSceneUntilReady() {
         var engine=new TestScene(); engine.delayed=true;
         var retired=new AtomicBoolean();

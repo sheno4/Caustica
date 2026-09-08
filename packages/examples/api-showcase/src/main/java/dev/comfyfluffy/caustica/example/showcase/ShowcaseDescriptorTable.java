@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.resource.FrameResources;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
@@ -20,8 +21,7 @@ final class ShowcaseDescriptorTable implements AutoCloseable {
     private final GpuDevice gpu;
     private final ResourceFactory factory;
     private ResourceOwner owner;
-    private GpuDescriptorRange<GpuDescriptorIndex.Resource> resources;
-    private GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplers;
+    private Indices indices;
 
     ShowcaseDescriptorTable(GpuDevice gpu, ResourceFactory factory) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
@@ -32,34 +32,45 @@ final class ShowcaseDescriptorTable implements AutoCloseable {
         Objects.requireNonNull(texture, "texture");
         Objects.requireNonNull(sampler, "sampler");
         var nextResources = gpu.descriptorHeap().allocateResources(1);
-        var nextSamplers = gpu.descriptorHeap().allocateSamplers(1);
-        var writer = gpu.descriptorHeap().writer();
-        writer.writeResource(nextResources, 0, texture);
-        writer.writeSampler(nextSamplers, 0, sampler);
-
-        var nextOwner = factory.create(() -> {
-            nextResources.destroy();
-            nextSamplers.destroy();
-        });
+        GpuDescriptorRange<GpuDescriptorIndex.Sampler> nextSamplers = null;
+        Indices nextIndices;
+        ResourceOwner nextOwner;
+        try {
+            nextSamplers = gpu.descriptorHeap().allocateSamplers(1);
+            var writer = gpu.descriptorHeap().writer();
+            writer.writeResource(nextResources, 0, texture);
+            writer.writeSampler(nextSamplers, 0, sampler);
+            nextIndices = new Indices(nextResources.firstIndex(), nextSamplers.firstIndex());
+            var lifetime = new ResourceLifetime(nextResources::destroy, nextSamplers::destroy);
+            nextOwner = factory.create(lifetime::close);
+        } catch (RuntimeException | Error failure) {
+            var allocatedSamplers = nextSamplers;
+            try {
+                new ResourceLifetime(nextResources::destroy, () -> {
+                    if (allocatedSamplers != null) allocatedSamplers.destroy();
+                }).close();
+            } catch (RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
         var previousOwner = owner;
-        resources = nextResources;
-        samplers = nextSamplers;
+        indices = nextIndices;
         owner = nextOwner;
         if (previousOwner != null) previousOwner.close();
-        return new Indices(nextResources.firstIndex(), nextSamplers.firstIndex());
+        return indices;
     }
 
     Indices capture(FrameResources use) {
         use.retain(owner);
-        return new Indices(resources.firstIndex(), samplers.firstIndex());
+        return indices;
     }
 
     @Override
     public void close() {
-        if (resources == null) return;
-        resources = null;
-        samplers = null;
-        owner.close();
+        var closing = owner;
         owner = null;
+        indices = null;
+        if (closing != null) closing.close();
     }
 }

@@ -15,7 +15,7 @@ final class ShowcaseScene {
     private final MeshPreparer meshes;
     private final SceneId scene;
     private final InstanceId instance;
-    private final List<LightId> lightIds;
+    private final PrimitiveLightMap primitiveLights;
     private ReadyMesh<ShowcasePrograms.InstanceData> mesh;
     private SceneId target;
     private GeometryTransform transform = GeometryTransform.translation(0.0, 64.0, 0.0);
@@ -25,7 +25,8 @@ final class ShowcaseScene {
     ShowcaseScene(ShowcasePrograms.Exports programs, List<LightId> lightIds,
                   SceneId scene, SceneChannel edits, MeshPreparer meshes) {
         this.programs = programs;
-        this.lightIds = List.copyOf(lightIds);
+        primitiveLights = new PrimitiveLightMap(
+                List.of(new PrimitiveLightMap.Range(0, 1, lightIds.getFirst())));
         this.scene = scene;
         this.target = scene;
         this.edits = edits;
@@ -42,11 +43,9 @@ final class ShowcaseScene {
             VulkanDeviceAddressRange indices, long indexRevision, ResourceOwner resource) {
         long preparing = ++request;
         CompletableFuture<ReadyMesh<ShowcasePrograms.InstanceData>> prepared;
-        try {
+        try (resource) {
             prepared = meshes.prepare(ShowcasePrograms.INSTANCE,
                     meshBuild(positions, indices, indexRevision, resource));
-        } finally {
-            resource.close();
         }
         return prepared.thenAccept(next -> {
             synchronized (this) {
@@ -62,13 +61,13 @@ final class ShowcaseScene {
 
     synchronized void moveInstance(SceneId target, GeometryTransform transform) {
         if (mesh != null) edits.edit(List.of(new SceneEdit.SetInstance<>(instance, target, mesh,
-                transform, 0xff, ShowcasePrograms.INSTANCE.data(7L), primitiveLights())));
+                transform, 0xff, ShowcasePrograms.INSTANCE.data(7L), primitiveLights)));
         this.target = target;
         this.transform = transform;
     }
 
     private MeshBuild<ShowcasePrograms.InstanceData> meshBuild(VulkanDeviceAddressRange currentPositions,
-                                                                VulkanDeviceAddressRange indices,
+                                                               VulkanDeviceAddressRange indices,
                                                                long indexRevision, ResourceOwner resource) {
         var opaque = new MeshBuild.SurfaceSlot<>(programs.opaque(),
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
@@ -91,11 +90,7 @@ final class ShowcaseScene {
     private SceneEdit.SetInstance<ShowcasePrograms.InstanceData> placement(
             ReadyMesh<ShowcasePrograms.InstanceData> ready) {
         return new SceneEdit.SetInstance<>(instance, target, ready, transform, 0xff,
-                ShowcasePrograms.INSTANCE.data(7L), primitiveLights());
-    }
-
-    private PrimitiveLightMap primitiveLights() {
-        return new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(0, 1, lightIds.getFirst())));
+                ShowcasePrograms.INSTANCE.data(7L), primitiveLights);
     }
 
     SceneId identity() { return scene; }
@@ -105,9 +100,11 @@ final class ShowcaseScene {
         stopped = true;
         request++;
         if (mesh != null) {
-            edits.edit(List.of(new SceneEdit.DropInstance(instance)));
-            mesh.close();
+            var released = mesh;
             mesh = null;
+            try (released) {
+                edits.edit(List.of(new SceneEdit.DropInstance(instance)));
+            }
         }
     }
 }
