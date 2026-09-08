@@ -146,6 +146,23 @@ def nrdNativeJar = tasks.register("nrdNativeJar", Jar) {
         inputs.dir(nrdNativeInputRoot)
         from(nrdNativeInputRoot)
         archiveClassifier = "natives"
+        onlyIf {
+            def runtimeRoot = new File(nrdNativeInputRoot.get(), "caustica/natives/nrd/${nrdRevision}")
+            def platforms = ["windows-x64": "nrdshim.dll", "linux-x64": "libnrdshim.so"]
+                    .findAll { name, library -> new File(runtimeRoot, name).isDirectory() }
+            if (platforms.isEmpty()) {
+                throw new GradleException("No supported NRD runtime found under ${runtimeRoot}")
+            }
+            platforms.each { name, library ->
+                def directory = new File(runtimeRoot, name)
+                def missing = [library, "LICENSE.txt", "NRI_LICENSE.txt"]
+                        .findAll { !new File(directory, it).isFile() }
+                if (!missing.empty) {
+                    throw new GradleException("Incomplete NRD runtime ${name}: missing ${missing.join(', ')}")
+                }
+            }
+            true
+        }
     } else {
         dependsOn bundleNrdNative
         from(nativeResourceRoot)

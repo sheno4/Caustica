@@ -2,6 +2,18 @@
 
 The project-wide aesthetic review includes interactive behavior and visual inspection. Failures found by these checks are part of the refactor/fix work. Compilation and unit tests do not substitute for the interactive checks.
 
+## Current driver queue
+
+The result entries below distinguish completed runs from remaining coverage. Keep these checks in the active refactor/fix goal and checkpoint verified fixes.
+
+- Completed: same-process enter/exit/other-world/return, five repeated RT off/on cycles, and command-driven Overworld/Nether/End round trips under REBLUR/SR and RR (including 3840×2112 output). Retain these as regression scenarios after lifecycle changes.
+- Next lifecycle checks: actual portal entry/return, leaving while RT preparation is active, and resource-pack reload in the Nether and End. Repeat RT toggles after arrival and inspect for old-world geometry, wrong sky, stale history and missing hand/HUD.
+- Next computer-use checks: keyboard slider editing, focus after hiding controls, changing prerequisites during interaction, and resizing while settings are open. Require an observed response to each input; a successful tool call alone is insufficient.
+- Next visual checks: turn through the entire Nether ash/ember dome and End violet nebula/star field, including horizons, open void and reflective surfaces; inspect exposure and temporal settling after travel. Then examine moving entities, cutouts, water, bright-emitter bloom and diffuse/metallic/transmissive materials at normal and grazing angles.
+- Keep the independent intermittent RR device loss open. Short dimension runs do not establish its resolution.
+
+The look package has been removed; these looks remain hardcoded. NGX RR and SR evaluation set `InIndicatorInvertYAxis = 1`; the separate SR overlay legibility issue remains recorded below.
+
 ## Queued lifecycle checks
 
 - Cross dimensions in one process: Overworld → Nether → Overworld → End → Overworld, then Nether → End directly. Wait for visible terrain and active RT at each arrival; check scene/sky/light replacement, exposure and temporal-history settling, stale geometry, crashes and cleanup. Repeat with RT disabled during travel and re-enabled after arrival; include portal travel when computer-use input is verified.
@@ -231,3 +243,10 @@ Use named debug operations for repeatable state checks and computer use for actu
 - The shim now sets `NRD_SHADERS_PATH` to its own CMake binary directory's `shaders` subdirectory. Generated shader headers no longer share the SDK checkout's `_Shaders` directory across configurations/platforms. NRD's custom-path mode also emits standalone SPIR-V files; both outputs stay in the build directory, while the library still embeds the headers.
 - Linux and Windows native rebuilds both passed. Each generated 162 headers and 162 SPIR-V files in its respective build directory. A before/after hash comparison of all 162 existing SDK `_Shaders` files found no changes. Evidence: `tmp/aesthetic-linux-nrd-isolated-shaders.log`, `tmp/aesthetic-nrd-source-shaders-comparison.json`.
 - Native lifetime tests passed on both platforms, and the offline Windows native/full-root check passed (188 tasks, 47 seconds). Evidence: `tmp/aesthetic-nrd-isolated-shaders-{linux-test.log,windows-check.log}`. These were sequential builds; output isolation was verified without claiming a simultaneous-build stress test. No GPU runtime was launched.
+
+## Fresh computer-use probe and native packaging validation (2026-09-09)
+
+- Fresh client 4714 used REBLUR/SR at 854×480 with rebuilt native libraries. Computer use found and activated the Minecraft window, but both the initial capture and one fresh-selection recovery displayed a white client area. No gameplay input was sent. This attempt does not establish reliable computer-use capture.
+- Independent debug status reported active/frame-active RT at frame 12903. Renderer capture 24116 was inspected and showed workbench geometry, lighting, hand and HUD. The SR diagnostic overlay remains difficult to read. Client exited 0 after graceful stop (1m15s). Evidence: `tmp/aesthetic-cu-current-{runtime.log,status.json,screenshot.json,stop.json}`.
+- Supplied NRD native-JAR inputs previously accepted an empty directory and emitted a class-only archive. Packaging now requires at least one supported revision/platform directory and its library, NRD license and NRI license. Validation also runs before up-to-date reuse. Empty input and a Linux fixture missing NRI_LICENSE.txt both fail; complete merged Windows/Linux inputs succeed.
+- The fresh merged archive contains all six library/license entries byte-for-byte and the backend class. Evidence: `tmp/aesthetic-nrd-merged-verification.json`, `tmp/aesthetic-nrd-empty-after.log`, `tmp/aesthetic-nrd-missing-license-final.log`, `tmp/aesthetic-nrd-merged-final-jar.log`. Root check passed (184 tasks, 40s) before the final map emptiness correction; the corrected branch was then exercised by the negative and positive packaging runs. This is Windows-host Gradle packaging of real Windows/Linux binaries, not Linux-host Gradle or hosted CI validation.
