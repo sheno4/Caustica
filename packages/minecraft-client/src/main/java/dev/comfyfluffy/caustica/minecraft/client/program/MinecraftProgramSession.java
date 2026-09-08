@@ -48,8 +48,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final MinecraftLightProvider lights;
     private final PassRegistration lightRegistration;
     private final PassRegistration overlayRegistration;
-    private final dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding entityCapture;
-    private final dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures entityTextures;
+    private final RtEntities entities;
+    private final RtEntityTextures entityTextures;
     private final RtTerrain terrain;
     private final OptionLookup options;
     private Pending pending;
@@ -63,8 +63,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     MinecraftFrameCaptureInstaller.Lease frameCapture,
                                     MinecraftLightProvider lights, PassRegistration lightRegistration,
                                     PassRegistration overlayRegistration,
-                                    dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding entityCapture,
-                                    dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures entityTextures,
+                                    RtEntities entities,
+                                    RtEntityTextures entityTextures,
                                     RtTerrain terrain, OptionLookup options) {
         this.context = context;
         this.resources = resources;
@@ -75,7 +75,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         this.lights = lights;
         this.lightRegistration = lightRegistration;
         this.overlayRegistration = overlayRegistration;
-        this.entityCapture = entityCapture;
+        this.entities = entities;
         this.entityTextures = entityTextures;
         this.terrain = terrain;
         this.options = options;
@@ -86,9 +86,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                                MinecraftFrameCaptureInstaller frameCaptures,
                                                MinecraftMaterialEpochCompiler materialEpochs,
                                                MinecraftLightingCalibration calibration,
-                                               dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding entityCapture,
-                                               dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures entityTextures,
-                                               dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities entities,
+                                               RtEntityTextures entityTextures,
+                                               RtEntities entities,
                                                RtTerrain terrain, OptionLookup options,
                                                MinecraftTelemetry.Instrumentation instrumentation) {
         java.util.Objects.requireNonNull(frameSelections, "frameSelections");
@@ -119,7 +118,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     WorldOverlayPass.ID, setup -> new WorldOverlayPass(setup, entities, terrain, context.renderSession().resources()));
             MinecraftProgramSession session = new MinecraftProgramSession(
                     context, resources, materialEpochs, frameSelections, frames, frameCapture,
-                    lights, lightRegistration, overlayRegistration, entityCapture, entityTextures, terrain, options);
+                    lights, lightRegistration, overlayRegistration, entities, entityTextures, terrain, options);
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
@@ -220,7 +219,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                 context.renderSession().gpu(), context.renderSession().resources(), terrain, entityTextures);
         MinecraftFrameSelectionInstaller.Lease frameSelection = null;
         MinecraftEntityGeometry entityGeometry = null;
-        dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease = null;
+        RtEntities.Lease entityLease = null;
         MinecraftFrameSelector frameSelector = null;
         PassRegistration sky = createSky(programs, request.generation);
         try {
@@ -236,7 +235,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             entityGeometry = new MinecraftEntityGeometry(context.renderSession().meshes(), context.renderSession().scene(), context.scene(),
                     new MinecraftVulkanEntityUploader(context.renderSession().gpu(), request.lookup,
                             programs, entityTextures, context.renderSession().resources()));
-            entityLease = java.util.Objects.requireNonNull(entityCapture.install(entityGeometry),
+            entityLease = java.util.Objects.requireNonNull(entities.install(entityGeometry),
                     "entity capture lease");
         } catch (RuntimeException | Error failure) {
             var releases = new ArrayList<Runnable>();
@@ -383,7 +382,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         final MinecraftFrameSelector frameSelector;
         final MinecraftFrameSelectionInstaller.Lease frameSelection;
         final MinecraftEntityGeometry entityGeometry;
-        final dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease;
+        final RtEntities.Lease entityLease;
         final PassRegistration sky;
         final ArrayList<RetiredPrograms> delayed;
         boolean producersStopped;
@@ -392,7 +391,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                MinecraftTerrainSession terrain, MinecraftFrameSelector frameSelector,
                MinecraftFrameSelectionInstaller.Lease frameSelection,
                MinecraftEntityGeometry entityGeometry,
-               dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease,
+               RtEntities.Lease entityLease,
                PassRegistration sky, ArrayList<RetiredPrograms> delayed) {
             this.generation = generation;
             this.registration = registration;

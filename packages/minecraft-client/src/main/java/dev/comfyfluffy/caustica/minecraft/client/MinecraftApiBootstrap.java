@@ -43,7 +43,7 @@ public final class MinecraftApiBootstrap {
         MinecraftProvidersExtension minecraftProviders = new MinecraftProvidersExtension(
                 frameAdapter::installFrameSelector, frameAdapter::installFrameCapture,
                 new MinecraftClientMaterialEpochCompiler(calibration), calibration,
-                frameAdapter.entities(), frameAdapter.entityTextures(), frameAdapter.entities(), terrain,
+                frameAdapter.entityTextures(), frameAdapter.entities(), terrain,
                 MinecraftTelemetry.renderer(telemetry));
         List<MinecraftExtension> minecraftExtensions = new ArrayList<>(platform.minecraftExtensions());
         minecraftExtensions.add(minecraftProviders);

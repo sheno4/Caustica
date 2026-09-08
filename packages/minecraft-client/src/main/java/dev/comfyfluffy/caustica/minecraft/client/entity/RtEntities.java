@@ -64,7 +64,7 @@ import java.util.UUID;
  * <p>Entity, block-entity, and particle capture each have a frame-local configured cap. Stable index
  * revisions allow the retained backend to derive compatible acceleration updates.
  */
-public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding {
+public final class RtEntities {
     private static final long ENTITY_GEOMETRY = 1L;
     private static final long BLOCK_ENTITY_GEOMETRY = 2L;
     private static final long PARTICLE_GEOMETRY = 3L;
@@ -184,7 +184,10 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         collector = new RtEntityCollector(textures, instrumentation);
     }
 
-    @Override public synchronized Lease install(MinecraftEntityGeometry geometry) {
+    /** Detaches this program epoch without closing the session-owned geometry. */
+    public interface Lease extends AutoCloseable { @Override void close(); }
+
+    public synchronized Lease install(MinecraftEntityGeometry geometry) {
         if (this.geometry != null) throw new IllegalStateException("entity geometry is already bound");
         this.geometry = java.util.Objects.requireNonNull(geometry, "geometry");
         return () -> uninstall(geometry);

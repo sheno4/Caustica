@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
-import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding;
+import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureInstaller;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelectionInstaller;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
@@ -23,9 +24,8 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
     private final MinecraftFrameCaptureInstaller frameCaptures;
     private final MinecraftMaterialEpochCompiler materialEpochs;
     private final MinecraftLightingCalibration calibration;
-    private final MinecraftEntityCaptureBinding entityCapture;
-    private final dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures entityTextures;
-    private final dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities entities;
+    private final RtEntityTextures entityTextures;
+    private final RtEntities entities;
     private final RtTerrain terrain;
     private final MinecraftTelemetry.Instrumentation instrumentation;
 
@@ -33,15 +33,12 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
                                        MinecraftFrameCaptureInstaller frameCaptures,
                                        MinecraftMaterialEpochCompiler materialEpochs,
                                        MinecraftLightingCalibration calibration,
-                                       MinecraftEntityCaptureBinding entityCapture,
-                                       dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures entityTextures,
-                                       dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities entities,
+                                       RtEntityTextures entityTextures, RtEntities entities,
                                        RtTerrain terrain, MinecraftTelemetry.Instrumentation instrumentation) {
         this.frameSelections = java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         this.frameCaptures = java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
         this.materialEpochs = java.util.Objects.requireNonNull(materialEpochs, "materialEpochs");
         this.calibration = java.util.Objects.requireNonNull(calibration, "calibration");
-        this.entityCapture = entityCapture;
         this.entityTextures = entityTextures;
         this.entities = entities;
         this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
@@ -58,7 +55,7 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
     @Override public void registerMinecraft(MinecraftApi api) {
         api.sessions().add(context -> MinecraftProgramSession.open(
                 context, frameSelections, frameCaptures, materialEpochs, calibration,
-                entityCapture, entityTextures, entities, terrain, options, instrumentation));
+                entityTextures, entities, terrain, options, instrumentation));
     }
 
     @Override public void registerSettings(SettingsRegistry registry) {
