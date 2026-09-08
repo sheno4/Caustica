@@ -26,6 +26,7 @@ import it.unimi.dsi.fastutil.longs.LongList;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSwapchain;
+import org.lwjgl.vulkan.KHRSurface;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkAllocationCallbacks;
 import org.lwjgl.vulkan.VkDevice;
@@ -115,11 +116,13 @@ public abstract class VulkanGpuSurfaceMixin {
 	private MinecraftVulkanImage caustica$sdrPresentationSource;
 
 	@Inject(method = "destroySwapchain", at = @At("HEAD"))
-	private void caustica$releasePresentationSource(CallbackInfo ci) {
-		if (caustica$sdrPresentationSource != null) {
-			caustica$sdrPresentationSource.close();
-			caustica$sdrPresentationSource = null;
-		}
+	private void caustica$releaseSwapchainState(CallbackInfo ci) {
+		caustica$presentationSwapchain = null;
+		caustica$metadataSwapchain = 0L;
+		caustica$metadataPeakNits = -1;
+		var source = caustica$sdrPresentationSource;
+		caustica$sdrPresentationSource = null;
+		if (source != null) source.close();
 	}
 	@Unique
 	private PresentationSwapchain caustica$presentationSwapchain;
@@ -204,8 +207,9 @@ public abstract class VulkanGpuSurfaceMixin {
 
 	@Unique
 	private static MinecraftHdr.SurfaceFormat caustica$findSdrValue(List<MinecraftHdr.SurfaceFormat> formats) {
-		return formats.stream().filter(format -> format.colorSpace() == 0
-				&& (format.format() == 37 || format.format() == 44)).findFirst().orElse(null);
+		return formats.stream().filter(format -> format.colorSpace() == KHRSurface.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+				&& (format.format() == VK10.VK_FORMAT_R8G8B8A8_UNORM
+				|| format.format() == VK10.VK_FORMAT_B8G8R8A8_UNORM)).findFirst().orElse(null);
 	}
 
 	@Unique
@@ -213,17 +217,6 @@ public abstract class VulkanGpuSurfaceMixin {
 		for (int i = 0; i < formats.capacity(); i++) {
 			VkSurfaceFormatKHR f = formats.get(i);
 			if (f.colorSpace() == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
-				return f;
-			}
-		}
-		return null;
-	}
-
-	@Unique
-	private static VkSurfaceFormatKHR caustica$findSdr(VkSurfaceFormatKHR.Buffer formats) {
-		for (int i = 0; i < formats.capacity(); i++) {
-			VkSurfaceFormatKHR f = formats.get(i);
-			if (f.colorSpace() == 0 && (f.format() == 37 || f.format() == 44)) {
 				return f;
 			}
 		}
@@ -347,44 +340,46 @@ public abstract class VulkanGpuSurfaceMixin {
 	 */
 	@Inject(method = "blitFromTexture", at = @At("HEAD"), cancellable = true)
 	private void caustica$presentHdr(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
-		// The mastering peak is a live option and selects a different baked ACES output LUT without forcing
-		// swapchain recreation. Refresh the metadata once when that selected LUT changes.
-		caustica$applyHdrMetadataIfNeeded();
-		if (this.currentImageIndex < 0) {
-			return;
-		}
-		MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
-		if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
-			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
-			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
-			UiPresentationResources ui = CausticaClientComposition.current().uiOverlay().capturePresentation();
-			presentation.presentHdr(submission, caustica$acquiredTarget(), ui);
-			if (ui.populated() && ui.colorView() != 0L) {
-				CausticaClientComposition.current().uiOverlay().markConsumed();
+		try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.hdr")) {
+			// The mastering peak is a live option and selects a different baked ACES output LUT without forcing
+			// swapchain recreation. Refresh the metadata once when that selected LUT changes.
+			caustica$applyHdrMetadataIfNeeded();
+			if (this.currentImageIndex < 0) {
+				return;
 			}
-			caustica$prepareGeneratedFrameHdr(submission, ui);
-			ci.cancel();
-			return;
-		}
-		// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
-		// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
-		// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
-		if (CausticaClientComposition.current().runtime().isPqSdrPresentActive()) {
-			VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
-			if (gpu != null && textureView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView view
-					&& view.texture().getFormat() == com.mojang.blaze3d.GpuFormat.RGBA8_UNORM) {
-				if (caustica$sdrPresentationSource == null || !caustica$sdrPresentationSource.wraps(
-						gpu, view, this.swapchainWidth, this.swapchainHeight)) {
-					MinecraftVulkanImage old = caustica$sdrPresentationSource;
-					caustica$sdrPresentationSource = MinecraftVulkanImage.sampled(gpu, view,
-							this.swapchainWidth, this.swapchainHeight, VK10.VK_FORMAT_R8G8B8A8_UNORM);
-					if (old != null) old.close();
+			MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
+			if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
+				VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
+				GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
+				UiPresentationResources ui = CausticaClientComposition.current().uiOverlay().capturePresentation();
+				presentation.presentHdr(submission, caustica$acquiredTarget(), ui);
+				if (ui.populated() && ui.colorView() != 0L) {
+					CausticaClientComposition.current().uiOverlay().markConsumed();
 				}
-				if (presentation.presentSdrToPq(
-					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder),
-					caustica$acquiredTarget(),
-					caustica$sdrPresentationSource)) {
+				caustica$prepareGeneratedFrameHdr(submission, ui);
 				ci.cancel();
+				return;
+			}
+			// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
+			// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
+			// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
+			if (CausticaClientComposition.current().runtime().isPqSdrPresentActive()) {
+				VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
+				if (gpu != null && textureView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView view
+						&& view.texture().getFormat() == com.mojang.blaze3d.GpuFormat.RGBA8_UNORM) {
+					if (caustica$sdrPresentationSource == null || !caustica$sdrPresentationSource.wraps(
+							gpu, view, this.swapchainWidth, this.swapchainHeight)) {
+						MinecraftVulkanImage old = caustica$sdrPresentationSource;
+						caustica$sdrPresentationSource = MinecraftVulkanImage.sampled(gpu, view,
+								this.swapchainWidth, this.swapchainHeight, VK10.VK_FORMAT_R8G8B8A8_UNORM);
+						if (old != null) old.close();
+					}
+					if (presentation.presentSdrToPq(
+						MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder),
+						caustica$acquiredTarget(),
+						caustica$sdrPresentationSource)) {
+					ci.cancel();
+					}
 				}
 			}
 		}
@@ -422,21 +417,23 @@ public abstract class VulkanGpuSurfaceMixin {
 	 */
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
 	private void caustica$prepareGeneratedFrame(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
-		if (this.currentImageIndex < 0
-				|| !CausticaClientComposition.current().runtime().frameGenerationActive(Minecraft.getInstance().level != null)) {
-			return;
+		try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.frameGeneration")) {
+			if (this.currentImageIndex < 0
+					|| !CausticaClientComposition.current().runtime().frameGenerationActive(Minecraft.getInstance().level != null)) {
+				return;
+			}
+			long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
+			long srcView = caustica$vkImageView(textureView);
+			if (srcImage == 0L) {
+				return;
+			}
+			MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
+			presentation.prepareGeneratedFrame(
+					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), caustica$swapchain(),
+					new BorrowedImage(srcImage, srcView, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+							this.swapchainWidth, this.swapchainHeight), false,
+					CausticaClientComposition.current().uiOverlay().capturePresentation());
 		}
-		long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
-		long srcView = caustica$vkImageView(textureView);
-		if (srcImage == 0L) {
-			return;
-		}
-		MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
-		presentation.prepareGeneratedFrame(
-				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), caustica$swapchain(),
-				new BorrowedImage(srcImage, srcView, VK10.VK_FORMAT_R8G8B8A8_UNORM,
-						this.swapchainWidth, this.swapchainHeight), false,
-				CausticaClientComposition.current().uiOverlay().capturePresentation());
 	}
 
 	/**
@@ -449,16 +446,18 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Unique
 	private void caustica$prepareGeneratedFrameHdr(GraphicsSubmission submission,
 			UiPresentationResources ui) {
-		if (this.currentImageIndex < 0
-				|| !CausticaClientComposition.current().runtime().frameGenerationActive(Minecraft.getInstance().level != null)) {
-			return;
+		try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.frameGeneration")) {
+			if (this.currentImageIndex < 0
+					|| !CausticaClientComposition.current().runtime().frameGenerationActive(Minecraft.getInstance().level != null)) {
+				return;
+			}
+			MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
+			dev.comfyfluffy.caustica.api.vulkan.GpuImage hdr = presentation.hdrBackbuffer();
+			if (hdr == null) {
+				return;
+			}
+			presentation.prepareGeneratedFrame(submission, caustica$swapchain(), hdr, true, ui);
 		}
-		MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
-		dev.comfyfluffy.caustica.api.vulkan.GpuImage hdr = presentation.hdrBackbuffer();
-		if (hdr == null) {
-			return;
-		}
-		presentation.prepareGeneratedFrame(submission, caustica$swapchain(), hdr, true, ui);
 	}
 
 	@Unique
@@ -494,6 +493,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	// presents the real frame, giving display order generated-then-real.
 	@Inject(method = "present", at = @At("HEAD"))
 	private void caustica$flushGeneratedPresent(CallbackInfo ci) {
-		CausticaClientComposition.current().runtime().flushGeneratedPresent(caustica$swapchain(), this.presentQueue);
+		try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.generatedPresent")) {
+			CausticaClientComposition.current().runtime().flushGeneratedPresent(caustica$swapchain(), this.presentQueue);
+		}
 	}
 }
