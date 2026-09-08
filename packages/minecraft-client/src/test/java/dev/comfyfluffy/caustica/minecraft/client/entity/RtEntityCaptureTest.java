@@ -171,26 +171,26 @@ final class RtEntityCaptureTest {
         RtEntityCapture capture = new RtEntityCapture();
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
 
-        RtEntities.MeshFingerprint initial = RtEntities.meshFingerprint(capture);
+        var initial = RtEntities.meshFingerprint(capture);
         assertEquals(0L, capture.entityMesh().indexRevision());
 
         capture.verts.set(0, 0.25f);
-        RtEntities.MeshFingerprint deformed = RtEntities.meshFingerprint(capture);
+        var deformed = RtEntities.meshFingerprint(capture);
         assertNotEquals(initial.contentHash(), deformed.contentHash());
         assertEquals(initial.topologyRevision(), deformed.topologyRevision());
 
         capture.uvList.set(0, 0.25f);
-        RtEntities.MeshFingerprint uvChanged = RtEntities.meshFingerprint(capture);
+        var uvChanged = RtEntities.meshFingerprint(capture);
         assertNotEquals(deformed.contentHash(), uvChanged.contentHash());
         assertEquals(deformed.topologyRevision(), uvChanged.topologyRevision());
 
         capture.colorList.set(3, 0.25f);
-        RtEntities.MeshFingerprint alphaChanged = RtEntities.meshFingerprint(capture);
+        var alphaChanged = RtEntities.meshFingerprint(capture);
         assertNotEquals(uvChanged.contentHash(), alphaChanged.contentHash());
         assertEquals(uvChanged.topologyRevision(), alphaChanged.topologyRevision());
 
         capture.idx.set(0, 1);
-        RtEntities.MeshFingerprint reordered = RtEntities.meshFingerprint(capture);
+        var reordered = RtEntities.meshFingerprint(capture);
         assertNotEquals(alphaChanged.topologyRevision(), reordered.topologyRevision());
         assertEquals(reordered.topologyRevision(), capture.entityMesh(reordered.topologyRevision()).indexRevision());
     }
@@ -202,7 +202,7 @@ final class RtEntityCaptureTest {
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
         MinecraftEntityMesh.Triangle surface = capture.surfaces.getFirst();
         assertSame(surface, capture.surfaces.get(1));
-        RtEntities.MeshFingerprint shared = RtEntities.meshFingerprint(capture);
+        var shared = RtEntities.meshFingerprint(capture);
 
         MinecraftEntityMesh.Triangle equalSurface = new MinecraftEntityMesh.Triangle(
                 surface.material(), surface.coverage(), surface.emission());
@@ -213,7 +213,7 @@ final class RtEntityCaptureTest {
 
         capture.surfaces.set(1, new MinecraftEntityMesh.Triangle(
                 surface.material(), surface.coverage(), surface.emission() + 1f));
-        RtEntities.MeshFingerprint changed = RtEntities.meshFingerprint(capture);
+        var changed = RtEntities.meshFingerprint(capture);
         assertNotEquals(shared.contentHash(), changed.contentHash());
         assertEquals(shared.topologyRevision(), changed.topologyRevision());
     }

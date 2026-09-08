@@ -418,3 +418,11 @@ Review of the slider, range contract, dropdown and screen event routing found th
 Behavioral widget regressions cover both wrapping directions, tentative selection, confirmation, collapse discarding a pending choice, and a prerequisite disabling the control before confirmation. Existing pointer tests remain passing. Full root check passed with 187 tasks in 40 seconds, terminal exit 0 (`tmp/aesthetic-dropdown-keyboard-check.log`); a final Javadoc-only update describes the current routing contract. No locale changes.
 
 Computer Use was not retried after the prior turn's two white captures. The new outline and actual screen-level Escape/Tab routing still need live visual/keyboard verification; widget tests and source routing inspection do not establish that pass. No client was launched in this turn.
+
+## One entity mesh revision contract (2026-09-09)
+
+Removed the constant epoch from MinecraftEntityGeometry.MeshRevision and the duplicate RtEntities.MeshFingerprint record/conversion helper. The capture scan now returns the publication revision directly, carrying contentHash and topologyRevision. Entity and block-entity submissions reuse that value; particles still substitute their membership-sensitive topology revision before submission. The hashing algorithm and equality inputs that vary in production are unchanged.
+
+Inspected all repository callers: the only production constructor supplied epoch zero. MinecraftProgramSession activation stops displaced scene producers and creates a fresh MinecraftEntityGeometry and capture lease, so revision identity is local to that owner. The record's comment states this scope. Updated existing capture, publication and shutdown tests for the simpler contract; no speculative compatibility adapter was retained.
+
+Full root check passed: 187 tasks in 44 seconds, terminal exit 0 (`tmp/aesthetic-entity-revision-check.log`). Existing tests cover content versus topology changes, material value equality, publication and teardown. No client was launched and no performance or new GPU lifecycle pass is claimed.

@@ -185,7 +185,7 @@ final class MinecraftEntityShutdownTest {
     }
 
     private static MinecraftEntityGeometry.MeshRevision revision(long value) {
-        return new MinecraftEntityGeometry.MeshRevision(1, value, 1);
+        return new MinecraftEntityGeometry.MeshRevision(value, 1);
     }
 
     private static MinecraftEntityMesh mesh() {

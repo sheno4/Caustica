@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.client.entity;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityGeometry;
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityGeometry.MeshRevision;
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
@@ -327,7 +328,7 @@ public final class RtEntities {
         }
 
         void put(MinecraftEntityGeometry.Key key, MinecraftEntityMesh mesh, GeometryTransform transform,
-                 MinecraftEntityGeometry.MeshRevision revision, int mask, Runnable acknowledgment) {
+                 MeshRevision revision, int mask, Runnable acknowledgment) {
             Object extraction = telemetry.extraction(sourceKind(key), 1);
             geometry.put(key, revision, mesh, transform, mask, () -> {
                 telemetry.published(extraction);
@@ -642,18 +643,18 @@ public final class RtEntities {
             clearParticleHistory();
             build.drop(particleKey, null);
         } else {
-            MeshFingerprint captured = meshFingerprint(capture);
+            MeshRevision captured = meshFingerprint(capture);
             if (captured.topologyRevision() != previousParticleBaseTopology
                     || !sameParticleLayout(particleMembers, previousParticleMembers)) {
                 particleTopologyRevision++;
             }
-            MeshFingerprint fingerprint = new MeshFingerprint(
+            MeshRevision fingerprint = new MeshRevision(
                     captured.contentHash(), particleTopologyRevision);
             previousParticleBaseTopology = captured.topologyRevision();
             previousParticleMembers = List.copyOf(particleMembers);
             build.put(particleKey, capture.entityMesh(fingerprint.topologyRevision()),
                     GeometryTransform.translation(build.origin.x(), build.origin.y(), build.origin.z()),
-                    revision(fingerprint), PARTICLE_MASK, null);
+                    fingerprint, PARTICLE_MASK, null);
         }
     }
 
@@ -770,7 +771,7 @@ public final class RtEntities {
         if (entry != null) {
             entry.lastSeen = now;
         }
-        MeshFingerprint fingerprint = meshFingerprint(capture);
+        MeshRevision fingerprint = meshFingerprint(capture);
         if (entry == null || entry.meshHash != fingerprint.contentHash()) {
             // Geometry changed (or new BE) → rebuild, but only within this frame's budget. Over budget: keep
             // showing the previous geometry; a brand-new BE simply pops in over the next frames.
@@ -791,7 +792,7 @@ public final class RtEntities {
     }
 
     /** Submits a keyed placement; an unchanged captured revision reuses that resident's retained mesh. */
-    private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, MeshFingerprint fingerprint) {
+    private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, MeshRevision fingerprint) {
         BlockPos p = be.getBlockPos();
         beBuildsThisFrame++;
 
@@ -800,21 +801,13 @@ public final class RtEntities {
         long key = p.asLong();
         MinecraftEntityGeometry.Key geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
         build.put(geometryKey, capture.entityMesh(fingerprint.topologyRevision()),
-                GeometryTransform.translation(p.getX(), p.getY(), p.getZ()), revision(fingerprint), MASK_ALL, null);
+                GeometryTransform.translation(p.getX(), p.getY(), p.getZ()), fingerprint, MASK_ALL, null);
         build.telemetry.count("blockEntityGeometrySubmissions", 1);
         return e;
     }
 
-    record MeshFingerprint(long contentHash, long topologyRevision) { }
-
-    private static MinecraftEntityGeometry.MeshRevision revision(MeshFingerprint fingerprint) {
-        // Program replacement installs a fresh geometry owner, so these revisions are lease-local.
-        return new MinecraftEntityGeometry.MeshRevision(
-                0L, fingerprint.contentHash(), fingerprint.topologyRevision());
-    }
-
     /** Computes content and topology fingerprints together during the capture's required change scan. */
-    static MeshFingerprint meshFingerprint(RtEntityCapture capture) {
+    static MeshRevision meshFingerprint(RtEntityCapture capture) {
         long content = 1469598103934665603L;
         long topology = 1469598103934665603L;
         float[] v = capture.verts.elements();
@@ -852,7 +845,7 @@ public final class RtEntities {
             }
             content = (content ^ surfaceHash) * 1099511628211L;
         }
-        return new MeshFingerprint(content, topology);
+        return new MeshRevision(content, topology);
     }
 
     /** Counts one selected cached block entity without resubmitting its unchanged retained state. */
@@ -907,7 +900,7 @@ public final class RtEntities {
             entityStates.put(entityId, state);
         }
         state.lastSeen = build.frameIndex;
-        MeshFingerprint fingerprint = meshFingerprint(capture);
+        MeshRevision fingerprint = meshFingerprint(capture);
         long capturedMeshHash = fingerprint.contentHash();
         boolean initial = !state.initialSubmitted;
         build.telemetry.count(initial ? "entityPlacementInitialSubmissions" : "entityPlacementFreshnessEligible", 1);
@@ -923,7 +916,7 @@ public final class RtEntities {
                         version, sourceFrame, visibilityToken, build.telemetry);
             }
             build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform,
-                    revision(fingerprint), mask, acknowledgment);
+                    fingerprint, mask, acknowledgment);
             state.meshSubmitted(capturedMeshHash);
         } else {
             build.transform(key, transform, mask);

@@ -559,7 +559,7 @@ final class MinecraftEntityGeometryTest {
     }
 
     private static MinecraftEntityGeometry.MeshRevision revision(long content) {
-        return new MinecraftEntityGeometry.MeshRevision(0, content, 17);
+        return new MinecraftEntityGeometry.MeshRevision(content, 17);
     }
 
     private static class Uploaded implements MinecraftEntityUploader.UploadedEntity {

@@ -436,7 +436,8 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     }
 
     public record Key(long domain, long value) { }
-    public record MeshRevision(long epoch, long content, long topology) { }
+    /** Content and refit topology identity within this geometry owner's lifetime. */
+    public record MeshRevision(long contentHash, long topologyRevision) { }
     private sealed interface Change { Key key(); }
     private record Put(Key key, Capture capture, GeometryTransform transform, int mask) implements Change { }
     private record Transform(Key key, GeometryTransform transform, int mask, Runnable accepted) implements Change { }
