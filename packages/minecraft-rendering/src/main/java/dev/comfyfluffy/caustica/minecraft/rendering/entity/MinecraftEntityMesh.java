@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 
 import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.rendering.texture.MinecraftTextureSampler;
 
 import java.util.Arrays;
@@ -80,8 +81,6 @@ public final class MinecraftEntityMesh {
     /** Shader family selected independently from the captured material and texture identity. */
     public enum Program { MATERIAL, PORTAL }
 
-    public enum MaterialProfile { ROUGH_DIELECTRIC, SMOOTH_DIELECTRIC }
-
     /** Captured traversal behavior; stochastic alpha remains distinct for the uploader's primitive ABI. */
     public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
 
@@ -114,7 +113,7 @@ public final class MinecraftEntityMesh {
 
     /** Minecraft material identity plus its optional sampled base-color texture. */
     public record Material(ResourceId material, Texture texture, Program program,
-                           MaterialProfile profile, boolean mediumBoundary) {
+                           MinecraftMaterialProfile profile, boolean mediumBoundary) {
         public Material {
             Objects.requireNonNull(material, "material");
             Objects.requireNonNull(program, "program");
@@ -122,7 +121,7 @@ public final class MinecraftEntityMesh {
         }
 
         public Material(ResourceId material, Texture texture, Program program) {
-            this(material, texture, program, MaterialProfile.ROUGH_DIELECTRIC, false);
+            this(material, texture, program, MinecraftMaterialProfile.ROUGH_DIELECTRIC, false);
         }
     }
 

@@ -248,7 +248,7 @@ final class MinecraftVulkanEntityUploaderTest {
     @Test void materialKeyPreservesOpticalProfileAndMediumBoundary() {
         var material = new MinecraftEntityMesh.Material(ResourceId.of("test", "glass"), null,
                 MinecraftEntityMesh.Program.MATERIAL,
-                MinecraftEntityMesh.MaterialProfile.SMOOTH_DIELECTRIC, true);
+                dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile.SMOOTH_DIELECTRIC, true);
         var key = MinecraftVulkanEntityUploader.materialKey(material);
         assertEquals(dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile.SMOOTH_DIELECTRIC,
                 key.profile());

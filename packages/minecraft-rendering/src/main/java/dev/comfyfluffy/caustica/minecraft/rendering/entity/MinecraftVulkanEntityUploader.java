@@ -13,7 +13,6 @@ import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTexture;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialKey;
-import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTopology;
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
@@ -255,13 +254,9 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
 
     static MinecraftMaterialKey materialKey(MinecraftEntityMesh.Material material) {
-        MinecraftMaterialProfile profile = switch (material.profile()) {
-            case ROUGH_DIELECTRIC -> MinecraftMaterialProfile.ROUGH_DIELECTRIC;
-            case SMOOTH_DIELECTRIC -> MinecraftMaterialProfile.SMOOTH_DIELECTRIC;
-        };
         MinecraftMaterialTopology topology = material.mediumBoundary()
                 ? MinecraftMaterialTopology.MEDIUM_BOUNDARY : MinecraftMaterialTopology.SURFACE;
-        return new MinecraftMaterialKey(material.material(), null, profile, topology);
+        return new MinecraftMaterialKey(material.material(), null, material.profile(), topology);
     }
 
     static TangentBasis tangentBasis(float[] positions, int[] indices, float[] uvs, int triangle) {

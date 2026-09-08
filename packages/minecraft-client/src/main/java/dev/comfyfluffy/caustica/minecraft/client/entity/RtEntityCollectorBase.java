@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.minecraft.client.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.font.TextRenderable;
@@ -146,7 +147,7 @@ class RtEntityCollectorBase {
             if (sprite != null) {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
                 capture.currentMaterial = spriteMaterial(sprite,
-                        MinecraftEntityMesh.MaterialProfile.ROUGH_DIELECTRIC, false);
+                        MinecraftMaterialProfile.ROUGH_DIELECTRIC, false);
             } else {
                 capture.currentMaterial = standaloneMaterial(renderType);
                 if (isEndPortal(renderType)) capture.currentCoverage = MinecraftEntityMesh.Coverage.OPAQUE;
@@ -257,8 +258,8 @@ class RtEntityCollectorBase {
         ChunkSectionLayer layer = q.materialInfo().layer();
         boolean transmissive = layer == ChunkSectionLayer.TRANSLUCENT;
         boolean cutout = !transmissive && layer != ChunkSectionLayer.SOLID;
-        capture.currentMaterial = spriteMaterial(sprite, transmissive ? MinecraftEntityMesh.MaterialProfile.SMOOTH_DIELECTRIC
-                        : MinecraftEntityMesh.MaterialProfile.ROUGH_DIELECTRIC,
+        capture.currentMaterial = spriteMaterial(sprite, transmissive ? MinecraftMaterialProfile.SMOOTH_DIELECTRIC
+                        : MinecraftMaterialProfile.ROUGH_DIELECTRIC,
                 transmissive);
         capture.currentCoverage = transmissive ? MinecraftEntityMesh.Coverage.STOCHASTIC
                 : cutout ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
@@ -268,7 +269,7 @@ class RtEntityCollectorBase {
 
     /** Preserve the block material selector and atlas identity for upload-time resolution. */
     private MinecraftEntityMesh.Material spriteMaterial(TextureAtlasSprite sprite,
-                                                         MinecraftEntityMesh.MaterialProfile profile,
+                                                         MinecraftMaterialProfile profile,
                                                          boolean transmissive) {
         if (sprite == null) return missingMaterial();
         MinecraftEntityMesh.Texture texture = textures.contributeAtlas(sprite.atlasLocation());
