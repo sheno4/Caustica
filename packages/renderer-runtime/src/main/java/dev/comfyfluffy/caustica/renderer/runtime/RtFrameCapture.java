@@ -19,6 +19,7 @@ import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
 
 import java.io.IOException;
+import java.nio.ShortBuffer;
 import java.nio.file.Path;
 
 /** Reads completed reconstructed color and exposure for an EXR capture at the Look/LMT input. */
@@ -52,18 +53,8 @@ final class RtFrameCapture {
 
             float residualExposure = MemoryUtil.memGetFloat(readback.mapped() + rgbaBytes);
             RtExposure.CaptureMetadata exposureMetadata = exposure.captureMetadata(residualExposure);
-            short[] exposedRgba = new short[Math.toIntExact(pixelCount * 4L)];
-            for (int sample = 0; sample < exposedRgba.length; sample++) {
-                short storedHalf = MemoryUtil.memGetShort(readback.mapped() + (long) sample * Short.BYTES);
-                float value = Float.float16ToFloat(storedHalf);
-                if ((sample & 3) != 3) {
-                    value *= residualExposure;
-                }
-                // Residual exposure is expected to keep this seam comfortably centred in fp16. Clamp only
-                // true outliers/infinities so a pathological light cannot poison a grading application.
-                value = Math.clamp(value, -65504.0f, 65504.0f);
-                exposedRgba[sample] = Float.floatToFloat16(value);
-            }
+            short[] exposedRgba = applyResidualExposure(
+                    MemoryUtil.memShortBuffer(readback.mapped(), Math.toIntExact(pixelCount * 4L)), residualExposure);
 
             RtOpenExrWriter.write(outputPath, extent.displayWidth(), extent.displayHeight(), exposedRgba,
                     new RtOpenExrWriter.Metadata(
@@ -78,6 +69,18 @@ final class RtFrameCapture {
         } finally {
             readback.destroy();
         }
+    }
+
+    /** Converts the remaining RGBA samples without changing the input buffer or its position. */
+    static short[] applyResidualExposure(ShortBuffer rgba, float residualExposure) {
+        short[] result = new short[rgba.remaining()];
+        for (int sample = 0; sample < result.length; sample++) {
+            float value = Float.float16ToFloat(rgba.get(rgba.position() + sample));
+            if ((sample & 3) != 3) value *= residualExposure;
+            // Saturate outliers and infinities to finite half range; NaNs remain visible as invalid samples.
+            result[sample] = Float.floatToFloat16(Math.clamp(value, -65504.0f, 65504.0f));
+        }
+        return result;
     }
 
     static void exportRaw(VulkanDeviceContext context, GpuImage image, Path output,
