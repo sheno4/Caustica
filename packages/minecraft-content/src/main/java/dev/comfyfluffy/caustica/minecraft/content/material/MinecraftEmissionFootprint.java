@@ -46,39 +46,48 @@ public final class MinecraftEmissionFootprint {
         private final int width;
         private final int height;
         private final float[] sums;
-        private final int[] counts;
+        private final float[] areas;
 
         Builder(int resolution, int width, int height) {
             this.resolution = resolution;
             this.width = width;
             this.height = height;
             sums = new float[Math.multiplyExact(Math.multiplyExact(resolution, resolution), SAMPLE_FLOATS)];
-            counts = new int[Math.multiplyExact(resolution, resolution)];
+            areas = new float[Math.multiplyExact(resolution, resolution)];
         }
 
         void add(int x, int y, float r, float g, float b, float weight) {
-            int sampleX = Math.min(resolution - 1, x * resolution / width);
-            int sampleY = Math.min(resolution - 1, y * resolution / height);
-            int sample = sampleY * resolution + sampleX;
-            int offset = sample * SAMPLE_FLOATS;
-            sums[offset] += r;
-            sums[offset + 1] += g;
-            sums[offset + 2] += b;
-            sums[offset + 3] += weight;
-            counts[sample]++;
+            double left = (double) x * resolution / width;
+            double right = (double) (x + 1) * resolution / width;
+            double top = (double) y * resolution / height;
+            double bottom = (double) (y + 1) * resolution / height;
+            // A source texel may cover several footprint cells or only part of one.
+            for (int sy = (int) top; sy < Math.ceil(bottom); sy++) {
+                double overlapY = Math.min(bottom, sy + 1) - Math.max(top, sy);
+                for (int sx = (int) left; sx < Math.ceil(right); sx++) {
+                    float area = (float) (overlapY * (Math.min(right, sx + 1) - Math.max(left, sx)));
+                    int sample = sy * resolution + sx;
+                    int offset = sample * SAMPLE_FLOATS;
+                    sums[offset] += r * area;
+                    sums[offset + 1] += g * area;
+                    sums[offset + 2] += b * area;
+                    sums[offset + 3] += weight * area;
+                    areas[sample] += area;
+                }
+            }
         }
 
         MinecraftEmissionFootprint build() {
             float totalWeight = 0.0f;
             float[] averaged = new float[sums.length];
-            for (int sample = 0; sample < counts.length; sample++) {
-                if (counts[sample] == 0) continue;
-                float inverseCount = 1.0f / counts[sample];
+            for (int sample = 0; sample < areas.length; sample++) {
+                if (areas[sample] == 0) continue;
+                float inverseArea = 1.0f / areas[sample];
                 int offset = sample * SAMPLE_FLOATS;
-                averaged[offset] = sums[offset] * inverseCount;
-                averaged[offset + 1] = sums[offset + 1] * inverseCount;
-                averaged[offset + 2] = sums[offset + 2] * inverseCount;
-                averaged[offset + 3] = sums[offset + 3] * inverseCount;
+                averaged[offset] = sums[offset] * inverseArea;
+                averaged[offset + 1] = sums[offset + 1] * inverseArea;
+                averaged[offset + 2] = sums[offset + 2] * inverseArea;
+                averaged[offset + 3] = sums[offset + 3] * inverseArea;
                 totalWeight += averaged[offset + 3];
             }
             return totalWeight > 0.0f ? new MinecraftEmissionFootprint(resolution, averaged) : null;
