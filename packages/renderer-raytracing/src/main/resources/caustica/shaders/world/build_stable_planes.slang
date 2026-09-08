@@ -22,9 +22,10 @@ struct StableBranch {
 };
 
 float3x3 branchReflection(float3 n) {
-    return float3x3(1.0 - 2.0*n.x*n.x, -2.0*n.x*n.y, -2.0*n.x*n.z,
-            -2.0*n.y*n.x, 1.0 - 2.0*n.y*n.y, -2.0*n.y*n.z,
-            -2.0*n.z*n.x, -2.0*n.z*n.y, 1.0 - 2.0*n.z*n.z);
+    return float3x3(
+            1.0 - 2.0 * n.x * n.x, -2.0 * n.x * n.y, -2.0 * n.x * n.z,
+            -2.0 * n.y * n.x, 1.0 - 2.0 * n.y * n.y, -2.0 * n.y * n.z,
+            -2.0 * n.z * n.x, -2.0 * n.z * n.y, 1.0 - 2.0 * n.z * n.z);
 }
 
 StableBranch branchAdvance(StableBranch branch, WorldPayload hit, TraceLobes lobes, bool transmission) {
@@ -40,8 +41,8 @@ StableBranch branchAdvance(StableBranch branch, WorldPayload hit, TraceLobes lob
         float3 to = incidentDirection;
         float3 v = cross(from, to);
         float c = dot(from, to);
-        float3x3 skew = float3x3(0,-v.z,v.y,v.z,0,-v.x,-v.y,v.x,0);
-        transform = float3x3(1,0,0,0,1,0,0,0,1) + skew + mul(skew, skew) / (1.0 + c);
+        float3x3 skew = float3x3(0, -v.z, v.y, v.z, 0, -v.x, -v.y, v.x, 0);
+        transform = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1) + skew + mul(skew, skew) / (1.0 + c);
     }
     float3 movement = hit.previousPosition - hit.position;
     branch.motion += mul(branch.imageTransform, movement - mul(transform, movement));
@@ -62,7 +63,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
     StableBranch branches[STABLE_PLANE_COUNT];
     branches[0] = {};
     branches[0].path = traceCamera<TComposition>(pixel, extent, frame);
-    branches[0].imageTransform = float3x3(1,0,0,0,1,0,0,0,1);
+    branches[0].imageTransform = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
     branches[0].identity = 1u;
     float3 cameraDirection = branches[0].path.direction;
     uint count = 1u;
@@ -96,27 +97,13 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             bool split = !sky && deltaCount > 0u && count + extra <= STABLE_PLANE_COUNT
                     && branch.path.depth < STABLE_PLANE_MAX_DELTA_SEGMENTS && branch.path.depth <= frame.maxBounces;
             if (split) {
+                // The capacity check reserves every extra endpoint before any branch is queued.
                 if (continuous) {
-                    if (reflectDelta) {
-                        StableBranch queued = branchAdvance(branch, hit, lobes, false);
-                        if (count == 1u) branches[1] = queued;
-                        else branches[2] = queued;
-                        count++;
-                    }
-                    if (transmitDelta) {
-                        StableBranch queued = branchAdvance(branch, hit, lobes, true);
-                        if (count == 1u) branches[1] = queued;
-                        else branches[2] = queued;
-                        count++;
-                    }
+                    if (reflectDelta) branches[count++] = branchAdvance(branch, hit, lobes, false);
+                    if (transmitDelta) branches[count++] = branchAdvance(branch, hit, lobes, true);
                     restart.flags |= PATH_ENDPOINT_CONTINUOUS;
                 } else {
-                    if (reflectDelta && transmitDelta) {
-                        StableBranch queued = branchAdvance(branch, hit, lobes, true);
-                        if (count == 1u) branches[1] = queued;
-                        else branches[2] = queued;
-                        count++;
-                    }
+                    if (reflectDelta && transmitDelta) branches[count++] = branchAdvance(branch, hit, lobes, true);
                     branch = branchAdvance(branch, hit, lobes, !reflectDelta);
                     continue;
                 }
