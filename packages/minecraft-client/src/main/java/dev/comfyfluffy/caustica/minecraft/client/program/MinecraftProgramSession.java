@@ -24,7 +24,6 @@ import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftProgramRes
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
-import dev.comfyfluffy.caustica.minecraft.rendering.sky.MinecraftSkyCatalog;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftTerrainSession;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.entity.*;
@@ -37,7 +36,7 @@ import java.util.List;
 public final class MinecraftProgramSession implements MinecraftWorldSessionContribution {
     private static final ShaderSource SHADERS = ShaderSource.classpath(
             MinecraftProgramSession.class, "/caustica/shaders/minecraft", "surface", "sky");
-    private static final MinecraftSkyCatalog SKIES = new MinecraftSkyCatalog();
+    private static final ResourceId OVERWORLD = ResourceId.of("minecraft", "overworld");
 
     private final MinecraftWorldSessionContext context;
     private final MinecraftProgramResources resources;
@@ -260,9 +259,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     }
 
     private PassRegistration createSky(MinecraftPrograms programs, long generation) {
-        if (!SKIES.supports(context.dimension())) return null;
+        if (!context.dimension().id().equals(OVERWORLD)) return null;
         return context.renderSession().passes().addWorldResourcePass(setup -> {
-            SkyLutPass sky = SKIES.create(context.dimension(), setup.gpu(), this::options,
+            SkyLutPass sky = new SkyLutPass(setup.gpu(), this::options,
                     frames::skyFrame, programs.environment(), context.environment(),
                     context.renderSession().resources(), generation);
             return new FirstRecordPass(sky, () -> skySelected(generation));

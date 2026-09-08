@@ -10,10 +10,8 @@ import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.SkyLutPushData;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
-import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.KHRSynchronization2;
@@ -151,12 +149,6 @@ final class SkyLutPassTest {
         assertEquals(1.0f, SkyLutPass.viewerAltitudeKm(1063.0, 63.0, 1.0));
         assertEquals(1.0f, SkyLutPass.viewerAltitudeKm(2063.0, 63.0, 0.5));
         assertEquals(0.0f, SkyLutPass.viewerAltitudeKm(20.0, 63.0, 1.0));
-    }
-
-    @Test void dimensionCatalogSelectsOnlyTheBuiltInOverworldSky() {
-        MinecraftSkyCatalog catalog = new MinecraftSkyCatalog();
-        assertTrue(catalog.supports(new MinecraftDimensionKey(ResourceId.of("minecraft", "overworld"))));
-        assertFalse(catalog.supports(new MinecraftDimensionKey(ResourceId.of("minecraft", "the_nether"))));
     }
 
     @Test void rollbackPreservesThePrimaryFailureAndAttemptsEveryRelease() {

@@ -4,14 +4,9 @@
 //
 //     psi_ms = L_2nd / (1 - f_ms)
 //
-// where f_ms is the fraction of light that gets scattered once more before leaving. Storing the closed
-// series rather than one extra order is what makes twilight and the night sky come out at the right level
-// without an authored fill term — high orders dominate exactly when the sun is below the horizon, which
-// is the case the previous single-scattering sky could not represent at all.
-//
-// Only ground albedo enters from outside, so this runs once behind the
-// transmittance LUT and is never rebuilt per frame. The 64x20 inner work is why: ~1.3M medium samples for
-// the whole 32x32 table, trivial once and far too much per frame.
+// f_ms is the fraction scattered again before escape. The geometric series includes higher orders
+// needed at twilight. Ground albedo is the only changing input; rebuild after transmittance when it
+// changes or the environment binding is replaced, and reuse the result between frames.
 module caustica_minecraft_sky_lut_multiscatter;
 
 import caustica_minecraft_sky_atmosphere;

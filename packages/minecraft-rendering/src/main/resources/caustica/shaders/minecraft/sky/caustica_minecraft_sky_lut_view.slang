@@ -1,13 +1,6 @@
-// Sky-view LUT bake, once per frame. Renders the whole sky dome — atmosphere in-scatter with real
-// multiple scattering — into a 192x108 latlong-ish table per celestial body, in the light-relative
-// parameterisation from sky.slang. world.rmiss answers every miss with two texture fetches, avoiding a
-// repeated atmosphere march on primary and GI-bounce rays.
-//
-// One slice per body (sun rows first, then moon), each marched with its own direction and illuminance.
-// Sampling adds the two physical lighting solutions without crossfading between them.
-//
-// Reads the same semantic sky values the engine writes into WorldPush, so the LUT and the frame it shades
-// use identical celestial and look inputs without exposing the world buffer to the pass API.
+// Each frame bakes sun and moon atmosphere slices into one sky-view LUT. Environment evaluation adds
+// both slices instead of marching the atmosphere for every miss. Invocation zero publishes the same
+// SkyInputs used by the bake into the binding's buffer; queue ordering makes both available to tracing.
 module caustica_minecraft_sky_lut_view;
 
 import caustica_minecraft_sky_atmosphere;
@@ -53,22 +46,8 @@ public void runSkyView(uint3 tid) {
             pc.transmittanceImage, pc.multiScatterImage, pc.sampler,
             sky.groundAlbedo, true).luminance;
 
-    // Horizon softening. The planet's surface is a real discontinuity in the model: a ray one arcminute
-    // above the tangent direction escapes the atmosphere, and one arcminute below it terminates on the
-    // ground a few km away. Measured at 370 m altitude under a 45 degree sun, that step is 9,977 to
-    // 3,155 cd/m² — 1.7 EV across a fraction of a degree — and everything below it is a nearly constant
-    // 2,400 cd/m² Lambertian plate. On screen that is a hard grey line across the distant view.
-    //
-    // Minecraft makes the discontinuity worse than it is on Earth. This ground is fictional: it is not the
-    // world's terrain, which is what the player would actually see there. Beyond render distance the rays
-    // simply escape, so the plate is drawn where a real view would show haze. And since the camera's
-    // altitude tracks world Y, so a player at sea level sits within metres of the shell, where the ground
-    // is reached almost immediately below the horizon and the in-scatter that would otherwise soften it
-    // never accumulates.
-    //
-    // So fade the ground in over `horizonSoften` degrees of dip instead of switching to it. The value the
-    // fade starts from is the ground-tangent direction marched with NO ground clip, which is exactly the
-    // limit the rows above the horizon converge to, making both sides meet at the same value.
+    // The atmosphere's ground sphere is not Minecraft terrain. Blend from the unclipped tangent sky
+    // into the ground solution over horizonSoften radians of dip to avoid a hard horizon seam.
     float horizonCos = horizonZenithCos(sky.viewerRadiusKm);
     float dip = acos(clamp(viewZenithCos, -1.0, 1.0)) - acos(clamp(horizonCos, -1.0, 1.0));
     if (dip > 0.0 && sky.horizonSoften > 0.0) {
@@ -80,11 +59,7 @@ public void runSkyView(uint3 tid) {
                 SKY_VIEW_STEPS, true, true,
                 pc.transmittanceImage, pc.multiScatterImage, pc.sampler,
                 sky.groundAlbedo, false).luminance;
-        // Interpolate in LOG luminance, not linearly. The two ends can be 5 EV apart at a low sun, and a
-        // linear blend spends most of its angular range near the bright end and then falls off a cliff in
-        // the last few degrees — trading one hard edge for a slightly softer one. In log space the same
-        // smoothstep spreads the drop evenly in stops, which is both what the eye integrates and what
-        // attenuation through haze actually does (extinction is multiplicative, so it is linear in log).
+        // Log-space interpolation spreads the brightness change evenly in exposure stops.
         float3 low = log2(max(skyward, float3(1.0e-6)));
         float3 high = log2(max(luminance, float3(1.0e-6)));
         luminance = exp2(lerp(low, high, smoothstep(0.0, sky.horizonSoften, dip)));

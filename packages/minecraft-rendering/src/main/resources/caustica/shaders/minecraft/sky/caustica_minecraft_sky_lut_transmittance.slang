@@ -1,10 +1,8 @@
 // Transmittance LUT bake (Hillaire 2020, §5.1 / Bruneton 2008). For each (altitude, cos zenith) texel,
 // integrate the optical depth from that point to the top of the atmosphere and store exp(-depth).
 //
-// Static: the medium never changes, so this runs once and every later pass reads it. Deliberately marched
-// WITHOUT a ground test — a direction pointing below the horizon then accumulates the optical depth of a
-// full chord through sea-level air, which comes out as transmittance zero. That is exactly the answer
-// wanted for "the sun has set", so downstream passes need no separate planet-occlusion branch.
+// The medium is fixed between atmosphere LUT rebuilds. Marching below the horizon includes the full
+// chord through dense sea-level air, yielding zero transmittance without a separate ground test.
 module caustica_minecraft_sky_lut_transmittance;
 
 import caustica_minecraft_sky_atmosphere;

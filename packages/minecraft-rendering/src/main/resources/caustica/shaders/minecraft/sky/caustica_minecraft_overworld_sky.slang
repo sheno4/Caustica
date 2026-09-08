@@ -1,6 +1,7 @@
 module caustica_minecraft_overworld_sky;
 
 import caustica_types;
+import caustica_resources;
 import caustica_color;
 import caustica_environment;
 import caustica_minecraft_sky_atmosphere;
@@ -23,8 +24,8 @@ float3 skyDome(float3 dir, SkyState state, MinecraftEnvironmentBinding binding) 
             lightViewCosine(dir, state.sunDir), SKY_VIEW_BODY_SUN);
     float2 moonUv = skyViewLutUv(state.viewerRadiusKm, dir.y,
             lightViewCosine(dir, state.moonDir), SKY_VIEW_BODY_MOON);
-    return sampleMinecraftEnvironment(binding, binding.skyView, binding.lutSampler, sunUv).rgb
-            + sampleMinecraftEnvironment(binding, binding.skyView, binding.lutSampler, moonUv).rgb;
+    return sampleTexture2DLod(binding.skyView, binding.lutSampler, sunUv, 0.0).rgb
+            + sampleTexture2DLod(binding.skyView, binding.lutSampler, moonUv, 0.0).rgb;
 }
 
 float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
@@ -60,8 +61,8 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
                     state.viewerRadiusKm,
                     state.sunDir, state.sunAngularRadius);
             float2 uv = lerp(state.sunUv.xy, state.sunUv.zw, local * 0.5 + 0.5);
-            float3 texel = sampleMinecraftEnvironment(binding, binding.celestialsAtlas,
-                    binding.celestialSampler, uv).rgb;
+            float3 texel = sampleTexture2DLod(binding.celestialsAtlas,
+                    binding.celestialSampler, uv, 0.0).rgb;
             // Vanilla's sun sprite bakes a soft glow gradient into its texels; scaling that raw to HDR
             // makes a huge ring around the disc. Raising the texture luminance to a high power keeps only
             // the bright core and collapses the painted halo to ~0 — the real halo comes from the Mie
@@ -72,8 +73,8 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
         if (celestialSquareLocal(dir, state.moonDir, state.moonDiscHalfAngle, local)) {
             float2 uv = lerp(state.moonUv.xy, state.moonUv.zw, local * 0.5 + 0.5);
             float3 texel = srgbToLinear(
-                    sampleMinecraftEnvironment(binding, binding.celestialsAtlas,
-                            binding.celestialSampler, uv).rgb);
+                    sampleTexture2DLod(binding.celestialsAtlas,
+                            binding.celestialSampler, uv, 0.0).rgb);
             float3 moonExtinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
                     state.viewerRadiusKm,
                     state.moonDir, state.moonAngularRadius);
@@ -87,8 +88,7 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
         // zero below the horizon.
     }
 
-    // sky.slang's own header: colour is linear BT.709 inside that module and crosses to ACEScg exactly
-    // once, at the consumer's output — this is that one crossing.
+    // Atmosphere and celestial colors use linear BT.709; convert once at the environment output.
     return bt709ToAcesCg(max(color, float3(0.0)));
 }
 
