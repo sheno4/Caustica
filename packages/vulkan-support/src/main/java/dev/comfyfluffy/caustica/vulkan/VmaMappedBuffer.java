@@ -10,6 +10,7 @@ import org.lwjgl.util.vma.Vma;
 import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.util.vma.VmaAllocationInfo;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
 import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 
@@ -79,7 +80,7 @@ public final class VmaMappedBuffer implements AutoCloseable {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default()
                     .size(byteSize)
-                    .usage(usage | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+                    .usage(usage | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
             if (asyncShared) {
                 configureAsyncSharing(bufferInfo, stack, gpu.asyncBufferSharingQueueFamilies());
@@ -102,7 +103,7 @@ public final class VmaMappedBuffer implements AutoCloseable {
                     ? "vmaCreateBuffer(" + label + ")"
                     : "vmaCreateBufferWithAlignment(" + label + ")");
 
-            long address = org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress(gpu.vk(),
+            long address = VK12.vkGetBufferDeviceAddress(gpu.vk(),
                     VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));
             long mappedAddress = resultInfo.pMappedData();
             if (address == 0L || mappedAddress == 0L) {
@@ -118,19 +119,14 @@ public final class VmaMappedBuffer implements AutoCloseable {
     }
 
     static void configureAsyncSharing(VkBufferCreateInfo bufferInfo, MemoryStack stack, int[] queueFamilies) {
-        int[] sharedFamilies = asyncSharingFamilies(queueFamilies);
-        if (sharedFamilies.length > 0) {
-            bufferInfo.sharingMode(VK10.VK_SHARING_MODE_CONCURRENT)
-                    .pQueueFamilyIndices(stack.ints(sharedFamilies));
-        }
-    }
-
-    static int[] asyncSharingFamilies(int[] queueFamilies) {
-        Objects.requireNonNull(queueFamilies, "queueFamilies");
         if (queueFamilies.length == 0) {
             throw new IllegalArgumentException("async buffer needs at least one queue family");
         }
-        return queueFamilies.length == 1 ? new int[0] : queueFamilies.clone();
+        // A single family needs no ownership transfers; concurrent sharing requires distinct families.
+        if (queueFamilies.length > 1) {
+            bufferInfo.sharingMode(VK10.VK_SHARING_MODE_CONCURRENT)
+                    .pQueueFamilyIndices(stack.ints(queueFamilies));
+        }
     }
 
     /** Raw {@code VkBuffer} handle for Vulkan calls that consume the native non-dispatchable handle. */

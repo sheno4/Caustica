@@ -3,7 +3,11 @@ package dev.comfyfluffy.caustica.support;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-/** One independently closeable strong reference to a shared resource. */
+/**
+ * One independently closeable strong reference to a shared resource.
+ * The final close invokes the disposer on the closing thread; the disposer arranges any required
+ * retirement or thread dispatch.
+ */
 public final class SharedResource<T> implements AutoCloseable {
     private Reference<T> state;
 
@@ -20,6 +24,7 @@ public final class SharedResource<T> implements AutoCloseable {
 
     public synchronized boolean isOpen() { return state != null; }
 
+    /** Borrows the value while this or another strong owner remains open. */
     public synchronized T get() {
         return openState().value();
     }
@@ -73,18 +78,17 @@ public final class SharedResource<T> implements AutoCloseable {
         }
 
         private void release() {
-            T disposedValue = null;
-            Consumer<? super T> disposedBy = null;
+            T disposedValue;
+            Consumer<? super T> disposedBy;
             synchronized (this) {
-                references--;
-                if (references == 0) {
-                    disposedValue = value;
-                    disposedBy = disposer;
-                    value = null;
-                    disposer = null;
-                }
+                if (--references != 0) return;
+                disposedValue = value;
+                disposedBy = disposer;
+                value = null;
+                disposer = null;
             }
-            if (disposedBy != null) disposedBy.accept(disposedValue);
+            // Final release may close dependencies or call a provider; neither runs under our lock.
+            disposedBy.accept(disposedValue);
         }
     }
 }

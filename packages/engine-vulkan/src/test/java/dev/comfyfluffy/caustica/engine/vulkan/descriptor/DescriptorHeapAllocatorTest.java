@@ -6,9 +6,9 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 final class DescriptorHeapAllocatorTest {
     @Test
@@ -33,28 +33,26 @@ final class DescriptorHeapAllocatorTest {
 
         assertThrows(IllegalStateException.class, () -> allocator.allocate(1));
         first.destroy();
-        assertTrue(first.retired());
 
         DescriptorHeapAllocation<GpuDescriptorIndex.Resource> replacement = allocator.allocate(4);
         assertEquals(first.firstIndex(), replacement.firstIndex());
-        assertNotEquals(first.identity(), replacement.identity());
+        assertNotSame(first, replacement);
         assertThrows(IllegalStateException.class, first::destroy);
-        assertThrows(IllegalStateException.class, () -> allocator.writeSpan(first, 0));
+        assertThrows(IllegalStateException.class,
+                () -> allocator.withWriteSpan(first, 0, span -> fail("retired allocation reached the writer")));
     }
 
     @Test
-    void validatesWritesAgainstTheStableLiveAllocationIdentity() {
+    void validatesWritesAgainstTheLiveAllocation() {
         DescriptorHeapAllocator<GpuDescriptorIndex.Resource> allocator = resourceAllocator(8, 4);
         DescriptorHeapAllocation<GpuDescriptorIndex.Resource> allocation = allocator.allocate(3);
 
-        DescriptorHeapWriteSpan span = allocator.writeSpan(allocation, 2);
-
-        assertEquals(DescriptorHeapKind.RESOURCE, span.kind());
-        assertEquals(allocation.identity(), span.allocationIdentity());
-        assertEquals(4, span.absoluteIndex());
-        assertEquals(128, span.byteOffset());
-        assertEquals(32, span.byteSize());
-        assertThrows(IndexOutOfBoundsException.class, () -> allocator.writeSpan(allocation, 3));
+        allocator.withWriteSpan(allocation, 2, span -> {
+            assertEquals(128, span.byteOffset());
+            assertEquals(32, span.byteSize());
+        });
+        assertThrows(IndexOutOfBoundsException.class,
+                () -> allocator.withWriteSpan(allocation, 3, span -> fail("invalid span reached the writer")));
     }
 
     @Test

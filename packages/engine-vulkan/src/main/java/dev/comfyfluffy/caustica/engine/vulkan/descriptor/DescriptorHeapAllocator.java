@@ -2,8 +2,10 @@ package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
@@ -13,8 +15,8 @@ public final class DescriptorHeapAllocator<I extends GpuDescriptorIndex> {
     private final DescriptorHeapLayout layout;
     private final IntFunction<I> indexFactory;
     private final TreeMap<Integer, Integer> freeRanges = new TreeMap<>();
-    private final Map<Long, DescriptorHeapAllocation<I>> live = new HashMap<>();
-    private long nextIdentity = 1;
+    private final Set<DescriptorHeapAllocation<I>> live =
+            Collections.newSetFromMap(new IdentityHashMap<>());
 
     DescriptorHeapAllocator(DescriptorHeapLayout layout, IntFunction<I> indexFactory) {
         this.layout = layout;
@@ -39,23 +41,15 @@ public final class DescriptorHeapAllocator<I extends GpuDescriptorIndex> {
         freeRanges.remove(relativeFirst);
         if (remaining != 0) freeRanges.put(relativeFirst + descriptorCount, remaining);
 
-        if (nextIdentity <= 0) throw new IllegalStateException("descriptor allocation identity space exhausted");
-        long identity = nextIdentity++;
         int absoluteFirst = Math.addExact(layout.firstApplicationIndex(), relativeFirst);
         DescriptorHeapAllocation<I> allocation = new DescriptorHeapAllocation<>(
-                this, identity, indexFactory.apply(absoluteFirst), descriptorCount);
-        live.put(identity, allocation);
+                this, indexFactory.apply(absoluteFirst), descriptorCount);
+        live.add(allocation);
         return allocation;
     }
 
     synchronized void retire(DescriptorHeapAllocation<I> allocation) {
-        if (allocation.retired()) {
-            throw new IllegalStateException("descriptor allocation " + allocation.identity() + " is already retired");
-        }
-        DescriptorHeapAllocation<I> owned = live.get(allocation.identity());
-        if (owned != allocation) throw new IllegalArgumentException("allocation is not live in this heap");
-        allocation.markRetired();
-        live.remove(allocation.identity());
+        if (!live.remove(allocation)) throw new IllegalStateException("descriptor allocation is not live in this heap");
         int relativeFirst = allocation.firstIndex().value() - layout.firstApplicationIndex();
         insertAndCoalesce(relativeFirst, allocation.descriptorCount());
     }
@@ -66,12 +60,6 @@ public final class DescriptorHeapAllocator<I extends GpuDescriptorIndex> {
 
     public synchronized int liveAllocationCount() {
         return live.size();
-    }
-
-    DescriptorHeapWriteSpan writeSpan(DescriptorHeapAllocation<I> allocation, int relativeIndex) {
-        synchronized (this) {
-            return validatedWriteSpan(allocation, relativeIndex);
-        }
     }
 
     /** Keeps a validated span live and unavailable for reuse through the complete native write. */
@@ -86,13 +74,9 @@ public final class DescriptorHeapAllocator<I extends GpuDescriptorIndex> {
         write.accept(validatedWriteSpan(allocation, relativeIndex, descriptorCount));
     }
 
-    private DescriptorHeapWriteSpan validatedWriteSpan(DescriptorHeapAllocation<I> allocation, int relativeIndex) {
-        return validatedWriteSpan(allocation, relativeIndex, 1);
-    }
-
     private DescriptorHeapWriteSpan validatedWriteSpan(DescriptorHeapAllocation<I> allocation, int relativeIndex,
                                                         int descriptorCount) {
-        if (live.get(allocation.identity()) != allocation || allocation.retired()) {
+        if (!live.contains(allocation)) {
             throw new IllegalStateException("descriptor allocation is not live");
         }
         if (descriptorCount <= 0) throw new IllegalArgumentException("descriptor count must be positive");
@@ -100,7 +84,7 @@ public final class DescriptorHeapAllocator<I extends GpuDescriptorIndex> {
             throw new IndexOutOfBoundsException(relativeIndex);
         }
         int absoluteIndex = Math.addExact(allocation.firstIndex().value(), relativeIndex);
-        return new DescriptorHeapWriteSpan(layout.kind(), allocation.identity(), absoluteIndex,
+        return new DescriptorHeapWriteSpan(
                 layout.byteOffset(absoluteIndex), Math.multiplyExact(layout.descriptorStrideBytes(), descriptorCount));
     }
 
