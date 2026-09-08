@@ -376,9 +376,7 @@ public final class MinecraftDeviceBringup {
         } else {
             VkDeviceQueueCreateInfo.Buffer expanded = VkDeviceQueueCreateInfo.calloc(requestedQueues.capacity() + 1, stack);
             for (int i = 0; i < requestedQueues.capacity(); i++) {
-                VkDeviceQueueCreateInfo source = requestedQueues.get(i);
-                expanded.get(i).sType(source.sType()).pNext(source.pNext()).flags(source.flags())
-                        .queueFamilyIndex(source.queueFamilyIndex()).pQueuePriorities(source.pQueuePriorities());
+                expanded.get(i).set(requestedQueues.get(i));
             }
             expanded.get(requestedQueues.capacity()).sType$Default().queueFamilyIndex(family)
                     .pQueuePriorities(stack.callocFloat(1));

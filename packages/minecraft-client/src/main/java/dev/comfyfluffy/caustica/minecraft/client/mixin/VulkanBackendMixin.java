@@ -15,11 +15,8 @@ import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanDiagnostics;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
-import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
-import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -30,17 +27,12 @@ import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /** Adds Caustica device extensions, SDK shader features and compute queues to Minecraft's device. */
 @Mixin(VulkanBackend.class)
 public abstract class VulkanBackendMixin {
-	private static final VulkanFeature STORAGE_IMAGE_WRITE_WITHOUT_FORMAT =
-			new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageWriteWithoutFormat",
-					VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEWRITEWITHOUTFORMAT);
-
 	private static final List<String> CAUSTICA_WANTED_EXTENSIONS = List.of(
 			// FFX (FSR)
 			"VK_KHR_get_memory_requirements2",
@@ -98,30 +90,10 @@ public abstract class VulkanBackendMixin {
 				.addExtensions(augmented, physicalDevice);
 		args.set(0, augmented);
 
-		caustica$addCoreDeviceFeatures(args, physicalDevice);
 		MinecraftVulkanDiagnostics.addFeatures(args);
 		CausticaClientComposition.current().deviceBringup()
 				.addFeatures(args, physicalDevice);
 		VulkanDiagnostics.logEnabledExtensions(augmented);
-	}
-
-	@SuppressWarnings("unchecked")
-	private void caustica$addCoreDeviceFeatures(Args args, VulkanPhysicalDevice physicalDevice) {
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			var supported = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default();
-			VK12.vkGetPhysicalDeviceFeatures2(physicalDevice.vkPhysicalDevice(), supported);
-			if (!supported.features().shaderStorageImageWriteWithoutFormat()) {
-				CausticaMod.LOGGER.warn("Device [{}] lacks {}; SDK shaders may fail validation",
-						physicalDevice.deviceName(), STORAGE_IMAGE_WRITE_WITHOUT_FORMAT.name());
-				return;
-			}
-		}
-		Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
-		if (features.add(STORAGE_IMAGE_WRITE_WITHOUT_FORMAT)) {
-			args.set(2, features);
-			CausticaMod.LOGGER.info("Enabling Vulkan feature {} for SDK shaders",
-					STORAGE_IMAGE_WRITE_WITHOUT_FORMAT.name());
-		}
 	}
 
 	/**
