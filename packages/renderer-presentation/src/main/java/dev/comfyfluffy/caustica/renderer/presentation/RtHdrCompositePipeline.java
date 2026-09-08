@@ -24,7 +24,8 @@ public final class RtHdrCompositePipeline {
     }
 
     public static RtHdrCompositePipeline create(VulkanDeviceContext context) {
-        return new RtHdrCompositePipeline(context, PresentationShaders.load(context, SHADER));
+        return new RtHdrCompositePipeline(context,
+                ShaderObjectCompute.load(context, RtHdrCompositePipeline.class, SHADER));
     }
 
     public void dispatch(VkCommandBuffer command, GpuImage output,

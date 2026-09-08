@@ -20,9 +20,6 @@ import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
 import jdk.jfr.*;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.IdentityHashMap;
@@ -59,7 +56,7 @@ final class RtNeeAtBackend {
 
     RtNeeAtBackend(VulkanDeviceContext context) {
         this.context = Objects.requireNonNull(context, "context");
-        this.bake = load(context);
+        this.bake = ShaderObjectCompute.load(context, RtNeeAtBackend.class, SHADER);
     }
 
     /** Runs on the serial scene worker; metadata contains no submitted-predecessor state. */
@@ -369,22 +366,6 @@ final class RtNeeAtBackend {
             VkDependencyInfo dependency = VkDependencyInfo.calloc(stack).sType$Default()
                     .pMemoryBarriers(memory);
             VK13.vkCmdPipelineBarrier2(commandBuffer, dependency);
-        }
-    }
-
-    private static ShaderObjectCompute load(VulkanDeviceContext context) {
-        try (InputStream input = RtNeeAtBackend.class.getResourceAsStream(SHADER)) {
-            if (input == null) throw new IllegalStateException("missing NEE-AT shader " + SHADER);
-            byte[] bytes = input.readAllBytes();
-            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
-            try {
-                spirv.put(bytes).flip();
-                return ShaderObjectCompute.create(context, spirv, "main");
-            } finally {
-                MemoryUtil.memFree(spirv);
-            }
-        } catch (IOException failure) {
-            throw new UncheckedIOException(failure);
         }
     }
 

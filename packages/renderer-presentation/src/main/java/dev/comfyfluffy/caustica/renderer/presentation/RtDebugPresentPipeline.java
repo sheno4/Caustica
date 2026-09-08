@@ -24,7 +24,8 @@ public final class RtDebugPresentPipeline {
     }
 
     public static RtDebugPresentPipeline create(VulkanDeviceContext context) {
-        return new RtDebugPresentPipeline(context, PresentationShaders.load(context, SHADER));
+        return new RtDebugPresentPipeline(context,
+                ShaderObjectCompute.load(context, RtDebugPresentPipeline.class, SHADER));
     }
 
     public void dispatch(VkCommandBuffer command, GpuImage output, GpuImage normal, GpuImage albedo,

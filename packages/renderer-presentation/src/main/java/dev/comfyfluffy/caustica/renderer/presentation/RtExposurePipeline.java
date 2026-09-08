@@ -28,10 +28,12 @@ final class RtExposurePipeline {
     }
 
     static RtExposurePipeline create(VulkanDeviceContext context) {
-        ShaderObjectCompute histogram = PresentationShaders.load(context, ROOT + "exposure_hist/main.comp.spv");
+        ShaderObjectCompute histogram = ShaderObjectCompute.load(context, RtExposurePipeline.class,
+                ROOT + "exposure_hist/main.comp.spv");
         try {
             return new RtExposurePipeline(context, histogram,
-                    PresentationShaders.load(context, ROOT + "exposure_resolve/main.comp.spv"));
+                    ShaderObjectCompute.load(context, RtExposurePipeline.class,
+                            ROOT + "exposure_resolve/main.comp.spv"));
         } catch (RuntimeException | Error failure) {
             histogram.close();
             throw failure;

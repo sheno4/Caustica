@@ -23,7 +23,8 @@ public final class RtDisplayPipeline {
     }
 
     public static RtDisplayPipeline create(VulkanDeviceContext context) {
-        return new RtDisplayPipeline(context, PresentationShaders.load(context, SHADER));
+        return new RtDisplayPipeline(context,
+                ShaderObjectCompute.load(context, RtDisplayPipeline.class, SHADER));
     }
 
     public void dispatch(VkCommandBuffer command, GpuImage output, GpuImage scene, GpuImage exposure,

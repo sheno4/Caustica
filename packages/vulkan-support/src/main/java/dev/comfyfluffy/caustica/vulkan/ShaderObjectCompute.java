@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.vulkan;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.EXTDescriptorHeap;
 import org.lwjgl.vulkan.EXTShaderObject;
 import org.lwjgl.vulkan.VK10;
@@ -11,6 +12,8 @@ import org.lwjgl.vulkan.VkHostAddressRangeConstEXT;
 import org.lwjgl.vulkan.VkPushDataInfoEXT;
 import org.lwjgl.vulkan.VkShaderCreateInfoEXT;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
@@ -28,6 +31,26 @@ public final class ShaderObjectCompute implements AutoCloseable {
     private ShaderObjectCompute(VkDevice device, long shader) {
         this.shader = shader;
         this.lifetime = new ResourceLifetime(() -> EXTShaderObject.vkDestroyShaderEXT(device, shader, null));
+    }
+
+    /**
+     * Loads a packaged compute shader's main entry point through the owning class's resource lookup.
+     * Temporary native SPIR-V storage is released after creation, including when creation fails.
+     */
+    public static ShaderObjectCompute load(GpuDevice gpu, Class<?> resourceOwner, String resource) {
+        try (var input = resourceOwner.getResourceAsStream(resource)) {
+            if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + resource);
+            byte[] bytes = input.readAllBytes();
+            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
+            try {
+                spirv.put(bytes).flip();
+                return create(gpu, spirv, "main");
+            } finally {
+                MemoryUtil.memFree(spirv);
+            }
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
+        }
     }
 
     /** Create a compute shader object from a direct SPIR-V buffer. */

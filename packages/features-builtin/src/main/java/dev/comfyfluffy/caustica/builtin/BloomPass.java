@@ -18,11 +18,7 @@ import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 import dev.comfyfluffy.caustica.vulkan.VulkanSampler;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -75,7 +71,7 @@ public final class BloomPass implements Pass<PostEffectFrame> {
         this.options = Objects.requireNonNull(options, "options");
         VulkanSampler createdSampler = VulkanSampler.linearClamp(gpu);
         try {
-            this.shader = loadShader(gpu);
+            this.shader = ShaderObjectCompute.load(gpu, BloomPass.class, SHADER);
             this.sampler = createdSampler;
         } catch (RuntimeException | Error failure) {
             createdSampler.close();
@@ -87,22 +83,6 @@ public final class BloomPass implements Pass<PostEffectFrame> {
             levels = new VmaImage2D[0];
             if (owner != null) owner.close();
         }, shader::close, sampler::close);
-    }
-
-    private static ShaderObjectCompute loadShader(GpuDevice gpu) {
-        try (InputStream input = BloomPass.class.getResourceAsStream(SHADER)) {
-            if (input == null) throw new IllegalStateException("missing Bloom shader " + SHADER);
-            byte[] bytes = input.readAllBytes();
-            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
-            try {
-                spirv.put(bytes).flip();
-                return ShaderObjectCompute.create(gpu, spirv, "main");
-            } finally {
-                MemoryUtil.memFree(spirv);
-            }
-        } catch (IOException failure) {
-            throw new UncheckedIOException(failure);
-        }
     }
 
     @Override

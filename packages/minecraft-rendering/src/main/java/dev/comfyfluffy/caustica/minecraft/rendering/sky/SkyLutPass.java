@@ -22,7 +22,6 @@ import org.lwjgl.vulkan.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
 import java.nio.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -98,9 +97,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
             ls = VulkanSampler.linearClamp(gpu);
             cs = VulkanSampler.nearestClamp(gpu);
             si = createEmptyBuffer(gpu, SkyInputsData.BYTE_SIZE, "Minecraft sky inputs");
-            ts = load(gpu, "transmittance.comp.spv");
-            ms = load(gpu, "multiscatter.comp.spv");
-            vs = load(gpu, "view.comp.spv");
+            ts = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "transmittance.comp.spv");
+            ms = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "multiscatter.comp.spv");
+            vs = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "view.comp.spv");
         } catch (RuntimeException | Error failure) {
             closeAll(vs, ms, ts, si, cs, ls, v, m, t);
             throw failure;
@@ -293,16 +292,6 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
     private static SkyInputsData.Float4 uv(MinecraftSkyFrame.Uv uv) {
         return new SkyInputsData.Float4(uv.u0(), uv.v0(), uv.u1(), uv.v1());
-    }
-
-    private static ShaderObjectCompute load(GpuDevice gpu, String name) {
-        try (InputStream input = SkyLutPass.class.getResourceAsStream(SHADER_ROOT + name)) {
-            if (input == null) throw new IllegalStateException("missing sky shader " + name);
-            byte[] bytes = input.readAllBytes();
-            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
-            try { spirv.put(bytes).flip(); return ShaderObjectCompute.create(gpu, spirv, "main"); }
-            finally { MemoryUtil.memFree(spirv); }
-        } catch (IOException failure) { throw new UncheckedIOException(failure); }
     }
 
     private void initializeImages(VkCommandBuffer commandBuffer) {

@@ -8,11 +8,8 @@ import dev.comfyfluffy.caustica.renderer.raytracing.gen.NrdComposePushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 /** Prepares one stable plane for NRD and merges its remodulated output into scene radiance. */
 public final class RtNrdComposePipeline {
@@ -48,19 +45,8 @@ public final class RtNrdComposePipeline {
     }
 
     public static RtNrdComposePipeline create(VulkanDeviceContext context) {
-        try (var input = RtNrdComposePipeline.class.getResourceAsStream(SHADER)) {
-            if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
-            byte[] bytes = input.readAllBytes();
-            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
-            try {
-                spirv.put(bytes).flip();
-                return new RtNrdComposePipeline(context, ShaderObjectCompute.create(context, spirv, "main"));
-            } finally {
-                MemoryUtil.memFree(spirv);
-            }
-        } catch (IOException failure) {
-            throw new UncheckedIOException(failure);
-        }
+        return new RtNrdComposePipeline(context,
+                ShaderObjectCompute.load(context, RtNrdComposePipeline.class, SHADER));
     }
 
     public void prepare(VkCommandBuffer command, long stablePlaneAddress, long frameAddress,

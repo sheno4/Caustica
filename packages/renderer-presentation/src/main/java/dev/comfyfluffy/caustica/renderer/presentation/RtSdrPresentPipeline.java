@@ -24,7 +24,8 @@ public final class RtSdrPresentPipeline {
     }
 
     public static RtSdrPresentPipeline create(VulkanDeviceContext context) {
-        return new RtSdrPresentPipeline(context, PresentationShaders.load(context, SHADER));
+        return new RtSdrPresentPipeline(context,
+                ShaderObjectCompute.load(context, RtSdrPresentPipeline.class, SHADER));
     }
 
     public void dispatch(VkCommandBuffer command, GpuImage output,
