@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
 import net.minecraft.client.renderer.culling.Frustum;
@@ -12,8 +13,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 
 /**
- * NeoForge counterpart of {@code FabricLevelExtractorBlockEntityMixin}; see it for why the extraction call
- * is wrapped rather than the enclosing method cancelled.
+ * Skips vanilla block-entity extraction while RT owns the world. The enclosing loop still runs
+ * to prune removed entries from the level's globally rendered block-entity set.
  *
  * <p>NeoForge patches vanilla to thread a {@code Frustum} through block-entity extraction. It keeps the
  * unpatched {@code extractVisibleBlockEntities} and {@code tryExtractRenderState} as overloads, but the live
@@ -35,7 +36,7 @@ public class NeoForgeLevelExtractorBlockEntityMixin {
             BlockEntityRenderDispatcher dispatcher, BlockEntity blockEntity, float partialTicks,
             ModelFeatureRenderer.CrumblingOverlay breakProgress, boolean isGloballyRendered, Frustum frustum,
             Operation<BlockEntityRenderState> original) {
-        return dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().renderController().rtOwnsWorldRendering()
+        return CausticaClientComposition.current().renderController().rtOwnsWorldRendering()
                 ? null
                 : original.call(dispatcher, blockEntity, partialTicks, breakProgress, isGloballyRendered,
                         frustum);

@@ -63,7 +63,7 @@ import java.util.ArrayList;
  * <p>Driven once per entity per frame: {@link #begin} sets the capture, then {@code
  * EntityRenderDispatcher.submit} fans out into {@code submitModel} here. Reused across entities.
  */
-class RtEntityCollectorBase {
+abstract class RtEntityCollectorBase implements SubmitNodeCollector {
     private final RtEntityTextures textures;
     private final MinecraftTelemetry.Instrumentation instrumentation;
 
@@ -218,11 +218,13 @@ class RtEntityCollectorBase {
         return count;
     }
 
-    protected final void setOrder(int order) {
+    @Override
+    public final OrderedSubmitNodeCollector order(int order) {
         // Single un-ordered capture sink reused synchronously (no queuing): the caller always issues the
         // very next submission immediately after requesting an order, so stashing it for that one
         // submitModel call (see there) is enough to recover banner/shield pattern-layer stacking.
         pendingOrder = order;
+        return this;
     }
 
     /** Capture a list of baked quads (items / block models), each textured from its sprite's atlas. */
