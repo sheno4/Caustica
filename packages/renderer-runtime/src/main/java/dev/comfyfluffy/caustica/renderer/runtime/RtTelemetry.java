@@ -101,6 +101,9 @@ public interface RtTelemetry {
 
     void afterPublicationVisible(LongConsumer action);
 
+    /** Runs only the newest acknowledgment for this identity admitted by the displayed revision's cutoff. */
+    void afterPublicationVisible(Object identity, LongConsumer action);
+
     long publicationCutoff();
 
     void frameAssembled(long publicationCutoff);

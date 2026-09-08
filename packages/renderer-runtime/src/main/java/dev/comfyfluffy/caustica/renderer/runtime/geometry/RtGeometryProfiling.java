@@ -2,44 +2,34 @@ package dev.comfyfluffy.caustica.renderer.runtime.geometry;
 
 import dev.comfyfluffy.caustica.renderer.runtime.RtFrameStats;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry;
+import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.GeometrySource;
 import jdk.jfr.Category;
 import jdk.jfr.Event;
 import jdk.jfr.Enabled;
-import jdk.jfr.Timespan;
-import java.util.concurrent.atomic.AtomicLong;
 import jdk.jfr.EventType;
 import jdk.jfr.Label;
 import jdk.jfr.Name;
 import jdk.jfr.StackTrace;
 
 import java.util.ArrayDeque;
+import java.util.IdentityHashMap;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
 
 /** Low-overhead CPU telemetry for retained geometry moving from extraction to frame visibility. */
 public final class RtGeometryProfiling {
-    public enum SourceKind {
-        TERRAIN("terrainDispatch"), TERRAIN_READY("terrainReady"), ENTITY("entity"),
-        ENTITY_PLACEMENT("entityPlacement"),
-        BLOCK_ENTITY("blockEntity"), PARTICLE("particle");
-
-        final String metricPrefix;
-
-        SourceKind(String metricPrefix) {
-            this.metricPrefix = metricPrefix;
-        }
-    }
-
     public static final class ExtractionStamp implements RtTelemetry.ExtractionStamp {
         private final long sampleId;
-        private final SourceKind kind;
+        private final GeometrySource source;
         private final long frame;
         private final long nanos;
         private final int geometryCount;
         private long publishedNanos;
 
-        ExtractionStamp(SourceKind kind, long frame, long nanos, int geometryCount) {
+        ExtractionStamp(GeometrySource source, long frame, long nanos, int geometryCount) {
             this.sampleId = NEXT_SAMPLE.incrementAndGet();
-            this.kind = kind;
+            this.source = source;
             this.frame = frame;
             this.nanos = nanos;
             this.geometryCount = geometryCount;
@@ -48,23 +38,21 @@ public final class RtGeometryProfiling {
 
     private static final AtomicLong NEXT_SAMPLE = new AtomicLong();
     private static final EventType VISIBILITY_EVENT = EventType.getEventType(GeometryVisibilityEvent.class);
-    private static final EventType BUILD_READY_EVENT = EventType.getEventType(GeometryBuildReadyLatencyEvent.class);
-    private static final EventType COMMAND_RECORD_EVENT = EventType.getEventType(BlasCommandRecordEvent.class);
     private final RtFrameStats frameStats;
     private final ArrayDeque<Publication> publications = new ArrayDeque<>();
     private long publicationSequence;
 
-    private record Publication(long sequence, LongConsumer assembled) { }
+    private record Publication(long sequence, Object identity, LongConsumer assembled) { }
 
     public RtGeometryProfiling(RtFrameStats frameStats) {
-        this.frameStats = java.util.Objects.requireNonNull(frameStats, "frameStats");
+        this.frameStats = Objects.requireNonNull(frameStats, "frameStats");
     }
 
-    public ExtractionStamp extraction(SourceKind kind, int geometryCount) {
+    public ExtractionStamp extraction(GeometrySource source, int geometryCount) {
         if (!VISIBILITY_EVENT.isEnabled()) {
             return null;
         }
-        return new ExtractionStamp(kind, frameStats.frameSerial(), System.nanoTime(), geometryCount);
+        return new ExtractionStamp(source, frameStats.frameSerial(), System.nanoTime(), geometryCount);
     }
 
     /** Called by a source acknowledgment after the retained maps contain this geometry. */
@@ -73,7 +61,7 @@ public final class RtGeometryProfiling {
             return;
         }
         stamp.publishedNanos = System.nanoTime();
-        publications.addLast(new Publication(++publicationSequence, frame -> recordVisible(stamp, frame)));
+        publications.addLast(new Publication(++publicationSequence, null, frame -> recordVisible(stamp, frame)));
     }
 
     /** Captured immediately before the renderer acquires its retained scene revision. */
@@ -84,13 +72,27 @@ public final class RtGeometryProfiling {
     /** Only acknowledgments present at the capture boundary belong to this assembled frame. */
     public synchronized void frameVisible(long cutoff) {
         long frame = frameStats.frameSerial();
+        if (publications.isEmpty()) return;
+        var latest = new IdentityHashMap<Object, Publication>();
+        for (var publication : publications) {
+            if (publication.sequence > cutoff) break;
+            if (publication.identity != null) latest.put(publication.identity, publication);
+        }
         while (!publications.isEmpty() && publications.getFirst().sequence <= cutoff) {
-            publications.removeFirst().assembled.accept(frame);
+            var publication = publications.removeFirst();
+            if (publication.identity == null || latest.get(publication.identity) == publication) {
+                publication.assembled.accept(frame);
+            }
         }
     }
 
     public synchronized void afterPublicationVisible(LongConsumer action) {
-        if (action != null) publications.addLast(new Publication(++publicationSequence, action));
+        if (action != null) publications.addLast(new Publication(++publicationSequence, null, action));
+    }
+
+    public synchronized void afterPublicationVisible(Object identity, LongConsumer action) {
+        publications.addLast(new Publication(++publicationSequence,
+                Objects.requireNonNull(identity), Objects.requireNonNull(action)));
     }
 
     public synchronized void resetPublications() {
@@ -102,7 +104,14 @@ public final class RtGeometryProfiling {
         if (VISIBILITY_EVENT.isEnabled()) {
             GeometryVisibilityEvent event = new GeometryVisibilityEvent();
             event.sampleId = stamp.sampleId;
-            event.source = stamp.kind.metricPrefix;
+            event.source = switch (stamp.source) {
+                case TERRAIN -> "terrainDispatch";
+                case TERRAIN_READY -> "terrainReady";
+                case ENTITY -> "entity";
+                case ENTITY_PLACEMENT -> "entityPlacement";
+                case BLOCK_ENTITY -> "blockEntity";
+                case PARTICLE -> "particle";
+            };
             event.geometryCount = stamp.geometryCount;
             event.extractionFrameId = stamp.frame;
             event.frameId = frame;
@@ -111,39 +120,6 @@ public final class RtGeometryProfiling {
             event.assembledNanos = now;
             event.commit();
         }
-    }
-
-    static long beginBuild() {
-        return BUILD_READY_EVENT.isEnabled() ? System.nanoTime() : 0L;
-    }
-
-    static void finishBuild(long startedNanos, int triangles, boolean update, boolean compaction,
-                            Throwable failure) {
-        if (startedNanos == 0L) {
-            return;
-        }
-        long micros = Math.max(0L, System.nanoTime() - startedNanos) / 1_000L;
-        GeometryBuildReadyLatencyEvent event = new GeometryBuildReadyLatencyEvent();
-        event.triangles = triangles;
-        event.update = update;
-        event.compaction = compaction;
-        event.micros = micros;
-        event.failed = failure != null;
-        event.commit();
-    }
-
-    static long beginCommandRecord() {
-        return COMMAND_RECORD_EVENT.isEnabled() ? System.nanoTime() : 0L;
-    }
-
-    static void endCommandRecord(long startedNanos) {
-        if (startedNanos == 0L) {
-            return;
-        }
-        long micros = Math.max(0L, System.nanoTime() - startedNanos) / 1_000L;
-        BlasCommandRecordEvent event = new BlasCommandRecordEvent();
-        event.micros = micros;
-        event.commit();
     }
 
     @Name("dev.comfyfluffy.caustica.GeometryVisibility")
@@ -162,25 +138,4 @@ public final class RtGeometryProfiling {
         @Label("System.nanoTime frame assembly") long assembledNanos;
     }
 
-    @Name("dev.comfyfluffy.caustica.GeometryBuildReadyLatency")
-    @Label("Geometry submit-to-ready wall latency")
-    @Category({"Caustica", "Geometry"})
-    @StackTrace(false)
-    @Enabled(false)
-    static final class GeometryBuildReadyLatencyEvent extends Event {
-        @Label("Triangles") int triangles;
-        @Label("Update") boolean update;
-        @Label("Compaction") boolean compaction;
-        @Timespan(Timespan.MICROSECONDS) long micros;
-        @Label("Failed") boolean failed;
-    }
-
-    @Name("dev.comfyfluffy.caustica.BlasCommandRecord")
-    @Label("BLAS CPU command recording")
-    @Category({"Caustica", "Geometry"})
-    @StackTrace(false)
-    @Enabled(false)
-    static final class BlasCommandRecordEvent extends Event {
-        @Timespan(Timespan.MICROSECONDS) long micros;
-    }
 }

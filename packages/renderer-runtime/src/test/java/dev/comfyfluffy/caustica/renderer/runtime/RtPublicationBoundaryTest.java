@@ -9,6 +9,55 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtPublicationBoundaryTest {
     @Test
+    void keyedAcknowledgmentsCoalesceOnlyWithinTheDisplayedRevisionCutoff() {
+        var telemetry = new RtTelemetryImpl();
+        var assembled = new ArrayList<String>();
+        var identity = new Object();
+        telemetry.beginRenderFrame();
+        telemetry.afterPublicationVisible(identity, frame -> assembled.add("obsolete:" + frame));
+        telemetry.afterPublicationVisible(frame -> assembled.add("unkeyed:" + frame));
+        telemetry.afterPublicationVisible(identity, frame -> assembled.add("captured:" + frame));
+        long cutoff = telemetry.publicationCutoff();
+        telemetry.afterPublicationVisible(identity, frame -> assembled.add("pending:" + frame));
+
+        telemetry.frameAssembled(cutoff);
+        assertEquals(List.of("unkeyed:1", "captured:1"), assembled);
+        telemetry.frameAssembled(cutoff);
+        assertEquals(List.of("unkeyed:1", "captured:1"), assembled);
+
+        telemetry.endFrame();
+        telemetry.beginRenderFrame();
+        telemetry.frameAssembled(telemetry.publicationCutoff());
+        assertEquals(List.of("unkeyed:1", "captured:1", "pending:2"), assembled);
+    }
+
+    @Test
+    void equalButDistinctPublicationIdentitiesRemainIndependent() {
+        var telemetry = new RtTelemetryImpl();
+        var assembled = new ArrayList<String>();
+        telemetry.afterPublicationVisible(new String("entity"), frame -> assembled.add("first"));
+        telemetry.afterPublicationVisible(new String("entity"), frame -> assembled.add("second"));
+        telemetry.frameAssembled(telemetry.publicationCutoff());
+        assertEquals(List.of("first", "second"), assembled);
+    }
+
+    @Test
+    void keyedCallbackQueuedDuringVisibilityWaitsForANewCapture() {
+        var telemetry = new RtTelemetryImpl();
+        var assembled = new ArrayList<String>();
+        var identity = new Object();
+        telemetry.afterPublicationVisible(identity, frame -> {
+            assembled.add("captured");
+            telemetry.afterPublicationVisible(identity, later -> assembled.add("next"));
+        });
+        long cutoff = telemetry.publicationCutoff();
+        telemetry.frameAssembled(cutoff);
+        assertEquals(List.of("captured"), assembled);
+        telemetry.frameAssembled(telemetry.publicationCutoff());
+        assertEquals(List.of("captured", "next"), assembled);
+    }
+
+    @Test
     void laterPublicationsWaitForTheNextCapturedFrame() {
         var telemetry = new RtTelemetryImpl();
         var assembled = new ArrayList<String>();

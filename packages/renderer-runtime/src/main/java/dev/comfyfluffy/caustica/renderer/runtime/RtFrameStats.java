@@ -2,12 +2,14 @@ package dev.comfyfluffy.caustica.renderer.runtime;
 
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.Frame;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
+import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.Scope;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.StageMetric;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.LongSupplier;
 import jdk.jfr.*;
 
@@ -19,6 +21,10 @@ public final class RtFrameStats {
     private static final EventType STAGE_EVENT = EventType.getEventType(CpuStageEvent.class);
     private static final EventType COUNTER_EVENT = EventType.getEventType(FrameCounterEvent.class);
     private static final MetricSchema RENDERER_FRAME_METRICS = new MetricSchema(List.of(
+            new StageMetric("frame.capture"),
+            new StageMetric("frame.composite"),
+            new StageMetric("frame.recordUi"),
+            new StageMetric("frame.finishGraphicsUse"),
             new StageMetric("geometry.providerCollect"),
             new StageMetric("geometry.providerConvert"),
             new StageMetric("geometry.schedulerSubmit"),
@@ -54,7 +60,12 @@ public final class RtFrameStats {
 
     public long frameSerial() { return frameSerial; }
     public void beginRenderFrame() { frameSerial++; renderFrameStarted = true; }
-    public void endFrame() { frame.end(); renderFrameStarted = false; }
+    /** A host loop without rendering leaves producer observations attached to the upcoming frame. */
+    public void endFrame() {
+        if (!renderFrameStarted) return;
+        frame.end();
+        renderFrameStarted = false;
+    }
     RtFrameStats() { }
     public void configureFrameMetrics(MetricSchema metrics) { frame.configureMetrics(metrics); }
     public Profile frame() { return frame; }
@@ -65,17 +76,13 @@ public final class RtFrameStats {
         return FRAME_EVENT.isEnabled() || STAGE_EVENT.isEnabled() || COUNTER_EVENT.isEnabled();
     }
 
-    public interface Scope extends RtTelemetry.Scope {
-        Scope NOOP = () -> { };
-    }
-
     /** Frame counters are accumulated on the host render thread; stages retain every invocation. */
     public static final class Profile implements Frame {
         private final String name;
         private final MetricSchema baseMetrics;
         private final LongSupplier frameSerial;
         private String[] counterNames;
-        private Map<String, Integer> stageIndices;
+        private Set<String> stageNames;
         private Map<String, Integer> counterIndices;
         private long[] counters;
         private long frameStart;
@@ -101,7 +108,7 @@ public final class RtFrameStats {
         }
 
         private void applyMetrics(MetricSchema metrics) {
-            stageIndices = index(metrics.stages().stream().map(StageMetric::name).toArray(String[]::new));
+            stageNames = Set.copyOf(metrics.stages().stream().map(StageMetric::name).toList());
             counterNames = metrics.counters().toArray(String[]::new);
             counterIndices = index(counterNames);
             counters = new long[counterNames.length];
@@ -130,7 +137,9 @@ public final class RtFrameStats {
 
         public void endStage(String stageName, long startedNanos) {
             if (startedNanos == 0L) return;
-            indexOf(stageIndices, stageName);
+            if (!stageNames.contains(stageName)) {
+                throw new IllegalArgumentException("Unknown telemetry metric: " + stageName);
+            }
             CpuStageEvent event = new CpuStageEvent();
             event.frameId = frameSerial.getAsLong();
             event.stage = stageName;

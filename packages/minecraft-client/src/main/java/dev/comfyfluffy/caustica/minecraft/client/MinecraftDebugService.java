@@ -216,7 +216,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                     for (var name : request.getAsJsonArray("events")) events.add(name.getAsString());
                 } else {
                     events.addAll(List.of("Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
-                            "GeometryBuildReadyLatency", "BlasCommandRecord", "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
+                            "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
                             "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication"));
                 }
                 for (String name : events)

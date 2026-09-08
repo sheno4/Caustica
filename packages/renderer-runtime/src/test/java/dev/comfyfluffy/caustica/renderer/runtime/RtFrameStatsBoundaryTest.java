@@ -13,6 +13,34 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class RtFrameStatsBoundaryTest {
     @Test
+    void geometrySourcesKeepTheirRecordedNamesAndPublicationTimes(@TempDir Path temporary) throws Exception {
+        Path file = temporary.resolve("geometry.jfr");
+        try (Recording recording = new Recording()) {
+            recording.enable("dev.comfyfluffy.caustica.GeometryVisibility");
+            recording.start();
+            var telemetry = new RtTelemetryImpl();
+            telemetry.beginRenderFrame();
+            for (var source : RtTelemetry.GeometrySource.values()) {
+                telemetry.published(telemetry.extraction(source, 3));
+            }
+            telemetry.frameAssembled(telemetry.publicationCutoff());
+            recording.stop();
+            recording.dump(file);
+        }
+        List<RecordedEvent> events = RecordingFile.readAllEvents(file).stream()
+                .filter(event -> event.getEventType().getName().equals("dev.comfyfluffy.caustica.GeometryVisibility"))
+                .toList();
+        assertEquals(List.of("terrainDispatch", "terrainReady", "entity", "entityPlacement", "blockEntity", "particle"),
+                events.stream().map(event -> event.getString("source")).toList());
+        for (var event : events) {
+            assertEquals(3, event.getInt("geometryCount"));
+            assertEquals(1, event.getLong("frameId"));
+            assertTrue(event.getLong("extractedNanos") <= event.getLong("publishedNanos"));
+            assertTrue(event.getLong("publishedNanos") <= event.getLong("assembledNanos"));
+        }
+    }
+
+    @Test
     void recordingEnablesRawSamplesWithoutConfigAndKeepsEveryStage(@TempDir Path temporary) throws Exception {
         Path file = temporary.resolve("frames.jfr");
         try (Recording recording = new Recording()) {
