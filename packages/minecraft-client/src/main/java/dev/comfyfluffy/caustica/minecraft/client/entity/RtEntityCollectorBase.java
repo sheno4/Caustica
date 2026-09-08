@@ -692,7 +692,7 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
             customQuadVertexConsumer.begin();
             customGeometryRenderer.render(poseStack.last(), customQuadVertexConsumer);
             customQuadVertexConsumer.finish();
-            capture.requireCompleteQuads("custom geometry " + renderType);
+            capture.requireCompleteQuads(renderType);
         }
     }
 

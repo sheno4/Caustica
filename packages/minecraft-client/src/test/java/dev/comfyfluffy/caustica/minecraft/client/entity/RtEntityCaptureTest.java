@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtEntityCaptureTest {
     private static final float[] X = {0f, 1f, 1f, 0f};
@@ -21,6 +22,33 @@ final class RtEntityCaptureTest {
     private static final float[] Z = {0f, 0f, 0f, 0f};
     private static final float[] U = {0f, 1f, 1f, 0f};
     private static final float[] V = {0f, 0f, 1f, 1f};
+
+    @Test
+    void formatsQuadDiagnosticsOnlyOnFailureAndDiscardsIncompleteVertices() {
+        RtEntityCapture capture = new RtEntityCapture();
+        int[] descriptions = {0};
+        Object source = new Object() {
+            @Override public String toString() {
+                descriptions[0]++;
+                return "custom source";
+            }
+        };
+        capture.requireCompleteQuads(source);
+        assertEquals(0, descriptions[0]);
+
+        capture.addVertex(9, 9, 9, -1, 0, 0, 0, 0, 0, 0, 1);
+        var failure = assertThrows(IllegalStateException.class, () -> capture.requireCompleteQuads(source));
+        assertEquals("custom source left an incomplete quad (1 vertices)", failure.getMessage());
+        assertEquals(1, descriptions[0]);
+
+        for (int i = 0; i < 4; i++) {
+            capture.addVertex(X[i], Y[i], Z[i], -1, U[i], V[i], 0, 0, 0, 0, 1);
+        }
+        capture.requireCompleteQuads(source);
+        assertEquals(1, descriptions[0]);
+        assertEquals(6, capture.idx.size());
+        assertArrayEquals(new float[]{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0}, capture.verts.toFloatArray());
+    }
 
     @Test
     void particleCaptureDiscardsAnInterruptedVertexBeforeTheNextFrame() {

@@ -172,11 +172,11 @@ public final class RtEntityCapture implements VertexConsumer {
     }
 
     /** Fail fast before a later submission can accidentally complete a malformed custom-geometry quad. */
-    void requireCompleteQuads(String label) {
+    void requireCompleteQuads(Object source) {
         if (n != 0) {
             int incomplete = n;
             n = 0;
-            throw new IllegalStateException(label + " left an incomplete quad (" + incomplete + " vertices)");
+            throw new IllegalStateException(source + " left an incomplete quad (" + incomplete + " vertices)");
         }
     }
 
