@@ -5,15 +5,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$candelaRoot = $PSScriptRoot
-
-Push-Location $candelaRoot
+Push-Location $PSScriptRoot
 try {
-	# Heap/GC flags and the client program arguments live on the Gradle run configuration
-	# (CLIENT_JVM_ARGUMENTS / CLIENT_PROGRAM_ARGUMENTS). JAVA_TOOL_OPTIONS would leak them into every
-	# forked JVM, and NeoForge's JDK 21 tooling JVM rejects them; --args is unusable because NeoForge's
-	# devlaunch reads the first program argument as the main class.
+	# The Gradle run configuration keeps JVM settings scoped to the development client.
 	.\gradlew.bat --no-daemon ("-Ploader={0}" -f $Loader) :runClient
+	exit $LASTEXITCODE
 } finally {
 	Pop-Location
 }
