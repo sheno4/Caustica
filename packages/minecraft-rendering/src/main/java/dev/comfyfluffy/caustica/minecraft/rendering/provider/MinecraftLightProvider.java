@@ -10,10 +10,11 @@ import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightFrame;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-/** Owns Minecraft's retained celestial, helmet, and emissive-terrain light contributions. */
+/** Owns Minecraft's retained sun, moon, and helmet lights. */
 public final class MinecraftLightProvider implements AutoCloseable {
     private static final double TO_RADIANS = Math.PI / 180.0;
     private static final double SURFACE_TO_TOP_ILLUMINANCE = 100_000.0 / 128_000.0;
@@ -53,39 +54,32 @@ public final class MinecraftLightProvider implements AutoCloseable {
 
     void publish(CelestialLights celestial, Optional<LightDescriptor.Spot> helmet) {
         ArrayList<SceneEdit> operations = new ArrayList<>();
-        boolean sunChanged = !java.util.Objects.equals(publishedSun, celestial.sun());
-        boolean moonChanged = !java.util.Objects.equals(publishedMoon, celestial.moon());
-        boolean helmetChanged = !java.util.Objects.equals(publishedHelmet, helmet);
-        if (sunChanged) {
-            setOrDrop(operations, sunLight, celestial.sun());
+        if (!Objects.equals(publishedSun, celestial.sun())) {
+            operations.add(lightEdit(sunLight, celestial.sun()));
         }
-        if (moonChanged) {
-            setOrDrop(operations, moonLight, celestial.moon());
+        if (!Objects.equals(publishedMoon, celestial.moon())) {
+            operations.add(lightEdit(moonLight, celestial.moon()));
         }
-        if (helmetChanged) {
-            setOrDrop(operations, helmetLight, helmet);
+        if (!Objects.equals(publishedHelmet, helmet)) {
+            operations.add(lightEdit(helmetLight, helmet));
         }
         if (operations.isEmpty()) return;
         lights.edit(operations);
-        if (sunChanged) publishedSun = celestial.sun();
-        if (moonChanged) publishedMoon = celestial.moon();
-        if (helmetChanged) publishedHelmet = helmet;
+        publishedSun = celestial.sun();
+        publishedMoon = celestial.moon();
+        publishedHelmet = helmet;
     }
 
-    private void setOrDrop(List<SceneEdit> operations, LightId light,
-                           Optional<? extends LightDescriptor> descriptor) {
-        operations.add(descriptor.<SceneEdit>map(value ->
+    private SceneEdit lightEdit(LightId light, Optional<? extends LightDescriptor> descriptor) {
+        return descriptor.<SceneEdit>map(value ->
                 new SceneEdit.SetLight(light, scene, value)).orElseGet(() ->
-                new SceneEdit.DropLight(light)));
+                new SceneEdit.DropLight(light));
     }
 
     @Override
     public void close() {
-        ArrayList<SceneEdit> operations = new ArrayList<>();
-        operations.add(new SceneEdit.DropLight(sunLight));
-        operations.add(new SceneEdit.DropLight(moonLight));
-        operations.add(new SceneEdit.DropLight(helmetLight));
-        lights.edit(operations);
+        lights.edit(List.of(new SceneEdit.DropLight(sunLight), new SceneEdit.DropLight(moonLight),
+                new SceneEdit.DropLight(helmetLight)));
     }
 
     static CelestialLights celestialLights(CelestialFrame frame) {
