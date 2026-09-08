@@ -1,33 +1,34 @@
-import groovy.json.JsonOutput
-import java.security.MessageDigest
 import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
-import dev.comfyfluffy.caustica.slangtooling.ReflectSlang
 
 plugins {
 	id "dev.comfyfluffy.caustica.slang-tooling"
 	id "maven-publish"
 }
 
-evaluationDependsOn(":packages:api")
-evaluationDependsOn(":packages:api-support")
-evaluationDependsOn(":packages:config")
-evaluationDependsOn(":packages:engine")
-evaluationDependsOn(":packages:engine-vulkan")
-evaluationDependsOn(":packages:features-builtin")
-evaluationDependsOn(":packages:minecraft-api")
-evaluationDependsOn(":packages:minecraft-adapter")
-evaluationDependsOn(":packages:minecraft-content")
-evaluationDependsOn(":packages:minecraft-rendering")
-evaluationDependsOn(":packages:nvidia-ngx")
-evaluationDependsOn(":packages:nvidia-nrd")
-evaluationDependsOn(":packages:renderer-denoising")
-evaluationDependsOn(":packages:renderer-presentation")
-evaluationDependsOn(":packages:renderer-raytracing")
-evaluationDependsOn(":packages:renderer-runtime")
-evaluationDependsOn(":packages:settings-api")
-evaluationDependsOn(":packages:shader-api")
-evaluationDependsOn(":packages:slang-runtime")
-evaluationDependsOn(":packages:vulkan-support")
+def embeddedPackages = [
+	"api",
+	"api-support",
+	"config",
+	"engine",
+	"engine-vulkan",
+	"features-builtin",
+	"minecraft-api",
+	"minecraft-adapter",
+	"minecraft-content",
+	"minecraft-rendering",
+	"nvidia-ngx",
+	"nvidia-nrd",
+	"renderer-denoising",
+	"renderer-presentation",
+	"renderer-raytracing",
+	"renderer-runtime",
+	"settings-api",
+	"shader-api",
+	"slang-runtime",
+	"vulkan-support",
+].collect { project(":packages:${it}") }
+embeddedPackages.each { evaluationDependsOn(it.path) }
+def embeddedJavaPackages = embeddedPackages.findAll { it.name != "shader-api" }
 
 def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
 if (!(loader in ["fabric", "neoforge"])) {
@@ -133,26 +134,7 @@ if (loader == "fabric") {
 		mods {
 			caustica {
 				sourceSet(sourceSets.main)
-				sourceSet(project(":packages:api").sourceSets.main)
-				sourceSet(project(":packages:api-support").sourceSets.main)
-				sourceSet(project(":packages:config").sourceSets.main)
-				sourceSet(project(":packages:engine").sourceSets.main)
-				sourceSet(project(":packages:engine-vulkan").sourceSets.main)
-				sourceSet(project(":packages:features-builtin").sourceSets.main)
-				sourceSet(project(":packages:minecraft-api").sourceSets.main)
-				sourceSet(project(":packages:minecraft-adapter").sourceSets.main)
-				sourceSet(project(":packages:minecraft-content").sourceSets.main)
-				sourceSet(project(":packages:minecraft-rendering").sourceSets.main)
-				sourceSet(project(":packages:nvidia-ngx").sourceSets.main)
-				sourceSet(project(":packages:nvidia-nrd").sourceSets.main)
-				sourceSet(project(":packages:renderer-denoising").sourceSets.main)
-				sourceSet(project(":packages:renderer-presentation").sourceSets.main)
-				sourceSet(project(":packages:renderer-raytracing").sourceSets.main)
-				sourceSet(project(":packages:renderer-runtime").sourceSets.main)
-				sourceSet(project(":packages:settings-api").sourceSets.main)
-				sourceSet(project(":packages:shader-api").sourceSets.main)
-				sourceSet(project(":packages:slang-runtime").sourceSets.main)
-				sourceSet(project(":packages:vulkan-support").sourceSets.main)
+				embeddedPackages.each { sourceSet(it.sourceSets.main) }
 			}
 		}
 		unitTest {
@@ -176,44 +158,12 @@ dependencies {
 	if (loader == "fabric") {
 		testImplementation testFixtures(project(":packages:settings-api"))
 	}
-	compileOnly project(":packages:api")
-	apiRuntime project(":packages:api")
-	compileOnly project(":packages:api-support")
-	apiRuntime project(":packages:api-support")
-	compileOnly project(":packages:config")
-	apiRuntime project(":packages:config")
-	compileOnly project(":packages:engine")
-	apiRuntime project(":packages:engine")
-	compileOnly project(":packages:engine-vulkan")
-	apiRuntime project(":packages:engine-vulkan")
-	compileOnly project(":packages:features-builtin")
-	apiRuntime project(":packages:features-builtin")
-	compileOnly project(":packages:minecraft-api")
-	apiRuntime project(":packages:minecraft-api")
-	compileOnly project(":packages:minecraft-adapter")
-	apiRuntime project(":packages:minecraft-adapter")
-	compileOnly project(":packages:minecraft-content")
-	apiRuntime project(":packages:minecraft-content")
-	compileOnly project(":packages:minecraft-rendering")
-	apiRuntime project(":packages:minecraft-rendering")
-	compileOnly project(":packages:nvidia-ngx")
-	apiRuntime project(":packages:nvidia-ngx")
-	compileOnly project(":packages:nvidia-nrd")
+	embeddedJavaPackages.each { dependency ->
+		compileOnly dependency
+		testImplementation dependency
+		if (dependency.name != "nvidia-nrd") apiRuntime dependency
+	}
 	apiRuntime project(path: ":packages:nvidia-nrd", configuration: "nrdNatives")
-	compileOnly project(":packages:renderer-denoising")
-	apiRuntime project(":packages:renderer-denoising")
-	compileOnly project(":packages:renderer-presentation")
-	apiRuntime project(":packages:renderer-presentation")
-	compileOnly project(":packages:renderer-raytracing")
-	apiRuntime project(":packages:renderer-raytracing")
-	compileOnly project(":packages:renderer-runtime")
-	apiRuntime project(":packages:renderer-runtime")
-	compileOnly project(":packages:settings-api")
-	apiRuntime project(":packages:settings-api")
-	compileOnly project(":packages:slang-runtime")
-	apiRuntime project(":packages:slang-runtime")
-	compileOnly project(":packages:vulkan-support")
-	apiRuntime project(":packages:vulkan-support")
 	slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
 	slangShaderModules project(path: ":packages:features-builtin", configuration: "runtimeElements")
 	slangShaderModules project(path: ":packages:renderer-raytracing", configuration: "runtimeElements")
@@ -225,44 +175,6 @@ dependencies {
 	}
 	testImplementation platform("org.junit:junit-bom:5.12.2")
 	testImplementation "org.junit.jupiter:junit-jupiter"
-	testImplementation project(":packages:api")
-	testImplementation project(":packages:api-support")
-	testImplementation project(":packages:config")
-	testImplementation project(":packages:engine")
-	testImplementation project(":packages:engine-vulkan")
-	testImplementation project(":packages:features-builtin")
-	testImplementation project(":packages:minecraft-api")
-	testImplementation project(":packages:minecraft-adapter")
-	testImplementation project(":packages:minecraft-content")
-	testImplementation project(":packages:minecraft-rendering")
-	testImplementation project(":packages:nvidia-ngx")
-	testImplementation project(":packages:nvidia-nrd")
-	testImplementation project(":packages:renderer-denoising")
-	testImplementation project(":packages:renderer-presentation")
-	testImplementation project(":packages:renderer-raytracing")
-	testImplementation project(":packages:renderer-runtime")
-	testImplementation project(":packages:settings-api")
-	testImplementation project(":packages:slang-runtime")
-	testImplementation project(":packages:vulkan-support")
-	testRuntimeOnly project(":packages:api")
-	testRuntimeOnly project(":packages:api-support")
-	testRuntimeOnly project(":packages:config")
-	testRuntimeOnly project(":packages:engine")
-	testRuntimeOnly project(":packages:engine-vulkan")
-	testRuntimeOnly project(":packages:features-builtin")
-	testRuntimeOnly project(":packages:minecraft-api")
-	testRuntimeOnly project(":packages:minecraft-adapter")
-	testRuntimeOnly project(":packages:minecraft-content")
-	testRuntimeOnly project(":packages:minecraft-rendering")
-	testRuntimeOnly project(":packages:nvidia-ngx")
-	testRuntimeOnly project(":packages:nvidia-nrd")
-	testRuntimeOnly project(":packages:renderer-denoising")
-	testRuntimeOnly project(":packages:renderer-presentation")
-	testRuntimeOnly project(":packages:renderer-raytracing")
-	testRuntimeOnly project(":packages:renderer-runtime")
-	testRuntimeOnly project(":packages:settings-api")
-	testRuntimeOnly project(":packages:slang-runtime")
-	testRuntimeOnly project(":packages:vulkan-support")
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
 	// Layered TOML config (config/caustica.toml) — NightConfig, the same library NeoForge's
@@ -338,12 +250,6 @@ def verifyRtBindingsGeneration = tasks.register("verifyRtBindingsGeneration") {
 	dependsOn(project(":packages:renderer-raytracing").tasks.named("verifyRayTracingAbi"))
 }
 
-tasks.named("test", Test) {
-	useJUnitPlatform()
-	workingDir(rootProject.projectDir)
-}
-
-
 // Emit the .spv into the main resources so they land in the jar / on the runClient classpath at the
 // same /caustica/shaders/ path the pipeline loaders read. builtBy wires the dependency.
 sourceSets.main.resources.srcDir(files(shaderGenRoot).builtBy(compileShaders))
@@ -354,6 +260,8 @@ def nvidiaNrdPackage = project(":packages:nvidia-nrd")
 def nrdNativeJar = nvidiaNrdPackage.tasks.named("nrdNativeJar", Jar)
 
 tasks.named("test", Test) {
+	useJUnitPlatform()
+	workingDir(rootProject.projectDir)
 	dependsOn(bundleSlangRuntime)
 	jvmArgs "--enable-native-access=ALL-UNNAMED"
 	doFirst {
@@ -380,61 +288,26 @@ java {
 
 tasks.named("jar", Jar).configure {
 	dependsOn(nrdNativeJar)
-	from(project(":packages:api").sourceSets.main.output)
-	from(project(":packages:api-support").sourceSets.main.output)
-	from(project(":packages:config").sourceSets.main.output)
-	from(project(":packages:engine").sourceSets.main.output)
-	from(project(":packages:engine-vulkan").sourceSets.main.output)
-	from(project(":packages:features-builtin").sourceSets.main.output)
-	from(project(":packages:minecraft-api").sourceSets.main.output)
-	from(project(":packages:minecraft-adapter").sourceSets.main.output)
-	from(project(":packages:minecraft-content").sourceSets.main.output)
-	from(project(":packages:minecraft-rendering").sourceSets.main.output)
-	from(project(":packages:nvidia-ngx").sourceSets.main.output)
-	from(project(":packages:nvidia-nrd").sourceSets.main.output)
-	from(project(":packages:renderer-denoising").sourceSets.main.output)
+	embeddedPackages.each { from(it.sourceSets.main.output) }
 	from(nrdNativeJar.flatMap { it.archiveFile }.map { zipTree(it) }) {
 		include "caustica/natives/nrd/**"
 	}
-	from(project(":packages:renderer-presentation").sourceSets.main.output)
-	from(project(":packages:renderer-raytracing").sourceSets.main.output)
-	from(project(":packages:renderer-runtime").sourceSets.main.output)
-	from(project(":packages:settings-api").sourceSets.main.output)
-	from(project(":packages:shader-api").sourceSets.main.output)
-	from(project(":packages:slang-runtime").sourceSets.main.output)
-	from(project(":packages:vulkan-support").sourceSets.main.output)
 	from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
 		into "META-INF"
 	}
 }
 
 tasks.named("sourcesJar", Jar).configure {
-	from(project(":packages:api").sourceSets.main.allSource)
-	from(project(":packages:api-support").sourceSets.main.allSource)
-	from(project(":packages:config").sourceSets.main.allSource)
-	from(project(":packages:engine").sourceSets.main.allSource)
-	from(project(":packages:engine-vulkan").sourceSets.main.allSource)
-	from(project(":packages:features-builtin").sourceSets.main.allSource)
+	embeddedPackages.each { dependency ->
+		from(dependency.name == "slang-runtime"
+				? dependency.sourceSets.main.allJava : dependency.sourceSets.main.allSource)
+	}
 	from(project(":packages:features-builtin").file("shaders")) { into "shaders" }
-	from(project(":packages:minecraft-api").sourceSets.main.allSource)
-	from(project(":packages:minecraft-adapter").sourceSets.main.allSource)
-	from(project(":packages:minecraft-content").sourceSets.main.allSource)
-	from(project(":packages:minecraft-rendering").sourceSets.main.allSource)
 	from(project(":packages:minecraft-rendering").file("src/shaderReflection")) { into "shaders/minecraft-rendering" }
-	from(project(":packages:nvidia-ngx").sourceSets.main.allSource)
 	from(project(":packages:nvidia-ngx").file("native")) { into "native/nvidia-ngx" }
-	from(project(":packages:nvidia-nrd").sourceSets.main.allSource)
 	from(project(":packages:nvidia-nrd").file("native")) { into "native/nvidia-nrd" }
-	from(project(":packages:renderer-denoising").sourceSets.main.allSource)
-	from(project(":packages:renderer-presentation").sourceSets.main.allSource)
 	from(project(":packages:renderer-presentation").file("shaders")) { into "shaders/presentation" }
-	from(project(":packages:renderer-raytracing").sourceSets.main.allSource)
-	from(project(":packages:renderer-runtime").sourceSets.main.allSource)
-	from(project(":packages:settings-api").sourceSets.main.allSource)
-	from(project(":packages:shader-api").sourceSets.main.allSource)
-	from(project(":packages:slang-runtime").sourceSets.main.allJava)
 	from(project(":packages:slang-runtime").file("native")) { into "native/slang-runtime" }
-	from(project(":packages:vulkan-support").sourceSets.main.allSource)
 }
 
 def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
