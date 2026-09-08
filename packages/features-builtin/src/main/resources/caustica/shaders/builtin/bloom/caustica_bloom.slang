@@ -9,10 +9,10 @@
 module caustica_bloom;
 
 import caustica_bloom_types;
+import caustica_color;
 
 [[vk::push_constant]] BloomPush pc;
 
-static const float3 ACESCG_LUMA = float3(0.2722287168, 0.6740817658, 0.0536895174);
 static const float HALF_MAX = 65504.0;
 static const float BLOOM_ROLLOFF_START = 25.0;
 static const float BLOOM_CONTRIBUTION_CEILING = 50.0;
@@ -128,6 +128,11 @@ public void runBloom(uint3 dispatchId) {
         // which is why sceneImage can be a storage read rather than another sampler.
         SamplerState samplerState = SamplerDescriptorHeap[NonUniformResourceIndex(pc.samplerIndex)];
         float3 bloom = srcImage.SampleLevel(samplerState, uv, 0.0).rgb * pc.compositeStrength;
+        Texture2D<float> exposureImage =
+                ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
+        float exposure = max(exposureImage.Load(int3(0, 0, 0)), 0.0);
+        // The pyramid is exposed; restore the scene's scale before the display pass applies exposure.
+        bloom = exposure > 0.0 ? bloom / exposure : float3(0.0);
         Texture2D<float4> sceneImage =
                 ResourceDescriptorHeap[NonUniformResourceIndex(pc.sceneImageIndex)];
         dstImage[pixel] = float4(sceneImage.Load(int3(pixel, 0)).rgb + bloom, 1.0);
