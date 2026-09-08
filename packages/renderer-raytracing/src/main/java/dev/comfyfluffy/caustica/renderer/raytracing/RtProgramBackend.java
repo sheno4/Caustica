@@ -4,6 +4,9 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.program.SurfaceId;
+import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
@@ -136,12 +139,12 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
 
     private Candidate build(ProgramComposition composition) throws IOException {
         WorldShaderCompiler shaderCompiler = null;
-        ImplementationTable table = null;
+        VmaMappedBuffer table = null;
         RtPipeline pipeline = null;
         try {
             shaderCompiler = WorldShaderCompiler.createIsolated(slangRuntime, cacheRoot, composition);
             List<Long> data = shaderCompiler.implementationData();
-            table = ImplementationTable.create(context, data);
+            table = createImplementationTable(data);
             boolean reordered = context.backend().capabilities().shaderExecutionReordering();
             RtShaderCode build = RtShaderCode.of("build-stable-planes", shaderCompiler.compileBuildStablePlanes());
             RtShaderCode fill = RtShaderCode.of("fill-stable-planes", shaderCompiler.compileFillStablePlanes(reordered));
@@ -153,10 +156,10 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             RtShaderCode shadow = RtShaderCode.of("shadow-any-hit", shaderCompiler.compileShadowAnyHit());
             pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill},
                     new RtShaderCode[]{environment, guide}, closest, radiance, shadow);
-            return new Candidate(shaderCompiler, table, pipeline);
+            return new Candidate(composition, shaderCompiler, table, pipeline);
         } catch (IOException | RuntimeException | Error failure) {
             if (pipeline != null) pipeline.destroy();
-            if (table != null) table.destroy();
+            if (table != null) table.close();
             if (shaderCompiler != null) shaderCompiler.close();
             throw failure;
         }
@@ -176,8 +179,13 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
 
     /** Renderer-facing immutable state of one published program. */
     public interface Published extends CompiledProgram {
+        ProgramComposition composition();
         RtPipeline pipeline();
         VulkanDeviceAddress compositionDataAddress();
+
+        default int resolve(SurfaceId<?, ?> id) { return composition().resolve(id); }
+        default int resolve(VolumeId<?, ?> id) { return composition().resolve(id); }
+        default int resolve(EnvironmentId<?> id) { return composition().resolve(id); }
 
         /** Writes this program's implementation table address into a complete world binding root. */
         default void writeCompositionDataAddress(ByteBuffer roots) {
@@ -193,22 +201,26 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
 
     private final class Candidate implements Published {
         private final RtProgramBackend owner = RtProgramBackend.this;
+        private final ProgramComposition composition;
         private final WorldShaderCompiler compiler;
-        private final ImplementationTable table;
+        private final VmaMappedBuffer table;
         private final RtPipeline pipeline;
         private final SharedResource<Published> lifetime;
         private Runnable retired = () -> { };
         private CandidateState state = CandidateState.CANDIDATE;
 
-        private Candidate(WorldShaderCompiler compiler, ImplementationTable table, RtPipeline pipeline) {
+        private Candidate(ProgramComposition composition, WorldShaderCompiler compiler,
+                          VmaMappedBuffer table, RtPipeline pipeline) {
+            this.composition = composition;
             this.compiler = compiler;
             this.table = table;
             this.pipeline = pipeline;
             lifetime = SharedResource.owned(this, ignored -> context.deferDestroy(this::destroy));
         }
 
+        @Override public ProgramComposition composition() { return composition; }
         @Override public RtPipeline pipeline() { return pipeline; }
-        @Override public VulkanDeviceAddress compositionDataAddress() { return table.address; }
+        @Override public VulkanDeviceAddress compositionDataAddress() { return table.deviceRange().address(); }
 
         @Override public void close() {
             synchronized (RtProgramBackend.this) {
@@ -222,10 +234,8 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         }
 
         private void destroy() {
-            try {
+            try (compiler; table) {
                 pipeline.destroy();
-                table.destroy();
-                compiler.close();
             } finally {
                 retired.run();
             }
@@ -234,31 +244,19 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
 
     private enum CandidateState { CANDIDATE, ACTIVE, RETIRING, DISPOSED }
 
-    private static final class ImplementationTable {
-        final VmaMappedBuffer storage;
-        final VulkanDeviceAddress address;
-
-        private ImplementationTable(VmaMappedBuffer storage) {
-            this.storage = storage;
-            this.address = storage.deviceRange().address();
+    private VmaMappedBuffer createImplementationTable(List<Long> words) {
+        long size = Math.max(Long.BYTES, Math.multiplyExact((long) words.size(), Long.BYTES));
+        VmaMappedBuffer storage = VmaMappedBuffer.create(
+                context, size, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "program data");
+        try {
+            ByteBuffer mapped = storage.mapped().order(ByteOrder.nativeOrder());
+            for (long word : words) mapped.putLong(word);
+            if (words.isEmpty()) mapped.putLong(0L);
+            storage.flush(0L, size);
+            return storage;
+        } catch (RuntimeException | Error failure) {
+            storage.close();
+            throw failure;
         }
-
-        static ImplementationTable create(VulkanDeviceContext context, List<Long> words) {
-            long size = Math.max(Long.BYTES, Math.multiplyExact((long) words.size(), Long.BYTES));
-            VmaMappedBuffer storage = VmaMappedBuffer.create(
-                    context, size, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "program data");
-            try {
-                ByteBuffer mapped = storage.mapped().order(ByteOrder.nativeOrder());
-                for (Long word : words) mapped.putLong(word);
-                if (words.isEmpty()) mapped.putLong(0L);
-                storage.flush(0L, size);
-                return new ImplementationTable(storage);
-            } catch (RuntimeException | Error failure) {
-                storage.close();
-                throw failure;
-            }
-        }
-
-        void destroy() { storage.close(); }
     }
 }

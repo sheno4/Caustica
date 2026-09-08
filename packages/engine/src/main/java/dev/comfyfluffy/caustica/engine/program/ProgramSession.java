@@ -43,7 +43,6 @@ public final class ProgramSession {
     private final Queue<CompletionEvent> compilerCompletions = new ConcurrentLinkedQueue<>();
     private final Queue<CallbackTask> callbacks = new ArrayDeque<>();
     private List<Registration<?>> published = List.of();
-    private ProgramBackend.CompiledProgram activeProgram;
     private long resolutionRevision;
     private BuildRequest inFlight;
     private final int[] nextDeclarationSequences = new int[ProgramKey.Kind.values().length];
@@ -107,7 +106,7 @@ public final class ProgramSession {
     /** Returns the published implementation index, or zero for a stale/foreign surface. */
     public synchronized int resolve(SurfaceId<?, ?> id) {
         if (!(id instanceof SurfaceReference reference) || reference.session != this
-                || !reference.registration.published || activeProgram == null) {
+                || !reference.registration.published) {
             return 0;
         }
         return reference.key.implementationIndex();
@@ -116,7 +115,7 @@ public final class ProgramSession {
     /** Returns the published implementation index, or zero for vacuum. */
     public synchronized int resolve(VolumeId<?, ?> id) {
         if (!(id instanceof VolumeReference reference) || reference.session != this
-                || !reference.registration.published || activeProgram == null) {
+                || !reference.registration.published) {
             return 0;
         }
         return reference.key.implementationIndex();
@@ -125,7 +124,7 @@ public final class ProgramSession {
     /** Returns the published implementation index, or zero for the error environment. */
     public synchronized int resolve(EnvironmentId<?> id) {
         if (!(id instanceof EnvironmentReference reference) || reference.session != this
-                || !reference.registration.published || activeProgram == null) {
+                || !reference.registration.published) {
             return 0;
         }
         return reference.key.implementationIndex();
@@ -173,7 +172,7 @@ public final class ProgramSession {
         if (!channel.accepting) throw new IllegalStateException("program channel no longer accepts declarations");
         if (declarationActive) throw new IllegalStateException("program declarations must not overlap");
 
-        Builder builder = new Builder(this);
+        Builder builder = new Builder();
         E exports;
         declarationActive = true;
         try {
@@ -220,13 +219,11 @@ public final class ProgramSession {
                 target = retained;
             } else {
                 introduced = accepted.stream()
-                        .filter(registration -> registration.status == RegistrationStatus.PENDING
+                        .filter(registration -> registration.completion == null
                                 && !registration.closed && !published.contains(registration))
                         .findFirst().orElse(null);
                 if (introduced == null) return;
-                target = new ArrayList<>(published);
-                target.add(introduced);
-                target = List.copyOf(target);
+                target = append(published, introduced);
             }
             request = new BuildRequest(target, introduced);
             inFlight = request;
@@ -246,10 +243,16 @@ public final class ProgramSession {
     }
 
     private ProgramComposition composition(BuildRequest request) {
-        return new ProgramComposition(request.target.stream()
-                .flatMap(registration -> registration.declarations.stream())
-                .map(Declaration::external)
-                .toList());
+        List<ProgramComposition.Declaration> declarations = new ArrayList<>();
+        Map<Object, Integer> implementations = new IdentityHashMap<>();
+        for (Registration<?> registration : request.target) {
+            for (Declaration declaration : registration.declarations) {
+                declarations.add(declaration.external());
+                Reference reference = declaration.reference();
+                implementations.put(reference, reference.key.implementationIndex());
+            }
+        }
+        return new ProgramComposition(declarations, implementations);
     }
 
     private void acceptCompletion(CompletionEvent event) {
@@ -264,7 +267,7 @@ public final class ProgramSession {
             if (event.result instanceof ProgramBackend.Compilation.Failed failed) {
                 if (event.request.introduced != null) {
                     Registration<?> registration = event.request.introduced;
-                    if (!registration.closed && registration.status == RegistrationStatus.PENDING) {
+                    if (!registration.closed && registration.completion == null) {
                         registration.fail(failed.failure());
                         accepted.remove(registration);
                         retire(registration);
@@ -295,7 +298,6 @@ public final class ProgramSession {
             backend.publish(candidate, () -> enqueue(null, () -> removed.forEach(this::retire)));
             removed.forEach(registration -> registration.published = false);
             event.request.target.forEach(registration -> registration.published = true);
-            activeProgram = candidate;
             published = event.request.target;
             resolutionRevision++;
             if (event.request.introduced != null) event.request.introduced.ready();
@@ -305,7 +307,7 @@ public final class ProgramSession {
     private boolean valid(BuildRequest request) {
         if (request.target.stream().anyMatch(registration -> registration.closed)) return false;
         if (request.introduced != null) {
-            return request.introduced.status == RegistrationStatus.PENDING
+            return request.introduced.completion == null
                     && request.target.equals(append(published, request.introduced));
         }
         return request.target.equals(published.stream().filter(registration -> !registration.closed).toList());
@@ -424,8 +426,6 @@ public final class ProgramSession {
     private record CompletionEvent(BuildRequest request, ProgramBackend.Compilation result) { }
     private record CallbackTask(ProgramContributionChannel channel, Runnable action) { }
 
-    private enum RegistrationStatus { PENDING, READY, FAILED, CANCELLED }
-
     private record ShaderIdentity(Class<?> anchor, String root, List<String> subdirectories,
                                   String module, String type) {
         static ShaderIdentity of(ShaderDefinition shader) {
@@ -509,18 +509,16 @@ public final class ProgramSession {
     }
 
     private final class Builder implements ProgramBuilder {
-        private final ProgramSession session;
         private final List<Declaration> declarations = new ArrayList<>();
         private boolean active = true;
-
-        private Builder(ProgramSession session) { this.session = session; }
 
         @Override
         @SuppressWarnings("unchecked")
         public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            SurfaceReference reference = new SurfaceReference(session, nextKey(ProgramKey.Kind.SURFACE), definition);
+            SurfaceReference reference = new SurfaceReference(
+                    ProgramSession.this, nextKey(ProgramKey.Kind.SURFACE), definition);
             declarations.add(new SurfaceDeclaration(reference, definition));
             return (SurfaceId<B, N>) (SurfaceId<?, ?>) reference;
         }
@@ -530,7 +528,8 @@ public final class ProgramSession {
         public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
-            VolumeReference reference = new VolumeReference(session, nextKey(ProgramKey.Kind.VOLUME), definition);
+            VolumeReference reference = new VolumeReference(
+                    ProgramSession.this, nextKey(ProgramKey.Kind.VOLUME), definition);
             declarations.add(new VolumeDeclaration(reference, definition));
             return (VolumeId<B, N>) (VolumeId<?, ?>) reference;
         }
@@ -541,7 +540,7 @@ public final class ProgramSession {
             requireActive();
             Objects.requireNonNull(definition, "definition");
             EnvironmentReference reference = new EnvironmentReference(
-                    session, nextKey(ProgramKey.Kind.ENVIRONMENT), definition);
+                    ProgramSession.this, nextKey(ProgramKey.Kind.ENVIRONMENT), definition);
             declarations.add(new EnvironmentDeclaration(reference, definition));
             return (EnvironmentId<B>) (EnvironmentId<?>) reference;
         }
@@ -558,7 +557,6 @@ public final class ProgramSession {
         private final List<Declaration> declarations;
         private final List<ResourceOwner> resourceLeases;
         private final List<Consumer<? super Completion>> observers = new ArrayList<>();
-        private RegistrationStatus status = RegistrationStatus.PENDING;
         private Completion completion;
         private boolean closed;
         private boolean retired;
@@ -590,8 +588,8 @@ public final class ProgramSession {
             synchronized (session) {
                 if (closed) return;
                 closed = true;
-                if (status == RegistrationStatus.PENDING) {
-                    complete(RegistrationStatus.CANCELLED, new Cancelled());
+                if (completion == null) {
+                    complete(new Cancelled());
                     if (session.inFlight == null || !session.inFlight.target.contains(this)) {
                         session.retire(this);
                     }
@@ -600,16 +598,15 @@ public final class ProgramSession {
         }
 
         private void ready() {
-            complete(RegistrationStatus.READY, new Ready());
+            complete(new Ready());
         }
 
         private void fail(ProgramFailure failure) {
-            complete(RegistrationStatus.FAILED, new Failed(failure));
+            complete(new Failed(failure));
         }
 
-        private void complete(RegistrationStatus status, Completion completion) {
-            if (this.status != RegistrationStatus.PENDING) return;
-            this.status = status;
+        private void complete(Completion completion) {
+            if (this.completion != null) return;
             this.completion = completion;
             observers.forEach(observer -> session.enqueue(channel, () -> observer.accept(completion)));
             observers.clear();

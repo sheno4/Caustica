@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
@@ -9,6 +10,7 @@ import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -89,6 +91,7 @@ final class RtProgramBackendAbiTest {
 
     private static RtProgramBackend.Published published(long address) {
         return new RtProgramBackend.Published() {
+            @Override public ProgramComposition composition() { return new ProgramComposition(List.of()); }
             @Override public RtPipeline pipeline() { return null; }
             @Override public VulkanDeviceAddress compositionDataAddress() {
                 return new VulkanDeviceAddress(address);

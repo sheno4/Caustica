@@ -1,17 +1,41 @@
 package dev.comfyfluffy.caustica.engine.program;
 
 import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
+import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
+import dev.comfyfluffy.caustica.api.program.VolumeId;
 
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
-/** Immutable ordered input to the renderer's shader composer. */
-public record ProgramComposition(List<Declaration> declarations) {
-    public ProgramComposition {
-        declarations = List.copyOf(declarations);
+/** Immutable declarations and implementation identities for one compiled renderer program. */
+public final class ProgramComposition {
+    private final List<Declaration> declarations;
+    private final IdentityHashMap<Object, Integer> implementations;
+
+    public ProgramComposition(List<Declaration> declarations) {
+        this(declarations, Map.of());
     }
+
+    public ProgramComposition(List<Declaration> declarations, Map<Object, Integer> implementations) {
+        this.declarations = List.copyOf(declarations);
+        this.implementations = new IdentityHashMap<>(implementations);
+    }
+
+    public List<Declaration> declarations() { return declarations; }
+
+    /** Resolves this composition's surface, or zero for an absent/foreign surface. */
+    public int resolve(SurfaceId<?, ?> id) { return implementations.getOrDefault(id, 0); }
+
+    /** Resolves this composition's volume, or zero for vacuum. */
+    public int resolve(VolumeId<?, ?> id) { return implementations.getOrDefault(id, 0); }
+
+    /** Resolves this composition's environment, or zero for the error environment. */
+    public int resolve(EnvironmentId<?> id) { return implementations.getOrDefault(id, 0); }
 
     public sealed interface Declaration permits Surface, Volume, Environment {
         ProgramKey key();

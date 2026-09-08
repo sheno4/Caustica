@@ -110,6 +110,9 @@ final class RtCapturedFrameTest {
 
     private static SharedResource<RtProgramBackend.Published> program(AtomicInteger destroyed) {
         return SharedResource.owned(new RtProgramBackend.Published() {
+            @Override public dev.comfyfluffy.caustica.engine.program.ProgramComposition composition() {
+                return new dev.comfyfluffy.caustica.engine.program.ProgramComposition(List.of());
+            }
             @Override public RtPipeline pipeline() { throw new AssertionError("capture must not record"); }
             @Override public VulkanDeviceAddress compositionDataAddress() { throw new AssertionError(); }
             @Override public void close() { throw new AssertionError("release through shared ownership"); }
