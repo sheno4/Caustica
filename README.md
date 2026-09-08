@@ -21,12 +21,14 @@ changes while the renderer is being built.
 - Vulkan hardware path-traced world rendering
 - Vulkan 1.4 with unified image layouts, descriptor heaps, and shader-object compute/raster passes
 - DLSS Ray Reconstruction support
+- DLSS Super Resolution after NRD denoising
 - DLSS Frame Generation support (experimental)
 - HDR output
 - Dynamic entity rendering in the ray-traced scene
 - LabPBR-style material support
 - SER (Shader Execution Reordering) support
 - NRD denoising
+- Procedural Nether and End skies
 - RTXPT-style adaptive next-event estimation implemented independently for retained rectangle, spot, and distant lights
 
 ## Requirements
@@ -48,7 +50,7 @@ changes while the renderer is being built.
 ## Usage Notes
 
 - Caustica is client-side only.
-- DLSS Ray Reconstruction and Frame Generation require supported NVIDIA
+- DLSS Super Resolution, Ray Reconstruction and Frame Generation require supported NVIDIA
   hardware and drivers.
 - On Linux if Minecraft crashes on startup with stack overflow errors, try adding `-Xss2M` to the Java args to increase the stack size.
 - Use Java args to improve performance. Minecraft Launcher default:
@@ -81,9 +83,15 @@ Release artifacts may bundle NVIDIA DLSS/NGX SDK components under NVIDIA's own
 license terms and the Slang compiler under Apache 2.0 with LLVM Exception. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+## Development
+
+See the [developer guide](docs/developer_guide.md) for build and launch instructions,
+the [architectural commitments](docs/VISION.md) for the Minecraft-independent engine contract,
+and the [debugging guide](docs/DEBUGGING.md) for runtime diagnostics.
+
 ## TODO List
 
-- [ ] Nether/End sky, weather, volumetric fog/clouds
+- [ ] Weather and volumetric fog/clouds
 - [ ] FSR upscaling for non-NVIDIA GPUs
 - [ ] Opacity micromap acceleration
 - [ ] LOD
