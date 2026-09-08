@@ -123,12 +123,11 @@ public final class Camera {
     }
 
     private static float[] identityMatrix() {
-        float[] matrix = new float[16];
-        Arrays.fill(matrix, 0.0f);
-        matrix[0] = 1.0f;
-        matrix[5] = 1.0f;
-        matrix[10] = 1.0f;
-        matrix[15] = 1.0f;
-        return matrix;
+        return new float[]{
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+        };
     }
 }

@@ -12,7 +12,11 @@ public sealed interface ViewMedium permits ViewMedium.Vacuum, ViewMedium.Volume 
         INSTANCE
     }
 
-    /** A typed volume implementation and the binding words selected at the camera origin. */
+    /**
+     * A typed volume implementation and the binding words selected at the camera origin.
+     * Construction borrows both data handles. The caller keeps them open until frame capture has retained
+     * independent claims, and closes its own handles when they are no longer needed.
+     */
     record Volume<B, N>(VolumeId<B, N> implementation, ShaderData<B> bindingData,
                         ShaderData<N> instanceData) implements ViewMedium {
         public Volume {
