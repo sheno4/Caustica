@@ -1,11 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
-
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.Option;
@@ -82,7 +79,6 @@ public final class MinecraftRtRuntime {
     private VulkanRendererBackend vulkanBackend;
     private VulkanDeviceContext vulkanContext;
     private NgxRuntime ngxRuntime;
-    private NrdLibrary nrdLibrary;
     private DenoiserBackendFactory denoiserFactory;
     private final MinecraftRtLifecycle lifecycle = new MinecraftRtLifecycle(
             new MinecraftRtLifecycle.Listener() {
@@ -127,6 +123,17 @@ public final class MinecraftRtRuntime {
         return telemetry;
     }
 
+    /** Active gameplay ticks belong to the upcoming render frame, including work before the runtime tick. */
+    public RtTelemetry.Scope beginTickProfile() {
+        return state == State.ACTIVE ? MinecraftFrameMetrics.beginTick(telemetry) : RtTelemetry.Scope.NOOP;
+    }
+
+    /** Times host-owned mod work, including producer edits before the next rendered frame. */
+    public RtTelemetry.Scope profileStage(String name) {
+        return state == State.ACTIVE || frameActive
+                ? MinecraftFrameMetrics.stage(telemetry, name) : RtTelemetry.Scope.NOOP;
+    }
+
     /** Attach the host backend whose device lifetime encloses every RT activation. */
     public synchronized void installVulkanBackend(VulkanRendererBackend backend) {
         VulkanRendererBackend installed = java.util.Objects.requireNonNull(backend, "backend");
@@ -162,13 +169,15 @@ public final class MinecraftRtRuntime {
                     VulkanCommandEncoder.MAX_SUBMITS_IN_FLIGHT));
             vulkanContext = created;
             ngxRuntime = createdNgxRuntime;
-            nrdLibrary = createdNrdLibrary;
             denoiserFactory = createdDenoiserFactory;
             return created;
         } catch (Throwable failure) {
             try {
-                if (createdDenoiserFactory != null) createdDenoiserFactory.close();
-                if (createdNgxRuntime != null) createdNgxRuntime.shutdown();
+                try {
+                    if (createdDenoiserFactory != null) createdDenoiserFactory.close();
+                } finally {
+                    if (createdNgxRuntime != null) createdNgxRuntime.shutdown();
+                }
             } finally {
                 created.destroy();
             }
@@ -253,7 +262,7 @@ public final class MinecraftRtRuntime {
 
     /** Process-scoped extension host used when the renderer creates its engine session services. */
     public RenderSessionHost apiHost() {
-        return java.util.Objects.requireNonNull(apiHost, "Caustica API host is not installed");
+        return apiHost;
     }
 
     /** Observe a resource pack that is available to the client, including the initial title-screen pack. */
@@ -310,7 +319,9 @@ public final class MinecraftRtRuntime {
     }
 
     public void beginFrame() {
-        if (frameActive && session != null && session.renderer != null) session.renderer.beginFrame();
+        try (var ignored = profileStage("runtime.frameSetup")) {
+            if (frameActive && session != null && session.renderer != null) session.renderer.beginFrame();
+        }
     }
 
     public void recordUiPasses(dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage uiLayer) {
@@ -321,8 +332,9 @@ public final class MinecraftRtRuntime {
         if (session != null && session.renderer != null) session.renderer.finishGraphicsUse();
     }
 
+    /** Finalize observations after host presentation and render-thread texture retirement. */
     public void endFrame() {
-        if (session != null && session.renderer != null) session.renderer.endFrame();
+        telemetry.endFrame();
     }
 
     public boolean composite(long nativeColorImage, int width, int height) {
@@ -378,7 +390,9 @@ public final class MinecraftRtRuntime {
     }
 
     public void captureHudless(BorrowedImage source, UiPresentationResources ui) {
-        if (session != null) session.presenter.captureHudless(source, ui);
+        try (var ignored = profileStage("presentation.captureHudless")) {
+            if (session != null) session.presenter.captureHudless(source, ui);
+        }
     }
 
     public RuntimeHost host() {
@@ -442,12 +456,14 @@ public final class MinecraftRtRuntime {
 
     /** Latch the session state consumed by every hook in this render frame. */
     public void beginRenderFrame() {
-        settings = CausticaConfig.snapshot();
-        if (session != null && session.renderer != null) {
-            session.renderer.configureSettings(RtRenderSettings.capture(settings, swapchainPqActive));
-            session.renderer.latchSceneReadiness();
+        try (var ignored = profileStage("runtime.frameSetup")) {
+            settings = CausticaConfig.snapshot();
+            if (session != null && session.renderer != null) {
+                session.renderer.configureSettings(RtRenderSettings.capture(settings, swapchainPqActive));
+                session.renderer.latchSceneReadiness();
+            }
+            frameActive = state == State.ACTIVE;
         }
-        frameActive = state == State.ACTIVE;
     }
 
     public void shutdown() {
@@ -470,7 +486,6 @@ public final class MinecraftRtRuntime {
                 vulkanContext = null;
                 ngxRuntime = null;
                 denoiserFactory = null;
-                nrdLibrary = null;
                 if (context != null) {
                     try {
                         context.waitIdle();
@@ -488,8 +503,7 @@ public final class MinecraftRtRuntime {
                     lifecycle.clear();
                 } finally {
                     try {
-                        SlangRuntime compilerRuntime = slangRuntime;
-                        if (compilerRuntime != null) compilerRuntime.shutdown();
+                        slangRuntime.shutdown();
                     } finally {
                         vulkanBackend = null;
                         state = State.OFF;
@@ -552,9 +566,7 @@ public final class MinecraftRtRuntime {
             DlssFrameGeneration frameGeneration = new DlssFrameGeneration(
                     requireNgxRuntime(), frameGenerationSettings());
             session = new Session(context, frameGeneration,
-                    new RtFramePresenter(context, frameGeneration, this::presentationSettings),
-                    java.util.Objects.requireNonNull(
-                    shaderCacheRoot, "shader cache is not configured"));
+                    new RtFramePresenter(context, frameGeneration, this::presentationSettings));
             state = State.STARTING;
             LOGGER.info("RT runtime starting; source presentation remains active");
         } catch (Throwable failure) {
@@ -575,11 +587,6 @@ public final class MinecraftRtRuntime {
      * throughout the RT session, so no rebuild or wait is required.
      */
     private void stop(Runnable reconfigureSurface) {
-        closeSession(reconfigureSurface, State.OFF);
-        LOGGER.info("RT runtime off; source presentation restored");
-    }
-
-    private void closeSession(Runnable reconfigureSurface, State terminalState) {
         state = State.STOPPING;
         frameActive = false;
         Session closing = session;
@@ -590,15 +597,15 @@ public final class MinecraftRtRuntime {
             try {
                 closing.close();
             } finally {
-                state = terminalState;
+                state = State.OFF;
             }
         }
+        LOGGER.info("RT runtime off; source presentation restored");
     }
 
     private final class Session {
         private final DlssFrameGeneration frameGeneration;
         private final RtFramePresenter presenter;
-        private final Path shaderCacheRoot;
         private VulkanDeviceContext context;
         private RtProgramBackend programs;
         private RtRetainedSceneBackend scenes;
@@ -610,11 +617,10 @@ public final class MinecraftRtRuntime {
         private long worldEpoch;
 
         private Session(VulkanDeviceContext context, DlssFrameGeneration frameGeneration,
-                        RtFramePresenter presenter, Path shaderCacheRoot) {
+                        RtFramePresenter presenter) {
             this.context = context;
             this.frameGeneration = frameGeneration;
             this.presenter = presenter;
-            this.shaderCacheRoot = shaderCacheRoot;
         }
 
         private boolean requiresSourceFallback() {
@@ -660,20 +666,20 @@ public final class MinecraftRtRuntime {
 
         private void openWorld(long epoch, MinecraftDimensionKey dimension,
                                ResourcePackEpoch resourcePackEpoch) {
-            programs = new RtProgramBackend(context,
-                    slangRuntime,
-                    shaderCacheRoot);
-            scenes = new RtRetainedSceneBackend(context);
-            passes = new RtPassSchedulerBackend(context,
-                    org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                    org.lwjgl.vulkan.VK10.VK_FORMAT_R32_SFLOAT,
-                    org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM);
-            RtDenoisingSettings denoising = denoisingSettings();
-            rayReconstruction = new DlssRayReconstruction(
-                    requireNgxRuntime(), rayReconstructionSettings(denoising));
-            superResolution = new DlssSuperResolution(
-                    requireNgxRuntime(), superResolutionSettings(denoising));
             try {
+                programs = new RtProgramBackend(context,
+                        slangRuntime,
+                        shaderCacheRoot);
+                scenes = new RtRetainedSceneBackend(context);
+                passes = new RtPassSchedulerBackend(context,
+                        org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                        org.lwjgl.vulkan.VK10.VK_FORMAT_R32_SFLOAT,
+                        org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM);
+                RtDenoisingSettings denoising = denoisingSettings();
+                rayReconstruction = new DlssRayReconstruction(
+                        requireNgxRuntime(), rayReconstructionSettings(denoising));
+                superResolution = new DlssSuperResolution(
+                        requireNgxRuntime(), superResolutionSettings(denoising));
                 world = new MinecraftEngineWorldSession(apiHost(),
                         minecraftSessionHost, context, context.gpuExecutor(),
                         programs, scenes, new dev.comfyfluffy.caustica.renderer.raytracing.scene.RtMeshPreparer(context),

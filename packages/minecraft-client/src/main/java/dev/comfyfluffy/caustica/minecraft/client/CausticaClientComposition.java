@@ -1,14 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftApiBootstrap;
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftFrameAdapter;
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftRuntimeHost;
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtWorkerPool;
-import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 
 import java.util.Objects;
 
@@ -67,8 +62,10 @@ public final class CausticaClientComposition {
 
     /** Advances client integration after the renderer backend has observed Minecraft's live device. */
     public void tickRuntime(net.minecraft.client.Minecraft client) {
-        vulkanBackend.installCurrent();
-        frameAdapter.tickRuntime(client);
+        try (var ignored = runtime.beginTickProfile()) {
+            vulkanBackend.installCurrent();
+            frameAdapter.tickRuntime(client);
+        }
     }
 
     public static synchronized void publish(CausticaClientComposition composition) {

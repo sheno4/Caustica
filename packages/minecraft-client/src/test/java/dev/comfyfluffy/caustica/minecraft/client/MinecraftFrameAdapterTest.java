@@ -65,13 +65,18 @@ final class MinecraftFrameAdapterTest {
         assertSame(secondScene, adapter.selection(false).scene());
         secondLease.close();
         assertNull(adapter.selection(false));
+        var reinstalled = adapter.installFrameSelector(first);
+        firstLease.close();
+        assertSame(firstScene, adapter.selection(false).scene());
+        reinstalled.close();
+        assertNull(adapter.selection(false));
     }
 
     @Test
     void uiSnapshotDoesNotRetainPriorFrameResources() {
-        UiPresentationResources first = MinecraftUiOverlay.snapshotPresentation(
+        UiPresentationResources first = new UiPresentationResources(
                 true, true, image(), 1920, 1080);
-        UiPresentationResources second = MinecraftUiOverlay.snapshotPresentation(
+        UiPresentationResources second = new UiPresentationResources(
                 false, false, null, 0, 0);
 
         assertEquals(11, first.colorImage());
