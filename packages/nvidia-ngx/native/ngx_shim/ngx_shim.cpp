@@ -435,6 +435,8 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     eval.InRenderSubrectDimensions.Height = renderHeight;
     eval.InFrameTimeDeltaInMsec = frameTimeMs;
     eval.InPreExposure = preExposure;
+    // Renderer images are bottom-up; keep the NGX diagnostic indicator upright after presentation.
+    eval.InIndicatorInvertYAxis = 1;
     NGX_LOG("evaluate_dlssd: calling NGX_VULKAN_EVALUATE_DLSSD_EXT");
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSSD_EXT(cmd, f->handle, f->params, &eval);
     g_lastResult = (int) r;
