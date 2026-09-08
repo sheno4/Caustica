@@ -145,10 +145,10 @@ class RtEntityCollectorBase {
                     : hasCutoutDefine(renderType) ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
             if (sprite != null) {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
-                setSpriteMaterial(sprite, MinecraftEntityMesh.MaterialProfile.ROUGH_DIELECTRIC, false,
-                        stochasticAlpha);
+                capture.currentMaterial = spriteMaterial(sprite,
+                        MinecraftEntityMesh.MaterialProfile.ROUGH_DIELECTRIC, false);
             } else {
-                setStandaloneMaterial(renderType);
+                capture.currentMaterial = standaloneMaterial(renderType);
                 if (isEndPortal(renderType)) capture.currentCoverage = MinecraftEntityMesh.Coverage.OPAQUE;
                 capture.clearUvRemap();
             }
@@ -257,9 +257,9 @@ class RtEntityCollectorBase {
         ChunkSectionLayer layer = q.materialInfo().layer();
         boolean transmissive = layer == ChunkSectionLayer.TRANSLUCENT;
         boolean cutout = !transmissive && layer != ChunkSectionLayer.SOLID;
-        setSpriteMaterial(sprite, transmissive ? MinecraftEntityMesh.MaterialProfile.SMOOTH_DIELECTRIC
+        capture.currentMaterial = spriteMaterial(sprite, transmissive ? MinecraftEntityMesh.MaterialProfile.SMOOTH_DIELECTRIC
                         : MinecraftEntityMesh.MaterialProfile.ROUGH_DIELECTRIC,
-                transmissive, transmissive);
+                transmissive);
         capture.currentCoverage = transmissive ? MinecraftEntityMesh.Coverage.STOCHASTIC
                 : cutout ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
@@ -267,27 +267,17 @@ class RtEntityCollectorBase {
     }
 
     /** Preserve the block material selector and atlas identity for upload-time resolution. */
-    private void setSpriteMaterial(TextureAtlasSprite sprite, boolean stochasticAlpha) {
-        setSpriteMaterial(sprite, MinecraftEntityMesh.MaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
-    }
-
-    private void setSpriteMaterial(TextureAtlasSprite sprite, MinecraftEntityMesh.MaterialProfile profile,
-                                   boolean transmissive, boolean stochasticAlpha) {
-        if (sprite == null) {
-            capture.currentMaterial = missingMaterial();
-        } else {
-            MinecraftEntityMesh.Texture texture = textures.contributeAtlas(sprite.atlasLocation());
-            if (TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
-                capture.currentMaterial = new MinecraftEntityMesh.Material(
-                        MinecraftResourceIds.material(sprite),
-                        texture, MinecraftEntityMesh.Program.MATERIAL, profile, transmissive);
-            } else {
-                capture.currentMaterial = new MinecraftEntityMesh.Material(
-                        MinecraftMaterialIds.PARTICLE_BILLBOARD, texture, MinecraftEntityMesh.Program.MATERIAL);
-            }
+    private MinecraftEntityMesh.Material spriteMaterial(TextureAtlasSprite sprite,
+                                                         MinecraftEntityMesh.MaterialProfile profile,
+                                                         boolean transmissive) {
+        if (sprite == null) return missingMaterial();
+        MinecraftEntityMesh.Texture texture = textures.contributeAtlas(sprite.atlasLocation());
+        if (TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
+            return new MinecraftEntityMesh.Material(MinecraftResourceIds.material(sprite),
+                    texture, MinecraftEntityMesh.Program.MATERIAL, profile, transmissive);
         }
-        capture.currentCoverage = stochasticAlpha ? MinecraftEntityMesh.Coverage.STOCHASTIC
-                : MinecraftEntityMesh.Coverage.OPAQUE;
+        return new MinecraftEntityMesh.Material(MinecraftMaterialIds.PARTICLE_BILLBOARD,
+                texture, MinecraftEntityMesh.Program.MATERIAL);
     }
 
     private MinecraftEntityMesh.Material standaloneMaterial(RenderType renderType) {
@@ -299,11 +289,6 @@ class RtEntityCollectorBase {
 
     static MinecraftEntityMesh.Material standaloneMaterial(MinecraftEntityMesh.Texture texture) {
         return new MinecraftEntityMesh.Material(texture.resource(), texture, MinecraftEntityMesh.Program.MATERIAL);
-    }
-
-    private void setStandaloneMaterial(RenderType renderType) {
-        MinecraftEntityMesh.Material material = standaloneMaterial(renderType);
-        capture.currentMaterial = material;
     }
 
     private static boolean isEndPortal(RenderType renderType) {
@@ -442,7 +427,7 @@ class RtEntityCollectorBase {
         public void acceptRenderable(TextRenderable renderable) {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
-            setStandaloneMaterial(renderType);
+            capture.currentMaterial = standaloneMaterial(renderType);
             capture.currentCoverage = stochasticAlpha ? MinecraftEntityMesh.Coverage.STOCHASTIC
                     : hasCutoutDefine(renderType) ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
             capture.currentOrder = 0;
@@ -700,7 +685,7 @@ class RtEntityCollectorBase {
                     MinecraftMaterialIds.VERTEX_COLOR, textures.whiteTexture(),
                     MinecraftEntityMesh.Program.MATERIAL);
         } else {
-            setStandaloneMaterial(renderType);
+            capture.currentMaterial = standaloneMaterial(renderType);
         }
         capture.currentCoverage = lines ? MinecraftEntityMesh.Coverage.OPAQUE
                 : isEndPortal(renderType) ? MinecraftEntityMesh.Coverage.OPAQUE
