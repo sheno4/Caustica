@@ -10,6 +10,7 @@ import com.mojang.blaze3d.vulkan.VulkanBackend;
 import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
+import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanDiagnostics;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
@@ -33,25 +34,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/**
- * Vulkan device-negotiation hook: adds the device extensions the Caustica runtime needs to the extension
- * list vanilla enables at vkCreateDevice time.
- *
- * <p>FFX resolves vkGetImageMemoryRequirements2KHR etc. through
- * vkGetDeviceProcAddr using the KHR-suffixed extension names; per Vulkan spec
- * that returns NULL unless the corresponding extension was enabled — even
- * though the functionality is core since 1.1 — and FFX then calls the NULL
- * pointer (verified: crash at amd_fidelityfx_vk.dll+0x1e5b0 building
- * VkMemoryRequirements2). Enabling the alias extensions is a behavioral no-op
- * for the rest of the engine.
- */
+/** Adds Caustica device extensions, SDK shader features and compute queues to Minecraft's device. */
 @Mixin(VulkanBackend.class)
 public abstract class VulkanBackendMixin {
 	private static final VulkanFeature STORAGE_IMAGE_WRITE_WITHOUT_FORMAT =
 			new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageWriteWithoutFormat",
 					VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEWRITEWITHOUTFORMAT);
-	private static final List<VulkanFeature> SDK_SHADER_FEATURES = List.of(
-			STORAGE_IMAGE_WRITE_WITHOUT_FORMAT);
 
 	private static final List<String> CAUSTICA_WANTED_EXTENSIONS = List.of(
 			// FFX (FSR)
@@ -62,8 +50,6 @@ public abstract class VulkanBackendMixin {
 			// DLSS relies on it being core/enabled at instance level.)
 			"VK_NVX_binary_import",
 			"VK_NVX_image_view_handle");
-
-	private static final Set<String> loggedMissingSdkFeatures = new HashSet<>();
 
 	@ModifyArg(
 			method = "createVma",
@@ -103,51 +89,38 @@ public abstract class VulkanBackendMixin {
 				augmented.add(extension);
 				CausticaMod.LOGGER.info("Enabling device extension {} for the Caustica runtime", extension);
 			} else {
-				CausticaMod.LOGGER.warn("Device extension {} not supported by {} — upscaling will be unavailable",
+				CausticaMod.LOGGER.warn("Optional SDK device extension {} is not supported by {}",
 						extension, physicalDevice.deviceName());
 			}
 		}
 		MinecraftVulkanDiagnostics.addExtensions(augmented, physicalDevice);
-		dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().deviceBringup()
+		CausticaClientComposition.current().deviceBringup()
 				.addExtensions(augmented, physicalDevice);
 		args.set(0, augmented);
 
 		caustica$addCoreDeviceFeatures(args, physicalDevice);
 		MinecraftVulkanDiagnostics.addFeatures(args);
-		dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().deviceBringup()
+		CausticaClientComposition.current().deviceBringup()
 				.addFeatures(args, physicalDevice);
 		VulkanDiagnostics.logEnabledExtensions(augmented);
 	}
 
 	@SuppressWarnings("unchecked")
 	private void caustica$addCoreDeviceFeatures(Args args, VulkanPhysicalDevice physicalDevice) {
-		Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
-		boolean changed = false;
-		for (VulkanFeature feature : SDK_SHADER_FEATURES) {
-			if (!caustica$supportsFeature(physicalDevice, feature)) {
-				if (loggedMissingSdkFeatures.add(feature.name())) {
-					CausticaMod.LOGGER.warn("Device [{}] lacks {}; FSR/DLSS SDK shaders may fail validation",
-							physicalDevice.deviceName(), feature.name());
-				}
-				continue;
-			}
-
-			if (features.add(feature)) {
-				changed = true;
-				CausticaMod.LOGGER.info("Enabling Vulkan feature {} for FSR/DLSS SDK shaders", feature.name());
-			}
-		}
-		if (changed) {
-			args.set(2, features);
-		}
-	}
-
-	private static boolean caustica$supportsFeature(VulkanPhysicalDevice physicalDevice, VulkanFeature feature) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			VkPhysicalDeviceFeatures2 deviceFeatures = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default();
-			feature.struct().findOrCreateStructInPNextChain(deviceFeatures, stack);
-			VK12.vkGetPhysicalDeviceFeatures2(physicalDevice.vkPhysicalDevice(), deviceFeatures);
-			return feature.get(deviceFeatures);
+			var supported = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default();
+			VK12.vkGetPhysicalDeviceFeatures2(physicalDevice.vkPhysicalDevice(), supported);
+			if (!supported.features().shaderStorageImageWriteWithoutFormat()) {
+				CausticaMod.LOGGER.warn("Device [{}] lacks {}; SDK shaders may fail validation",
+						physicalDevice.deviceName(), STORAGE_IMAGE_WRITE_WITHOUT_FORMAT.name());
+				return;
+			}
+		}
+		Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
+		if (features.add(STORAGE_IMAGE_WRITE_WITHOUT_FORMAT)) {
+			args.set(2, features);
+			CausticaMod.LOGGER.info("Enabling Vulkan feature {} for SDK shaders",
+					STORAGE_IMAGE_WRITE_WITHOUT_FORMAT.name());
 		}
 	}
 
@@ -162,7 +135,7 @@ public abstract class VulkanBackendMixin {
 	private void caustica$probeRayTracing(long window, ShaderSource defaultShaderSource, GpuDebugOptions debugOptions,
 			Runnable criticalShaderLoader, CallbackInfoReturnable<GpuDevice> cir, @Local VkDevice device) {
 		VulkanDiagnostics.probe(device);
-		dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().deviceBringup().probe(device);
+		CausticaClientComposition.current().deviceBringup().probe(device);
 	}
 
 	@Inject(
@@ -171,7 +144,7 @@ public abstract class VulkanBackendMixin {
 	private static void caustica$augmentDeviceCreateInfo(Collection<String> extensions,
 			VulkanPhysicalDevice physicalDevice, Set<VulkanFeature> features,
 			CallbackInfoReturnable<VkDevice> cir, @Local VkDeviceCreateInfo deviceCreateInfo) {
-		dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().deviceBringup()
+		CausticaClientComposition.current().deviceBringup()
 				.reserveComputeQueue(deviceCreateInfo, physicalDevice, MemoryStack.stackGet());
 	}
 }
