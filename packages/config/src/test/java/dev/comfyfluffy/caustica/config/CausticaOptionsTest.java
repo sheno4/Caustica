@@ -114,8 +114,33 @@ final class CausticaOptionsTest {
     }
 
     @Test
+    void defaultProcessOverridesKeepDottedFeatureAndOptionIdsSeparate() {
+        ResourceId feature = ResourceId.of("test", "feature");
+        ResourceId nestedFeature = ResourceId.of("test", "feature.group");
+        Option<Float> grouped = Option.range("group.value", 0, 1, 0.25f);
+        Option<Float> plain = Option.range("value", 0, 1, 0.75f);
+        SettingsRegistry registry = new SettingsRegistry();
+        registry.feature(feature).option(grouped).register();
+        registry.feature(nestedFeature).option(plain).register();
+        String first = "caustica.option.test:feature:group.value";
+        String second = "caustica.option.test:feature.group:value";
+        System.setProperty(first, "0.4");
+        System.setProperty(second, "0.9");
+        try {
+            CausticaOptions options = CausticaOptions.load(configDir.resolve("override.toml"), registry);
+            assertEquals(0.4f, options.options(feature).get(grouped));
+            assertEquals(0.9f, options.options(nestedFeature).get(plain));
+            assertEquals(0.25f, options.preference(feature, grouped));
+            assertEquals(0.75f, options.preference(nestedFeature, plain));
+        } finally {
+            System.clearProperty(first);
+            System.clearProperty(second);
+        }
+    }
+
+    @Test
     void aSystemPropertyOverridesTheFile() throws IOException {
-        String property = "caustica.option.test.options.alpha";
+        String property = "caustica.option.test:options:alpha";
         System.setProperty(property, "0.9");
         try {
             CausticaOptions options = loadWithFile("""
@@ -131,7 +156,7 @@ final class CausticaOptionsTest {
 
     @Test
     void anUnparseableSystemPropertyFallsBackToTheFile() throws IOException {
-        String property = "caustica.option.test.options.alpha";
+        String property = "caustica.option.test:options:alpha";
         System.setProperty(property, "not-a-number");
         try {
             CausticaOptions options = loadWithFile("""
@@ -251,7 +276,7 @@ final class CausticaOptionsTest {
 
     @Test
     void processOverrideRemainsEffectiveWhilePreferenceChangesAndSaves() {
-        String property = "caustica.option.test.options.alpha";
+        String property = "caustica.option.test:options:alpha";
         Path path = configDir.resolve("caustica.toml");
         System.setProperty(property, "0.9");
         try {

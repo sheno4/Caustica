@@ -22,7 +22,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-/** One process-wide preference store. Immutable effective snapshots include latched process overrides. */
+/**
+ * One process-wide preference store. Immutable effective snapshots include latched process overrides.
+ * Default override keys are {@code caustica.option.<namespace>:<feature>:<option>}; an option may declare
+ * an explicit key with {@link Option#storage}.
+ */
 public final class CausticaOptions implements SettingsAccess {
     private static final Logger LOGGER = LoggerFactory.getLogger("Caustica");
     private final CommentedFileConfig file;
@@ -203,6 +207,6 @@ public final class CausticaOptions implements SettingsAccess {
 
     private static String systemPropertyKey(ResourceId feature, Option<?> option) {
         return option.systemPropertyKey() != null ? option.systemPropertyKey()
-                : "caustica.option." + feature.namespace() + "." + feature.path() + "." + option.id();
+                : "caustica.option." + feature + ":" + option.id();
     }
 }
