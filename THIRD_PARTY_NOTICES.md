@@ -7,7 +7,7 @@ Caustica's license.
 ## NVIDIA DLSS / NGX SDK
 
 Caustica can build and distribute release artifacts that include NVIDIA DLSS/NGX
-SDK runtime components, including DLSS Ray Reconstruction and Frame Generation
+SDK runtime components, including DLSS Super Resolution, Ray Reconstruction and Frame Generation
 libraries. These NVIDIA components are proprietary third-party software and are
 not licensed under the LGPL.
 
@@ -23,8 +23,10 @@ This software contains source code provided by NVIDIA Corporation.
 
 Bundled NVIDIA SDK runtime libraries may include files matching:
 
+- `caustica/natives/windows-x64/nvngx_dlss.dll`
 - `caustica/natives/windows-x64/nvngx_dlssd.dll`
 - `caustica/natives/windows-x64/nvngx_dlssg.dll`
+- `caustica/natives/linux-x64/libnvidia-ngx-dlss.so*`
 - `caustica/natives/linux-x64/libnvidia-ngx-dlssd.so*`
 - `caustica/natives/linux-x64/libnvidia-ngx-dlssg.so*`
 
