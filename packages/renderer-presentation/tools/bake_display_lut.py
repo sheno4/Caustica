@@ -10,11 +10,11 @@ One SDR LUT (BT.709, sRGB OETF) plus one HDR LUT per REC2020 mastering-nits targ
 The LMT is a separate log-to-log scene-referred table, so it does not duplicate all five
 output LUTs.
 
-Requires: pip install opencolorio numpy  (tested with opencolorio 2.5.2 / numpy 2.5.1, Python 3.14)
+Dependencies are declared in the repository's pyproject.toml and uv.lock.
 
 Usage:
-    python packages/renderer-presentation/tools/bake_display_lut.py
-    python packages/renderer-presentation/tools/bake_display_lut.py --import-lmt path/to/resolve-export.cube
+    uv run python packages/renderer-presentation/tools/bake_display_lut.py
+    uv run python packages/renderer-presentation/tools/bake_display_lut.py --import-lmt path/to/resolve-export.cube
 
 Regenerate whenever SHAPER_LO/HI, LUT_SIZE, or the OCIO config/view below changes. The baked
 .bin files are committed binary resources. The display transforms live in
@@ -23,7 +23,6 @@ packages/renderer-presentation/src/main/resources/caustica/color/luts/.
 import argparse
 import hashlib
 import struct
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +34,7 @@ OCIO_BUILTIN_CONFIG = "cg-config-v4.0.0_aces-v2.0_ocio-v2.5"
 SOURCE_SPACE = "ACEScg"  # matches the renderer's scene-linear ACEScg/AP1/D60 working space
 
 # Log2 shaper range, in stops relative to linear 1.0. Matches LOG_MIN/LOG_MAX in
-# shaders/display/exposure_hist.comp and exposure_resolve.comp -- same renderer quantity metered
+# shaders/pipelines/exposure_hist and exposure_resolve -- same renderer quantity metered
 # in both places, so the same bounds. Input is exposed scene-linear (may exceed 1.0 for
 # unclipped-highlight emitters), so headroom above 0 stops matters, not just below.
 SHAPER_LO_STOPS = -12.0
@@ -54,8 +53,7 @@ LUTS = [
     dict(
         name="sdr_aces2_rec709",
         display_view=("sRGB - Display", "ACES 2.0 - SDR 100 nits (Rec.709)"),
-        note="SDR output, BT.709 display code values (renderer's existing rgba8 gamma-encoded "
-             "presentation path expects sRGB-OETF-encoded BT.709, same as the AgX path it replaces).",
+        note="SDR output, sRGB-OETF-encoded BT.709 code values for RGBA8 presentation.",
     ),
 ] + [
     dict(
@@ -161,10 +159,8 @@ def read_shaper_cube(path: Path) -> tuple[int, np.ndarray, str | None]:
 
 def bake_one(cfg: "OCIO.Config", spec: dict, size: int) -> np.ndarray:
     axis = shaper_axis(size)  # same axis reused for R, G, B -- the shaper is a per-channel diagonal
-    # Grid shape (N,N,N,3) with R fastest-varying (x), G next (y), B slowest (z). This matches
-    # VkBufferImageCopy's row-major layout for a 3D image of extent (N,N,N): x is the contiguous
-    # texel run, so keep that axis == index 0 of the meshgrid arrays below, i.e. last numpy axis
-    # before the channel axis. See decodeToneLut()'s texCoord order in display.comp.
+    # Vulkan's x coordinate varies fastest. Store R on the last spatial NumPy axis,
+    # followed by G and B, so each contiguous row corresponds to increasing red input.
     b, g, r = np.meshgrid(axis, axis, axis, indexing="ij")  # b,g,r all shape (N,N,N)
     grid = np.stack([r, g, b], axis=-1).astype(np.float32)  # (N,N,N,3), fastest axis = r = x
 
@@ -206,7 +202,7 @@ def main() -> None:
         size, rgb, title = read_shaper_cube(source_path)
         digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
         print(
-            f"importing default-package LMT: {size}^3 normalized log-shaper cube"
+            f"importing LMT: {size}^3 normalized log-shaper cube"
             f"{f' ({title})' if title else ''}; source SHA-256={digest}"
         )
         write_lut(OUT_DIR / "lmt.bin", size, rgb)
@@ -219,4 +215,4 @@ def main() -> None:
         write_lut(OUT_DIR / f"{spec['name']}.bin", LUT_SIZE, rgb)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
