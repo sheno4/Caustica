@@ -299,125 +299,40 @@ tasks.named("sourcesJar", Jar).configure {
 def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	group = "verification"
 	description = "Verifies that the full mod embeds the Java and Slang API artifacts exactly once."
-	dependsOn(tasks.named("jar"), project(":packages:api").tasks.named("jar"),
-			project(":packages:api-support").tasks.named("jar"),
-			project(":packages:config").tasks.named("jar"),
-			project(":packages:engine").tasks.named("jar"),
-			project(":packages:engine-vulkan").tasks.named("jar"),
-			project(":packages:features-builtin").tasks.named("jar"),
-			project(":packages:minecraft-api").tasks.named("jar"),
-			project(":packages:minecraft-adapter").tasks.named("jar"),
-			project(":packages:minecraft-content").tasks.named("jar"),
-			project(":packages:minecraft-rendering").tasks.named("jar"),
-			project(":packages:nvidia-ngx").tasks.named("jar"),
-			project(":packages:nvidia-nrd").tasks.named("jar"), nrdNativeJar,
-			project(":packages:renderer-denoising").tasks.named("jar"),
-			project(":packages:renderer-presentation").tasks.named("jar"),
-			project(":packages:renderer-raytracing").tasks.named("jar"),
-			project(":packages:renderer-runtime").tasks.named("jar"),
-			project(":packages:settings-api").tasks.named("jar"),
-			project(":packages:shader-api").tasks.named("jar"),
-			project(":packages:slang-runtime").tasks.named("jar"),
-			project(":packages:vulkan-support").tasks.named("jar"))
-	inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:api").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:api-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:config").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:engine").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:engine-vulkan").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:features-builtin").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:minecraft-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:minecraft-adapter").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:minecraft-content").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:minecraft-rendering").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:nvidia-ngx").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:nvidia-nrd").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(nrdNativeJar.flatMap { it.archiveFile })
-	inputs.file(project(":packages:renderer-denoising").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:renderer-presentation").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:renderer-raytracing").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:renderer-runtime").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:slang-runtime").tasks.named("jar", Jar).flatMap { it.archiveFile })
-	inputs.file(project(":packages:vulkan-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	def resourcePrefixes = [
+		"features-builtin": ["caustica/shaders/builtin/", "caustica/shaders/pipelines/bloom/"],
+		"minecraft-rendering": ["caustica/shaders/minecraft/"],
+		"nvidia-ngx": ["caustica/natives/"],
+		"renderer-presentation": ["caustica/shaders/pipelines/", "caustica/color/"],
+		"renderer-raytracing": ["caustica/shaders/world/", "caustica/shaders/pipelines/nee_at/"],
+		"shader-api": ["caustica/shaders/api/"],
+		"slang-runtime": ["caustica/natives/slang/"]
+	]
+	def embeddedArtifacts = embeddedPackages.collect { dependency ->
+		[archive: dependency.tasks.named("jar", Jar).flatMap { it.archiveFile },
+		 classes: dependency.name != "shader-api",
+		 prefixes: resourcePrefixes[dependency.name] ?: []]
+	}
+	embeddedArtifacts.add([archive: nrdNativeJar.flatMap { it.archiveFile },
+			classes: false, prefixes: ["caustica/natives/nrd/"]])
+	def modArchive = tasks.named("jar", Jar).flatMap { it.archiveFile }
+	inputs.file(modArchive)
+	inputs.files(embeddedArtifacts.collect { it.archive })
 	doLast {
 		def names = { File artifact ->
-			def result = []
 			new java.util.jar.JarFile(artifact).withCloseable { jar ->
-				def enumeration = jar.entries()
-				while (enumeration.hasMoreElements()) {
-					result.add(enumeration.nextElement().name)
-				}
+				jar.entries().collect { it.name }
 			}
-			return result
 		}
-		def rootEntries = names(tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def apiEntries = names(project(":packages:api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def supportEntries = names(project(":packages:api-support").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def configEntries = names(project(":packages:config").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def engineEntries = names(project(":packages:engine").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def engineVulkanEntries = names(project(":packages:engine-vulkan").tasks.named("jar", Jar)
-				.get().archiveFile.get().asFile)
-		def builtinEntries = names(project(":packages:features-builtin").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def minecraftApiEntries = names(project(":packages:minecraft-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def minecraftAdapterEntries = names(project(":packages:minecraft-adapter").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def minecraftContentEntries = names(project(":packages:minecraft-content").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def minecraftRenderingEntries = names(project(":packages:minecraft-rendering").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def nvidiaNgxEntries = names(project(":packages:nvidia-ngx").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def nvidiaNrdEntries = names(project(":packages:nvidia-nrd").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def nrdNativeEntries = names(nrdNativeJar.get().archiveFile.get().asFile)
-		def rendererDenoisingEntries = names(project(":packages:renderer-denoising").tasks.named("jar", Jar)
-				.get().archiveFile.get().asFile)
-		def rendererPresentationEntries = names(project(":packages:renderer-presentation").tasks.named("jar", Jar)
-				.get().archiveFile.get().asFile)
-		def rendererRayTracingEntries = names(project(":packages:renderer-raytracing").tasks.named("jar", Jar)
-				.get().archiveFile.get().asFile)
-		def rendererRuntimeEntries = names(project(":packages:renderer-runtime").tasks.named("jar", Jar)
-				.get().archiveFile.get().asFile)
-		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def shaderApiEntries = names(project(":packages:shader-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def slangRuntimeEntries = names(project(":packages:slang-runtime").tasks.named("jar", Jar)
-				.get().archiveFile.get().asFile)
-		def vulkanSupportEntries = names(project(":packages:vulkan-support").tasks.named("jar", Jar)
-				.get().archiveFile.get().asFile)
-		def required = apiEntries.findAll { it.endsWith(".class") }
-		required.addAll(supportEntries.findAll { it.endsWith(".class") })
-		required.addAll(configEntries.findAll { it.endsWith(".class") })
-		required.addAll(engineEntries.findAll { it.endsWith(".class") })
-		required.addAll(engineVulkanEntries.findAll { it.endsWith(".class") })
-		required.addAll(builtinEntries.findAll { it.endsWith(".class")
-				|| it.startsWith("caustica/shaders/builtin/") || it.startsWith("caustica/shaders/pipelines/bloom/") })
-		required.addAll(minecraftApiEntries.findAll { it.endsWith(".class") })
-		required.addAll(minecraftAdapterEntries.findAll { it.endsWith(".class") })
-		required.addAll(minecraftContentEntries.findAll { it.endsWith(".class") })
-		required.addAll(minecraftRenderingEntries.findAll { it.endsWith(".class")
-				|| it.startsWith("caustica/shaders/minecraft/") && !it.endsWith("/") })
-		required.addAll(nvidiaNgxEntries.findAll { it.endsWith(".class")
-				|| it.startsWith("caustica/natives/") && !it.endsWith("/") })
-		required.addAll(nvidiaNrdEntries.findAll { it.endsWith(".class") })
-		required.addAll(nrdNativeEntries.findAll {
-			it.startsWith("caustica/natives/nrd/") && !it.endsWith("/")
-		})
-		required.addAll(rendererDenoisingEntries.findAll { it.endsWith(".class") })
-		required.addAll(rendererPresentationEntries.findAll { it.endsWith(".class")
-				|| it.startsWith("caustica/shaders/pipelines/") && !it.endsWith("/")
-				|| it.startsWith("caustica/color/") && !it.endsWith("/") })
-		required.addAll(rendererRayTracingEntries.findAll { it.endsWith(".class")
-				|| it.startsWith("caustica/shaders/world/") && !it.endsWith("/")
-				|| it.startsWith("caustica/shaders/pipelines/nee_at/") && !it.endsWith("/") })
-		required.addAll(rendererRuntimeEntries.findAll { it.endsWith(".class") })
-		required.addAll(settingsApiEntries.findAll { it.endsWith(".class") })
-		required.addAll(shaderApiEntries.findAll { entry ->
-			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
-		})
-		required.addAll(slangRuntimeEntries.findAll { it.endsWith(".class")
-				|| it.startsWith("caustica/natives/slang/") && !it.endsWith("/") })
-		required.addAll(vulkanSupportEntries.findAll { it.endsWith(".class") })
-		def missing = required.findAll { !rootEntries.contains(it) }
-		def duplicated = required.findAll { requiredEntry ->
-			rootEntries.count { it == requiredEntry } != 1
+		def rootCounts = names(modArchive.get().asFile).countBy { it }
+		def required = embeddedArtifacts.collectMany { artifact ->
+			names(artifact.archive.get().asFile).findAll { entry ->
+				!entry.endsWith("/") && (artifact.classes && entry.endsWith(".class")
+						|| artifact.prefixes.any { entry.startsWith(it) })
+			}
 		}
+		def missing = required.findAll { !rootCounts.containsKey(it) }
+		def duplicated = required.findAll { rootCounts[it] > 1 }
 		if (!missing.empty || !duplicated.empty) {
 			throw new GradleException("embedded API mismatch; missing=${missing}, duplicate=${duplicated}")
 		}
