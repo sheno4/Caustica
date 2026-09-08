@@ -4,7 +4,10 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import dev.comfyfluffy.caustica.api.resource.FrameResources;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
@@ -31,10 +34,10 @@ import java.nio.ByteOrder;
 /** The vanilla targeted-block shape rendered at display resolution and occluded through the root TLAS. */
 final class BlockOutlineFeature implements OverlayFeature {
     private final RtEntities entities;
-    private final dev.comfyfluffy.caustica.api.resource.ResourceFactory resources;
-    private dev.comfyfluffy.caustica.api.resource.ResourceOwner maskOwner;
+    private final ResourceFactory resources;
+    private ResourceOwner maskOwner;
     private final RtTerrain terrain;
-    BlockOutlineFeature(RtEntities entities, RtTerrain terrain, dev.comfyfluffy.caustica.api.resource.ResourceFactory resources) {
+    BlockOutlineFeature(RtEntities entities, RtTerrain terrain, ResourceFactory resources) {
         this.resources = resources;
         this.entities = entities;
         this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
@@ -42,9 +45,8 @@ final class BlockOutlineFeature implements OverlayFeature {
     private static final int PUSH_BYTES = 112;
     private static final int TLAS_INDEX_OFFSET = 96;
     private static final float OUTLINE_ALPHA = 102f / 255f;
-    private GpuDevice device;
-    private OverlayPipelines.Pipeline pipeline;
-    private OverlayPipelines.Pipeline compositePipeline;
+    private ShaderObjectGraphics pipeline;
+    private ShaderObjectGraphics compositePipeline;
     private VmaImage2D mask;
     private boolean maskNeedsInitialization;
     private final Matrix4f viewProj = new Matrix4f();
@@ -84,21 +86,30 @@ final class BlockOutlineFeature implements OverlayFeature {
     }
 
     private void ensureResources(GpuDevice gpu, FrameResources use, int width, int height) {
-        device = gpu;
         if (pipeline == null) {
             pipeline = new OverlayPipelines.Spec("block_outline/vertex.vert.spv", "block_outline/fragment.frag.spv")
                     .vertex(OverlayPipelines.EDGE_POSITION_PAIR)
                     .fragmentAccelerationStructure(0, 0, TLAS_INDEX_OFFSET)
-                    .attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline");
+                    .build(gpu);
+        }
+        if (compositePipeline == null) {
             compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/passthrough.frag.spv")
-                    .blend(OverlayPipelines.ALPHA_BLEND).attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline composite");
+                    .blend(OverlayPipelines.ALPHA_BLEND).build(gpu);
         }
         if (mask == null || mask.width() != width || mask.height() != height) {
-            if (maskOwner != null) maskOwner.close();
-            mask = VmaImage2D.create(gpu, width, height, WorldOverlayPass.TARGET_FORMAT,
+            VmaImage2D replacement = VmaImage2D.create(gpu, width, height, WorldOverlayPass.TARGET_FORMAT,
                     VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, "block outline mask");
-            maskOwner = resources.create(mask::close);
+            ResourceOwner replacementOwner;
+            try {
+                replacementOwner = resources.create(replacement::close);
+            } catch (RuntimeException | Error failure) {
+                try (replacement) { throw failure; }
+            }
+            ResourceOwner previousOwner = maskOwner;
+            mask = replacement;
+            maskOwner = replacementOwner;
             maskNeedsInitialization = true;
+            if (previousOwner != null) previousOwner.close();
         }
         use.retain(maskOwner);
     }
@@ -142,7 +153,11 @@ final class BlockOutlineFeature implements OverlayFeature {
     }
 
     @Override public void close() {
-        if (pipeline != null) pipeline.close(); if (compositePipeline != null) compositePipeline.close(); if (maskOwner != null) maskOwner.close();
-        pipeline = null; compositePipeline = null; mask = null; device = null;
+        try (var shader = pipeline; var compositeShader = compositePipeline; var imageOwner = maskOwner) {
+            pipeline = null;
+            compositePipeline = null;
+            maskOwner = null;
+            mask = null;
+        }
     }
 }

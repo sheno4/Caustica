@@ -4,6 +4,7 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import dev.comfyfluffy.caustica.vulkan.VulkanSampler;
 
 import org.joml.Matrix4f;
@@ -49,7 +50,7 @@ import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
 final class NameTagFeature implements OverlayFeature {
     private final RtEntities entities;
     NameTagFeature(RtEntities entities) { this.entities = entities; }
-    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) = 80B.
+    // View projection at 0, camera offset at 64, and image/sampler indices at 80/84; padded to 96 bytes.
     private static final int PUSH_BYTES = 96;
     private static final int VERTEX_STRIDE = 24;
     // Vanilla's unoccluded name tag is actually two overlaid copies (opaque depth-tested + translucent
@@ -60,7 +61,7 @@ final class NameTagFeature implements OverlayFeature {
     private static final int BACKGROUND_COLOR = 0x40000000; // ~25% opaque black; vanilla's default opacity
 
     private GpuDevice device;
-    private OverlayPipelines.Pipeline pipeline;
+    private ShaderObjectGraphics pipeline;
     private VulkanSampler sampler;
 
     // Each atlas page remains pinned while its immutable descriptor can be referenced by a recorded frame.
@@ -144,16 +145,15 @@ final class NameTagFeature implements OverlayFeature {
 
     private void ensureResources(GpuDevice device) {
         this.device = device;
-        if (pipeline != null) {
-            return;
+        if (sampler == null) {
+            sampler = VulkanSampler.nearestClamp(device);
         }
-        sampler = VulkanSampler.nearestClamp(device);
-        pipeline = new OverlayPipelines.Spec("name_tag/vertex.vert.spv", "name_tag/fragment.frag.spv")
-                .vertex(OverlayPipelines.POSITION_TEX_COLOR)
-                .blend(OverlayPipelines.ALPHA_BLEND)
-                .attachment(WorldOverlayPass.TARGET_FORMAT)
-                .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
-                .build(device, "name tag");
+        if (pipeline == null) {
+            pipeline = new OverlayPipelines.Spec("name_tag/vertex.vert.spv", "name_tag/fragment.frag.spv")
+                    .vertex(OverlayPipelines.POSITION_TEX_COLOR)
+                    .blend(OverlayPipelines.ALPHA_BLEND)
+                    .build(device);
+        }
     }
 
     @Override
@@ -165,7 +165,7 @@ final class NameTagFeature implements OverlayFeature {
             push.putFloat(64, camOffX).putFloat(68, camOffY).putFloat(72, camOffZ);
             for (DrawPage page : drawPages) {
                 OverlayPipelines.FontImage image = pageImages.computeIfAbsent(page.view, v ->
-                        OverlayPipelines.FontImage.create(device, (VulkanGpuTextureView) v, "name tag atlas"));
+                        OverlayPipelines.FontImage.create(device, (VulkanGpuTextureView) v));
                 push.putInt(80, image.index()).putInt(84, sampler.index().value());
                 pipeline.bind(cmd, push, width, height);
                 VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(page.vbo.handle()), stack.longs(0L));

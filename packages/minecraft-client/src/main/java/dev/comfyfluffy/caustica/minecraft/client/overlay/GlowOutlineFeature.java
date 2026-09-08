@@ -11,7 +11,10 @@ import java.nio.ByteOrder;
 import java.util.List;
 
 import dev.comfyfluffy.caustica.api.resource.FrameResources;
+import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
+import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
 
@@ -31,18 +34,17 @@ import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
  */
 final class GlowOutlineFeature implements OverlayFeature {
     private final RtEntities entities;
-    private final dev.comfyfluffy.caustica.api.resource.ResourceFactory resources;
-    private dev.comfyfluffy.caustica.api.resource.ResourceOwner maskOwner;
-    GlowOutlineFeature(RtEntities entities, dev.comfyfluffy.caustica.api.resource.ResourceFactory resources) {
+    private final ResourceFactory resources;
+    private ResourceOwner maskOwner;
+    GlowOutlineFeature(RtEntities entities, ResourceFactory resources) {
         this.entities = entities; this.resources = resources;
     }
-    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
+    // View projection at 0, camera offset at 64, color at 80, and TLAS index at 96; padded to 112 bytes.
     private static final int MASK_PUSH_BYTES = 112;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
-    private GpuDevice device;
-    private OverlayPipelines.Pipeline maskPipeline;
-    private OverlayPipelines.Pipeline compositePipeline;
+    private ShaderObjectGraphics maskPipeline;
+    private ShaderObjectGraphics compositePipeline;
     private VmaImage2D maskImage;
     private boolean maskNeedsInitialization;
 
@@ -120,25 +122,31 @@ final class GlowOutlineFeature implements OverlayFeature {
     }
 
     private void ensureResources(GpuDevice device, FrameResources frameResources, int width, int height) {
-        this.device = device;
         if (maskPipeline == null) {
             maskPipeline = new OverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")
                     .vertex(OverlayPipelines.POSITION)
-                    .attachment(MASK_FORMAT)
-                    .push(MASK_PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
-                    .build(device, "glow mask");
+                    .build(device);
+        }
+        if (compositePipeline == null) {
             compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/glow.frag.spv")
                     .blend(OverlayPipelines.ALPHA_BLEND)
-                    .attachment(WorldOverlayPass.TARGET_FORMAT)
-                    .build(device, "glow composite");
+                    .build(device);
         }
         if (maskImage == null || maskImage.width() != width || maskImage.height() != height) {
-            if (maskOwner != null) maskOwner.close();
-            maskImage = VmaImage2D.create(device, width, height, MASK_FORMAT,
+            VmaImage2D replacement = VmaImage2D.create(device, width, height, MASK_FORMAT,
                     VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                     "glow outline mask " + width + "x" + height);
-            maskOwner = resources.create(maskImage::close);
+            ResourceOwner replacementOwner;
+            try {
+                replacementOwner = resources.create(replacement::close);
+            } catch (RuntimeException | Error failure) {
+                try (replacement) { throw failure; }
+            }
+            ResourceOwner previousOwner = maskOwner;
+            maskImage = replacement;
+            maskOwner = replacementOwner;
             maskNeedsInitialization = true;
+            if (previousOwner != null) previousOwner.close();
         }
         frameResources.retain(maskOwner);
     }
@@ -182,22 +190,11 @@ final class GlowOutlineFeature implements OverlayFeature {
 
     @Override
     public void close() {
-        if (device == null) {
-            return;
-        }
-        if (maskPipeline != null) {
-            maskPipeline.close();
+        try (var maskShader = maskPipeline; var compositeShader = compositePipeline; var imageOwner = maskOwner) {
             maskPipeline = null;
-        }
-        if (compositePipeline != null) {
-            compositePipeline.close();
             compositePipeline = null;
-        }
-        if (maskImage != null) {
-            maskOwner.close();
             maskOwner = null;
             maskImage = null;
         }
-        device = null;
     }
 }

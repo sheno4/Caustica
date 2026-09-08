@@ -35,50 +35,38 @@ final class OverlayPipelines {
             VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
             VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, COLOR_WRITE_RGBA);
 
-    static final class Pipeline implements AutoCloseable {
-        private final ShaderObjectGraphics shader;
-        Pipeline(ShaderObjectGraphics shader) { this.shader = shader; }
-        void bind(VkCommandBuffer commandBuffer, ByteBuffer pushData, int width, int height) {
-            shader.bind(commandBuffer, pushData, width, height);
-        }
-        @Override public void close() { shader.close(); }
-    }
-
     static final class Spec {
         private final String vertex, fragment;
         private ShaderObjectGraphics.VertexInput vertexInput = ShaderObjectGraphics.VertexInput.NONE;
-        private int topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         private ShaderObjectGraphics.ColorBlend blend = OPAQUE;
-        private int samples = VK_SAMPLE_COUNT_1_BIT;
         private List<ShaderObjectGraphics.PushIndexedResourceMapping> fragmentMappings = List.of();
         Spec(String vertex, String fragment) { this.vertex = vertex; this.fragment = fragment; }
         Spec vertex(ShaderObjectGraphics.VertexInput value) { vertexInput = value; return this; }
-        Spec topology(int value) { topology = value; return this; }
         Spec blend(ShaderObjectGraphics.ColorBlend value) { blend = value; return this; }
-        Spec attachment(int ignored) { return this; }
-        Spec samples(int value) { samples = value; return this; }
-        Spec push(int ignored, int ignoredStages) { return this; }
         Spec fragmentAccelerationStructure(int descriptorSet, int binding, int pushDataOffset) {
             fragmentMappings = List.of(ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(
                     descriptorSet, binding, pushDataOffset));
             return this;
         }
-        Pipeline build(GpuDevice gpu, String label) {
+        ShaderObjectGraphics build(GpuDevice gpu) {
             ByteBuffer vertexCode = load(vertex);
-            ByteBuffer fragmentCode = load(fragment);
             try {
-                return new Pipeline(ShaderObjectGraphics.create(gpu, vertexCode, fragmentCode,
-                        "main", "main", graphicsState(),
-                        List.of(), fragmentMappings));
+                ByteBuffer fragmentCode = load(fragment);
+                try {
+                    return ShaderObjectGraphics.create(gpu, vertexCode, fragmentCode,
+                            "main", "main", graphicsState(), List.of(), fragmentMappings);
+                } finally {
+                    MemoryUtil.memFree(fragmentCode);
+                }
             } finally {
-                MemoryUtil.memFree(fragmentCode);
                 MemoryUtil.memFree(vertexCode);
             }
         }
 
         private ShaderObjectGraphics.GraphicsState graphicsState() {
-            return new ShaderObjectGraphics.GraphicsState(vertexInput, topology, false, VK_POLYGON_MODE_FILL,
-                    VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, samples, ~0,
+            return new ShaderObjectGraphics.GraphicsState(vertexInput, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                    false, VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                    VK_SAMPLE_COUNT_1_BIT, ~0,
                     false, false, VK_COMPARE_OP_ALWAYS, blend);
         }
     }
@@ -98,7 +86,7 @@ final class OverlayPipelines {
                           GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor) {
             this.texture = texture; this.descriptor = descriptor;
         }
-        static FontImage create(GpuDevice gpu, VulkanGpuTextureView view, String label) {
+        static FontImage create(GpuDevice gpu, VulkanGpuTextureView view) {
             VulkanGpuTexture texture = view.texture();
             if (texture.getFormat() != GpuFormat.RGBA8_UNORM) {
                 throw new IllegalArgumentException("font atlas must be RGBA8_UNORM");
@@ -107,7 +95,6 @@ final class OverlayPipelines {
             GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 descriptor = gpu.descriptorHeap().allocateResources(1);
-                GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = descriptor;
                 VkImageViewCreateInfo imageView = VkImageViewCreateInfo.calloc(stack).sType$Default()
                         .image(texture.vkImage()).viewType(VK_IMAGE_VIEW_TYPE_2D).format(VK_FORMAT_R8G8B8A8_UNORM);
                 imageView.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
@@ -115,13 +102,21 @@ final class OverlayPipelines {
                         .baseArrayLayer(0).layerCount(1);
                 VkImageDescriptorInfoEXT image = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
                         .pView(imageView).layout(VK_IMAGE_LAYOUT_GENERAL);
-                gpu.descriptorHeap().writer().writeResource(allocated, 0,
+                gpu.descriptorHeap().writer().writeResource(descriptor, 0,
                         VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()
                                 .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(data -> data.pImage(image)));
-                return new FontImage(texture, allocated);
+                return new FontImage(texture, descriptor);
             } catch (RuntimeException | Error failure) {
-                if (descriptor != null) descriptor.destroy();
-                MinecraftTextureLifetime.release(texture);
+                try {
+                    if (descriptor != null) descriptor.destroy();
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (failure != cleanupFailure) failure.addSuppressed(cleanupFailure);
+                }
+                try {
+                    MinecraftTextureLifetime.release(texture);
+                } catch (RuntimeException | Error cleanupFailure) {
+                    if (failure != cleanupFailure) failure.addSuppressed(cleanupFailure);
+                }
                 throw failure;
             }
         }
