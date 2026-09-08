@@ -484,10 +484,7 @@ class RtEntityCollectorBase {
 
         @Override
         public VertexConsumer setUv2(int lightU, int lightV) {
-            // Inverts VertexConsumer#setLight's default packing; light itself is unused by the capture
-            // (entities are fully path-traced), so any value round-trips fine.
-            int light = (lightU & 0xFFFF) | (lightV << 16);
-            capture.addVertex(vx, vy, vz, vColor, vu, vv, 0, light, 0f, 0f, 0f);
+            capture.addVertex(vx, vy, vz, vColor, vu, vv, 0, 0, 0f, 0f, 0f);
             return this;
         }
 
@@ -605,23 +602,12 @@ class RtEntityCollectorBase {
             poseStack.pushPose();
             poseStack.translate(offset.x, offset.y, offset.z);
         }
-        int idxStart = capture.idx.size();
-        long started = profileDynamicEntity ? instrumentation.startStage() : 0L;
         try {
-            RandomSource random = RandomSource.create();
-            random.setSeed(seed);
+            RandomSource random = RandomSource.create(seed);
             List<BlockStateModelPart> parts = new ArrayList<>();
             model.collectParts(random, parts);
-            Matrix4f pose = poseStack.last().pose();
-            for (BlockStateModelPart part : parts) {
-                addQuads(pose, part.getQuads(null), null);
-                for (Direction direction : DIRECTIONS) {
-                    addQuads(pose, part.getQuads(direction), null);
-                }
-            }
+            addBlockParts(poseStack.last().pose(), parts, null);
         } finally {
-            instrumentation.endStage("entity.capture.submit.bakedQuads", started);
-            countBakedOutput(idxStart);
             if (applyBlockOffset) {
                 poseStack.popPose();
             }
@@ -635,7 +621,10 @@ class RtEntityCollectorBase {
         if (capture == null) {
             return;
         }
-        Matrix4f pose = poseStack.last().pose();
+        addBlockParts(poseStack.last().pose(), parts, tintLayers);
+    }
+
+    private void addBlockParts(Matrix4f pose, List<BlockStateModelPart> parts, int[] tintLayers) {
         for (BlockStateModelPart part : parts) {
             addQuads(pose, part.getQuads(null), tintLayers);
             for (Direction d : DIRECTIONS) {
