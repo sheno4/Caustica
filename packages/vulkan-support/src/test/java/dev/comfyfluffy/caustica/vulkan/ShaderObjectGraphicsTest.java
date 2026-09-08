@@ -69,6 +69,17 @@ final class ShaderObjectGraphicsTest {
                         List.of(ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 1, 96))));
     }
 
+    @Test void mappedValidatorAllowsDisjointResourceTypesAtTheSameBinding() {
+        var acceleration = ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 0, 96);
+        var image = new ShaderObjectGraphics.PushIndexedResourceMapping(0, 0,
+                EXTDescriptorHeap.VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT, 100);
+        assertDoesNotThrow(() -> ShaderObjectGraphics.validateMappedDescriptorHeapSpirv(
+                descriptorBinding(7, 0, 0), List.of(acceleration, image)));
+        assertThrows(IllegalArgumentException.class,
+                () -> ShaderObjectGraphics.validateMappedDescriptorHeapSpirv(
+                        descriptorBinding(7, 0, 0), List.of(acceleration, image, image)));
+    }
+
     @Test void accelerationStructureMappingRetainsItsStaticBindingAndPushOffset() {
         var mapping = ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 0, 96);
         assertEquals(0, mapping.descriptorSet());

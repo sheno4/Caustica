@@ -22,12 +22,10 @@ import java.util.Objects;
  * pipeline layout; dispatch push data and heap indices are the complete invocation ABI.
  */
 public final class ShaderObjectCompute implements AutoCloseable {
-    private final VkDevice device;
     private final long shader;
     private final ResourceLifetime lifetime;
 
     private ShaderObjectCompute(VkDevice device, long shader) {
-        this.device = device;
         this.shader = shader;
         this.lifetime = new ResourceLifetime(() -> EXTShaderObject.vkDestroyShaderEXT(device, shader, null));
     }

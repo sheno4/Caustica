@@ -5,7 +5,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
+import java.nio.ByteOrder;
 import java.nio.LongBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -84,14 +84,12 @@ public final class ShaderObjectGraphics implements AutoCloseable {
         }
     }
 
-    private final VkDevice device;
     private final long vertex;
     private final long fragment;
     private final GraphicsState state;
     private final ResourceLifetime lifetime;
 
     private ShaderObjectGraphics(VkDevice device, long vertex, long fragment, GraphicsState state) {
-        this.device = device;
         this.vertex = vertex;
         this.fragment = fragment;
         this.state = state;
@@ -172,22 +170,18 @@ public final class ShaderObjectGraphics implements AutoCloseable {
 
     static void validateMappedDescriptorHeapSpirv(ByteBuffer spirv,
                                                    List<PushIndexedResourceMapping> mappings) {
-        Set<DescriptorBinding> covered = new HashSet<>();
-        for (int index = 0; index < mappings.size(); index++) {
-            PushIndexedResourceMapping mapping = Objects.requireNonNull(mappings.get(index), "mapping");
+        Map<DescriptorBinding, Integer> covered = new HashMap<>();
+        for (PushIndexedResourceMapping mapping : mappings) {
             DescriptorBinding binding = new DescriptorBinding(mapping.descriptorSet(), mapping.binding());
-            for (int previous = 0; previous < index; previous++) {
-                PushIndexedResourceMapping other = mappings.get(previous);
-                if (other.descriptorSet() == mapping.descriptorSet() && other.binding() == mapping.binding()
-                        && (other.resourceMask() & mapping.resourceMask()) != 0) {
-                    throw new IllegalArgumentException("overlapping mappings for descriptor set "
-                            + mapping.descriptorSet() + " binding " + mapping.binding());
-                }
+            int previousMask = covered.getOrDefault(binding, 0);
+            if ((previousMask & mapping.resourceMask()) != 0) {
+                throw new IllegalArgumentException("overlapping mappings for descriptor set "
+                        + mapping.descriptorSet() + " binding " + mapping.binding());
             }
-            covered.add(binding);
+            covered.put(binding, previousMask | mapping.resourceMask());
         }
 
-        ByteBuffer words = spirv.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer words = spirv.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         if (words.remaining() < 5 * Integer.BYTES || (words.remaining() & 3) != 0
                 || words.getInt(words.position()) != 0x07230203) {
             throw new IllegalArgumentException("shader object code is not a SPIR-V module");
@@ -222,7 +216,7 @@ public final class ShaderObjectGraphics implements AutoCloseable {
             Integer descriptorSet = descriptorSets.get(target);
             Integer binding = bindings.get(target);
             if (descriptorSet == null || binding == null
-                    || !covered.contains(new DescriptorBinding(descriptorSet, binding))) {
+                    || !covered.containsKey(new DescriptorBinding(descriptorSet, binding))) {
                 throw new IllegalArgumentException("SPIR-V descriptor binding is not covered by a mapping");
             }
         }

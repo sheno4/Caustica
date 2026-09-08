@@ -14,7 +14,17 @@ final class ResourceLifetime implements AutoCloseable {
     @Override
     public void close() {
         if (closed) return;
-        destroy.forEach(Runnable::run);
         closed = true;
+        Throwable failure = null;
+        for (Runnable action : destroy) {
+            try {
+                action.run();
+            } catch (RuntimeException | Error next) {
+                if (failure == null) failure = next;
+                else if (failure != next) failure.addSuppressed(next);
+            }
+        }
+        if (failure instanceof RuntimeException exception) throw exception;
+        if (failure instanceof Error error) throw error;
     }
 }
