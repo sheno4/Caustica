@@ -10,6 +10,8 @@ import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
+import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure;
+
 /** Prepares section resources before atomically replacing neighboring instances and their lights. */
 public final class MinecraftTerrainGeometry implements AutoCloseable {
     private final MeshPreparer meshes;
@@ -33,13 +35,13 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
             return meshes.prepare(MinecraftProgramTypes.INSTANCE_DATA, uploaded.build())
                     .handle((mesh, failure) -> {
                         if (failure != null) {
-                            uploaded.close();
+                            closeAfterFailure(failure, uploaded::close);
                             throw new java.util.concurrent.CompletionException(failure);
                         }
                         return new Prepared(placement, uploaded, mesh);
                     });
         } catch (RuntimeException | Error failure) {
-            uploaded.close();
+            closeAfterFailure(failure, uploaded::close);
             throw failure;
         }
     }

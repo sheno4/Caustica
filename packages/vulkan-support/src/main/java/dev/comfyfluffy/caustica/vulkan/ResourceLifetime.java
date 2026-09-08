@@ -14,6 +14,15 @@ public final class ResourceLifetime implements AutoCloseable {
         this.destroy = List.of(destroy);
     }
 
+    /** Attempts every rollback action, attaching cleanup failures to the original failure. */
+    public static void closeAfterFailure(Throwable failure, Runnable... destroy) {
+        try {
+            new ResourceLifetime(destroy).close();
+        } catch (RuntimeException | Error cleanupFailure) {
+            if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
+        }
+    }
+
     @Override
     public void close() {
         if (closed) return;

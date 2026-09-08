@@ -151,32 +151,6 @@ final class SkyLutPassTest {
         assertEquals(0.0f, SkyLutPass.viewerAltitudeKm(20.0, 63.0, 1.0));
     }
 
-    @Test void rollbackPreservesThePrimaryFailureAndAttemptsEveryRelease() {
-        RuntimeException primary = new IllegalStateException("publication");
-        Error cleanup = new AssertionError("descriptor release");
-        List<String> released = new ArrayList<>();
-
-        SkyLutPass.closeAfterFailure(primary,
-                () -> { released.add("binding"); throw cleanup; },
-                () -> { released.add("atlas"); throw cleanup; },
-                () -> released.add("images"));
-
-        assertEquals(List.of("binding", "atlas", "images"), released);
-        assertEquals(List.of(cleanup), List.of(primary.getSuppressed()));
-        assertEquals(0, cleanup.getSuppressed().length);
-    }
-
-    @Test void rollbackCanReportTheOriginalFailureWithoutSelfSuppression() {
-        Error primary = new AssertionError("allocation");
-        List<String> released = new ArrayList<>();
-
-        SkyLutPass.closeAfterFailure(primary,
-                () -> { throw primary; }, () -> released.add("remaining resource"));
-
-        assertEquals(List.of("remaining resource"), released);
-        assertEquals(0, primary.getSuppressed().length);
-    }
-
     @Test void skyStateUsesOneCapturedHostFrame() {
         var lighting = new MinecraftLightingCalibration(100, 2, 3, 4, 5, .25f);
         var captured = new MinecraftCelestialFrame(.1f, .2f, .3f, .4f,

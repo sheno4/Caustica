@@ -32,6 +32,24 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftTerrainGeometryTest {
+    @Test void failedPreparationPreservesItsCauseWhenUploadRollbackFails() {
+        var scene = new PreparedScene();
+        var primary = new IllegalStateException("mesh preparation failed");
+        var cleanup = new AssertionError("upload cleanup failed");
+        var uploaded = new Uploaded(0x1000, () -> { throw cleanup; });
+        var terrain = new MinecraftTerrainGeometry(scene, scene, new SceneId() {}, ignored -> uploaded);
+        var result = terrain.prepare(new MinecraftTerrainGeometry.Put(7, 0, 0, 0, mesh()));
+
+        scene.jobs.getLast().future.completeExceptionally(primary);
+
+        var reported = assertThrows(java.util.concurrent.CompletionException.class, result::join);
+        assertSame(primary, reported.getCause());
+        assertEquals(List.of(cleanup), List.of(primary.getSuppressed()));
+        assertTrue(uploaded.closed);
+        assertTrue(terrain.sectionKeys().isEmpty());
+        terrain.close();
+    }
+
     @Test void preparedSectionReleasesUploadWhenMeshRetirementFails() {
         var failure = new AssertionError("mesh cleanup failed");
         var uploaded = new Uploaded(0x1000);
@@ -417,7 +435,7 @@ final class MinecraftTerrainGeometryTest {
         AtomicInteger cleanups = new AtomicInteger();
         var atlasValue = new MinecraftVulkanTerrainUploader.SharedAtlas(37, 41, () -> {
             cleanups.incrementAndGet();
-            throw new IllegalStateException("cleanup failure must not escape retirement");
+            throw new IllegalStateException("atlas cleanup failed");
         });
         var atlas = SharedResource.owned(atlasValue, MinecraftVulkanTerrainUploader.SharedAtlas::cleanup);
         var first = atlas.retain();
@@ -428,7 +446,7 @@ final class MinecraftTerrainGeometryTest {
         first.close();
         assertEquals(0, cleanups.get());
 
-        assertDoesNotThrow(second::close);
+        assertThrows(IllegalStateException.class, second::close);
         second.close();
         assertEquals(1, cleanups.get());
         assertThrows(IllegalStateException.class, atlas::retain);
@@ -512,9 +530,15 @@ final class MinecraftTerrainGeometryTest {
 
     private static final class Uploaded implements MinecraftTerrainUploader.UploadedSection {
         private final long address;
+        private final Runnable retirement;
         private boolean closed;
 
-        private Uploaded(long address) { this.address = address; }
+        private Uploaded(long address) { this(address, () -> {}); }
+
+        private Uploaded(long address, Runnable retirement) {
+            this.address = address;
+            this.retirement = retirement;
+        }
 
         @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(
@@ -536,7 +560,10 @@ final class MinecraftTerrainGeometryTest {
             return MinecraftProgramTypes.INSTANCE_DATA.data(address + 0x300);
         }
 
-        @Override public void close() { closed = true; }
+        @Override public void close() {
+            closed = true;
+            retirement.run();
+        }
     }
 
 }

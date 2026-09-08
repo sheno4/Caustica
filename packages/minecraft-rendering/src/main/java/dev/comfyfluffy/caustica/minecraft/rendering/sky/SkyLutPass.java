@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.VK10.*;
+import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure;
 
 /** Owns the Overworld atmosphere LUTs and publishes immutable environment binding revisions. */
 public final class SkyLutPass implements Pass<PassFrame> {
@@ -340,14 +341,6 @@ public final class SkyLutPass implements Pass<PassFrame> {
             if (previousAtlas != null) previousAtlas.close();
         }, skyViewShader::close, multiScatterShader::close, transmittanceShader::close,
                 resources::close).close();
-    }
-
-    static void closeAfterFailure(Throwable failure, Runnable... releases) {
-        try {
-            new ResourceLifetime(releases).close();
-        } catch (RuntimeException | Error cleanupFailure) {
-            if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
-        }
     }
 
     private record BindingResources(VmaMappedBuffer root, SharedResource<AtlasEntry> atlas,

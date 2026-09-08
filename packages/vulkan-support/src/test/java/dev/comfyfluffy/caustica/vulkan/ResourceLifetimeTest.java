@@ -10,6 +10,33 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ResourceLifetimeTest {
+    @Test void rollbackPreservesThePrimaryFailureAndAttemptsEveryRelease() {
+        RuntimeException primary = new IllegalStateException("publication");
+        Error cleanup = new AssertionError("descriptor release");
+        List<String> released = new ArrayList<>();
+
+        ResourceLifetime.closeAfterFailure(primary,
+                () -> { released.add("binding"); throw cleanup; },
+                () -> { released.add("atlas"); throw cleanup; },
+                () -> released.add("images"));
+
+        assertEquals(List.of("binding", "atlas", "images"), released);
+        assertEquals(List.of(cleanup), List.of(primary.getSuppressed()));
+        assertEquals(0, cleanup.getSuppressed().length);
+    }
+
+    @Test void rollbackCanReportTheOriginalFailureWithoutSelfSuppression() {
+        Error primary = new AssertionError("allocation");
+        List<String> released = new ArrayList<>();
+
+        ResourceLifetime.closeAfterFailure(primary,
+                () -> { throw primary; }, () -> released.add("remaining resource"));
+
+        assertEquals(List.of("remaining resource"), released);
+        assertEquals(0, primary.getSuppressed().length);
+    }
+
+
     @Test
     void failedDestructionStillReleasesDependenciesWithoutRetryingNativeDestruction() {
         List<String> destroyed = new ArrayList<>();
