@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -13,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -37,6 +39,41 @@ final class SlangLibraryTest {
         if (library != null && runtime != null) {
             library.destroyRuntime(runtime);
         }
+    }
+
+    @Test
+    void closesNativeSessionExactlyOnceOutsideItsMonitor() {
+        AtomicInteger notifications = new AtomicInteger();
+        SlangSession session = new SlangSession(library,
+                library.createSession(runtime, List.of(), 0), closed -> {
+                    assertFalse(Thread.holdsLock(closed));
+                    notifications.incrementAndGet();
+                });
+        session.close();
+        session.close();
+        assertEquals(1, notifications.get());
+        assertThrows(IllegalStateException.class,
+                () -> session.compile("closed", "closed.slang", "", "main"));
+    }
+
+    @Test
+    void unregistersSessionWhenNativeDestructionCannotStart() {
+        MemorySegment expiredHandle;
+        try (Arena arena = Arena.ofConfined()) {
+            expiredHandle = arena.allocate(1);
+        }
+        AtomicInteger notifications = new AtomicInteger();
+        SlangSession session = new SlangSession(library, expiredHandle, closed -> {
+            assertFalse(Thread.holdsLock(closed));
+            notifications.incrementAndGet();
+        });
+        // FFM rejects the expired segment before entering the native destructor.
+        assertThrows(RuntimeException.class, session::close);
+        assertEquals(1, notifications.get());
+        session.close();
+        assertEquals(1, notifications.get());
+        assertThrows(IllegalStateException.class,
+                () -> session.compile("closed", "closed.slang", "", "main"));
     }
 
     @Test

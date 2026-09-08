@@ -41,7 +41,7 @@ public final class SlangSession implements AutoCloseable {
                 Objects.requireNonNull(implementationType, "implementationType"));
     }
 
-    synchronized boolean isClosed() {
+    private boolean isClosed() {
         return retainedUntilProcessExit || handle.equals(MemorySegment.NULL);
     }
 
@@ -58,18 +58,19 @@ public final class SlangSession implements AutoCloseable {
 
     @Override
     public void close() {
-        boolean closed = false;
+        MemorySegment closingHandle;
         synchronized (this) {
-            if (!retainedUntilProcessExit && !handle.equals(MemorySegment.NULL)) {
-                try {
-                    library.destroySession(handle);
-                } finally {
-                    handle = MemorySegment.NULL;
-                    closed = true;
-                }
+            if (isClosed()) {
+                return;
             }
+            // No new compiler call may use the handle once native cleanup begins.
+            closingHandle = handle;
+            handle = MemorySegment.NULL;
         }
-        if (closed) {
+        try {
+            library.destroySession(closingHandle);
+        } finally {
+            // The runtime callback takes its own monitor, so invoke it outside the session monitor.
             onClose.accept(this);
         }
     }
