@@ -85,12 +85,12 @@ public abstract class VulkanBackendMixin {
 						extension, physicalDevice.deviceName());
 			}
 		}
-		MinecraftVulkanDiagnostics.addExtensions(augmented, physicalDevice);
+		boolean deviceFault = MinecraftVulkanDiagnostics.addExtensions(augmented, physicalDevice);
 		CausticaClientComposition.current().deviceBringup()
 				.addExtensions(augmented, physicalDevice);
 		args.set(0, augmented);
 
-		MinecraftVulkanDiagnostics.addFeatures(args);
+		MinecraftVulkanDiagnostics.addFeatures(args, deviceFault);
 		CausticaClientComposition.current().deviceBringup()
 				.addFeatures(args, physicalDevice);
 		VulkanDiagnostics.logEnabledExtensions(augmented);

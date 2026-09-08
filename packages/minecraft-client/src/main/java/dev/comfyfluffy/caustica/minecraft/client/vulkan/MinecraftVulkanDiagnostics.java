@@ -19,17 +19,15 @@ import java.util.Set;
 
 /** Bridges host device wrappers and checkpoint formatting into raw Vulkan diagnostics. */
 public final class MinecraftVulkanDiagnostics {
-    private static boolean faultRequested;
-
     private MinecraftVulkanDiagnostics() {
     }
 
-    public static void addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
+    /** Returns whether feature setup should enable device-fault reporting for this device. */
+    public static boolean addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
         VulkanDiagnostics.logStartup(device.vkPhysicalDevice(), startupInfo(device));
-        faultRequested = device.hasDeviceExtension(
+        boolean faultRequested = device.hasDeviceExtension(
                 EXTDeviceFault.VK_EXT_DEVICE_FAULT_EXTENSION_NAME)
-                ? VulkanDiagnostics.queryDeviceFaultSupport(device.vkPhysicalDevice())
-                : false;
+                && VulkanDiagnostics.queryDeviceFaultSupport(device.vkPhysicalDevice());
         VulkanDiagnostics.configureDeviceFault(faultRequested);
         if (faultRequested) {
             addOnce(extensions, EXTDeviceFault.VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
@@ -37,10 +35,11 @@ public final class MinecraftVulkanDiagnostics {
         } else {
             CausticaMod.LOGGER.warn("Vulkan device-fault diagnostics unavailable on [{}]", device.deviceName());
         }
+        return faultRequested;
     }
 
     @SuppressWarnings("unchecked")
-    public static void addFeatures(Args args) {
+    public static void addFeatures(Args args, boolean faultRequested) {
         if (!faultRequested) return;
         Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
         VulkanPNextStruct faultStruct = new VulkanPNextStruct(
