@@ -20,7 +20,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class RtFluidMaterialTest {
     private static final ResourceId STILL = MinecraftMaterialIds.LAVA;
@@ -33,9 +32,9 @@ final class RtFluidMaterialTest {
         var resources = List.of(resource(STILL, stillUv, 100.0f), resource(FLOW, flowUv, 200.0f));
         var capture = capture(resources);
 
-        assertSame(capture, capture.getBuilder(STILL));
+        capture.beginFace(STILL);
         var still = capture.faceMaterial;
-        assertSame(capture, capture.getBuilder(FLOW));
+        capture.beginFace(FLOW);
         var flow = capture.faceMaterial;
 
         assertEquals(STILL, still.material());
@@ -47,7 +46,7 @@ final class RtFluidMaterialTest {
         assertEquals(0.25f, (0.53125f - record.baseColorUv().u()) * record.baseColorUv().inverseDu());
         assertEquals(0.75f, (0.84375f - record.baseColorUv().v()) * record.baseColorUv().inverseDv());
 
-        capture.getBuilder(STILL);
+        capture.beginFace(STILL);
         assertEquals(still, capture.faceMaterial);
         assertEquals(stillUv, capture.materials.records().get(still.materialIndex()).baseColorUv());
         capture.reset();
@@ -58,9 +57,9 @@ final class RtFluidMaterialTest {
     void waterKeepsItsNamedBoundaryAcrossSpriteChanges() {
         var capture = capture(List.of());
         capture.water = true;
-        capture.getBuilder(ResourceId.of("minecraft", "block/water_still"));
+        capture.beginFace(ResourceId.of("minecraft", "block/water_still"));
         var still = capture.faceMaterial;
-        capture.getBuilder(ResourceId.of("minecraft", "block/water_flow"));
+        capture.beginFace(ResourceId.of("minecraft", "block/water_flow"));
 
         assertEquals(still, capture.faceMaterial);
         assertEquals(MinecraftMaterialIds.WATER, capture.faceMaterial.material());

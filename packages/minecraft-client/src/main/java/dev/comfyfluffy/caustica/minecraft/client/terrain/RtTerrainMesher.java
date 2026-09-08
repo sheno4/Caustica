@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialClassification;
@@ -608,15 +607,10 @@ final class RtTerrainMesher {
     }
 
     /**
-     * Captures the quads {@link RtFluidMesher} emits into the current section's mesh. It
-     * is both the {@link RtFluidMesher.Output} and the {@link VertexConsumer} it hands back. Vertices
-     * arrive in groups of 4 (one quad) via the bulk {@code addVertex}; we keep position + atlas UV,
-     * compute a geometric normal (sign is irrelevant — the closest-hit flips it toward the viewer), and
-     * emit two triangles like {@link QuadCapture}. Coords are already section-local (RtFluidMesher uses
-     * {@code pos & 15}). Albedo comes from the atlas; RGB primitive tint carries the fluid source colour.
-     * Topology and appearance come from the resolved named material rather than a primitive semantic bit.
+     * Captures four section-local vertices per fluid face, computes its geometric normal, and emits
+     * two triangles. Water uses the source vertex colors for absorption tint; lava uses its textures.
      */
-    static final class FluidCapture implements VertexConsumer, RtFluidMesher.Output {
+    static final class FluidCapture implements RtFluidMesher.Output {
         SectionMesh cur;     // set before each section
         MinecraftMaterialLookup materials;
         MinecraftMaterialResolution faceMaterial;
@@ -633,17 +627,15 @@ final class RtTerrainMesher {
         }
 
         @Override
-        public VertexConsumer getBuilder(ResourceId material) {
+        public void beginFace(ResourceId material) {
             faceMaterial = water ? materials.resolve(MinecraftMaterialIds.WATER)
                     : materials.resolve(new MinecraftMaterialKey(material, null,
                             MinecraftMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
                             MinecraftMaterialTopology.SURFACE));
-            return this;
         }
 
         @Override
-        public void addVertex(float x, float y, float z, int color, float u, float v,
-                              int overlay, int light, float nx, float ny, float nz) {
+        public void vertex(float x, float y, float z, int color, float u, float v) {
             qx[n] = x; qy[n] = y; qz[n] = z; qu[n] = u; qv[n] = v; qc[n] = color;
             if (++n == 4) {
                 emitQuad();
@@ -721,15 +713,6 @@ final class RtTerrainMesher {
             }
         }
 
-        // RtFluidMesher calls only the bulk addVertex above.
-        @Override public VertexConsumer addVertex(float x, float y, float z) { return this; }
-        @Override public VertexConsumer setColor(int r, int g, int b, int a) { return this; }
-        @Override public VertexConsumer setColor(int color) { return this; }
-        @Override public VertexConsumer setUv(float u, float v) { return this; }
-        @Override public VertexConsumer setUv1(int u, int v) { return this; }
-        @Override public VertexConsumer setUv2(int u, int v) { return this; }
-        @Override public VertexConsumer setNormal(float x, float y, float z) { return this; }
-        @Override public VertexConsumer setLineWidth(float width) { return this; }
     }
 
 }

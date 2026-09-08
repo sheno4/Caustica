@@ -1,13 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.client.color.block.BlockTintSource;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
 import net.minecraft.client.renderer.block.FluidModel;
 import net.minecraft.client.renderer.block.FluidStateModelSet;
-import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -25,13 +23,13 @@ import static dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftFluidSu
  * its sprite's material before emitting vertices so its material maps use the same atlas transform.
  * Faces have one winding because rays intersect both sides. Neighbour occlusion uses real block
  * shapes, including glass, and covered cells reach full height to avoid spurious medium interfaces.
- * Coordinates have no raster depth bias. The capture computes geometric normals and water tint;
- * vertex lighting and overlay fields are unused.
+ * Coordinates have no raster depth bias. The capture computes geometric normals and water tint.
  */
 final class RtFluidMesher {
-    /** Selects the material whose atlas coordinates are emitted for the next face. */
+    /** Each face begins with its sprite material and emits four vertices in winding order. */
     interface Output {
-        VertexConsumer getBuilder(ResourceId material);
+        void beginFace(ResourceId material);
+        void vertex(float x, float y, float z, int color, float u, float v);
     }
 
     private RtFluidMesher() {
@@ -137,7 +135,7 @@ final class RtFluidMesher {
                 v11 = flowingSprite.getV(0.5F + (-c - s));
             }
 
-            addFace(output.getBuilder(MinecraftResourceIds.material(sprite)),
+            addFace(output, MinecraftResourceIds.material(sprite),
                     x + 0.0F, y + heightNorthWest, z + 0.0F, u00, v00,
                     x + 0.0F, y + heightSouthWest, z + 1.0F, u01, v01,
                     x + 1.0F, y + heightSouthEast, z + 1.0F, u10, v10,
@@ -151,7 +149,7 @@ final class RtFluidMesher {
             float u1 = stillSprite.getU1();
             float v0 = stillSprite.getV0();
             float v1 = stillSprite.getV1();
-            addFace(output.getBuilder(MinecraftResourceIds.material(stillSprite)),
+            addFace(output, MinecraftResourceIds.material(stillSprite),
                     x, y, z, u0, v0,
                     x + 1.0F, y, z, u1, v0,
                     x + 1.0F, y, z + 1.0F, u1, v1,
@@ -224,7 +222,7 @@ final class RtFluidMesher {
                 float v01 = sprite.getV((1.0F - hh0) * 0.5F);
                 float v02 = sprite.getV((1.0F - hh1) * 0.5F);
                 float v1 = sprite.getV(0.5F);
-                addFace(output.getBuilder(MinecraftResourceIds.material(sprite)),
+                addFace(output, MinecraftResourceIds.material(sprite),
                         x0, y + hh0, z0, u0, v01,
                         x1, y + hh1, z1, u1, v02,
                         x1, y, z1, u1, v1,
@@ -234,22 +232,17 @@ final class RtFluidMesher {
         }
     }
 
-    private static void addFace(VertexConsumer builder,
+    private static void addFace(Output output, ResourceId material,
                                 float x0, float y0, float z0, float u0, float v0,
                                 float x1, float y1, float z1, float u1, float v1,
                                 float x2, float y2, float z2, float u2, float v2,
                                 float x3, float y3, float z3, float u3, float v3,
                                 int color) {
-        vertex(builder, x0, y0, z0, color, u0, v0);
-        vertex(builder, x1, y1, z1, color, u1, v1);
-        vertex(builder, x2, y2, z2, color, u2, v2);
-        vertex(builder, x3, y3, z3, color, u3, v3);
-    }
-
-    private static void vertex(VertexConsumer builder,
-                               float x, float y, float z, int color, float u, float v) {
-        // FluidCapture computes geometric normals and ignores vertex lighting and overlays.
-        builder.addVertex(x, y, z, color, u, v, OverlayTexture.NO_OVERLAY, 0, 0.0F, 1.0F, 0.0F);
+        output.beginFace(material);
+        output.vertex(x0, y0, z0, color, u0, v0);
+        output.vertex(x1, y1, z1, color, u1, v1);
+        output.vertex(x2, y2, z2, color, u2, v2);
+        output.vertex(x3, y3, z3, color, u3, v3);
     }
 
 }
