@@ -32,10 +32,8 @@ import PyOpenColorIO as OCIO
 OCIO_BUILTIN_CONFIG = "cg-config-v4.0.0_aces-v2.0_ocio-v2.5"
 SOURCE_SPACE = "ACEScg"  # matches the renderer's scene-linear ACEScg/AP1/D60 working space
 
-# Log2 shaper range, in stops relative to linear 1.0. Matches LOG_MIN/LOG_MAX in
-# shaders/pipelines/exposure_hist and exposure_resolve -- same renderer quantity metered
-# in both places, so the same bounds. Input is exposed scene-linear (may exceed 1.0 for
-# unclipped-highlight emitters), so headroom above 0 stops matters, not just below.
+# Log2 shaper range relative to linear 1.0, shared with the display shader and LUT loader.
+# Exposed scene-linear input can exceed 1.0, so the range includes highlight headroom.
 SHAPER_LO_STOPS = -12.0
 SHAPER_HI_STOPS = 12.0
 
@@ -57,12 +55,8 @@ LUTS = [
 ] + [
     dict(
         name=f"hdr_aces2_rec2020_{nits}nit",
-        # Composed directly from BuiltinTransform pieces (verified bit-exact against the config's
-        # own Display/View path for 1000nit, the only nits value pre-wired as a named View) rather
-        # than via getProcessor(display, view, ...): ACES2065-1_to_CIE-XYZ-D65 is the ACES 2 output
-        # transform itself; CIE-XYZ-D65_to_REC.2100-PQ is the final display encode, matching
-        # VK_COLOR_SPACE_HDR10_ST2084_EXT's container exactly, so no separate gamut step or
-        # pqEncode() needed at sample time.
+        # The built-in chain selects each mastering target explicitly. Its final transform
+        # produces PQ-encoded BT.2020 for the HDR10 swapchain; the shader must not encode it again.
         builtin_chain=[
             ("colorspace", ("ACEScg", "ACES2065-1")),
             ("builtin", f"ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-{nits}nit-REC2020_2.0"),
@@ -172,9 +166,8 @@ def bake_one(cfg: "OCIO.Config", spec: dict, size: int) -> np.ndarray:
 
 
 def write_lut(path: Path, size: int, rgb: np.ndarray) -> None:
-    # RGBA16F texel data (alpha unused, kept 1.0 for a well-defined value + simpler Vulkan format
-    # matching: R16G16B16_SFLOAT support is patchy, RGBA16F is universal). Header is self-describing
-    # so the Java loader doesn't need a second source of truth for size/shaper range.
+    # The loader consumes little-endian RGBA16F texels, with R varying fastest and unused alpha at 1.
+    # The header supplies the dimensions and shaper range used to validate and upload the texture.
     rgba = np.concatenate([rgb, np.ones((size, size, size, 1), dtype=np.float32)], axis=-1)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
@@ -182,7 +175,7 @@ def write_lut(path: Path, size: int, rgb: np.ndarray) -> None:
         f.write(struct.pack("<I", 1))  # version
         f.write(struct.pack("<I", size))
         f.write(struct.pack("<ff", SHAPER_LO_STOPS, SHAPER_HI_STOPS))
-        f.write(rgba.astype(np.float16).tobytes())
+        f.write(rgba.astype("<f2").tobytes())
     print(f"wrote {path} ({path.stat().st_size} bytes, {size}^3 texels)")
 
 
