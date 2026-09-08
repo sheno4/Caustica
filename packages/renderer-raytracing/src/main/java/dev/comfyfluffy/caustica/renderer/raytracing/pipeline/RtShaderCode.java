@@ -11,8 +11,4 @@ public record RtShaderCode(String debugName, byte[] spirv) {
             throw new IllegalArgumentException("empty SPIR-V for " + debugName);
         }
     }
-
-    public static RtShaderCode of(String debugName, byte[] spirv) {
-        return new RtShaderCode(debugName, spirv);
-    }
 }

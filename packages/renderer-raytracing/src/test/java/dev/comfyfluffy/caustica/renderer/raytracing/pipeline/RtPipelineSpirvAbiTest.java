@@ -16,20 +16,20 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class RtPipelineSpirvAbiTest {
     @Test
     void acceptsAHeapNativeModuleWithoutSetDecorations() {
-        RtShaderCode shader = RtShaderCode.of("heap-native", words(1 << 16));
+        RtShaderCode shader = new RtShaderCode("heap-native", words(1 << 16));
         assertDoesNotThrow(() -> RtPipeline.requireDescriptorHeapCompatible(shader));
     }
 
     @Test
     void acceptsOnlyTheMappedWorldTlasDescriptorBinding() {
         assertDoesNotThrow(() -> RtPipeline.requireDescriptorHeapCompatible(
-                RtShaderCode.of("world-tlas", descriptorBinding(7, 0, 0))));
+                new RtShaderCode("world-tlas", descriptorBinding(7, 0, 0))));
         assertThrows(IllegalArgumentException.class, () -> RtPipeline.requireDescriptorHeapCompatible(
-                RtShaderCode.of("wrong-set", descriptorBinding(7, 1, 0))));
+                new RtShaderCode("wrong-set", descriptorBinding(7, 1, 0))));
         assertThrows(IllegalArgumentException.class, () -> RtPipeline.requireDescriptorHeapCompatible(
-                RtShaderCode.of("wrong-binding", descriptorBinding(7, 0, 1))));
+                new RtShaderCode("wrong-binding", descriptorBinding(7, 0, 1))));
         assertThrows(IllegalArgumentException.class, () -> RtPipeline.requireDescriptorHeapCompatible(
-                RtShaderCode.of("incomplete", decoration(7, 34, 0))));
+                new RtShaderCode("incomplete", decoration(7, 34, 0))));
     }
 
     @Test
@@ -64,7 +64,7 @@ final class RtPipelineSpirvAbiTest {
     @Test
     void rejectsMalformedInstructionRanges() {
         assertThrows(IllegalArgumentException.class, () -> RtPipeline.requireDescriptorHeapCompatible(
-                RtShaderCode.of("malformed", words((4 << 16) | 1))));
+                new RtShaderCode("malformed", words((4 << 16) | 1))));
     }
 
     private static byte[] descriptorBinding(int target, int descriptorSet, int binding) {

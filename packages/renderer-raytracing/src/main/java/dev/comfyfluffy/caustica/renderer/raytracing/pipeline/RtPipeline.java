@@ -35,11 +35,11 @@ public final class RtPipeline {
     private final int handleSize;
     private final int raygenCount;
     private final int missCount;
-    private final int hitCount;
+    private final ByteBuffer hitHandles;
     private boolean destroyed;
 
     private RtPipeline(VulkanDeviceContext context, long pipeline, VmaMappedBuffer sbt, long stride, int handleSize,
-                       int raygenCount, int missCount, int hitCount) {
+                       int raygenCount, int missCount, ByteBuffer hitHandles) {
         this.context = context;
         this.pipeline = pipeline;
         this.sbt = sbt;
@@ -47,7 +47,7 @@ public final class RtPipeline {
         this.handleSize = handleSize;
         this.raygenCount = raygenCount;
         this.missCount = missCount;
-        this.hitCount = hitCount;
+        this.hitHandles = hitHandles;
     }
 
     /** Creates a KHR ray-tracing pipeline whose shaders directly address the two descriptor heaps. */
@@ -135,17 +135,20 @@ public final class RtPipeline {
                     if (stride > Integer.toUnsignedLong(context.maxShaderGroupStride())) {
                         throw new UnsupportedOperationException("SBT stride exceeds maxShaderGroupStride");
                     }
-                    long sbtSize = stride * groupCount;
+                    // Scene-specific hit tables use CPU handles; only raygen and miss records live in this SBT.
+                    ByteBuffer hitHandles = ByteBuffer.allocate(hitCount * handleSize);
+                    hitHandles.put(0, handles, firstHit * handleSize, hitHandles.capacity());
+                    long sbtSize = stride * firstHit;
                     sbt = VmaMappedBuffer.create(context, sbtSize,
                             VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
                             context.shaderGroupBaseAlignment(), "world shader binding table");
                     ByteBuffer mapped = sbt.mapped();
-                    for (int i = 0; i < groupCount; i++) {
+                    for (int i = 0; i < firstHit; i++) {
                         mapped.put(Math.toIntExact(i * stride), handles, i * handleSize, handleSize);
                     }
                     sbt.flush(0L, sbtSize);
                     return new RtPipeline(context, pipeline, sbt, stride, handleSize,
-                            raygenCount, missCount, hitCount);
+                            raygenCount, missCount, hitHandles);
                 } catch (RuntimeException | Error failure) {
                     if (sbt != null) sbt.close();
                     VK10.vkDestroyPipeline(device, pipeline, null);
@@ -206,13 +209,7 @@ public final class RtPipeline {
     /** CPU image for a scene-specific hit table; the caller owns uploading and retiring its SBT buffer. */
     public ByteBuffer retainedHitRecords(List<RtRetainedGeometryPlan.HitGroup> groups) {
         if (destroyed) throw new IllegalStateException("pipeline is destroyed");
-        ByteBuffer handles = ByteBuffer.allocate(hitCount * handleSize);
-        ByteBuffer mapped = sbt.mapped();
-        int firstHit = mapped.position() + Math.toIntExact((long) (raygenCount + missCount) * stride);
-        for (int group = 0; group < hitCount; group++) {
-            handles.put(group * handleSize, mapped, firstHit + Math.toIntExact(group * stride), handleSize);
-        }
-        return packRetainedHitRecords(handles, handleSize, Math.toIntExact(stride), groups);
+        return packRetainedHitRecords(hitHandles, handleSize, Math.toIntExact(stride), groups);
     }
 
     static ByteBuffer packRetainedHitRecords(ByteBuffer fixedHitHandles, int handleSize, int recordStride,

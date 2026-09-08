@@ -146,14 +146,14 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             List<Long> data = shaderCompiler.implementationData();
             table = createImplementationTable(data);
             boolean reordered = context.backend().capabilities().shaderExecutionReordering();
-            RtShaderCode build = RtShaderCode.of("build-stable-planes", shaderCompiler.compileBuildStablePlanes());
-            RtShaderCode fill = RtShaderCode.of("fill-stable-planes", shaderCompiler.compileFillStablePlanes(reordered));
-            RtShaderCode environment = RtShaderCode.of("environment", shaderCompiler.compileSkyMiss());
-            RtShaderCode guide = RtShaderCode.of("guide", shaderCompiler.compilePlain(
+            RtShaderCode build = new RtShaderCode("build-stable-planes", shaderCompiler.compileBuildStablePlanes());
+            RtShaderCode fill = new RtShaderCode("fill-stable-planes", shaderCompiler.compileFillStablePlanes(reordered));
+            RtShaderCode environment = new RtShaderCode("environment", shaderCompiler.compileSkyMiss());
+            RtShaderCode guide = new RtShaderCode("guide", shaderCompiler.compilePlain(
                     "guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
-            RtShaderCode closest = RtShaderCode.of("closest-hit", shaderCompiler.compileClosestHit());
-            RtShaderCode radiance = RtShaderCode.of("radiance-any-hit", shaderCompiler.compileRadianceAnyHit());
-            RtShaderCode shadow = RtShaderCode.of("shadow-any-hit", shaderCompiler.compileShadowAnyHit());
+            RtShaderCode closest = new RtShaderCode("closest-hit", shaderCompiler.compileClosestHit());
+            RtShaderCode radiance = new RtShaderCode("radiance-any-hit", shaderCompiler.compileRadianceAnyHit());
+            RtShaderCode shadow = new RtShaderCode("shadow-any-hit", shaderCompiler.compileShadowAnyHit());
             pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill},
                     new RtShaderCode[]{environment, guide}, closest, radiance, shadow);
             return new Candidate(composition, shaderCompiler, table, pipeline);
