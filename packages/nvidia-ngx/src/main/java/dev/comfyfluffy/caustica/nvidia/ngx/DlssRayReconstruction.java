@@ -61,12 +61,7 @@ public final class DlssRayReconstruction {
     private boolean failed;
     private boolean loggedAvailable;
 
-    private int featureRenderWidth = -1;
-    private int featureRenderHeight = -1;
-    private int featureDisplayWidth = -1;
-    private int featureDisplayHeight = -1;
-    private int featureQuality = Integer.MIN_VALUE;
-    private int featurePreset = Integer.MIN_VALUE;
+    private DlssFeatureConfiguration featureConfiguration;
 
     private boolean resetHistory;
     private long lastFrameNanos;
@@ -169,9 +164,8 @@ public final class DlssRayReconstruction {
     }
 
     public boolean featureReadyFor(int renderWidth, int renderHeight, int displayWidth, int displayHeight) {
-        return !feature.equals(MemorySegment.NULL) && featureRenderWidth == renderWidth && featureRenderHeight == renderHeight
-                && featureDisplayWidth == displayWidth && featureDisplayHeight == displayHeight
-                && featureQuality == quality() && featurePreset == settings.preset();
+        return featureConfiguration != null && featureConfiguration.matches(renderWidth, renderHeight,
+                displayWidth, displayHeight, quality(), settings.preset());
     }
 
     /**
@@ -196,12 +190,8 @@ public final class DlssRayReconstruction {
                     throw new IllegalStateException("ngxshim_create_dlssd failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
                 }
-                featureRenderWidth = renderWidth;
-                featureRenderHeight = renderHeight;
-                featureDisplayWidth = displayWidth;
-                featureDisplayHeight = displayHeight;
-                featureQuality = quality;
-                featurePreset = preset;
+                featureConfiguration = new DlssFeatureConfiguration(renderWidth, renderHeight,
+                        displayWidth, displayHeight, quality, preset);
                 resetHistory();
                 LOGGER.info("DLSS-RR feature created: {}x{} -> {}x{} (quality {}, preset {})",
                         renderWidth, renderHeight, displayWidth, displayHeight, quality, preset);
@@ -251,12 +241,7 @@ public final class DlssRayReconstruction {
             lib.release(feature);
             feature = MemorySegment.NULL;
         }
-        featureRenderWidth = -1;
-        featureRenderHeight = -1;
-        featureDisplayWidth = -1;
-        featureDisplayHeight = -1;
-        featureQuality = Integer.MIN_VALUE;
-        featurePreset = Integer.MIN_VALUE;
+        featureConfiguration = null;
     }
 
 }

@@ -40,12 +40,7 @@ public final class DlssSuperResolution {
     private boolean loggedAvailable;
     private boolean resetHistory = true;
     private long lastFrameNanos;
-    private int featureRenderWidth = -1;
-    private int featureRenderHeight = -1;
-    private int featureDisplayWidth = -1;
-    private int featureDisplayHeight = -1;
-    private int featureQuality = Integer.MIN_VALUE;
-    private int featurePreset = Integer.MIN_VALUE;
+    private DlssFeatureConfiguration featureConfiguration;
 
     public DlssSuperResolution(NgxRuntime runtime, Settings settings) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -107,9 +102,8 @@ public final class DlssSuperResolution {
             ensureInitialized();
             int quality = settings.quality();
             int preset = settings.preset();
-            if (featureRenderWidth != renderWidth || featureRenderHeight != renderHeight
-                    || featureDisplayWidth != displayWidth || featureDisplayHeight != displayHeight
-                    || featureQuality != quality || featurePreset != preset || feature.equals(MemorySegment.NULL)) {
+            if (featureConfiguration == null || !featureConfiguration.matches(renderWidth, renderHeight,
+                    displayWidth, displayHeight, quality, preset)) {
                 releaseFeature();
                 feature = lib.createDlss(commandBuffer.address(), renderWidth, renderHeight,
                         displayWidth, displayHeight, quality, FEATURE_FLAGS, preset);
@@ -117,12 +111,8 @@ public final class DlssSuperResolution {
                     throw new IllegalStateException("ngxshim_create_dlss failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
                 }
-                featureRenderWidth = renderWidth;
-                featureRenderHeight = renderHeight;
-                featureDisplayWidth = displayWidth;
-                featureDisplayHeight = displayHeight;
-                featureQuality = quality;
-                featurePreset = preset;
+                featureConfiguration = new DlssFeatureConfiguration(renderWidth, renderHeight,
+                        displayWidth, displayHeight, quality, preset);
                 resetHistory();
                 LOGGER.info("DLSS-SR feature created: {}x{} -> {}x{} (quality {}, preset {})",
                         renderWidth, renderHeight, displayWidth, displayHeight, quality, preset);
@@ -193,11 +183,6 @@ public final class DlssSuperResolution {
             lib.release(feature);
             feature = MemorySegment.NULL;
         }
-        featureRenderWidth = -1;
-        featureRenderHeight = -1;
-        featureDisplayWidth = -1;
-        featureDisplayHeight = -1;
-        featureQuality = Integer.MIN_VALUE;
-        featurePreset = Integer.MIN_VALUE;
+        featureConfiguration = null;
     }
 }

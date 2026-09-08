@@ -596,3 +596,11 @@ Linux Gradle preparation, native compilation, lifetime CTest and runtime staging
 A subsequent Linux Gradle `nrdNativeJar check` passed in1m10s,14 tasks (process85571, terminal0). All5 Java tests across NrdAbiTest, NrdBackendFactoryTest and NrdBackendTest passed without skips, failures or errors. Inspected `caustica-nvidia-nrd-0.8.0-linux-x64.jar`: it contains NrdBackend.class and all three library/license entries, each matching the staged input byte-for-byte by SHA-256. Library SHA-256: `3f41e926bbda679cb3de7ec5f75ad22186f850cd11c5439f116f336173809082`.
 
 Evidence: `tmp/aesthetic-linux-gradle-ninja.{sh,log}`, `tmp/aesthetic-linux-gradle-jar.{sh,log}`, `tmp/aesthetic-linux-gradle-bundle.json`, and test XML/native archive under `tmp/linux-gradle-build/nrd-ninja`. This closes the NRD Linux-host Gradle build/test/packaging gap. It is not a full Linux application build, hosted CI run or GPU runtime test. No Minecraft client was launched.
+
+## DLSS feature configuration as one retained value (2026-09-09)
+
+RR and SR each retained six separate creation-parameter fields, repeated assignment sequences and sentinel resets. Replaced these with a shared immutable DlssFeatureConfiguration value created only after native feature creation succeeds and cleared after release. The primitive matching method preserves allocation-free per-frame checks. Feature handles, native calls, failure behavior and prior-GPU-use ordering are unchanged.
+
+Reviewed RR's explicit idle-before-replacement path and SR's caller-side extent/configuration path. RtFrameResources waits idle when SR size, quality or preset changes; RR additionally checks feature readiness before ensuring it. This inspection found no demonstrated release-order defect and does not identify or fix the independent RR device loss.
+
+Root `check --no-parallel` passed187 tasks in42s (process56284, terminal0), with56 executed and131 up-to-date. Evidence: `tmp/aesthetic-dlss-feature-config-check.log`. No native renderer session was launched for this cleanup; live RR/SR replacement and toggle coverage of this revision remains pending.
