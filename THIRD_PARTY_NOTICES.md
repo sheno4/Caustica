@@ -39,10 +39,10 @@ object code. NRD is proprietary third-party software and is not licensed under
 the LGPL. NRI is third-party software licensed under the MIT License.
 
 The integration is pinned to NVIDIA NRD revision
-`b233cc3ec5b1db2763e45fd18c9bb19793016355`. Native artifacts are built only
-from an explicitly supplied checkout and contain that checkout's `LICENSE.txt`
-and NRI's `LICENSE.txt` beside the native library under
-`caustica/natives/nrd/`.
+`b233cc3ec5b1db2763e45fd18c9bb19793016355`. Native builds use the pinned
+`third_party/NRD` submodule by default. Bundled artifacts contain NRD's
+`LICENSE.txt` and NRI's license as `NRI_LICENSE.txt` beside the native library
+under `caustica/natives/nrd/<revision>/<platform>/`.
 
 The NVIDIA SDK components remain subject to the NVIDIA RTX SDKs license:
 
@@ -59,8 +59,8 @@ NRI license and source:
 
 ## Slang
 
-Caustica bundles the Slang compiler shared libraries and standard module from
-Vulkan SDK 1.4.350.0 for in-game shader compilation. Slang is licensed under
+Caustica bundles the Slang 2026.14.1 compiler shared libraries and standard module
+for in-game shader compilation. Slang is licensed under
 `Apache-2.0 WITH LLVM-exception`:
 
 <https://github.com/shader-slang/slang/blob/master/LICENSE>
@@ -73,13 +73,6 @@ SPIR-V Tools. The upstream dependency and license list is maintained at:
 
 Caustica's `causticaslang` native library is project-owned glue code and follows
 Caustica's project license unless otherwise noted.
-
-## dev.harrel JSON Schema
-
-Caustica bundles `dev.harrel:json-schema` for ray-pack manifest validation. It is
-licensed under the MIT License:
-
-<https://github.com/harrel56/json-schema/blob/master/LICENSE>
 
 ## Khronos Box Vertex Colors glTF asset
 

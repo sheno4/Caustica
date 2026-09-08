@@ -1,5 +1,8 @@
 # Developer Guide
 
+Use Java 25 and CMake 3.30 or newer. Native builds also require a C++ compiler;
+the Windows commands below use Visual Studio 2022 with the C++ build tools installed.
+
 Initialize the pinned NRD source subrepository after cloning:
 
 ```bash
@@ -25,7 +28,7 @@ dependencies. Native configuration and compilation remain offline and do not run
    The installer sets `VULKAN_SDK` automatically.
 2. Download Slang 2026.14.1 from <https://github.com/shader-slang/slang/releases/tag/v2026.14.1>,
    extract it, and set `SLANG_SDK` to the extracted directory.
-3. Download the DLSS SDK from <https://github.com/NVIDIA/DLSS/releases>.
+3. Download DLSS SDK v310.7.0 from <https://github.com/NVIDIA/DLSS/releases/tag/v310.7.0>.
    Extract it, then set `DLSS_SDK` to the folder you extracted.
 
    To set it permanently for your Windows user account, run PowerShell with:
@@ -44,7 +47,7 @@ dependencies. Native configuration and compilation remain offline and do not run
 4. Configure and build the native shims:
 
 ```powershell
-cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
+cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim/release -G "Visual Studio 17 2022" -A x64
 cmake --build build/cmake/ngx_shim/release --config Release
 cmake -S packages/slang-runtime/native -B build/cmake/slang_shim -G "Visual Studio 17 2022" -A x64
 cmake --build build/cmake/slang_shim --config Release
@@ -114,8 +117,8 @@ runtime for the current host platform by default:
 Select NeoForge with `-Ploader=neoforge`. The build emits a loader-specific
 classifier (`-fabric` or `-neoforge`); install the jar matching the instance's loader.
 
-Release builds that already have both platform shims available can request a
-cross-platform native bundle:
+Release builds that already have both NGX platform shims available can request
+both NGX runtimes:
 
 ```bash
 ./gradlew -Ploader=fabric build -PngxPlatforms=windows-x64,linux-x64
@@ -140,26 +143,17 @@ CI uses this path to include both Windows and Linux runtimes in each loader arti
 For local compiler development, `-Dcaustica.slang.path=/path/to/runtime` loads
 an unpacked runtime directory instead of extracting the bundled copy.
 
-The `causticaslang` ABI is version 2. Its dynamic program operation accepts an
-engine module/entry point and a pack module/concrete type. Slang loads both from
-the session search paths, specializes the engine-owned generic entry point with
-the pack type, links, reflects, validates, and emits engine-owned SPIR-V. Pack
-API 0.1 appearance modules contain no shader entry points or pipeline
-declarations. This restriction is scoped to the current appearance contract:
-the planned pack-compute extension will compile manifest-declared compute entry
-points through a separate engine-owned wrapper, reflection validator, and frame-
-graph path. It will not expose integrator, direct-lighting, Vulkan scheduling, or
-engine-service selection to packs.
+The `causticaslang` ABI is version 2. Its specialization operation accepts an
+engine module/entry point and a composition module/concrete type. Slang loads
+both from the session search paths, specializes the generic entry point with
+the composition type, links, reflects, validates, and emits SPIR-V.
+`WorldShaderCompiler` generates the composition dispatch from the declarations
+in an immutable `ProgramComposition`.
 
-Ray-pack manifests are validated against the bundled Draft 2020-12 schema at
-`caustica/raypacks/api/0.1/pack.schema.json` before typed parsing. The schema is
-strict about unknown fields; semantic checks that require engine or Slang state
-remain separate.
-
-Validate the Java FFM boundary and the engine/pack specialization path with:
+Validate the Java FFM boundary and shader specialization with:
 
 ```bash
-./gradlew validateRayPackContract test --tests dev.comfyfluffy.caustica.slang.SlangLibraryTest
+./gradlew :packages:slang-runtime:test --tests dev.comfyfluffy.caustica.slang.SlangLibraryTest
 ```
 
 Run the Vulkan RT/DLSS-RR client with:

@@ -28,8 +28,7 @@ from pathlib import Path
 import numpy as np
 import PyOpenColorIO as OCIO
 
-# OCIO 2.2+ ships this config compiled into the library -- no external config file/network fetch
-# needed. This is the renderer's pinned ACES 2.0 color configuration.
+# OCIO ships this pinned ACES 2.0 config in the library; no external config file is needed.
 OCIO_BUILTIN_CONFIG = "cg-config-v4.0.0_aces-v2.0_ocio-v2.5"
 SOURCE_SPACE = "ACEScg"  # matches the renderer's scene-linear ACEScg/AP1/D60 working space
 
