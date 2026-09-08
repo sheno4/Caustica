@@ -17,6 +17,7 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProf
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTopology;
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
@@ -363,30 +364,35 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         return failure;
     }
     static final class TextureSet implements AutoCloseable {
-        final GpuDescriptorRange<GpuDescriptorIndex.Resource> range;
-        final GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange;
         final Map<MinecraftEntityMesh.Texture, TextureBinding> bindings;
-        final List<BorrowedMinecraftTexture> leases;
+        private final ResourceLifetime lifetime;
         TextureSet(GpuDescriptorRange<GpuDescriptorIndex.Resource> range,
                    GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange,
                    Map<MinecraftEntityMesh.Texture, TextureBinding> bindings,
                    List<BorrowedMinecraftTexture> leases) {
-            this.range = range;
-            this.samplerRange = samplerRange;
             this.bindings = bindings;
-            this.leases = leases;
+            List<Runnable> releases = new ArrayList<>();
+            if (range != null) releases.add(range::destroy);
+            if (samplerRange != null) releases.add(samplerRange::destroy);
+            for (BorrowedMinecraftTexture lease : leases) releases.add(lease::close);
+            lifetime = new ResourceLifetime(releases.toArray(Runnable[]::new));
         }
         @Override public void close() {
-            throwIfFailed(closeAll(range == null ? null : range::destroy,
-                    samplerRange == null ? null : samplerRange::destroy, new LeaseCloser(leases)));
+            lifetime.close();
         }
     }
     record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
                     ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                    List<ResourceOwner> shaderClaims,
-                    List<ResourceOwner> bufferClaims) implements UploadedEntity {
+                    ResourceLifetime lifetime) implements UploadedEntity {
+        Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
+                 ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
+                 List<ResourceOwner> shaderClaims, List<ResourceOwner> bufferClaims) {
+            this(build, instanceData, new ResourceLifetime(
+                    java.util.stream.Stream.concat(shaderClaims.stream(), bufferClaims.stream())
+                            .map(owner -> (Runnable) owner::close).toArray(Runnable[]::new)));
+        }
         @Override public void close() {
-            throwIfFailed(closeAll(new LeaseCloser(shaderClaims), new LeaseCloser(bufferClaims)));
+            lifetime.close();
         }
     }
     record TextureBinding(int image, int sampler) { }

@@ -188,6 +188,8 @@ final class MinecraftVulkanEntityUploaderTest {
         IllegalStateException failure = assertThrows(IllegalStateException.class, set::close);
         assertEquals(List.of("descriptor", "sampler", "first", "second"), closed);
         assertEquals(1, failure.getSuppressed().length);
+        set.close();
+        assertEquals(List.of("descriptor", "sampler", "first", "second"), closed);
     }
 
     private static BorrowedMinecraftTexture lease(
@@ -300,13 +302,10 @@ final class MinecraftVulkanEntityUploaderTest {
         for (int i = 0; i < 3; i++) {
             int index = i;
             claims.add(new dev.comfyfluffy.caustica.api.resource.ResourceOwner() {
-                boolean released;
                 @Override public dev.comfyfluffy.caustica.api.resource.ResourceOwner retain() {
                     throw new AssertionError("closing must not retain");
                 }
                 @Override public void close() {
-                    if (released) return;
-                    released = true;
                     closed.add(index);
                     if (index == 0) throw failure;
                 }
