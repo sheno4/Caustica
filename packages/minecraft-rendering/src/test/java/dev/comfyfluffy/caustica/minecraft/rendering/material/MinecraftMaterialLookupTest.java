@@ -1,6 +1,14 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.material;
 
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureResource;
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureKind;
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureAnalysisSource;
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureImage;
+import dev.comfyfluffy.caustica.minecraft.content.material.MaterialUv;
+import dev.comfyfluffy.caustica.minecraft.content.material.OpenPbrColorBinding;
+import dev.comfyfluffy.caustica.minecraft.content.material.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialRule;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialKey;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
@@ -18,6 +26,52 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftMaterialLookupTest {
+    @Test
+    void topologyOverridesChooseDefaultsBeforeParameterOverrides() {
+        for (var topology : MinecraftMaterialTopology.values()) {
+            var defaults = overriddenMaterial(new MinecraftMaterialRule.Parameters(
+                    null, null, null, null, null, topology));
+            var explicit = overriddenMaterial(new MinecraftMaterialRule.Parameters(
+                    0.42f, 0.25f, 1.7f, 0.6f, null, topology));
+            for (var sourceTopology : MinecraftMaterialTopology.values()) {
+                var key = new MinecraftMaterialKey(ResourceId.of("test", "material"), null,
+                        MinecraftMaterialProfile.CONDUCTOR, sourceTopology);
+                var resolution = defaults.resolve(key);
+                assertEquals(topology, resolution.topology());
+                var record = defaults.records().get(resolution.materialIndex());
+                boolean boundary = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY;
+                assertEquals(boundary ? OpenPbrDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS : 0.3f,
+                        record.specularRoughness());
+                assertEquals(boundary ? 0.0f : 1.0f, record.baseMetalness());
+                assertEquals(boundary ? 1.31f : OpenPbrDefaults.SPECULAR_IOR, record.specularIor());
+                assertEquals(boundary ? 1.0f : 0.0f, record.transmissionWeight());
+
+                var overridden = explicit.records().get(explicit.resolve(key).materialIndex());
+                assertEquals(0.42f, overridden.specularRoughness());
+                assertEquals(0.25f, overridden.baseMetalness());
+                assertEquals(1.7f, overridden.specularIor());
+                assertEquals(0.6f, overridden.transmissionWeight());
+            }
+        }
+    }
+
+    private static MinecraftMaterialLookup overriddenMaterial(MinecraftMaterialRule.Parameters parameters) {
+        var id = ResourceId.of("test", "material");
+        var resource = new MaterialTextureResource(id, MaterialTextureKind.STANDALONE,
+                new MaterialTextureAnalysisSource(1, 1, 1, () -> new MaterialTextureImage() {
+                    @Override public int width() { return 1; }
+                    @Override public int height() { return 1; }
+                    @Override public int albedoArgb(int x, int y) { return 0xFFFFFFFF; }
+                    @Override public int alphaArgb(int frame, int x, int y) { return 0xFFFFFFFF; }
+                    @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
+                    @Override public void close() { }
+                }), MaterialUv.IDENTITY, false, false, false,
+                OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT, 1.31f, 0.0f);
+        return MinecraftMaterialLookup.compile(new ResourcePackEpoch(7),
+                List.of(new MinecraftMaterialRule(id, id, null, parameters)), List.of(resource),
+                MinecraftMaterialPageCompiler.compile(List.of(resource)));
+    }
+
     @Test
     void alwaysPublishesTheLogicalWaterBoundaryMaterial() {
         MinecraftMaterialLookup lookup = MinecraftMaterialLookup.compile(

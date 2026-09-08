@@ -72,12 +72,13 @@ public final class MinecraftMaterialLookup {
             geometries.getOrDefault(resource.material(), Set.of()).stream()
                     .sorted(Comparator.comparing(ResourceId::toString)).forEach(geometryCases::add);
             for (ResourceId geometry : geometryCases) {
+                MinecraftMaterialRule rule = matchingRule(rules, resource.material(), geometry);
                 for (MinecraftMaterialProfile profile : MinecraftMaterialProfile.values()) {
                     for (MinecraftMaterialTopology topology : MinecraftMaterialTopology.values()) {
                         MinecraftMaterialKey key = new MinecraftMaterialKey(resource.material(), geometry,
                                 profile, topology);
                         Compiled resolved = compileRecord(key, resource, pages.material(resource.material()),
-                                matchingRule(rules, resource.material(), geometry), scans.get(resource.material()));
+                                rule, scans.get(resource.material()));
                         int index = records.size();
                         records.add(resolved.record());
                         MinecraftMaterialResolution resolution = new MinecraftMaterialResolution(index,
@@ -155,7 +156,9 @@ public final class MinecraftMaterialLookup {
                                           MinecraftMaterialRule rule,
                                           MinecraftMaterialEmissionAnalyzer.Scan scan) {
         int features = page.features();
-        MinecraftMaterialTopology topology = key.topology();
+        MinecraftMaterialRule.Parameters parameters = rule == null ? null : rule.parameters();
+        MinecraftMaterialTopology topology = parameters != null && parameters.topology() != null
+                ? parameters.topology() : key.topology();
         float roughness = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY
                 ? OpenPbrDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS : roughness(key.profile());
         float metalness = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY
@@ -168,14 +171,7 @@ public final class MinecraftMaterialLookup {
                 ? resource.dielectricIor() : OpenPbrDefaults.SPECULAR_IOR;
         float transmission = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY ? 1.0f : 0.0f;
         float luminance = resource.uniformEmissionLuminanceCdM2();
-        if (rule != null) {
-            MinecraftMaterialRule.Parameters parameters = rule.parameters();
-            if (parameters.topology() != null && parameters.topology() != topology) {
-                topology = parameters.topology();
-                ior = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY
-                        ? OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR : OpenPbrDefaults.SPECULAR_IOR;
-                transmission = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY ? 1.0f : 0.0f;
-            }
+        if (parameters != null) {
             if (parameters.specularRoughness() != null) roughness = parameters.specularRoughness();
             if (parameters.baseMetalness() != null) metalness = parameters.baseMetalness();
             if (parameters.specularIor() != null) ior = parameters.specularIor();
