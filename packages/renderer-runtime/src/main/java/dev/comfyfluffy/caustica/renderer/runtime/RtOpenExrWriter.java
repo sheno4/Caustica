@@ -4,14 +4,16 @@ import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.IntUnaryOperator;
 
 /**
  * Uncompressed scanline OpenEXR writer for half-float screenshots and float diagnostic images.
@@ -47,85 +49,62 @@ final class RtOpenExrWriter {
         }
     }
 
-    /**
-     * Writes RGBA half values whose rows are in Vulkan image order (row zero is the bottom row).
-     * EXR scanline zero is the top row, so scanlines are reversed while writing.
-     */
+    /** Writes the renderer's bottom-up RGBA half samples with scene-linear color metadata. */
     static void write(Path output, int width, int height, short[] rgba, Metadata metadata) throws IOException {
         Objects.requireNonNull(output, "output");
         Objects.requireNonNull(rgba, "rgba");
         Objects.requireNonNull(metadata, "metadata");
-        if (width <= 0 || height <= 0) {
-            throw new IllegalArgumentException("EXR dimensions must be positive: " + width + "x" + height);
-        }
-        int pixelCount = Math.multiplyExact(width, height);
-        if (rgba.length != Math.multiplyExact(pixelCount, 4)) {
-            throw new IllegalArgumentException("Expected " + (pixelCount * 4) + " RGBA samples, got " + rgba.length);
-        }
-
-        byte[] header = header(width, height, metadata);
-        long rowDataBytes = Math.multiplyExact((long) width, 8L);
-        long scanlineBlockBytes = Math.addExact(8L, rowDataBytes);
-        long firstScanlineOffset = Math.addExact(header.length, Math.multiplyExact((long) height, 8L));
-
-        Path parent = output.toAbsolutePath().getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        try (OutputStream raw = Files.newOutputStream(output, StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-             BufferedOutputStream stream = new BufferedOutputStream(raw, 1 << 20)) {
-            stream.write(header);
-            for (int y = 0; y < height; y++) {
-                writeLongLe(stream, Math.addExact(firstScanlineOffset, Math.multiplyExact((long) y, scanlineBlockBytes)));
-            }
-
-            byte[] row = new byte[Math.toIntExact(rowDataBytes)];
-            for (int y = 0; y < height; y++) {
-                writeIntLe(stream, y);
-                writeIntLe(stream, row.length);
-                int sourceRow = height - 1 - y;
-                int cursor = 0;
-                for (int component : CHANNEL_COMPONENT) {
-                    int source = (sourceRow * width * 4) + component;
-                    for (int x = 0; x < width; x++, source += 4) {
-                        short bits = rgba[source];
-                        row[cursor++] = (byte) bits;
-                        row[cursor++] = (byte) (bits >>> 8);
-                    }
-                }
-                stream.write(row);
-            }
-        }
+        checkDimensions(width, height, rgba.length);
+        writeScanlines(output, width, height, header(width, height, metadata), Short.BYTES, i -> rgba[i]);
     }
 
     /** Writes unmodified diagnostic samples as FLOAT channels; missing channels are supplied by the caller. */
     static void writeRaw(Path output, int width, int height, float[] rgba,
                          Map<String, String> metadata) throws IOException {
-        if (rgba.length != Math.multiplyExact(Math.multiplyExact(width, height), 4)) {
-            throw new IllegalArgumentException("Invalid diagnostic image sample count");
-        }
+        checkDimensions(width, height, rgba.length);
         ByteArrayOutputStream attributes = header(width, height, FLOAT);
         for (var entry : metadata.entrySet()) {
             stringAttribute(attributes, entry.getKey(), entry.getValue());
         }
         attributes.write(0);
-        byte[] header = attributes.toByteArray();
-        long rowBytes = Math.multiplyExact((long) width, 16L);
-        long first = header.length + (long) height * 8L;
+        writeScanlines(output, width, height, attributes.toByteArray(), Float.BYTES,
+                i -> Float.floatToRawIntBits(rgba[i]));
+    }
+
+    private static void checkDimensions(int width, int height, int samples) {
+        if (width <= 0 || height <= 0) {
+            throw new IllegalArgumentException("EXR dimensions must be positive: " + width + "x" + height);
+        }
+        int expected = Math.multiplyExact(Math.multiplyExact(width, height), 4);
+        if (samples != expected) {
+            throw new IllegalArgumentException("Expected " + expected + " RGBA samples, got " + samples);
+        }
+    }
+
+    private static void writeScanlines(Path output, int width, int height, byte[] header,
+                                       int sampleBytes, IntUnaryOperator sampleBits) throws IOException {
+        var row = ByteBuffer.allocate(Math.multiplyExact(Math.multiplyExact(width, 4), sampleBytes))
+                .order(ByteOrder.LITTLE_ENDIAN);
+        long first = header.length + (long) height * Long.BYTES;
+        long blockBytes = 2L * Integer.BYTES + row.capacity();
         Files.createDirectories(output.toAbsolutePath().getParent());
         try (OutputStream stream = new BufferedOutputStream(Files.newOutputStream(output), 1 << 20)) {
             stream.write(header);
-            for (int y = 0; y < height; y++) writeLongLe(stream, first + y * (rowBytes + 8));
+            for (int y = 0; y < height; y++) writeLongLe(stream, first + y * blockBytes);
             for (int y = 0; y < height; y++) {
-                writeIntLe(stream, y);
-                writeIntLe(stream, Math.toIntExact(rowBytes));
+                row.clear();
+                // EXR stores top-down scanlines, with each channel's samples contiguous within a row.
                 for (int component : CHANNEL_COMPONENT) {
                     int source = ((height - 1 - y) * width * 4) + component;
                     for (int x = 0; x < width; x++, source += 4) {
-                        writeIntLe(stream, Float.floatToRawIntBits(rgba[source]));
+                        int bits = sampleBits.applyAsInt(source);
+                        if (sampleBytes == Short.BYTES) row.putShort((short) bits);
+                        else row.putInt(bits);
                     }
                 }
+                writeIntLe(stream, y);
+                writeIntLe(stream, row.capacity());
+                stream.write(row.array());
             }
         }
     }

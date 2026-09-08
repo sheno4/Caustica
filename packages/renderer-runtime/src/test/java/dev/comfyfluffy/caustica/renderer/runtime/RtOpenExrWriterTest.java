@@ -88,6 +88,23 @@ final class RtOpenExrWriterTest {
         assertEquals(file.limit(), file.position());
     }
 
+    @Test
+    void preservesHalfBitPatternsAcrossPixels() throws IOException {
+        Path output = temp.resolve("half-bits.exr");
+        short[] pixels = {(short) 0x7e12, (short) 0xfc00, (short) 0x8000, 0x3c00,
+                0x0001, 0x7c00, 0x7fff, 0};
+        RtOpenExrWriter.write(output, 2, 1, pixels,
+                new RtOpenExrWriter.Metadata(1, 1, 1, "manual", 0, 0, 0, 1));
+        ByteBuffer file = ByteBuffer.wrap(Files.readAllBytes(output)).order(ByteOrder.LITTLE_ENDIAN);
+        file.position(8);
+        readAttributes(file);
+        long offset = file.getLong();
+        assertEquals(file.position(), offset);
+        assertScanline(file, 0, new short[]{0x3c00, 0, (short) 0x8000, 0x7fff,
+                (short) 0xfc00, 0x7c00, 0x7e12, 0x0001});
+        assertEquals(file.limit(), file.position());
+    }
+
     private static Map<String, Attribute> readAttributes(ByteBuffer file) {
         Map<String, Attribute> result = new HashMap<>();
         while (file.get(file.position()) != 0) {
