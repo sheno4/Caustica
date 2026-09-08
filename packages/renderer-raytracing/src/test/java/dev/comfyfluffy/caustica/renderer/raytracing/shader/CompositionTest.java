@@ -25,7 +25,7 @@ final class CompositionTest {
     }
 
     private static Composition composition(String root, Map<String, byte[]> sources) {
-        return Composition.create(Map.of(), List.of(), "test_composition", "Composition", root, sources);
+        return Composition.create(List.of(), "test_composition", "Composition", root, sources);
     }
 
     private static byte[] bytes(String value) {

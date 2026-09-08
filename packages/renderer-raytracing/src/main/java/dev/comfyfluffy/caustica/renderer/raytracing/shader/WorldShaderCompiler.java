@@ -68,22 +68,6 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "sky/caustica_builtin_sky.slang", "sky/caustica_error_environment.slang");
     private static final Set<String> PROVIDED_MODULES = moduleNames(WORLD_MODULES, API_MODULES, BUILTIN_MODULES);
 
-    static Set<String> missingBundledWorldImports() throws IOException {
-        Set<String> missing = new java.util.LinkedHashSet<>();
-        for (String file : WORLD_MODULES) {
-            try (InputStream input = WorldShaderCompiler.class.getResourceAsStream(WORLD_SHADER_ROOT + file)) {
-                if (input == null) throw new IOException("missing bundled world shader " + file);
-                String source = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                var imports = IMPORT.matcher(source);
-                while (imports.find()) {
-                    String module = imports.group(1);
-                    if (!PROVIDED_MODULES.contains(module)) missing.add(module);
-                }
-            }
-        }
-        return Set.copyOf(missing);
-    }
-
     private final SlangSession session;
     private final Path worldDirectory;
     private final Path cleanupDirectory;
@@ -154,7 +138,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         List<Path> searchPaths = List.of(worldDirectory, apiDirectory, builtinDirectory,
                 extensionDirectory, compositionDirectory);
         SlangSession session = runtime.openSession(searchPaths, true, true);
-        Composition composition = Composition.create(generated.indices(), generated.data(),
+        Composition composition = Composition.create(generated.data(),
                 COMPOSITION_MODULE, COMPOSITION_TYPE, generated.source(), sources);
         return new WorldShaderCompiler(session, worldDirectory, cleanupDirectory, composition);
     }
@@ -221,21 +205,15 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 case ProgramComposition.Environment environment -> environments.add(environment);
             }
         });
-        Map<ProgramKey, Integer> indices = new LinkedHashMap<>();
         Map<ProgramKey, Integer> dataOffsets = new LinkedHashMap<>();
         List<Long> data = new ArrayList<>();
         for (ProgramComposition.Surface surface : surfaces) {
-            indices.put(surface.key(), surface.key().implementationIndex());
             dataOffsets.put(surface.key(), data.size());
             data.add(surface.definition().implementationData().bits());
         }
         for (ProgramComposition.Volume volume : volumes) {
-            indices.put(volume.key(), volume.key().implementationIndex());
             dataOffsets.put(volume.key(), data.size());
             data.add(volume.definition().implementationData().bits());
-        }
-        for (ProgramComposition.Environment environment : environments) {
-            indices.put(environment.key(), environment.key().implementationIndex());
         }
 
         StringBuilder source = new StringBuilder("module ").append(COMPOSITION_MODULE).append(";\n\n")
@@ -304,7 +282,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("    public typealias Coverages = CoverageDispatch;\n")
                 .append("    public typealias Volumes = VolumeDispatch;\n")
                 .append("    public typealias Environments = EnvironmentDispatch;\n};\n");
-        return new GeneratedComposition(source.toString(), indices, data);
+        return new GeneratedComposition(source.toString(), data);
     }
 
     private static void appendVolumeCases(StringBuilder source, List<ProgramComposition.Volume> volumes,
@@ -339,38 +317,32 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         declarations.stream().flatMap(WorldShaderCompiler::definitions).map(ShaderDefinition::source)
                 .forEach(source -> { if (identities.add(source)) sources.add(source); });
         Map<String, ResolvedModule> resolved = new LinkedHashMap<>();
-        Set<String> visiting = new LinkedHashSet<>();
         for (ProgramComposition.Declaration declaration : declarations) {
             for (ShaderDefinition definition : definitions(declaration).toList()) {
-                resolveModule(definition.module(), definition.source(), sources, resolved, visiting);
+                resolveModule(definition.module(), sources, resolved);
             }
         }
         return resolved;
     }
 
-    private static void resolveModule(String name, ShaderSource preferred, List<ShaderSource> sources,
-                                      Map<String, ResolvedModule> resolved, Set<String> visiting)
+    private static void resolveModule(String name, List<ShaderSource> sources,
+                                      Map<String, ResolvedModule> resolved)
             throws IOException {
         if (PROVIDED_MODULES.contains(name) || resolved.containsKey(name)) return;
-        if (!visiting.add(name)) throw new IOException("cyclic extension shader import involving " + name);
-        byte[] bytes = readModule(preferred, name);
-        if (bytes == null) {
-            for (ShaderSource source : sources) {
-                bytes = readModule(source, name);
-                if (bytes != null) break;
-            }
-        }
-        if (bytes == null) throw new IOException("missing extension shader module " + name);
+        byte[] bytes = null;
         for (ShaderSource source : sources) {
             byte[] candidate = readModule(source, name);
-            if (candidate != null && !java.util.Arrays.equals(bytes, candidate)) {
+            if (candidate == null) continue;
+            if (bytes != null && !java.util.Arrays.equals(bytes, candidate)) {
                 throw new IOException("ambiguous extension shader module " + name);
             }
+            bytes = candidate;
         }
+        if (bytes == null) throw new IOException("missing extension shader module " + name);
+        // Register before following imports so shared dependencies are read once; Slang validates the graph.
         resolved.put(name, new ResolvedModule(name, bytes));
         Matcher imports = IMPORT.matcher(new String(bytes, StandardCharsets.UTF_8));
-        while (imports.find()) resolveModule(imports.group(1), preferred, sources, resolved, visiting);
-        visiting.remove(name);
+        while (imports.find()) resolveModule(imports.group(1), sources, resolved);
     }
 
     private static byte[] readModule(ShaderSource source, String name) throws IOException {
@@ -431,5 +403,5 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     }
 
     private record ResolvedModule(String name, byte[] bytes) { }
-    private record GeneratedComposition(String source, Map<ProgramKey, Integer> indices, List<Long> data) { }
+    private record GeneratedComposition(String source, List<Long> data) { }
 }

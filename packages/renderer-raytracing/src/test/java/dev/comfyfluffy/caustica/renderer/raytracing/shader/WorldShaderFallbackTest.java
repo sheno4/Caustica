@@ -55,14 +55,11 @@ final class WorldShaderFallbackTest {
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache.resolve("registered"),
                 registered)) {
-            assertEquals(7, compiler.composition().implementationIndices().get(surface));
-            assertEquals(9, compiler.composition().implementationIndices().get(volume));
+            assertEquals(List.of(1L, 2L), compiler.composition().implementationData());
         }
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache.resolve("removed"),
                 new ProgramComposition(List.of()))) {
-            assertFalse(compiler.composition().implementationIndices().containsKey(surface));
-            assertFalse(compiler.composition().implementationIndices().containsKey(volume));
             assertTrue(compiler.composition().implementationData().isEmpty());
             assertSpirv(compiler.compileClosestHit());
             assertSpirv(compiler.compileRadianceAnyHit());

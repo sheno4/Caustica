@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
-import dev.comfyfluffy.caustica.engine.program.ProgramKey;
-
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -12,10 +10,9 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 /** Immutable generated Slang composition identity. */
-record Composition(Map<ProgramKey, Integer> implementationIndices, List<Long> implementationData,
+record Composition(List<Long> implementationData,
                    String rootModule, String rootType, String rootSource, String contentHash) {
     public Composition {
-        implementationIndices = Map.copyOf(implementationIndices);
         implementationData = List.copyOf(implementationData);
         Objects.requireNonNull(rootModule, "rootModule");
         Objects.requireNonNull(rootType, "rootType");
@@ -23,7 +20,7 @@ record Composition(Map<ProgramKey, Integer> implementationIndices, List<Long> im
         Objects.requireNonNull(contentHash, "contentHash");
     }
 
-    static Composition create(Map<ProgramKey, Integer> indices, List<Long> implementationData,
+    static Composition create(List<Long> implementationData,
                               String rootModule, String rootType,
                               String rootSource, Map<String, byte[]> sources) {
         TreeMap<String, byte[]> ordered = new TreeMap<>(sources);
@@ -36,7 +33,7 @@ record Composition(Map<ProgramKey, Integer> implementationIndices, List<Long> im
                 digest.update(entry.getValue());
                 digest.update((byte) 0);
             }
-            return new Composition(indices, implementationData, rootModule, rootType, rootSource,
+            return new Composition(implementationData, rootModule, rootType, rootSource,
                     HexFormat.of().formatHex(digest.digest()));
         } catch (NoSuchAlgorithmException e) {
             throw new AssertionError("SHA-256 is required by the Java platform", e);

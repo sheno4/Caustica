@@ -168,7 +168,6 @@ public final class SlangRuntime {
                                         SlangRuntimeManifest.FileEntry expected) throws IOException {
         Files.createDirectories(destination.getParent());
         Path temporary = Files.createTempFile(destination.getParent(), destination.getFileName().toString(), ".tmp");
-        boolean published = false;
         try (InputStream input = SlangRuntime.class.getResourceAsStream(resource)) {
             if (input == null) {
                 throw new IOException("Bundled Slang file is missing: " + resource);
@@ -183,11 +182,8 @@ public final class SlangRuntime {
             } catch (AtomicMoveNotSupportedException e) {
                 Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
             }
-            published = true;
         } finally {
-            if (!published) {
-                Files.deleteIfExists(temporary);
-            }
+            Files.deleteIfExists(temporary);
         }
     }
 
