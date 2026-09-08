@@ -65,6 +65,10 @@ repositories {
 
 sourceSets.main.java.srcDir("src/${loader}/java")
 sourceSets.main.resources.srcDir("src/${loader}/resources")
+if (loader == "neoforge") {
+	// Fixtures must load with the tested mod because their settings interfaces live in that module.
+	sourceSets.test.java.srcDirs(project(":packages:settings-api").sourceSets.testFixtures.java.srcDirs)
+}
 
 // The renderer only attaches to the Vulkan backend, so every dev client run needs these.
 def CLIENT_PROGRAM_ARGUMENTS = ["--renderDebugLabels", "--graphicsBackend", "VULKAN"]
@@ -169,7 +173,9 @@ configurations {
 sourceSets.main.runtimeClasspath += configurations.apiRuntime
 
 dependencies {
-    testImplementation testFixtures(project(":packages:settings-api"))
+	if (loader == "fabric") {
+		testImplementation testFixtures(project(":packages:settings-api"))
+	}
 	compileOnly project(":packages:api")
 	apiRuntime project(":packages:api")
 	compileOnly project(":packages:api-support")
