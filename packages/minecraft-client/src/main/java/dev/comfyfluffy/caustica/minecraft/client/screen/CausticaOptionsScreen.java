@@ -262,7 +262,9 @@ public final class CausticaOptionsScreen extends Screen {
                     CausticaTheme.TEXT_DISABLED, false);
         }
 
-        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        // Covered rows must not queue tooltips over the popup that owns the pointer.
+        super.extractRenderState(graphics, openDropdown == null ? mouseX : -1,
+                openDropdown == null ? mouseY : -1, partialTick);
         // After the pane, so an open list is not clipped by its scissor.
         if (openDropdown != null) {
             openDropdown.extractPopup(graphics, mouseX, mouseY);

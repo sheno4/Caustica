@@ -32,6 +32,7 @@ public final class CausticaDropdown<T> extends AbstractButton {
     private final Font font;
     private final int accent;
     private final Consumer<CausticaDropdown<?>> onToggled;
+    private final Tooltip tooltip;
     private boolean expanded;
     private int popupTop;
 
@@ -42,9 +43,8 @@ public final class CausticaDropdown<T> extends AbstractButton {
         this.font = font;
         this.accent = accent;
         this.onToggled = onToggled;
-        if (control.tooltip() != null) {
-            setTooltip(Tooltip.create(control.tooltip()));
-        }
+        tooltip = control.tooltip() == null ? null : Tooltip.create(control.tooltip());
+        setTooltip(tooltip);
     }
 
     /** The screen closes the popup before scrolling or resizing its anchor row. */
@@ -52,10 +52,12 @@ public final class CausticaDropdown<T> extends AbstractButton {
         int below = getY() + getHeight();
         popupTop = below + popupHeight() <= screenHeight ? below : Math.max(0, getY() - popupHeight());
         expanded = true;
+        setTooltip(null);
     }
 
     public void collapse() {
         expanded = false;
+        setTooltip(tooltip);
     }
 
     @Override
