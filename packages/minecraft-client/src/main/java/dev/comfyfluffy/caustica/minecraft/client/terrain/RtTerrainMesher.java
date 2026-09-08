@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProf
 import dev.comfyfluffy.caustica.minecraft.client.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh;
+import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialResolution;
@@ -54,6 +55,7 @@ import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -104,23 +106,16 @@ final class RtTerrainMesher {
         tessellate(region, modelSet, blockRandom, modelParts, capture,
                 fluidModels, fluidCapture, mesh, m, scx, scy, scz);
         if (mesh.isEmpty()) {
-            return new CpuSection(null, null);
+            return new CpuSection(null, List.of());
         }
-        // Only opaque and masked surfaces contribute light descriptors; transmissive surfaces use
-        // their material path, while lava is represented by opaque terrain geometry.
-        FloatArrayList collected = new FloatArrayList();
-        collectLights(collected, mesh.geometry, CausticaConfig.get(MinecraftOptions.Rt.Lights.MIN_FILL_RATIO));
-        float[] lights = EMPTY_LIGHTS;
-        if (!collected.isEmpty()) {
-            lights = collected.toFloatArray();
-        }
+        // Material luminance and sampled footprint determine which quads contribute retained lights.
+        var lights = new ArrayList<MinecraftTerrainEmitter>();
+        collectLights(lights, mesh.geometry, CausticaConfig.get(MinecraftOptions.Rt.Lights.MIN_FILL_RATIO));
         PackedSection packed = packSection(mesh);
         return new CpuSection(packed.mesh(), remapLights(lights, packed.sourceToDestinationPrimitives()));
     }
 
-    private static final float[] EMPTY_LIGHTS = new float[0];
-
-    private static void collectLights(FloatArrayList out, Geom geom, float minFillRatio) {
+    private static void collectLights(List<MinecraftTerrainEmitter> out, Geom geom, float minFillRatio) {
         if (geom != null && !geom.idx.isEmpty()) {
             RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.cornerUv,
                     geom.lightSprites.elements(), geom.materialEmissions.elements(), minFillRatio);
@@ -152,29 +147,20 @@ final class RtTerrainMesher {
                 packed.sourceToDestinationPrimitives());
     }
 
-    static float[] remapLights(float[] source, int[] sourceToDestinationPrimitives) {
-        if (source.length == 0) return source;
-        int count = source.length / RtLightCollector.FLOATS_PER_LIGHT;
-        float[][] records = new float[count][];
-        for (int light = 0; light < count; light++) {
-            int offset = light * RtLightCollector.FLOATS_PER_LIGHT;
-            float[] record = java.util.Arrays.copyOfRange(source, offset,
-                    offset + RtLightCollector.FLOATS_PER_LIGHT);
-            int sourcePrimitive = (int) record[7];
+    static List<MinecraftTerrainEmitter> remapLights(List<MinecraftTerrainEmitter> source,
+                                                    int[] sourceToDestinationPrimitives) {
+        var remapped = new ArrayList<MinecraftTerrainEmitter>(source.size());
+        for (var emitter : source) {
+            int sourcePrimitive = emitter.firstPrimitive();
             int destinationPrimitive = sourceToDestinationPrimitives[sourcePrimitive];
             if (sourceToDestinationPrimitives[sourcePrimitive + 1] != destinationPrimitive + 1) {
                 throw new IllegalStateException("terrain quad triangles must remain adjacent after routing");
             }
-            record[7] = destinationPrimitive;
-            records[light] = record;
+            remapped.add(new MinecraftTerrainEmitter(emitter.descriptor(), destinationPrimitive,
+                    emitter.primitiveCount()));
         }
-        java.util.Arrays.sort(records, java.util.Comparator.comparingDouble(record -> record[7]));
-        float[] remapped = new float[source.length];
-        for (int light = 0; light < count; light++) {
-            System.arraycopy(records[light], 0, remapped, light * RtLightCollector.FLOATS_PER_LIGHT,
-                    RtLightCollector.FLOATS_PER_LIGHT);
-        }
-        return remapped;
+        remapped.sort(Comparator.comparingInt(MinecraftTerrainEmitter::firstPrimitive));
+        return List.copyOf(remapped);
     }
 
     /** Vulkan routing shared by triangles that may occupy one contiguous acceleration-geometry range. */
@@ -288,7 +274,7 @@ final class RtTerrainMesher {
 
 
     /** Pure-CPU worker result: tessellated mesh and CPU-only light metadata. */
-    record CpuSection(MinecraftTerrainMesh mesh, float[] lights) {
+    record CpuSection(MinecraftTerrainMesh mesh, List<MinecraftTerrainEmitter> lights) {
     }
 
 

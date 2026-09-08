@@ -7,51 +7,25 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftTerrainLightAdapterTest {
-    @Test
-    void shadingNormalSelectsTheParallelogramAxisWinding() {
-        float[] record = new float[MinecraftTerrainLightAdapter.FLOATS_PER_LIGHT];
-        record[4] = 0.8f;
-        record[5] = 0.2f;
-        record[6] = -0.4f;
-        record[7] = 12.0f;
-        record[8] = 2.0f;
-        record[13] = 3.0f;
-        record[16] = 10.0f;
-        record[17] = 11.0f;
-        record[18] = 12.0f;
-
-        var batch = MinecraftTerrainLightAdapter.describe(4L, 7L, 32, 48, 80, record);
+    @Test void translatesOnlyTheEmitterPosition() {
+        var light = new LightDescriptor.Parallelogram(.5, 1, 2, 2, 0, 0, 0, -3, 0, 10, 11, 12);
+        var source = new dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter(light, 12, 2);
+        var batch = MinecraftTerrainLightAdapter.describe(4L, 7L, 32, 48, 80, java.util.List.of(source));
         var emitter = batch.emitters().getFirst();
-        LightDescriptor.Parallelogram light = (LightDescriptor.Parallelogram) emitter.descriptor();
-
-        assertEquals(32.0, light.positionX());
-        assertEquals(48.0, light.positionY());
-        assertEquals(80.0, light.positionZ());
-        assertEquals(-3.0, light.halfVy());
+        var placed = emitter.descriptor();
+        assertEquals(32.5, placed.positionX());
+        assertEquals(49.0, placed.positionY());
+        assertEquals(82.0, placed.positionZ());
+        assertEquals(light.halfUx(), placed.halfUx());
+        assertEquals(light.halfVy(), placed.halfVy());
+        assertEquals(light.radianceRedCdM2(), placed.radianceRedCdM2());
+        assertEquals(light.radianceGreenCdM2(), placed.radianceGreenCdM2());
+        assertEquals(light.radianceBlueCdM2(), placed.radianceBlueCdM2());
         assertEquals(4L, batch.sectionKey());
         assertEquals(7L, batch.revision());
         assertEquals(12, emitter.firstPrimitive());
         assertEquals(2, emitter.primitiveCount());
+        assertEquals(.5, source.descriptor().positionX());
         assertThrows(UnsupportedOperationException.class, () -> batch.emitters().add(emitter));
-    }
-
-    @Test
-    void acceptsSkewedFluidSurfaceAxes() {
-        float[] record = new float[MinecraftTerrainLightAdapter.FLOATS_PER_LIGHT];
-        record[4] = 0.0f;
-        record[5] = 1.0f;
-        record[8] = 1.0f;
-        record[9] = 0.2f;
-        record[13] = 0.3f;
-        record[14] = 1.0f;
-        record[16] = 1.0f;
-
-        var batch = MinecraftTerrainLightAdapter.describe(1L, 2L, 0, 0, 0, record);
-
-        assertEquals(1, batch.emitters().size());
-        LightDescriptor.Parallelogram light =
-                (LightDescriptor.Parallelogram) batch.emitters().getFirst().descriptor();
-        assertEquals(0.2, light.halfUy(), 1.0e-6);
-        assertEquals(0.3, Math.abs(light.halfVy()), 1.0e-6);
     }
 }

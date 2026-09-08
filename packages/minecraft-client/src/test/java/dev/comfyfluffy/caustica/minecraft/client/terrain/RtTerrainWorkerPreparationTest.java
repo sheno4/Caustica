@@ -118,7 +118,7 @@ final class RtTerrainWorkerPreparationTest {
                 entered.countDown();
                 try { new CountDownLatch(1).await(); }
                 catch (InterruptedException expected) { Thread.currentThread().interrupt(); }
-                return new RtTerrainMesher.CpuSection(null, new float[0]);
+                return new RtTerrainMesher.CpuSection(null, List.of());
             });
             assertTrue(entered.await(5, TimeUnit.SECONDS));
             fixture.terrain.submitBuild(fixture.build(), fixture.geometry,
@@ -134,7 +134,7 @@ final class RtTerrainWorkerPreparationTest {
             var builds = new java.util.ArrayList<RtTerrain.Build>();
             for (int i = 0; i < 192; i++) builds.add(fixture.build());
             for (var build : builds) fixture.terrain.submitBuild(build, fixture.geometry,
-                    () -> new RtTerrainMesher.CpuSection(null, new float[0]));
+                    () -> new RtTerrainMesher.CpuSection(null, List.of()));
             fixture.awaitPublication();
             assertEquals(0, fixture.outstanding());
             assertTrue(fixture.updates().ready().isEmpty());
@@ -235,7 +235,7 @@ final class RtTerrainWorkerPreparationTest {
                     new MinecraftTerrainMesh(new float[]{0,0,0, 1,0,0, 0,1,0}, new int[]{0,1,2},
                             new float[6], new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS],
                             List.of(new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                                    MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f)), 1), new float[0]));
+                                    MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f)), 1), List.of()));
         }
         @SuppressWarnings("unchecked")
         TerrainUpdates<RtTerrain.Build> updates() {

@@ -4,6 +4,8 @@ import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import dev.comfyfluffy.caustica.api.light.LightDescriptor;
+import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -11,14 +13,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 final class RtTerrainMesherPackingTest {
     @Test
     void emitterRangesFollowBucketedPrimitiveOrderAndStaySorted() {
-        float[] records = new float[2 * RtLightCollector.FLOATS_PER_LIGHT];
-        records[7] = 0;
-        records[RtLightCollector.FLOATS_PER_LIGHT + 7] = 4;
+        var descriptor = new LightDescriptor.Parallelogram(0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1);
+        var records = List.of(new MinecraftTerrainEmitter(descriptor, 0, 2),
+                new MinecraftTerrainEmitter(descriptor, 4, 2));
 
-        float[] remapped = RtTerrainMesher.remapLights(records, new int[]{4, 5, 2, 3, 0, 1});
+        var remapped = RtTerrainMesher.remapLights(records, new int[]{4, 5, 2, 3, 0, 1});
 
-        assertEquals(0, (int) remapped[7]);
-        assertEquals(4, (int) remapped[RtLightCollector.FLOATS_PER_LIGHT + 7]);
+        assertEquals(0, remapped.get(0).firstPrimitive());
+        assertEquals(4, remapped.get(1).firstPrimitive());
+        assertEquals(0, records.get(0).firstPrimitive());
+        assertEquals(descriptor, remapped.get(1).descriptor());
     }
 
     @Test

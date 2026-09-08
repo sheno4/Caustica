@@ -5,46 +5,24 @@ import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitte
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
 
 import java.util.ArrayList;
+import java.util.List;
 
-/** Converts Minecraft terrain-emitter sidecars into engine light descriptors. */
+/** Places section-local emitter descriptors in world coordinates for scene publication. */
 public final class MinecraftTerrainLightAdapter {
-    public static final int FLOATS_PER_LIGHT = 20;
-    public static final double METERS_PER_WORLD_UNIT = 1.0;
-
-    private MinecraftTerrainLightAdapter() {
-    }
+    private MinecraftTerrainLightAdapter() { }
 
     public static MinecraftTerrainLightBatch describe(long sectionKey, long revision,
                                                       double originX, double originY, double originZ,
-                                                      float[] records) {
-        int lightCount = records.length / FLOATS_PER_LIGHT;
-        ArrayList<MinecraftTerrainEmitter> emitters = new ArrayList<>(lightCount);
-        for (int source = 0; source < records.length;
-             source += FLOATS_PER_LIGHT) {
-            double ux = records[source + 8];
-            double uy = records[source + 9];
-            double uz = records[source + 10];
-            double vx = records[source + 12];
-            double vy = records[source + 13];
-            double vz = records[source + 14];
-            double nx = uy * vz - uz * vy;
-            double ny = uz * vx - ux * vz;
-            double nz = ux * vy - uy * vx;
-            double facing = nx * records[source + 4]
-                    + ny * records[source + 5]
-                    + nz * records[source + 6];
-            if (facing < 0.0) {
-                vx = -vx;
-                vy = -vy;
-                vz = -vz;
-            }
+                                                      List<MinecraftTerrainEmitter> source) {
+        var emitters = new ArrayList<MinecraftTerrainEmitter>(source.size());
+        for (var emitter : source) {
+            var light = emitter.descriptor();
             var descriptor = new LightDescriptor.Parallelogram(
-                    records[source] + originX,
-                    records[source + 1] + originY,
-                    records[source + 2] + originZ,
-                    ux, uy, uz, vx, vy, vz,
-                    records[source + 16], records[source + 17], records[source + 18]);
-            emitters.add(new MinecraftTerrainEmitter(descriptor, (int) records[source + 7], 2));
+                    light.positionX() + originX, light.positionY() + originY, light.positionZ() + originZ,
+                    light.halfUx(), light.halfUy(), light.halfUz(),
+                    light.halfVx(), light.halfVy(), light.halfVz(),
+                    light.radianceRedCdM2(), light.radianceGreenCdM2(), light.radianceBlueCdM2());
+            emitters.add(new MinecraftTerrainEmitter(descriptor, emitter.firstPrimitive(), emitter.primitiveCount()));
         }
         return new MinecraftTerrainLightBatch(sectionKey, revision, emitters);
     }
