@@ -3,9 +3,12 @@ package dev.comfyfluffy.caustica.renderer.presentation;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import org.lwjgl.vulkan.VK10;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 
 import java.io.IOException;
 import java.util.Objects;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Owns presentation pipelines, color state, and display-extent images. */
 public final class PresentationResources {
@@ -90,28 +93,36 @@ public final class PresentationResources {
     }
 
     public void destroy() {
-        destroySized();
-        exposure.destroy();
-        if (displayPipeline != null) { displayPipeline.destroy(); displayPipeline = null; }
-        if (debugPresentPipeline != null) { debugPresentPipeline.destroy(); debugPresentPipeline = null; }
-        if (nrdComposePipeline != null) { nrdComposePipeline.destroy(); nrdComposePipeline = null; }
-        if (sdrToneLut != null) { sdrToneLut.destroy(); sdrToneLut = null; }
-        if (hdrToneLut != null) { hdrToneLut.destroy(); hdrToneLut = null; }
-        if (lookLut != null) { lookLut.destroy(); lookLut = null; }
+        List<Runnable> releases = new ArrayList<>();
+        releases.add(this::destroySized);
+        releases.add(exposure::destroy);
+        if (displayPipeline != null) releases.add(displayPipeline::destroy);
+        if (debugPresentPipeline != null) releases.add(debugPresentPipeline::destroy);
+        if (nrdComposePipeline != null) releases.add(nrdComposePipeline::destroy);
+        if (sdrToneLut != null) releases.add(sdrToneLut::destroy);
+        if (hdrToneLut != null) releases.add(hdrToneLut::destroy);
+        if (lookLut != null) releases.add(lookLut::destroy);
+        displayPipeline = null;
+        debugPresentPipeline = null;
+        nrdComposePipeline = null;
+        sdrToneLut = null;
+        hdrToneLut = null;
+        lookLut = null;
         loadedHdrLutNits = -1;
+        new ResourceLifetime(releases.toArray(Runnable[]::new)).close();
     }
 
     private void destroySized() {
-        displayImage = destroy(displayImage);
-        hdrDisplayImage = destroy(hdrDisplayImage);
-        postColorA = destroy(postColorA);
-        postColorB = destroy(postColorB);
+        List<Runnable> releases = new ArrayList<>();
+        for (GpuImage image : new GpuImage[]{displayImage, hdrDisplayImage, postColorA, postColorB}) {
+            if (image != null) releases.add(image::destroy);
+        }
+        displayImage = null;
+        hdrDisplayImage = null;
+        postColorA = null;
+        postColorB = null;
         width = -1;
         height = -1;
-    }
-
-    private static GpuImage destroy(GpuImage image) {
-        if (image != null) image.destroy();
-        return null;
+        new ResourceLifetime(releases.toArray(Runnable[]::new)).close();
     }
 }

@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 
 /** Coordinates trace and presentation resource owners at the root renderer lifetime. */
 final class RtFrameResources {
@@ -72,9 +73,8 @@ final class RtFrameResources {
     }
 
     void destroy() {
-        trace.destroy();
-        presentation.destroy();
         renderSizeRoute = null;
         renderSizeConfiguration = Integer.MIN_VALUE;
+        new ResourceLifetime(trace::destroy, presentation::destroy).close();
     }
 }
