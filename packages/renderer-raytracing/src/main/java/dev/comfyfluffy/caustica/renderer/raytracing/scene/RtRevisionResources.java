@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import java.util.ArrayDeque;
 
-/** Preparation owns these releases until a shared completed revision takes ownership. */
+/** Releases owned resources in reverse registration order, including when a release fails. */
 final class RtRevisionResources implements AutoCloseable {
     private final ArrayDeque<Runnable> releases = new ArrayDeque<>();
 
