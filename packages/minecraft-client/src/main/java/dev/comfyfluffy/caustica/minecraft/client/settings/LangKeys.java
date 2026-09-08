@@ -49,9 +49,4 @@ public final class LangKeys {
                 "caustica.group." + featureId.namespace() + "." + featureId.path() + "." + groupId);
     }
 
-    /** A feature's own name, reusing the convention {@code BuiltinExtension} already declares. */
-    public static Component featureDescription(ResourceId featureId) {
-        return Component.translatable(
-                "feature." + featureId.namespace() + "." + featureId.path() + ".description");
-    }
 }

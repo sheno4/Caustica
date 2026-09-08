@@ -33,10 +33,6 @@ public final class CausticaGroupHeader extends AbstractButton {
         this.onToggled = onToggled;
     }
 
-    public SettingGroup group() {
-        return group;
-    }
-
     public boolean rowsVisible() {
         return group.rowsVisible(expandedByCaret);
     }

@@ -35,10 +35,6 @@ public final class CausticaToggle extends AbstractButton {
         }
     }
 
-    public SettingControl.BoolControl control() {
-        return control;
-    }
-
     @Override
     public boolean isActive() {
         return super.isActive() && control.enabled();

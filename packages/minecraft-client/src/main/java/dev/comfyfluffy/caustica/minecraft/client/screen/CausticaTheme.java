@@ -3,15 +3,9 @@ package dev.comfyfluffy.caustica.minecraft.client.screen;
 import net.minecraft.util.ARGB;
 
 /**
- * Palette and metrics for the Caustica settings screen. Every pixel is drawn from these constants with
- * {@code fill}/{@code text} primitives — no vanilla sprite, no nine-slice, no widget texture.
- *
- * <p><b>Two constraints shape the palette, both from how this screen reaches the display.</b> Everything the
- * GUI draws is redirected into {@code MinecraftUiOverlay}'s transparent {@code RGBA8_UNORM} target and composited
- * back over the scene, so alpha is real: any surface under text is near-opaque here, and only the backdrop
- * and the hover wash are meaningfully translucent. And because that overlay is SDR-authored and, in HDR, is
- * composited at a fixed nit level beside a scene that may peak far above it, <b>nothing uses brightness as a
- * cue</b> — accents differentiate by hue and saturation alone. No glows, no "brighter means selected".
+ * Palette and metrics for the settings panel. Translucent surfaces preserve the view of the world;
+ * text and control marks use opaque colors for contrast. The SDR-authored UI is composited at the
+ * configured UI luminance in HDR.
  */
 public final class CausticaTheme {
     private CausticaTheme() {
@@ -58,7 +52,6 @@ public final class CausticaTheme {
     public static final int HEADER_BODY = 0xC8080B11;
     public static final int SIDEBAR_BODY = 0xBC0A0D14;
     public static final int CONTENT_BODY = 0xB40E1119;
-    public static final int ROW_ALT = 0xB4121722;
     public static final int FOOTER_BODY = 0xC8080B11;
     public static final int DIVIDER = 0xFF1B2231;
     /** One-pixel top/left inner edge — the bevel cue that keeps this reading as Minecraft. */
@@ -81,10 +74,8 @@ public final class CausticaTheme {
     /** Opaque unlike the panels: an open list sits over content and has to be readable against it. */
     public static final int POPUP_BODY = 0xF60D1119;
 
-    /** Section accents. Hues from Minecraft's own materials rather than arbitrary saturated colour. */
+    /** Accent for the host video-settings entry button. */
     public static final int ACCENT_ENGINE = 0xFF4FC3F7;
-    public static final int ACCENT_COMPOSITION = 0xFFB388FF;
-    public static final int ACCENT_BUILTIN = 0xFFFFB74D;
 
     public static int sidebarWidth(int guiWidth) {
         return guiWidth < NARROW_GUI_WIDTH ? SIDEBAR_WIDTH_NARROW : SIDEBAR_WIDTH;
@@ -95,12 +86,12 @@ public final class CausticaTheme {
         return Math.min(guiWidth, sidebarWidth(guiWidth) + CONTENT_WIDTH);
     }
 
-    /** The lighter fill a control takes while it is being dragged. */
+    /** Highlight used while keyboard editing is enabled. */
     public static int active(int accent) {
         return ARGB.srgbLerp(0.25f, accent, 0xFFFFFFFF);
     }
 
-    /** Greys a control's colour without changing its hue, so a disabled row still reads as itself. */
+    /** Reduces opacity without changing the stored RGB components. */
     public static int dimmed(int argb) {
         return ARGB.multiplyAlpha(argb, 0.4f);
     }

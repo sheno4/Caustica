@@ -35,15 +35,6 @@ public final class CausticaSlider extends AbstractSliderButton {
         }
     }
 
-    public SettingControl.RangeControl control() {
-        return control;
-    }
-
-    /** Re-reads the store, for when something else changed the value — a section reset, say. */
-    public void refresh() {
-        value = control.toSlider(control.get());
-    }
-
     @Override
     public boolean isActive() {
         return super.isActive() && control.enabled();

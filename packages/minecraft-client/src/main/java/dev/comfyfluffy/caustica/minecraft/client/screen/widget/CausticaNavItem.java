@@ -10,6 +10,8 @@ import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.input.InputWithModifiers;
 import net.minecraft.network.chat.Component;
 
+import java.util.function.BooleanSupplier;
+
 /**
  * A sidebar entry. The selected one is marked by a bar in its section's accent — position and hue, never
  * brightness, since the UI is composited at a fixed nit level and cannot rely on being brighter.
@@ -17,10 +19,10 @@ import net.minecraft.network.chat.Component;
 public final class CausticaNavItem extends AbstractButton {
     private final SettingsSection section;
     private final Font font;
-    private final java.util.function.Supplier<Boolean> selected;
+    private final BooleanSupplier selected;
     private final Runnable onSelected;
 
-    public CausticaNavItem(SettingsSection section, Font font, java.util.function.Supplier<Boolean> selected,
+    public CausticaNavItem(SettingsSection section, Font font, BooleanSupplier selected,
                            Runnable onSelected) {
         super(0, 0, 0, CausticaTheme.NAV_ITEM_HEIGHT, section.title());
         this.section = section;
@@ -36,7 +38,7 @@ public final class CausticaNavItem extends AbstractButton {
 
     @Override
     protected void extractContents(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-        boolean isSelected = selected.get();
+        boolean isSelected = selected.getAsBoolean();
         int right = getX() + getWidth();
         int textY = CausticaPaint.textBaseline(font, getY(), getHeight());
 
@@ -62,7 +64,7 @@ public final class CausticaNavItem extends AbstractButton {
     @Override
     public void updateWidgetNarration(NarrationElementOutput output) {
         output.add(NarratedElementType.TITLE, section.title());
-        if (selected.get()) {
+        if (selected.getAsBoolean()) {
             output.add(NarratedElementType.USAGE, Component.translatable("narration.selected"));
         }
     }

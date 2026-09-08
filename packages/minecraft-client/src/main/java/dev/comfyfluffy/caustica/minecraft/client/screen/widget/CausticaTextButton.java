@@ -29,7 +29,7 @@ public final class CausticaTextButton extends AbstractButton {
     }
 
     private CausticaTextButton(Component label, Font font, int accent, Runnable action, boolean glyphOnly) {
-        super(0, 0, glyphOnly ? 16 : font.width(label) + 16, glyphOnly ? 16 : 16, label);
+        super(0, 0, glyphOnly ? 16 : font.width(label) + 16, 16, label);
         this.font = font;
         this.accent = accent;
         this.action = action;
