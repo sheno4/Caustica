@@ -4,13 +4,12 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedLightRecordData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedLightRecordData.Float4;
+import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend.SceneLight;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.BitSet;
 import java.util.List;
-import java.util.Objects;
-import java.util.function.IntFunction;
-import java.util.function.IntPredicate;
 
 /** Packs public physical-light descriptors into the reflected scene-relative GPU ABI. */
 final class RtRetainedLightPlan {
@@ -21,31 +20,15 @@ final class RtRetainedLightPlan {
 
     private RtRetainedLightPlan() { }
 
-    static ByteBuffer pack(List<LightDescriptor> lights, SceneOrigin origin) {
-        return pack(lights, origin, new boolean[lights.size()]);
-    }
-
-    static ByteBuffer pack(List<LightDescriptor> lights, SceneOrigin origin, boolean[] linkedEmitters) {
-        Objects.requireNonNull(lights, "lights");
-        Objects.requireNonNull(origin, "origin");
-        if (linkedEmitters.length != lights.size()) {
-            throw new IllegalArgumentException("linked-emitter flags must match the light table");
-        }
+    static ByteBuffer pack(List<SceneLight> lights, SceneOrigin origin, BitSet linkedEmitters) {
         ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(lights.size(), RECORD_BYTES))
                 .order(ByteOrder.nativeOrder());
-        packInto(packed, 0, lights.size(), lights::get, origin, index -> linkedEmitters[index]);
-        return packed;
-    }
-
-    /** Writes a contiguous light range into its own slice, using frame-global descriptor and flag indices. */
-    static void packInto(ByteBuffer packed, int firstLight, int lightCount,
-                         IntFunction<LightDescriptor> lightAt, SceneOrigin origin, IntPredicate linkedEmitter) {
-        for (int offset = 0; offset < lightCount; offset++) {
-            int index = firstLight + offset;
-            ByteBuffer record = packed.slice(packed.position() + offset * RECORD_BYTES, RECORD_BYTES)
+        for (int index = 0; index < lights.size(); index++) {
+            ByteBuffer record = packed.slice(index * RECORD_BYTES, RECORD_BYTES)
                     .order(ByteOrder.nativeOrder());
-            data(lightAt.apply(index), origin, linkedEmitter.test(index)).write(record);
+            data(lights.get(index).descriptor(), origin, linkedEmitters.get(index)).write(record);
         }
+        return packed.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
     }
 
     private static RetainedLightRecordData data(LightDescriptor descriptor, SceneOrigin origin,

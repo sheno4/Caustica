@@ -19,8 +19,7 @@ class RtPackedLightPagesTest {
             var flags = new BitSet();
             flags.set(0);
             var packed = cache.resolve(SnapshotList.ofPages(List.of(first, second)), SceneOrigin.ZERO, flags, preparation);
-            assertEquals(RtRetainedLightPlan.pack(first.stream().map(RtRetainedSceneBackend.SceneLight::descriptor).toList(),
-                    SceneOrigin.ZERO, new boolean[]{true, false}), packed.getFirst());
+            assertEquals(RtRetainedLightPlan.pack(first, SceneOrigin.ZERO, flags), packed.getFirst());
             flags.clear();
             flags.set(1);
             var reordered = cache.resolve(SnapshotList.ofPages(List.of(second, first)), SceneOrigin.ZERO, flags, preparation);

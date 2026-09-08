@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend.SceneLight;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.IdentityHashMap;
@@ -55,11 +54,7 @@ final class RtPackedLightPages {
         }
 
         void pack() {
-            var target = ByteBuffer.allocate(Math.multiplyExact(input.size(), RtRetainedLightPlan.RECORD_BYTES))
-                    .order(ByteOrder.nativeOrder());
-            RtRetainedLightPlan.packInto(target, 0, input.size(), index -> input.get(index).descriptor(),
-                    origin, flags::get);
-            bytes = target.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+            bytes = RtRetainedLightPlan.pack(input, origin, flags);
         }
     }
 }

@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class RtRetainedLightPlanTest {
     @Test
     void packsEveryPublicLightInAcceptanceOrderAndPhysicalUnits() {
-        ByteBuffer records = RtRetainedLightPlan.pack(List.of(
+        ByteBuffer records = pack(List.of(
                 new LightDescriptor.Parallelogram(11, 22, 33, 2, 0, 0, 0, 3, 0, 4, 5, 6),
                 new LightDescriptor.Spot(17, 28, 39, 0, 0, 1,
                         11, 0.2, 12, 13, 14),
@@ -43,7 +43,7 @@ final class RtRetainedLightPlanTest {
     @Test
     void marksOnlyLightsWithActiveGeometryEmitterLinks() {
         var light = new LightDescriptor.Parallelogram(0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1);
-        ByteBuffer records = RtRetainedLightPlan.pack(List.of(light, light),
+        ByteBuffer records = pack(List.of(light, light),
                 new SceneOrigin(0, 0, 0), new boolean[]{true, false});
 
         assertEquals(1, records.getInt(4));
@@ -55,11 +55,11 @@ final class RtRetainedLightPlanTest {
         var light = new LightDescriptor.Spot(Double.MAX_VALUE, 0, 0, 0, 0, 1,
                 1, 0.2, 1, 1, 1);
         assertThrows(IllegalArgumentException.class,
-                () -> RtRetainedLightPlan.pack(List.of(light), new SceneOrigin(0, 0, 0)));
+                () -> pack(List.of(light), new SceneOrigin(0, 0, 0)));
     }
 
     @Test
-    void parallelRangesMatchSequentialLightBytesAndGlobalLinkedFlags() {
+    void parallelPagesMatchSequentialLightBytesAndGlobalLinkedFlags() {
         List<LightDescriptor> lights = new ArrayList<>();
         int count = 1027;
         boolean[] flags = new boolean[count];
@@ -77,27 +77,31 @@ final class RtRetainedLightPlanTest {
         }
         try (var preparation = new RtFramePreparation()) {
             for (SceneOrigin origin : List.of(new SceneOrigin(0, 0, 0), new SceneOrigin(-17, 31, 4000))) {
-                ByteBuffer sequential = RtRetainedLightPlan.pack(lights, origin, flags);
-                ByteBuffer parallel = ByteBuffer.allocateDirect(sequential.remaining() + 16);
-                for (int index = 0; index < parallel.capacity(); index++) parallel.put(index, (byte) 0x5a);
-                List<Runnable> tasks = new ArrayList<>();
-                int firstLight = 0;
-                for (List<LightDescriptor> chunk : RtFramePreparation.chunks(lights)) {
-                    int first = firstLight;
-                    tasks.add(RtFramePreparation.measured("lights", 0, chunk.size(), () ->
-                            RtRetainedLightPlan.packInto(parallel.slice(8 + first * RtRetainedLightPlan.RECORD_BYTES,
-                                            chunk.size() * RtRetainedLightPlan.RECORD_BYTES),
-                                    first, chunk.size(), lights::get, origin, linked::get)));
-                    firstLight += chunk.size();
-                }
-                preparation.run(tasks, Runnable::run);
-                assertEquals(sequential, parallel.slice(8, sequential.remaining()));
-                for (int index = 0; index < 8; index++) {
-                    assertEquals((byte) 0x5a, parallel.get(index));
-                    assertEquals((byte) 0x5a, parallel.get(parallel.capacity() - 1 - index));
-                }
+                ByteBuffer sequential = pack(lights, origin, flags);
+                var sceneLights = sceneLights(lights);
+                var pages = dev.comfyfluffy.caustica.engine.scene.SnapshotList.ofPages(
+                        RtFramePreparation.chunks(sceneLights));
+                var packed = new RtPackedLightPages().resolve(pages, origin, linked, preparation);
+                ByteBuffer parallel = ByteBuffer.allocate(sequential.remaining());
+                for (ByteBuffer page : packed) parallel.put(page.duplicate());
+                assertEquals(sequential, parallel.flip());
             }
         }
+    }
+
+    private static ByteBuffer pack(List<LightDescriptor> lights, SceneOrigin origin) {
+        return RtRetainedLightPlan.pack(sceneLights(lights), origin, new BitSet());
+    }
+
+    private static ByteBuffer pack(List<LightDescriptor> lights, SceneOrigin origin, boolean[] flags) {
+        var linked = new BitSet();
+        for (int index = 0; index < flags.length; index++) if (flags[index]) linked.set(index);
+        return RtRetainedLightPlan.pack(sceneLights(lights), origin, linked);
+    }
+
+    private static List<RtRetainedSceneBackend.SceneLight> sceneLights(List<LightDescriptor> lights) {
+        return java.util.stream.IntStream.range(0, lights.size())
+                .mapToObj(index -> new RtRetainedSceneBackend.SceneLight(index + 1, lights.get(index))).toList();
     }
 
     private static void assertRecord(ByteBuffer records, int base, int type,
