@@ -15,7 +15,6 @@ import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage;
@@ -27,18 +26,13 @@ import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
 
 /**
- * Transparent final-UI overlay. World-space overlay features and the vanilla GUI/HUD
- * are routed into one transparent {@code RGBA8} target, then that single image is composited back over the
- * world after GUI rendering. SDR presentation composites over the main target; HDR presentation
- * blends the overlay at paper white after the world's display transform.
+ * Routes world overlays and vanilla GUI into one transparent RGBA8 target. SDR composites it over the
+ * main target after GUI rendering; HDR composites it at paper white after the world's display transform.
  *
  * <p>Composite blend: vanilla GUI pipelines use {@code BlendFunction.TRANSLUCENT} (colour {@code SRC_ALPHA,
  * ONE_MINUS_SRC_ALPHA}; alpha {@code ONE, ONE_MINUS_SRC_ALPHA}), so drawing onto a cleared target
  * accumulates <em>premultiplied</em> colour ({@code rgb = C*A}, {@code a = A}). The composite therefore uses
- * premultiplied-over ({@code TRANSLUCENT_PREMULTIPLIED_ALPHA}); {@code ENTITY_OUTLINE_BLIT} expects straight
- * alpha and would double-darken semi-transparent UI. The pipeline is unregistered, so its shaders are not
- * preloaded — it lazily compiles fine once resources are loaded, but cannot compile during the loading
- * screen; hence the {@link #enabled()} {@code isGameLoadFinished} guard, plus a defensive try/catch.
+ * premultiplied-over ({@code TRANSLUCENT_PREMULTIPLIED_ALPHA}).
  *
  * <p>Depth: the overlay clears depth to 0.0 each frame, exactly as {@code GameRenderer.render} clears the
  * main depth right before the GUI. Blur ({@code GameRenderer.processBlurEffect}) still operates on the real
@@ -61,10 +55,7 @@ public final class MinecraftUiOverlay {
     private final MinecraftRtRuntime runtime;
     private TextureTarget overlay;
     private boolean usedThisFrame;
-    private boolean compositeFailed;
-    // The overlay is cleared once per frame, before the first thing that renders into it (RT world overlays,
-    // the hand/screen-effects redirects in HDR mode, or the GUI). Reset at the start of GameRenderer.render
-    // via beginFrame().
+    // Hand, world overlays and GUI share one clear, before the first draw of the frame.
     private boolean overlayClearedThisFrame;
     private MinecraftVulkanImage ownedImage;
 
@@ -72,17 +63,10 @@ public final class MinecraftUiOverlay {
         this.runtime = java.util.Objects.requireNonNull(runtime, "runtime");
     }
 
-    /**
-     * Runs for active RT frames regardless of HDR mode because the GUI redirect and composite-back reproduce
-     * vanilla in SDR, while {@code WorldOverlayPass}'s composite point is this same seam. Active only once
-     * the game has finished loading: the composite
-     * pipeline lazily compiles its shaders, which are not available during the loading screen (would crash
-     * with "Couldn't find source for core/screenquad"). Gating the redirect here keeps the loading-screen
-     * GUI on the normal path.
-     */
+    /** The composite pipeline's shaders become available only after game resources finish loading. */
     public boolean enabled() {
         return runtime.frameActive()
-                && !compositeFailed && Minecraft.getInstance().isGameLoadFinished();
+                && Minecraft.getInstance().isGameLoadFinished();
     }
 
     /** Whether the overlay holds this frame's UI (for the HDR present path to composite + consume). */
@@ -95,50 +79,9 @@ public final class MinecraftUiOverlay {
         usedThisFrame = false;
     }
 
-    public int overlayWidth() {
-        return overlay != null ? overlay.width : 0;
-    }
-
-    public int overlayHeight() {
-        return overlay != null ? overlay.height : 0;
-    }
-
-    /** The overlay color image view, for the HDR composite compute pass (0 if not available). */
-    public long overlayColorView() {
-        if (overlay == null || overlay.getColorTextureView() == null) {
-            return 0L;
-        }
-        if (overlay.getColorTextureView() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView v) {
-            return v.vkImageView();
-        }
-        return 0L;
-    }
-
-    /** The overlay color image (0 if not available) — pairs with {@link #overlayColorView()} for callers
-     * (e.g. the DLSSG "ui" optional resource) that need both the view and the raw image. */
-    public long overlayColorImage() {
-        if (overlay == null || overlay.getColorTexture() == null) {
-            return 0L;
-        }
-        if (overlay.getColorTexture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t) {
-            return t.vkImage();
-        }
-        return 0L;
-    }
-
-    public OwnedGpuImage presentationImage() {
-        return ownedImage;
-    }
-
     public UiPresentationResources capturePresentation() {
-        return snapshotPresentation(enabled(), populatedThisFrame(), presentationImage(),
-                overlayWidth(), overlayHeight());
-    }
-
-    static UiPresentationResources snapshotPresentation(boolean enabled, boolean populated,
-                                                          dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage color,
-                                                          int width, int height) {
-        return new UiPresentationResources(enabled, populated, color, width, height);
+        return new UiPresentationResources(enabled(), populatedThisFrame(), ownedImage,
+                overlay == null ? 0 : overlay.width, overlay == null ? 0 : overlay.height);
     }
 
     /**
@@ -147,22 +90,26 @@ public final class MinecraftUiOverlay {
      * {@code GuiRendererMixin} redirect on the render thread.
      */
     public RenderTarget beginAndRedirect(RenderTarget main) {
-        return prepare(main);
+        try (var ignored = runtime.profileStage("ui.redirect")) {
+            return prepare(main);
+        }
     }
 
     /** The sampled overlay image consumed by renderer-owned UI commands. */
     public OwnedGpuImage uiPassTarget(RenderTarget main) {
-        TextureTarget target = prepare(main);
-        VulkanDeviceContext gpu = runtime.vulkanContextOrNull();
-        if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
-        if (ownedImage == null || !ownedImage.wraps(gpu, view, target.width, target.height)) {
-            MinecraftVulkanImage replacement = MinecraftVulkanImage.sampled(
-                    gpu, view, target.width, target.height, VK10.VK_FORMAT_R8G8B8A8_UNORM);
-            MinecraftVulkanImage old = ownedImage;
-            ownedImage = replacement;
-            if (old != null) old.close();
+        try (var ignored = runtime.profileStage("ui.prepare")) {
+            TextureTarget target = prepare(main);
+            VulkanDeviceContext gpu = runtime.vulkanContextOrNull();
+            if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
+            if (ownedImage == null || !ownedImage.wraps(gpu, view, target.width, target.height)) {
+                MinecraftVulkanImage replacement = MinecraftVulkanImage.sampled(
+                        gpu, view, target.width, target.height, VK10.VK_FORMAT_R8G8B8A8_UNORM);
+                MinecraftVulkanImage old = ownedImage;
+                ownedImage = replacement;
+                if (old != null) old.close();
+            }
+            return ownedImage;
         }
-        return ownedImage;
     }
 
     /** Reset the per-frame clear latch. Called at the start of {@code GameRenderer.render} (every frame). */
@@ -179,11 +126,7 @@ public final class MinecraftUiOverlay {
         TextureTarget target = ensureSized(main);
         if (!overlayClearedThisFrame) {
             CommandEncoder enc = RenderSystem.getDevice().createCommandEncoder();
-            if (target.useDepth && target.getDepthTexture() != null) {
-                enc.clearColorAndDepthTextures(target.getColorTexture(), TRANSPARENT, target.getDepthTexture(), 0.0);
-            } else {
-                enc.clearColorTexture(target.getColorTexture(), TRANSPARENT);
-            }
+            enc.clearColorAndDepthTextures(target.getColorTexture(), TRANSPARENT, target.getDepthTexture(), 0.0);
             overlayClearedThisFrame = true;
         }
         usedThisFrame = true;
@@ -198,20 +141,23 @@ public final class MinecraftUiOverlay {
      * target's depth without a clear between them. Must be paired with {@link #endOutputRedirect()}.
      */
     public void beginOutputRedirect(RenderTarget main) {
-        TextureTarget target = prepare(main);
-        RenderSystem.outputColorTextureOverride = target.getColorTextureView();
-        RenderSystem.outputDepthTextureOverride = target.getDepthTextureView();
+        try (var ignored = runtime.profileStage("ui.redirect")) {
+            TextureTarget target = prepare(main);
+            RenderSystem.outputColorTextureOverride = target.getColorTextureView();
+            RenderSystem.outputDepthTextureOverride = target.getDepthTextureView();
+        }
     }
 
     public void endOutputRedirect() {
-        RenderSystem.outputColorTextureOverride = null;
-        RenderSystem.outputDepthTextureOverride = null;
+        try (var ignored = runtime.profileStage("ui.redirect")) {
+            RenderSystem.outputColorTextureOverride = null;
+            RenderSystem.outputDepthTextureOverride = null;
+        }
     }
 
     /**
      * Composite the overlay over the real main target. Called once per frame from {@code GameRendererMixin}
-     * after {@code GuiRenderer.render} returns (the {@code GuiRenderer.draw} TAIL did not fire on in-game HUD
-     * frames). A compile/render failure latches the overlay off rather than crashing the frame.
+     * after {@code GuiRenderer.render} returns.
      */
     public void compositeIfUsed() {
         if (!usedThisFrame || overlay == null) {
@@ -219,8 +165,7 @@ public final class MinecraftUiOverlay {
             return;
         }
         if (runtime.isHdrPresentActive()) {
-            // HDR path composites the overlay over the PQ HDR image at present; leave usedThisFrame set so
-            // presentHdr can consume it. Do NOT composite over the SDR main target (it isn't presented).
+            // Keep the overlay populated until HDR presentation consumes it.
             return;
         }
         usedThisFrame = false;
@@ -235,10 +180,6 @@ public final class MinecraftUiOverlay {
             pass.bindTexture("InSampler", overlay.getColorTextureView(),
                     RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
             pass.draw(3, 1, 0, 0);
-        } catch (Throwable t) {
-            compositeFailed = true;
-            org.slf4j.LoggerFactory.getLogger("Caustica")
-                    .error("UI overlay composite failed; disabling overlay", t);
         }
     }
 
@@ -256,14 +197,14 @@ public final class MinecraftUiOverlay {
         RenderSystem.outputDepthTextureOverride = null;
         usedThisFrame = false;
         overlayClearedThisFrame = false;
-        compositeFailed = false;
-        if (ownedImage != null) {
-            ownedImage.close();
-            ownedImage = null;
-        }
-        if (overlay != null) {
-            overlay.destroyBuffers();
-            overlay = null;
+        MinecraftVulkanImage image = ownedImage;
+        TextureTarget target = overlay;
+        ownedImage = null;
+        overlay = null;
+        try {
+            if (image != null) image.close();
+        } finally {
+            if (target != null) target.destroyBuffers();
         }
     }
 

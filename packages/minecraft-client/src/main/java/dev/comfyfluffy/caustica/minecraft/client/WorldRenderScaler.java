@@ -4,13 +4,9 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 
 /**
- * RT composite seam. Brackets vanilla's level-rendering section in {@code GameRenderer.render}: the
- * world renders at full resolution, then the ray-traced composite (DLSS-RR denoise + upscale, see
- * renderer runtime runs once at the before-hand seam, before vanilla's pre-GUI depth clear, so the
- * hand and HUD draw at native resolution on top.
- *
- * <p>The RT renderer owns reconstruction through DLSS Ray Reconstruction. With
- * {@code -Dcaustica.rt=false} this is an inert passthrough.
+ * Brackets level rendering and composites the reconstructed RT image before the hand and HUD.
+ * The renderer owns reconstruction; this host hook only selects the destination and reports whether
+ * RT supplied the replacement image after vanilla world rendering was skipped.
  */
 public final class WorldRenderScaler {
 	private final VanillaRenderController renderController;
@@ -23,9 +19,9 @@ public final class WorldRenderScaler {
 
 	/** Open the level-render window. Called right before level rendering. */
 	public void begin(RenderTarget mainTarget) {
-		renderController.beginFrame(mainTarget);
-		if (renderController.shouldCompositeRt()) {
-			this.rtWindowOpen = true;
+		try (var ignored = CausticaClientComposition.current().runtime().profileStage("host.worldBegin")) {
+			renderController.beginFrame(mainTarget);
+			rtWindowOpen = renderController.shouldCompositeRt();
 		}
 	}
 

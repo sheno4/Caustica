@@ -16,7 +16,6 @@ final class MinecraftUiOverlayOwnershipTest {
         assertFalse(isStatic(field("runtime")));
         assertFalse(isStatic(field("overlay")));
         assertFalse(isStatic(field("usedThisFrame")));
-        assertFalse(isStatic(field("compositeFailed")));
         assertFalse(isStatic(field("overlayClearedThisFrame")));
         assertFalse(isStatic(field("ownedImage")));
     }
