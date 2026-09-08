@@ -44,7 +44,7 @@ final class GeneratedFrameQueue {
 
     void prepare(GraphicsSubmission submission, PresentationSwapchain swapchain,
             BorrowedImage source, boolean hdrBackbuffer,
-            UiPresentationResources ui, FrameGeneration generation) {
+            UiPresentationResources ui, RtFramePresenter.RenderedFrame frame, FrameGeneration generation) {
         pendingImageIndex = -1;
         pendingPresentSemaphore = 0L;
         if (failed || swapchain.swapchain() == 0L || source.image() == 0L) {
@@ -52,7 +52,7 @@ final class GeneratedFrameQueue {
         }
         try {
             ensureCapacity(swapchain.device(), swapchain.images().size() + 1);
-            GpuImage interpolation = generation.interpolate(submission, source,
+            GpuImage interpolation = generation.interpolate(submission, frame, source,
                     swapchain.width(), swapchain.height(), hdrBackbuffer, ui);
             if (interpolation == null) {
                 return;

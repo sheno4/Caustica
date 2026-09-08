@@ -39,8 +39,8 @@ public final class RtFramePresenter {
         this.dlssFrameGeneration = Objects.requireNonNull(dlssFrameGeneration, "dlssFrameGeneration");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.frameGeneration = new FrameGeneration(context, dlssFrameGeneration);
-        this.hdrPresentation = new HdrPresentation(context, frameGeneration, this.settings);
-        this.sdrPqPresentation = new SdrPqPresentation(context, this.settings);
+        this.hdrPresentation = new HdrPresentation(context, frameGeneration);
+        this.sdrPqPresentation = new SdrPqPresentation(context);
     }
 
     public void beginFrame() {
@@ -49,7 +49,6 @@ public final class RtFramePresenter {
 
     public void invalidateRenderedFrame() {
         renderedFrame = null;
-        frameGeneration.invalidate();
     }
 
     public void resetSceneHistory() {
@@ -59,7 +58,6 @@ public final class RtFramePresenter {
 
     public void publish(RenderedFrame frame) {
         renderedFrame = frame;
-        frameGeneration.publish(frame);
     }
 
     public boolean isActive(boolean sceneAvailable) {
@@ -69,7 +67,7 @@ public final class RtFramePresenter {
 
     public void prepareGeneratedFrame(GraphicsSubmission submission, PresentationSwapchain swapchain,
             BorrowedImage source, boolean hdrBackbuffer, UiPresentationResources ui) {
-        generatedFrames.prepare(submission, swapchain, source, hdrBackbuffer, ui, frameGeneration);
+        generatedFrames.prepare(submission, swapchain, source, hdrBackbuffer, ui, renderedFrame, frameGeneration);
     }
 
     public void prepareGeneratedFrame(GraphicsSubmission submission, PresentationSwapchain swapchain,
@@ -114,7 +112,7 @@ public final class RtFramePresenter {
         if (frame == null || !frame.hdrReady()) {
             throw new IllegalStateException("No rendered HDR frame is available for presentation");
         }
-        hdrPresentation.present(submission, frame, target, ui);
+        hdrPresentation.present(submission, frame, target, ui, settings.get().uiNits());
     }
 
     public boolean isPqSdrPresentActive() {
@@ -124,7 +122,7 @@ public final class RtFramePresenter {
 
     public boolean presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
             dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage source) {
-        return sdrPqPresentation.present(submission, target, source);
+        return sdrPqPresentation.present(submission, target, source, settings.get().uiNits());
     }
 
     public void captureHudless(BorrowedImage source, UiPresentationResources ui) {

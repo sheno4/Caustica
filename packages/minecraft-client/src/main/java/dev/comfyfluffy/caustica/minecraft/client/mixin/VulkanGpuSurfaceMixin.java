@@ -483,9 +483,8 @@ public abstract class VulkanGpuSurfaceMixin {
 
 	@Unique
 	private AcquiredSwapchainTarget caustica$acquiredTarget() {
-		return new AcquiredSwapchainTarget(this.swapchain,
-				this.swapchainImages.getLong(this.currentImageIndex), this.currentImageIndex,
-				this.swapchainImageFormat, this.swapchainWidth, this.swapchainHeight,
+		return new AcquiredSwapchainTarget(this.swapchainImages.getLong(this.currentImageIndex),
+				this.swapchainWidth, this.swapchainHeight,
 				this.acquireSemaphores[this.currentAcquireSemaphore],
 				this.presentSemaphores[this.currentImageIndex]);
 	}

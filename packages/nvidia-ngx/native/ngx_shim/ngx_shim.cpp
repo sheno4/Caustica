@@ -261,6 +261,8 @@ NGX_SHIM_EXPORT int ngxshim_evaluate(VkCommandBuffer cmd, void* feature,
     eval.InFrameTimeDeltaInMsec = frameTimeMs;
     eval.InPreExposure = preExposure;
 
+    // Presentation flips bottom-up renderer images; orient the native diagnostic text independently.
+    eval.InIndicatorInvertYAxis = 1;
     NGX_LOG("evaluate: calling NGX_VULKAN_EVALUATE_DLSS_EXT");
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSS_EXT(cmd, f->handle, f->params, &eval);
     g_lastResult = (int) r;

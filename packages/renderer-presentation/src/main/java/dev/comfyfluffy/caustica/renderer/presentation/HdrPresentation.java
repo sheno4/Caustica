@@ -20,24 +20,19 @@ import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.KHRSwapchain;
 
-import java.util.function.Supplier;
-
 /** Composites the UI into a rendered PQ frame and submits its swapchain blit. */
 final class HdrPresentation {
     private final VulkanDeviceContext context;
     private final FrameGeneration generation;
-    private final Supplier<RtFramePresenter.Settings> settings;
     private RtHdrCompositePipeline pipeline;
 
-    HdrPresentation(VulkanDeviceContext context, FrameGeneration generation,
-            Supplier<RtFramePresenter.Settings> settings) {
+    HdrPresentation(VulkanDeviceContext context, FrameGeneration generation) {
         this.context = context;
         this.generation = generation;
-        this.settings = settings;
     }
 
     void present(GraphicsSubmission submission, RtFramePresenter.RenderedFrame frame,
-            AcquiredSwapchainTarget target, UiPresentationResources ui) {
+            AcquiredSwapchainTarget target, UiPresentationResources ui, float uiNits) {
         GpuImage source = frame.hdrDisplayImage();
         int copyWidth = Math.min(target.width(), source.width());
         int copyHeight = Math.min(target.height(), source.height());
@@ -52,11 +47,11 @@ final class HdrPresentation {
             var overlay = ui.populated() ? ui.color() : null;
             if (overlay != null) {
                 use.keepAlive(overlay.retain());
-                ensurePipeline();
+                if (pipeline == null) pipeline = RtHdrCompositePipeline.create(context);
                 VulkanBarriers.memoryBarrier(commandBuffer, stack);
                 pipeline.dispatch(commandBuffer, source,
                         overlay.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
-                        settings.get().uiNits());
+                        uiNits);
             }
             recordSwapchainBlit(commandBuffer, stack, source.image(), target.image(), copyWidth, copyHeight);
             submission.waitSemaphore(target.acquireSemaphore(), 0L, VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
@@ -65,13 +60,6 @@ final class HdrPresentation {
         } finally {
             context.graphics().resolveGraphicsUse(submission, use);
         }
-    }
-
-    private void ensurePipeline() {
-        if (pipeline != null) {
-            return;
-        }
-        pipeline = RtHdrCompositePipeline.create(context);
     }
 
     static void recordSwapchainBlit(VkCommandBuffer commandBuffer, MemoryStack stack,

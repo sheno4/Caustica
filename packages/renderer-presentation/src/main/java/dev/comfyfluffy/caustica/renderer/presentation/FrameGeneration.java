@@ -21,13 +21,9 @@ import org.lwjgl.vulkan.VkImageCopy2;
 final class FrameGeneration {
     private final VulkanDeviceContext context;
     private final DlssFrameGeneration backend;
-    private RtFramePresenter.RenderedFrame renderedFrame;
     private GpuImage hudlessImage;
     private GpuImage hdrHudlessImage;
     private GpuImage interpolationImage;
-    private int interpolationWidth = -1;
-    private int interpolationHeight = -1;
-    private int interpolationFormat = Integer.MIN_VALUE;
     private boolean reset = true;
     private final Matrix4f clipToPrevious = new Matrix4f();
     private final Matrix4f previousToClip = new Matrix4f();
@@ -42,16 +38,7 @@ final class FrameGeneration {
         return backend.enabled();
     }
 
-    void publish(RtFramePresenter.RenderedFrame frame) {
-        renderedFrame = frame;
-    }
-
-    void invalidate() {
-        renderedFrame = null;
-    }
-
     void resetHistory() {
-        renderedFrame = null;
         reset = true;
     }
 
@@ -98,10 +85,9 @@ final class FrameGeneration {
         VulkanBarriers.memoryBarrier(commandBuffer, stack);
     }
 
-    GpuImage interpolate(GraphicsSubmission submission, BorrowedImage backbuffer,
+    GpuImage interpolate(GraphicsSubmission submission, RtFramePresenter.RenderedFrame frame, BorrowedImage backbuffer,
             int swapWidth, int swapHeight, boolean hdrBackbuffer,
             UiPresentationResources ui) {
-        RtFramePresenter.RenderedFrame frame = renderedFrame;
         if (frame == null || frame.depth() == null || frame.motion() == null) {
             return null;
         }
@@ -164,20 +150,16 @@ final class FrameGeneration {
     }
 
     private void ensureInterpolationImage(VulkanDeviceContext context, int width, int height, int format) {
-        if (interpolationImage != null && interpolationWidth == width
-                && interpolationHeight == height && interpolationFormat == format) {
+        if (interpolationImage != null && interpolationImage.width() == width
+                && interpolationImage.height() == height && interpolationImage.format() == format) {
             return;
         }
         destroyInterpolationImage();
         interpolationImage = context.createStorageImage(
                 width, height, format, "FG interpolation " + width + "x" + height);
-        interpolationWidth = width;
-        interpolationHeight = height;
-        interpolationFormat = format;
     }
 
     void destroy() {
-        renderedFrame = null;
         if (hudlessImage != null) {
             hudlessImage.destroy();
             hudlessImage = null;
@@ -187,9 +169,6 @@ final class FrameGeneration {
             hdrHudlessImage = null;
         }
         destroyInterpolationImage();
-        interpolationWidth = -1;
-        interpolationHeight = -1;
-        interpolationFormat = Integer.MIN_VALUE;
         reset = true;
     }
 
