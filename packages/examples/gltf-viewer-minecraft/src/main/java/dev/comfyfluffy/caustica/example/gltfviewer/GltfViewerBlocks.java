@@ -8,6 +8,7 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 /** World anchors registered by the standalone viewer mod. */
 public final class GltfViewerBlocks {
@@ -27,13 +28,14 @@ public final class GltfViewerBlocks {
     private GltfViewerBlocks() {
     }
 
-    public static void registerBlocks(BlockRegistrar registrar) {
-        registrar.register(GLTF_ANCHOR_KEY, GLTF_ANCHOR);
-        registrar.register(PROCEDURAL_SURFACE_KEY, PROCEDURAL_SURFACE);
+    public static void registerBlocks(BiConsumer<ResourceKey<Block>, Block> registrar) {
+        registrar.accept(GLTF_ANCHOR_KEY, GLTF_ANCHOR);
+        registrar.accept(PROCEDURAL_SURFACE_KEY, PROCEDURAL_SURFACE);
     }
 
-    public static void registerBlockEntities(BlockEntityRegistrar registrar) {
-        registrar.register(ANCHOR_BLOCK_ENTITY_KEY, ANCHOR_BLOCK_ENTITY);
+    public static void registerBlockEntities(
+            BiConsumer<ResourceKey<BlockEntityType<?>>, BlockEntityType<?>> registrar) {
+        registrar.accept(ANCHOR_BLOCK_ENTITY_KEY, ANCHOR_BLOCK_ENTITY);
     }
 
     private static Identifier id(String path) {
@@ -51,13 +53,4 @@ public final class GltfViewerBlocks {
                 .noOcclusion());
     }
 
-    @FunctionalInterface
-    public interface BlockRegistrar {
-        void register(ResourceKey<Block> key, Block block);
-    }
-
-    @FunctionalInterface
-    public interface BlockEntityRegistrar {
-        void register(ResourceKey<BlockEntityType<?>> key, BlockEntityType<?> blockEntityType);
-    }
 }

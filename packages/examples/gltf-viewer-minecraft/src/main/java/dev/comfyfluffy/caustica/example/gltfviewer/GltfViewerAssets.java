@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.example.gltfviewer;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfAssetAdapter;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfLoader;
 import dev.comfyfluffy.caustica.example.gltfcontent.GltfScene;
-import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 
@@ -11,41 +10,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Path;
-import java.util.Objects;
-import java.util.function.Supplier;
 
 /**
- * Resource-epoch snapshot for the viewer model. Resource packs can replace
+ * Loads the viewer model from the active resources. Resource packs can replace
  * {@code assets/caustica_gltf_viewer/gltf/viewer/model.glb} with any supported glTF binary.
  */
-final class GltfViewerAssetRepository {
+final class GltfViewerAssets {
     static final Identifier LOCATION = Identifier.fromNamespaceAndPath(
             GltfViewerMod.MOD_ID, "gltf/viewer/model.glb");
-    private final Supplier<GltfScene> loader;
-    private GltfScene current;
-
-    GltfViewerAssetRepository() {
-        this(() -> load(Minecraft.getInstance().getResourceManager()));
-    }
-
-    GltfViewerAssetRepository(Supplier<GltfScene> loader) {
-        this.loader = Objects.requireNonNull(loader, "loader");
-    }
-
-    GltfScene current() {
-        if (current == null) {
-            throw new IllegalStateException("glTF viewer assets are not loaded for this resource epoch");
-        }
-        return current;
-    }
-
-    void reload() {
-        current = Objects.requireNonNull(loader.get(), "loader returned a null glTF viewer scene");
-    }
-
-    void clear() {
-        current = null;
-    }
+    private GltfViewerAssets() { }
 
     static GltfScene load(ResourceManager resources) {
         try {

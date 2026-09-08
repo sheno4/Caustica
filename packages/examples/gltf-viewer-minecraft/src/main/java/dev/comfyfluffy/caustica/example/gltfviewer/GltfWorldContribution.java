@@ -30,7 +30,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
     private final MinecraftWorldSessionContext context;
     private final GltfProgramExports programs;
     private final ProgramRegistration<GltfProgramExports> programRegistration;
-    private final GltfViewerAssetRepository assets;
+    private final Supplier<GltfScene> loadScene;
     private final GltfPrimitiveUploader uploader;
     private final Supplier<Set<BlockPos>> gltfAnchors;
     private final Supplier<Set<BlockPos>> portalAnchors;
@@ -41,9 +41,9 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
     static GltfWorldContribution open(MinecraftWorldSessionContext context) {
         ProgramRegistration<GltfProgramExports> registration =
                 GltfProgramContent.register(context.renderSession().program());
-        GltfViewerAssetRepository assets = new GltfViewerAssetRepository();
         try {
-            GltfWorldContribution contribution = new GltfWorldContribution(context, registration, assets,
+            GltfWorldContribution contribution = new GltfWorldContribution(context, registration,
+                    () -> GltfViewerAssets.load(Minecraft.getInstance().getResourceManager()),
                     new GltfMeshUploader(context.renderSession().gpu()),
                     () -> loadedAnchors(GltfViewerBlocks.GLTF_ANCHOR),
                     () -> loadedAnchors(GltfViewerBlocks.PROCEDURAL_SURFACE));
@@ -51,19 +51,18 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
             return contribution;
         } catch (RuntimeException | Error failure) {
             registration.close();
-            assets.clear();
             throw failure;
         }
     }
 
     GltfWorldContribution(MinecraftWorldSessionContext context,
                           ProgramRegistration<GltfProgramExports> programRegistration,
-                          GltfViewerAssetRepository assets, GltfPrimitiveUploader uploader,
+                          Supplier<GltfScene> loadScene, GltfPrimitiveUploader uploader,
                           Supplier<Set<BlockPos>> gltfAnchors, Supplier<Set<BlockPos>> portalAnchors) {
         this.context = context;
         this.programRegistration = programRegistration;
         this.programs = programRegistration.exports();
-        this.assets = assets;
+        this.loadScene = loadScene;
         this.uploader = uploader;
         this.gltfAnchors = gltfAnchors;
         this.portalAnchors = portalAnchors;
@@ -76,9 +75,8 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
 
     private synchronized void replace() {
         if (stopped) throw new IllegalStateException("glTF world contribution is stopped");
-        assets.reload();
+        GltfScene authored = loadScene.get();
         long preparing = ++request;
-        GltfScene authored = assets.current();
         var anchors = Set.copyOf(gltfAnchors.get());
         var portals = Set.copyOf(portalAnchors.get());
         var pending = new ArrayList<CompletableFuture<ReadyMesh<GltfProgramExports.InstanceData>>>();
@@ -165,8 +163,6 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
             programRegistration.close();
         }
     }
-
-    @Override public void close() { assets.clear(); }
 
     private static List<SceneEdit> dropOperations(Live state) {
         List<SceneEdit> operations = new ArrayList<>();

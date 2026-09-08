@@ -44,7 +44,6 @@ final class GltfWorldContributionTest {
                 new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 1, .5f, .25f, 1, .4f, 0, false, .5f)),
                 List.of(new GltfScene.Placement(0, identity())));
-        GltfViewerAssetRepository assets = new GltfViewerAssetRepository(() -> scene);
         List<String> stopOrder = new ArrayList<>();
         TestScene geometry = new TestScene();
         geometry.onEdit = () -> stopOrder.add("geometry");
@@ -53,9 +52,10 @@ final class GltfWorldContributionTest {
         FakeUploader uploader = new FakeUploader(destroyed);
         AtomicInteger registrationCloses = new AtomicInteger();
         ProgramRegistration<GltfProgramExports> registration = registration(registrationCloses, stopOrder);
+        AtomicInteger loads = new AtomicInteger();
         GltfWorldContribution contribution = new GltfWorldContribution(
                 new WorldContext(geometry, resources), registration,
-                assets, uploader, () -> Set.of(new BlockPos(10, 20, 30)),
+                () -> { loads.incrementAndGet(); return scene; }, uploader, () -> Set.of(new BlockPos(10, 20, 30)),
                 () -> Set.of(new BlockPos(-2, 4, 8)));
 
         contribution.resourcePackChanged(new ResourcePackEpoch(2));
@@ -77,6 +77,7 @@ final class GltfWorldContributionTest {
 
         var oldFrame = geometry.readyMeshes.stream().map(mesh -> mesh.retain()).toList();
         contribution.resourcePackChanged(new ResourcePackEpoch(3));
+        assertEquals(2, loads.get());
         assertEquals(2, count(geometry.last(), SceneEdit.DropInstance.class));
         assertEquals(4, geometry.builds.size());
         assertEquals(0, destroyed.get());
@@ -142,7 +143,7 @@ final class GltfWorldContributionTest {
                 List.of(new GltfScene.Placement(0, identity())));
         return new GltfWorldContribution(new WorldContext(geometry, resources),
                 registration(new AtomicInteger(), new ArrayList<>()),
-                new GltfViewerAssetRepository(() -> authored), new FakeUploader(destroyed),
+                () -> authored, new FakeUploader(destroyed),
                 () -> Set.of(new BlockPos(10, 20, 30)), () -> Set.of(new BlockPos(-2, 4, 8)));
     }
 
