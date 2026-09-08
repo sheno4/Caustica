@@ -118,7 +118,7 @@ final class RtTerrainMesher {
     private static void collectLights(List<MinecraftTerrainEmitter> out, Geom geom, float minFillRatio) {
         if (geom != null && !geom.idx.isEmpty()) {
             RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.cornerUv,
-                    geom.lightSprites.elements(), geom.materialEmissions.elements(), minFillRatio);
+                    geom.lightSprites, geom.materialEmissions, minFillRatio);
         }
     }
 
@@ -288,7 +288,7 @@ final class RtTerrainMesher {
             return geometry.idx.isEmpty();
         }
 
-        /** Empty the classes keeping their backing arrays — the mesh is reused across jobs per worker thread. */
+        /** Clear the section while retaining array capacity for the next job on this worker. */
         void reset() {
             geometry.reset();
         }
@@ -304,17 +304,16 @@ final class RtTerrainMesher {
     private static final class Geom {
         final FloatArrayList verts;
         final IntArrayList idx;
-        // Lever B: per-triangle corner UVs in primitive order — 6 floats/triangle (3 corners x u,v),
-        // aligned with `idx`'s triangle order so the hit shader reads cornerUv[3*pid + k] directly with no
-        // index->vertex-UV gather. The index buffer is still emitted (above) for the BLAS build.
+        // Three float2 UVs per triangle, in index-stream order. Upload converts these CPU lanes into
+        // the primitive records consumed by the surface shader.
         final FloatArrayList cornerUv;
         // 12 CPU lanes/triangle: normal/emission float4, tint float4, material index, atlas presence,
         // then two reserved lanes.
         final FloatArrayList prim;
         final List<TerrainSurface> surfaces;
         // One sprite per triangle for CPU light extraction.
-        final SpriteList lightSprites;
-        final MaterialEmissionList materialEmissions;
+        final List<TextureAtlasSprite> lightSprites;
+        final List<MinecraftMaterialEmission> materialEmissions;
 
         Geom(int triCapacity) {
             int cap = Math.max(2, triCapacity);
@@ -324,12 +323,8 @@ final class RtTerrainMesher {
             cornerUv = new FloatArrayList(cap * 6);
             prim = new FloatArrayList(cap * 12);
             surfaces = new ArrayList<>(cap);
-            lightSprites = new SpriteList(cap);
-            materialEmissions = new MaterialEmissionList(cap);
-        }
-
-        int triCount() {
-            return idx.size() / 3;
+            lightSprites = new ArrayList<>(cap);
+            materialEmissions = new ArrayList<>(cap);
         }
 
         void reset() {
@@ -343,76 +338,12 @@ final class RtTerrainMesher {
         }
     }
 
-    /** Growable reference array paired one-to-one with triangles; entries belong to the captured lookup epoch. */
-    private static final class MaterialEmissionList {
-        private MinecraftMaterialEmission[] elements;
-        private int size;
-
-        MaterialEmissionList(int capacity) {
-            elements = new MinecraftMaterialEmission[Math.max(2, capacity)];
-        }
-
-        void add(MinecraftMaterialEmission emission) {
-            if (size == elements.length) {
-                elements = java.util.Arrays.copyOf(elements, size * 2);
-            }
-            elements[size++] = emission;
-        }
-
-        MinecraftMaterialEmission[] elements() {
-            return elements;
-        }
-
-        void clear() {
-            java.util.Arrays.fill(elements, 0, size, null);
-            size = 0;
-        }
-    }
-
-    /** Minimal growable sprite array for the worker path; avoids ArrayList object churn and per-copy gets. */
-    private static final class SpriteList {
-        private TextureAtlasSprite[] elements;
-        private int size;
-
-        SpriteList(int capacity) {
-            elements = new TextureAtlasSprite[Math.max(2, capacity)];
-        }
-
-        void add(TextureAtlasSprite sprite) {
-            if (size == elements.length) {
-                TextureAtlasSprite[] grown = new TextureAtlasSprite[elements.length + (elements.length >>> 1)];
-                System.arraycopy(elements, 0, grown, 0, elements.length);
-                elements = grown;
-            }
-            elements[size++] = sprite;
-        }
-
-        TextureAtlasSprite[] elements() {
-            return elements;
-        }
-
-        int size() {
-            return size;
-        }
-
-        void copyInto(TextureAtlasSprite[] dst, int offset) {
-            System.arraycopy(elements, 0, dst, offset, size);
-        }
-
-        void clear() {
-            java.util.Arrays.fill(elements, 0, size, null); // don't retain sprites across atlas reloads
-            size = 0;
-        }
-    }
-
     /** Captures vanilla baked model quads into the current section's mesh. */
     private static final class QuadCapture {
         SectionMesh cur; // set before each block model emission
         MinecraftMaterialLookup materials;
 
-        // Per-block context for biome tint, set before each model emission. We resolve it straight from
-        // BlockColors resolves biome tint before raster lighting, so the path tracer receives unlit albedo
-        // rather than vanilla AO + directional shading.
+        // BlockColors resolves biome tint before raster lighting, so extraction receives unlit albedo.
         BlockColors blockColors;
         BlockAndTintGetter view;
         BlockState state;

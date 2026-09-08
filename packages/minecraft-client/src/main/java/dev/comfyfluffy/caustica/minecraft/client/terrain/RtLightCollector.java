@@ -32,8 +32,8 @@ final class RtLightCollector {
     private static final float AREA_EPS = 1.0e-9f;
 
     static void collectClass(List<MinecraftTerrainEmitter> out, FloatArrayList verts, FloatArrayList prim,
-                              FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
-                              MinecraftMaterialEmission[] materialEmissions,
+                              FloatArrayList cornerUv, List<TextureAtlasSprite> sprites,
+                              List<MinecraftMaterialEmission> materialEmissions,
                               float minFillRatio) {
         int quads = prim.size() / (2 * PRIMITIVE_FLOATS);
         float[] v = verts.elements();
@@ -41,7 +41,7 @@ final class RtLightCollector {
         float[] uv = cornerUv.elements();
         for (int k = 0; k < quads; k++) {
             int pb = k * 2 * PRIMITIVE_FLOATS;
-            MinecraftMaterialEmission material = materialEmissions[2 * k];
+            MinecraftMaterialEmission material = materialEmissions.get(2 * k);
             if (material.luminanceCdM2() == 0.0f) {
                 continue;
             }
@@ -75,7 +75,7 @@ final class RtLightCollector {
             float u1 = uv[ub + 2], v1 = uv[ub + 3];
             float u2 = uv[ub + 4], v2 = uv[ub + 5];
             float u3 = uv[ub + 10], v3 = uv[ub + 11];
-            TextureAtlasSprite sprite = sprites[2 * k];
+            TextureAtlasSprite sprite = sprites.get(2 * k);
             float su0 = 0.0f, sv0 = 0.0f, invDu = 1.0f, invDv = 1.0f;
             boolean localUv = sprite != null;
             if (localUv) {

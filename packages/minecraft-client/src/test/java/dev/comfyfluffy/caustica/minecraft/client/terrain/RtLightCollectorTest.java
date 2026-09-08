@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftEmissionFoot
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.ArrayList;
@@ -106,7 +105,7 @@ final class RtLightCollectorTest {
         });
         var lights = new ArrayList<MinecraftTerrainEmitter>();
         RtLightCollector.collectClass(lights, verts, prim, cornerUv,
-                new TextureAtlasSprite[2], new MinecraftMaterialEmission[]{emission, emission},
+                java.util.Arrays.asList(null, null), List.of(emission, emission),
                 minFillRatio);
         return new Result(lights);
     }
