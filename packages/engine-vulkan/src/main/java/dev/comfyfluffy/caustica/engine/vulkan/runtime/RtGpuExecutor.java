@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
-import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
@@ -159,7 +158,6 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                         .semaphore(jobTimeline).value(prior).stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
                 submission.pWaitSemaphoreInfos(wait);
             }
-            VulkanDiagnostics.noteQueueSubmission(ctx.computeQueue().queue(), "Caustica compute queue");
             synchronized (ctx.deviceQueueHostLock()) {
                 ctx.checkDeviceResult(VK13.vkQueueSubmit2(ctx.computeQueue().queue(), submission, 0L), "vkQueueSubmit2(compute)");
             }

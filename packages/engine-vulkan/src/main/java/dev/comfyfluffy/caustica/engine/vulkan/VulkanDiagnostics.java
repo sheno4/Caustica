@@ -40,6 +40,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -54,7 +55,6 @@ public final class VulkanDiagnostics {
             new ConcurrentSkipListMap<>((left, right) -> Long.compareUnsigned(left.value(), right.value()));
     private static volatile boolean deviceFaultRequested;
     private static volatile boolean deviceFaultEnabled;
-    private static volatile QueueCheckpointSource lastQueue;
     private static int memoryHeapCount;
     private static volatile long allocator;
     private static boolean startupLogged;
@@ -65,8 +65,6 @@ public final class VulkanDiagnostics {
                               String deviceUuid, String driverUuid, String conformance,
                               String selectedQueues) {
     }
-
-    private record QueueCheckpointSource(VkQueue queue, String label) { }
 
     private record BufferRange(VulkanDeviceAddressRange bytes, long handle, String label) {
         boolean contains(VulkanDeviceAddress value) {
@@ -146,10 +144,6 @@ public final class VulkanDiagnostics {
         deviceFaultRequested = fault;
     }
 
-    public static boolean deviceLossAlreadyReported() {
-        return FAULT_REPORTED.get();
-    }
-
     public static void logEnabledExtensions(Collection<String> extensions) {
         List<String> sorted = new ArrayList<>(extensions);
         sorted.sort(Comparator.naturalOrder());
@@ -173,11 +167,6 @@ public final class VulkanDiagnostics {
         }
     }
 
-    /** Remember the queue before submission so a later device-loss report queries the relevant queue. */
-    public static void noteQueueSubmission(VkQueue queue, String label) {
-        lastQueue = new QueueCheckpointSource(queue, label);
-    }
-
     public static void registerBuffer(VulkanDeviceAddressRange bytes, long handle, String label) {
         BUFFERS.put(bytes.address(), new BufferRange(bytes, handle, label));
     }
@@ -187,15 +176,12 @@ public final class VulkanDiagnostics {
     }
 
     /** Query fault details once, immediately after a device-loss result is observed. */
-    public static void reportDeviceLost(VkDevice device, String operation) {
+    public static void reportDeviceLost(VkDevice device, String operation, Map<String, VkQueue> queues) {
         if (!FAULT_REPORTED.compareAndSet(false, true)) {
             return;
         }
         LOGGER.error("Vulkan device lost while {}", operation);
-        QueueCheckpointSource source = lastQueue;
-        if (source != null) {
-            logNvQueueCheckpoints(source.queue(), source.label());
-        }
+        queues.forEach((label, queue) -> logNvQueueCheckpoints(queue, label));
         logRuntimeSnapshot();
         if (!deviceFaultEnabled || device == null || device.getCapabilities().vkGetDeviceFaultInfoEXT == 0L) {
             LOGGER.error("VK_EXT_device_fault is unavailable; no driver fault details can be queried");

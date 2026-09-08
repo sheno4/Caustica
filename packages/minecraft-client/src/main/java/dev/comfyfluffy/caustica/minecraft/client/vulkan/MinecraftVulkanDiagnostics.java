@@ -15,10 +15,14 @@ import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Bridges host device wrappers and checkpoint formatting into raw Vulkan diagnostics. */
 public final class MinecraftVulkanDiagnostics {
+    private static final AtomicBoolean CHECKPOINTS_REPORTED = new AtomicBoolean();
+
     private MinecraftVulkanDiagnostics() {
     }
 
@@ -50,7 +54,7 @@ public final class MinecraftVulkanDiagnostics {
     }
 
     public static void reportDeviceLost(VulkanDevice device, String operation) {
-        if (VulkanDiagnostics.deviceLossAlreadyReported()) return;
+        if (!CHECKPOINTS_REPORTED.compareAndSet(false, true)) return;
         try {
             String checkpoints = VulkanUtils.formatCheckpoints(
                     device.checkpointExtension().retrieveCheckpoints(true));
@@ -59,7 +63,7 @@ public final class MinecraftVulkanDiagnostics {
         } catch (Throwable t) {
             CausticaMod.LOGGER.error("Failed to retrieve Vulkan queue checkpoints", t);
         }
-        VulkanDiagnostics.reportDeviceLost(device.vkDevice(), operation);
+        VulkanDiagnostics.reportDeviceLost(device.vkDevice(), operation, Map.of());
     }
 
     private static VulkanDiagnostics.StartupInfo startupInfo(VulkanPhysicalDevice device) {

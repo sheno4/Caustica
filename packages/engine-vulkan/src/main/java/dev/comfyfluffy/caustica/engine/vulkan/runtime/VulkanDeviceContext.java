@@ -44,6 +44,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.LongBuffer;
 import java.nio.ByteBuffer;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
@@ -533,7 +534,7 @@ public final class VulkanDeviceContext implements GpuDevice {
     public void waitIdle() {
         // vkDeviceWaitIdle is externally synchronized against every queue owned by the device.
         synchronized (deviceQueueHostLock) {
-            check(VK10.vkDeviceWaitIdle(vk), "vkDeviceWaitIdle");
+            checkDeviceResult(VK10.vkDeviceWaitIdle(vk), "vkDeviceWaitIdle");
         }
     }
 
@@ -578,7 +579,8 @@ public final class VulkanDeviceContext implements GpuDevice {
     /** Check a device operation and capture fault diagnostics before propagating device loss. */
     public void checkDeviceResult(int rc, String what) {
         if (rc == VK10.VK_ERROR_DEVICE_LOST) {
-            VulkanDiagnostics.reportDeviceLost(vk, what);
+            VulkanDiagnostics.reportDeviceLost(vk, what, Map.of(
+                    "graphics", graphicsQueue.queue(), "compute", computeQueue.queue()));
         }
         check(rc, what);
     }
