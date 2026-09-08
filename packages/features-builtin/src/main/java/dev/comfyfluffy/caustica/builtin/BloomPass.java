@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.builtin.gen.BloomPushData;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.vulkan.ComputeSynchronization;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 import dev.comfyfluffy.caustica.vulkan.VulkanSampler;
@@ -62,6 +63,7 @@ public final class BloomPass implements Pass<PostEffectFrame> {
     private final Supplier<OptionValues> options;
     private final VulkanSampler sampler;
     private final ShaderObjectCompute shader;
+    private final ResourceLifetime lifetime;
     private VmaImage2D[] levels = new VmaImage2D[0];
     private int builtWidth;
     private int builtHeight;
@@ -79,6 +81,12 @@ public final class BloomPass implements Pass<PostEffectFrame> {
             createdSampler.close();
             throw failure;
         }
+        lifetime = new ResourceLifetime(() -> {
+            var owner = levelsOwner;
+            levelsOwner = null;
+            levels = new VmaImage2D[0];
+            if (owner != null) owner.close();
+        }, shader::close, sampler::close);
     }
 
     private static ShaderObjectCompute loadShader(GpuDevice gpu) {
@@ -138,7 +146,13 @@ public final class BloomPass implements Pass<PostEffectFrame> {
     private boolean ensureLevels(int displayWidth, int displayHeight) {
         if (displayWidth == builtWidth && displayHeight == builtHeight) return false;
         VmaImage2D[] replacement = allocateLevels(displayWidth, displayHeight);
-        var replacementOwner = resources.create(() -> closeLevels(replacement));
+        ResourceOwner replacementOwner;
+        try {
+            replacementOwner = resources.create(() -> closeLevels(replacement));
+        } catch (RuntimeException | Error failure) {
+            closeLevelsAfterFailure(replacement, failure);
+            throw failure;
+        }
         var previousOwner = levelsOwner;
         levels = replacement;
         levelsOwner = replacementOwner;
@@ -164,7 +178,7 @@ public final class BloomPass implements Pass<PostEffectFrame> {
             }
             return allocated;
         } catch (RuntimeException | Error failure) {
-            closeLevels(allocated);
+            closeLevelsAfterFailure(allocated, failure);
             throw failure;
         }
     }
@@ -211,14 +225,19 @@ public final class BloomPass implements Pass<PostEffectFrame> {
 
     @Override
     public void close() {
-        if (levelsOwner != null) levelsOwner.close();
-        levelsOwner = null;
-        levels = new VmaImage2D[0];
-        shader.close();
-        sampler.close();
+        lifetime.close();
     }
 
     private static void closeLevels(VmaImage2D[] images) {
-        for (VmaImage2D image : images) if (image != null) image.close();
+        new ResourceLifetime(Arrays.stream(images).filter(Objects::nonNull)
+                .map(image -> (Runnable) image::close).toArray(Runnable[]::new)).close();
+    }
+
+    private static void closeLevelsAfterFailure(VmaImage2D[] images, Throwable failure) {
+        try {
+            closeLevels(images);
+        } catch (RuntimeException | Error cleanupFailure) {
+            if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
+        }
     }
 }
