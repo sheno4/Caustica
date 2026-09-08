@@ -29,11 +29,8 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Brackets the level-rendering section of {@link GameRenderer#render} with the
- * render-scale window: low-res textures are swapped into the main target just
- * before {@code renderLevel} (so the level frame graph, sky, entity outline and
- * post chains all run at reduced resolution) and restored + upscaled right
- * before the pre-GUI depth clear.
+ * Captures the world frame, composites its reconstructed image before the hand,
+ * and routes hand, screen effects and GUI through the shared presentation overlay.
  */
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
@@ -73,14 +70,13 @@ public abstract class GameRendererMixin {
 				CausticaClientComposition.current().runtime().frameActive());
 		MinecraftDebugCapture.poll(Minecraft.getInstance(),
 				CausticaClientComposition.current().runtime().frameActive());
-		CausticaClientComposition.current().runtime().endFrame();
 	}
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V",
 			at = @At(value = "INVOKE",
 					target = "Lnet/minecraft/client/renderer/GameRenderer;renderLevel(Lnet/minecraft/client/DeltaTracker;)V"))
-	private void caustica$beginWorldScale(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		CausticaClientComposition.current().renderScaler().begin(this.mainRenderTarget);
+	private void caustica$beginWorldComposite(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
+		CausticaClientComposition.current().worldComposite().begin(this.mainRenderTarget);
 	}
 
 	// Redirect the held-item/hand render into the combined UI overlay. SDR and HDR then feed DLSS-FG the same
@@ -129,15 +125,15 @@ public abstract class GameRendererMixin {
 		}
 	}
 
-	// Safety net only: the primary end-of-window is caustica$endWorldScaleBeforeHand
+	// Safety net only: the primary end-of-window is caustica$endWorldCompositeBeforeHand
 	// inside renderLevel. This catches any path where renderLevel bailed early
 	// (end() no-ops when the window is already closed).
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V",
 			at = @At(value = "INVOKE",
 					target = "Lnet/minecraft/client/renderer/fog/FogRenderer;endFrame()V",
 					shift = At.Shift.AFTER))
-	private void caustica$endWorldScale(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		CausticaClientComposition.current().renderScaler().endSafetyNet(this.mainRenderTarget);
+	private void caustica$endWorldComposite(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
+		CausticaClientComposition.current().worldComposite().endSafetyNet(this.mainRenderTarget);
 	}
 
 	// Capture the exact level projection while retaining the base projection needed to move view-effect
@@ -163,19 +159,16 @@ public abstract class GameRendererMixin {
 		return projection;
 	}
 
-	// Primary end-of-window: right after the 3D-HUD projection is set and *before*
-	// vanilla's pre-hand depth clear. The world (incl. entity outline targets and
-	// translucency compositing) has fully rendered at low res by this point; the
-	// upscale runs here, then the hand, screen effects and 3D crosshair draw at
-	// native resolution on top — keeping the screen-fixed hand out of the FSR
-	// inputs entirely (camera-reprojection MVs would be exactly wrong for it).
+	// Composite after the 3D-HUD projection is set, before the hand's depth clear.
+	// Screen-fixed content is drawn afterward into the UI overlay, keeping it out
+	// of reconstruction inputs and the hudless image used for frame generation.
 	@Inject(method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
 			at = @At(value = "INVOKE",
 					target = "Lcom/mojang/blaze3d/systems/RenderSystem;setProjectionMatrix(Lcom/mojang/blaze3d/buffers/GpuBufferSlice;Lcom/mojang/blaze3d/ProjectionType;)V",
 					ordinal = 1,
 					shift = At.Shift.AFTER))
-	private void caustica$endWorldScaleBeforeHand(DeltaTracker deltaTracker, CallbackInfo ci) {
-		CausticaClientComposition.current().renderScaler().end(this.mainRenderTarget);
+	private void caustica$endWorldCompositeBeforeHand(DeltaTracker deltaTracker, CallbackInfo ci) {
+		CausticaClientComposition.current().worldComposite().end(this.mainRenderTarget);
 		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
 		}
@@ -192,25 +185,26 @@ public abstract class GameRendererMixin {
 	}
 
 	// Composite the redirected UI overlay back over the world once the GUI has fully rendered into it.
-	// Done here (not at GuiRenderer.draw TAIL) because that TAIL inject did not fire on in-game HUD frames;
-	// this INVOKE-after seam runs unconditionally once per frame in both gameplay and menus.
+	// This seam runs once per frame in both gameplay and menus.
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V",
 			at = @At(value = "INVOKE",
 					target = "Lnet/minecraft/client/gui/render/GuiRenderer;render()V",
 					shift = At.Shift.AFTER))
 	private void caustica$compositeUiOverlay(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		if (!CausticaClientComposition.current().runtime().frameActive()) {
-			return;
+		try (var ignored = CausticaClientComposition.current().runtime().profileStage("ui.composite")) {
+			if (!CausticaClientComposition.current().runtime().frameActive()) {
+				return;
+			}
+			// DLSS-FG quality: snapshot the main target before the combined UI overlay composites back below.
+			// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
+	        long mainImage = this.mainRenderTarget.getColorTexture() instanceof VulkanGpuTexture texture
+	                ? texture.vkImage() : 0L;
+	        CausticaClientComposition.current().runtime().captureHudless(new BorrowedImage(
+	                        mainImage, 0L, org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM,
+	                        this.mainRenderTarget.width, this.mainRenderTarget.height),
+					CausticaClientComposition.current().uiOverlay().capturePresentation());
+			CausticaClientComposition.current().uiOverlay().compositeIfUsed();
 		}
-		// DLSS-FG quality: snapshot the main target before the combined UI overlay composites back below.
-		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
-        long mainImage = this.mainRenderTarget.getColorTexture() instanceof VulkanGpuTexture texture
-                ? texture.vkImage() : 0L;
-        CausticaClientComposition.current().runtime().captureHudless(new BorrowedImage(
-                        mainImage, 0L, org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM,
-                        this.mainRenderTarget.width, this.mainRenderTarget.height),
-				CausticaClientComposition.current().uiOverlay().capturePresentation());
-		CausticaClientComposition.current().uiOverlay().compositeIfUsed();
 	}
 
 	@Shadow

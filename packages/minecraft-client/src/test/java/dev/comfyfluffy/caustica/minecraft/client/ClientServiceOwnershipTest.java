@@ -15,7 +15,7 @@ final class ClientServiceOwnershipTest {
     @Test
     void processServicesDoNotPublishMutableStaticState() {
         List<Class<?>> services = List.of(MinecraftFrameAdapter.class, MinecraftRuntimeHost.class,
-                VanillaRenderController.class, WorldRenderScaler.class,
+                VanillaRenderController.class, WorldRenderComposite.class,
                 MinecraftDeviceBringup.class, MinecraftVulkanBackend.class);
 
         for (Class<?> service : services) {

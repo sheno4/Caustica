@@ -16,12 +16,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * The Reflex per-frame sleep call must run at the very start of the frame, before input
- * sampling/simulation. {@link Minecraft#runTick} is Minecraft's per-loop-iteration entry point (called once
- * per {@code while (running)} iteration in {@link Minecraft#run()}, right after
- * {@code RenderSystem.pollEvents()}), so its HEAD is the earliest hookable point in this codebase for that
- * purpose — the alternative (hooking inside {@code run()}'s loop body directly) isn't a clean Mixin target
- * since it's inline in a loop, not a call to a named method.
+ * Runs Reflex sleep at the start of {@link Minecraft#runTick}, before simulation.
+ * Retired texture leases and frame observations are finalized at its end, after presentation.
  *
  * <p>SIMULATION_START/END bracket the tick/extract work that happens before rendering (from here through
  * just before {@code renderFrame} is called); RENDERSUBMIT/PRESENT markers are set from
@@ -64,7 +60,12 @@ public abstract class MinecraftMixin {
 
 	@Inject(method = "runTick", at = @At("TAIL"))
 	private void caustica$releaseRetiredTextures(boolean advanceGameTime, CallbackInfo ci) {
-		MinecraftTextureLifetime.drain();
+		var runtime = CausticaClientComposition.current().runtime();
+		try (var ignored = runtime.profileStage("host.textureRetire")) {
+			MinecraftTextureLifetime.drain();
+		} finally {
+			runtime.endFrame();
+		}
 	}
 
 	@Inject(method = "runTick",

@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.client.VanillaRenderController;
-import dev.comfyfluffy.caustica.minecraft.client.WorldRenderScaler;
+import dev.comfyfluffy.caustica.minecraft.client.WorldRenderComposite;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
@@ -44,13 +44,13 @@ public final class CausticaMod {
         MinecraftRtRuntime runtime = new MinecraftRtRuntime(apiServices.renderSessionHost(), apiServices.minecraftWorldSessionHost(),
                 apiServices.slangRuntime(), apiServices.shaderCacheRoot(), telemetry, apiServices.ngxSettings());
         VanillaRenderController renderController = new VanillaRenderController(terrain);
-        WorldRenderScaler renderScaler = new WorldRenderScaler(renderController);
+        WorldRenderComposite worldComposite = new WorldRenderComposite(renderController);
         MinecraftUiOverlay uiOverlay = new MinecraftUiOverlay(runtime);
-        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler, uiOverlay);
+        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, worldComposite, uiOverlay);
         MinecraftDeviceBringup deviceBringup = new MinecraftDeviceBringup();
         MinecraftVulkanBackend vulkanBackend = new MinecraftVulkanBackend(deviceBringup, runtime);
         CausticaClientComposition.publish(new CausticaClientComposition(runtime, apiServices, frameAdapter,
-                runtimeHost, uiOverlay, renderController, renderScaler, deviceBringup, vulkanBackend,
+                runtimeHost, uiOverlay, renderController, worldComposite, deviceBringup, vulkanBackend,
                 terrainWorkers, terrain));
         LOGGER.info("Caustica initialized (common); config: {}", configPath);
     }

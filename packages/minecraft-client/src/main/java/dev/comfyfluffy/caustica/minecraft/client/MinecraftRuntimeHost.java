@@ -1,20 +1,20 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
 import dev.comfyfluffy.caustica.minecraft.client.VanillaRenderController;
-import dev.comfyfluffy.caustica.minecraft.client.WorldRenderScaler;
+import dev.comfyfluffy.caustica.minecraft.client.WorldRenderComposite;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 
 
 /** Minecraft lifecycle and material-policy adapter for the renderer runtime. */
 public final class MinecraftRuntimeHost implements RuntimeHost {
     private final VanillaRenderController renderController;
-    private final WorldRenderScaler renderScaler;
+    private final WorldRenderComposite worldComposite;
     private final MinecraftUiOverlay uiOverlay;
 
-    public MinecraftRuntimeHost(VanillaRenderController renderController, WorldRenderScaler renderScaler,
+    public MinecraftRuntimeHost(VanillaRenderController renderController, WorldRenderComposite worldComposite,
             MinecraftUiOverlay uiOverlay) {
         this.renderController = java.util.Objects.requireNonNull(renderController, "renderController");
-        this.renderScaler = java.util.Objects.requireNonNull(renderScaler, "renderScaler");
+        this.worldComposite = java.util.Objects.requireNonNull(worldComposite, "worldComposite");
         this.uiOverlay = java.util.Objects.requireNonNull(uiOverlay, "uiOverlay");
     }
 
@@ -25,7 +25,7 @@ public final class MinecraftRuntimeHost implements RuntimeHost {
 
     @Override
     public void resetFrameBridge() {
-        renderScaler.destroy();
+        worldComposite.destroy();
     }
 
     @Override

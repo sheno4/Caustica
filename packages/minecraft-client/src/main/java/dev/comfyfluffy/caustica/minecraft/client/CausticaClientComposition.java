@@ -17,7 +17,7 @@ public final class CausticaClientComposition {
     private final MinecraftRuntimeHost runtimeHost;
     private final MinecraftUiOverlay uiOverlay;
     private final VanillaRenderController renderController;
-    private final WorldRenderScaler renderScaler;
+    private final WorldRenderComposite worldComposite;
     private final MinecraftDeviceBringup deviceBringup;
     private final MinecraftVulkanBackend vulkanBackend;
     private final RtWorkerPool terrainWorkers;
@@ -26,7 +26,7 @@ public final class CausticaClientComposition {
     public CausticaClientComposition(MinecraftRtRuntime runtime, MinecraftApiBootstrap.ApiServices apiServices,
                                      MinecraftFrameAdapter frameAdapter, MinecraftRuntimeHost runtimeHost,
                                      MinecraftUiOverlay uiOverlay,
-                                     VanillaRenderController renderController, WorldRenderScaler renderScaler,
+                                     VanillaRenderController renderController, WorldRenderComposite worldComposite,
                                      MinecraftDeviceBringup deviceBringup, MinecraftVulkanBackend vulkanBackend,
                                      RtWorkerPool terrainWorkers, RtTerrain terrain) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -35,7 +35,7 @@ public final class CausticaClientComposition {
         this.runtimeHost = Objects.requireNonNull(runtimeHost, "runtimeHost");
         this.uiOverlay = Objects.requireNonNull(uiOverlay, "uiOverlay");
         this.renderController = Objects.requireNonNull(renderController, "renderController");
-        this.renderScaler = Objects.requireNonNull(renderScaler, "renderScaler");
+        this.worldComposite = Objects.requireNonNull(worldComposite, "worldComposite");
         this.deviceBringup = Objects.requireNonNull(deviceBringup, "deviceBringup");
         this.vulkanBackend = Objects.requireNonNull(vulkanBackend, "vulkanBackend");
         this.terrainWorkers = Objects.requireNonNull(terrainWorkers, "terrainWorkers");
@@ -54,7 +54,7 @@ public final class CausticaClientComposition {
     public MinecraftRuntimeHost runtimeHost() { return runtimeHost; }
     public MinecraftUiOverlay uiOverlay() { return uiOverlay; }
     public VanillaRenderController renderController() { return renderController; }
-    public WorldRenderScaler renderScaler() { return renderScaler; }
+    public WorldRenderComposite worldComposite() { return worldComposite; }
     public MinecraftDeviceBringup deviceBringup() { return deviceBringup; }
     public MinecraftVulkanBackend vulkanBackend() { return vulkanBackend; }
     public RtWorkerPool terrainWorkers() { return terrainWorkers; }

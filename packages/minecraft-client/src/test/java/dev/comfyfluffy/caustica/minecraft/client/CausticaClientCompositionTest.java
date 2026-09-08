@@ -60,13 +60,13 @@ final class CausticaClientCompositionTest {
         RtTerrain terrain = new RtTerrain(terrainWorkers, MinecraftTelemetry.disabled());
         MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter(terrain, MinecraftTelemetry.disabled());
         VanillaRenderController renderController = new VanillaRenderController(terrain);
-        WorldRenderScaler renderScaler = new WorldRenderScaler(renderController);
+        WorldRenderComposite worldComposite = new WorldRenderComposite(renderController);
         MinecraftUiOverlay uiOverlay = new MinecraftUiOverlay(runtime);
-        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler, uiOverlay);
+        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, worldComposite, uiOverlay);
         MinecraftDeviceBringup deviceBringup = new MinecraftDeviceBringup();
         MinecraftVulkanBackend vulkanBackend = new MinecraftVulkanBackend(deviceBringup, runtime);
         CausticaClientComposition composition = new CausticaClientComposition(runtime, services, frameAdapter,
-                runtimeHost, uiOverlay, renderController, renderScaler, deviceBringup, vulkanBackend,
+                runtimeHost, uiOverlay, renderController, worldComposite, deviceBringup, vulkanBackend,
                 terrainWorkers, terrain);
 
         CausticaClientComposition.publish(composition);
@@ -78,14 +78,14 @@ final class CausticaClientCompositionTest {
         assertSame(runtimeHost, composition.runtimeHost());
         assertSame(uiOverlay, composition.uiOverlay());
         assertSame(renderController, composition.renderController());
-        assertSame(renderScaler, composition.renderScaler());
+        assertSame(worldComposite, composition.worldComposite());
         assertSame(deviceBringup, composition.deviceBringup());
         assertSame(vulkanBackend, composition.vulkanBackend());
         assertSame(terrainWorkers, composition.terrainWorkers());
         assertSame(terrain, composition.terrain());
         assertThrows(IllegalStateException.class,
                 () -> CausticaClientComposition.publish(new CausticaClientComposition(runtime, services,
-                        frameAdapter, runtimeHost, uiOverlay, renderController, renderScaler, deviceBringup, vulkanBackend,
+                        frameAdapter, runtimeHost, uiOverlay, renderController, worldComposite, deviceBringup, vulkanBackend,
                         terrainWorkers, terrain)));
     }
 }

@@ -8,12 +8,12 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
  * The renderer owns reconstruction; this host hook only selects the destination and reports whether
  * RT supplied the replacement image after vanilla world rendering was skipped.
  */
-public final class WorldRenderScaler {
+public final class WorldRenderComposite {
 	private final VanillaRenderController renderController;
 	// Tracks that the level-render window is open so the safety-net end() does not composite twice.
 	private boolean rtWindowOpen;
 
-	public WorldRenderScaler(VanillaRenderController renderController) {
+	public WorldRenderComposite(VanillaRenderController renderController) {
 		this.renderController = java.util.Objects.requireNonNull(renderController, "renderController");
 	}
 
