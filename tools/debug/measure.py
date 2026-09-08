@@ -33,9 +33,11 @@ def main():
         result["intervalEnd"] = client.call("wait", frames=args.frames, timeoutMs=int(args.timeout * 1000))
         result["end"] = client.call("status")
     finally:
-        result["recording"] = client.call("jfr.stop")
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        try:
+            result["recording"] = client.call("jfr.stop")
+        finally:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result["recording"], indent=2))
 
 

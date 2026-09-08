@@ -7,9 +7,29 @@ from unittest.mock import Mock, call, patch
 from caustica_debug import Client
 from analyze_recording import analyze, summarize, milliseconds
 import check_rt_lifecycle
+import measure
 
 
 class DebugToolsTest(unittest.TestCase):
+    def test_measurement_preserves_conditions_when_client_disconnects(self):
+        client = Mock()
+        conditions = {"window": {"width": 3840, "height": 2130}, "frames": 120}
+        client.call.side_effect = [conditions, {}, ConnectionResetError("client crashed"),
+                                   ConnectionRefusedError("client stopped")]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "measurement.json"
+            with patch("sys.argv", ["measure", "--warmup", "0", "--frames", "600", "--output", str(output)]), \
+                    patch.object(measure, "Client", return_value=client), \
+                    patch.object(measure.subprocess, "run", side_effect=[Mock(stdout="revision\n"), Mock(stdout="")]):
+                with self.assertRaises(ConnectionRefusedError):
+                    measure.main()
+            report = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(report["start"], conditions)
+        self.assertEqual(report["revision"], "revision")
+        self.assertEqual(report["requestedFrames"], 600)
+        self.assertNotIn("recording", report)
+        self.assertNotIn("end", report)
+
     def test_lifecycle_restores_rt_when_report_write_fails(self):
         client = Mock()
         client.call.side_effect = lambda op, **kwargs: (

@@ -63,6 +63,8 @@ uv run python tools/debug/analyze_recording.py run/caustica-debug/recording-ID.j
 
 This external Python analysis computes descriptive statistics and exposure changes. It requires the JDK `jfr` executable on PATH (or `--jfr PATH`). The exported JSON retains all Caustica events for ad hoc analysis. Use JDK `jfr print` separately for JVM events. Record settings, camera, workload and build revision alongside measurements; wall time includes scheduling and waits.
 
+If a measurement fails after recording starts, its JSON retains the available conditions even when the client cannot stop JFR. Missing `end` or `recording` fields indicate an incomplete experiment, not a completed timing sample.
+
 For JVM hotspot attribution, export with `jfr print --json --stack-depth 64 --events jdk.ExecutionSample,jdk.ObjectAllocationSample RECORDING.jfr`.
 The command's default stack display depth is five frames and can hide application callers even when the recording contains deeper stacks.
 
