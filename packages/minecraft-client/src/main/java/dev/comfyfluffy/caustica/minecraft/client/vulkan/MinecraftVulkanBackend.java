@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanQueue;
 import dev.comfyfluffy.caustica.minecraft.client.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.minecraft.client.mixin.GpuDeviceAccessor;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
@@ -18,7 +19,7 @@ import org.lwjgl.vulkan.VkDevice;
 /** Adapts Blaze3D's deferred Vulkan encoder and device wrappers to renderer-owned interfaces. */
 public final class MinecraftVulkanBackend implements VulkanRendererBackend {
     private final MinecraftDeviceBringup deviceBringup;
-    private final dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime runtime;
+    private final MinecraftRtRuntime runtime;
     private VulkanDevice device;
     private VulkanQueueRef graphicsQueue;
     private VulkanQueueRef computeQueue;
@@ -27,7 +28,7 @@ public final class MinecraftVulkanBackend implements VulkanRendererBackend {
     private VulkanLowLatency lowLatency;
 
     public MinecraftVulkanBackend(MinecraftDeviceBringup deviceBringup,
-                                  dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime runtime) {
+                                  MinecraftRtRuntime runtime) {
         this.deviceBringup = java.util.Objects.requireNonNull(deviceBringup, "deviceBringup");
         this.runtime = java.util.Objects.requireNonNull(runtime, "runtime");
     }
@@ -41,7 +42,7 @@ public final class MinecraftVulkanBackend implements VulkanRendererBackend {
         this.computeQueue = new VulkanQueueRef(compute.vkQueue(), compute.queueFamilyIndex());
         this.debugMarkers = new MinecraftDebugMarkers(device);
         this.capabilities = negotiated.capabilities();
-        this.lowLatency = new MinecraftLowLatency(capabilities);
+        this.lowLatency = new MinecraftLowLatency(capabilities, runtime);
     }
 
     public void installCurrent() {

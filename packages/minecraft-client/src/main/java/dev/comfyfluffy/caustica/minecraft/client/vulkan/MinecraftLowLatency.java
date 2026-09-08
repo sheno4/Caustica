@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
-import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanDeviceCapabilities;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 import org.lwjgl.system.MemoryStack;
@@ -24,6 +24,7 @@ final class MinecraftLowLatency implements VulkanLowLatency {
     private static final long SLEEP_WAIT_TIMEOUT_NS = 200_000_000L;
 
     private final VulkanDeviceCapabilities capabilities;
+    private final MinecraftRtRuntime runtime;
     private long timelineSemaphore;
     private long simulationId;
     private long presentId;
@@ -32,13 +33,14 @@ final class MinecraftLowLatency implements VulkanLowLatency {
     private int lastMinimumIntervalUs;
     private boolean failed;
 
-    MinecraftLowLatency(VulkanDeviceCapabilities capabilities) {
+    MinecraftLowLatency(VulkanDeviceCapabilities capabilities, MinecraftRtRuntime runtime) {
         this.capabilities = capabilities;
+        this.runtime = runtime;
     }
 
     @Override
     public boolean active() {
-        return capabilities.lowLatency() && CausticaClientComposition.current().runtime().active()
+        return capabilities.lowLatency() && runtime.active()
                 && CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED) && !failed;
     }
 
