@@ -40,6 +40,7 @@ import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_2D;
+import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure;
 
 /** VMA-backed uploader for retained Minecraft entity geometry and per-triangle shader records. */
 public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploader {
@@ -74,8 +75,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             }
             return new PackingJob(source, captured, Map.copyOf(materialIndices));
         } catch (RuntimeException | Error failure) {
-            Throwable cleanup = closeAll(captured);
-            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
+            closeAfterFailure(failure, captured::close);
             throw failure;
         }
     }
@@ -96,16 +96,22 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             var claimed = captured;
             captured = null;
             TextureSet textures = allocateTextures(claimed);
-            VmaMappedBuffer positions = null, indices = null, primitive = null, instance = null;
+            List<Runnable> releases = new ArrayList<>();
+            releases.add(textures::close);
+            VmaMappedBuffer positions, indices, primitive, instance;
             try {
                 positions = VmaMappedBuffer.createAsync(gpu, (long) source.vertexCount() * 12,
                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity positions");
+                releases.add(positions::close);
                 indices = VmaMappedBuffer.createAsync(gpu, (long) source.triangleCount() * 12,
                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity indices");
+                releases.add(indices::close);
                 primitive = VmaMappedBuffer.create(gpu, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity primitives");
+                releases.add(primitive::close);
                 instance = VmaMappedBuffer.create(gpu, MinecraftInstanceData.BYTE_SIZE,
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity instance");
+                releases.add(instance::close);
                 var positionValues = source.positions();
                 var indexValues = source.indices();
                 write(positions, (long) positionValues.length * 4, bytes -> bytes.asFloatBuffer().put(positionValues));
@@ -117,8 +123,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                         bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,
                                 new MinecraftInstanceData.SampledTexture2DIndex(0), 0).write(bytes));
             } catch (RuntimeException | Error failure) {
-                Throwable cleanup = closeAll(instance, primitive, indices, positions, textures);
-                if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
+                closeAfterFailure(failure, releases.reversed().toArray(Runnable[]::new));
                 throw failure;
             }
             return uploaded(source, positions, indices, primitive, instance, textures);
@@ -304,11 +309,13 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     private TextureSet allocateTextures(CapturedTextures captured) {
         var leases = captured.leases;
         if (leases.isEmpty()) return new TextureSet(null, null, Map.of(), List.of());
-        GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
-        GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange = null;
+        List<Runnable> releases = new ArrayList<>();
+        releases.add(captured::close);
         try {
-            range = gpu.descriptorHeap().allocateResources(leases.size());
-            samplerRange = gpu.descriptorHeap().allocateSamplers(leases.size());
+            var range = gpu.descriptorHeap().allocateResources(leases.size());
+            releases.add(range::destroy);
+            var samplerRange = gpu.descriptorHeap().allocateSamplers(leases.size());
+            releases.add(samplerRange::destroy);
             Map<MinecraftEntityMesh.Texture, TextureBinding> bindings = new LinkedHashMap<>();
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 int offset = 0;
@@ -335,12 +342,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             return new TextureSet(range, samplerRange, Map.copyOf(bindings),
                     List.copyOf(leases.values()));
         } catch (RuntimeException | Error failure) {
-            GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = range;
-            GpuDescriptorRange<GpuDescriptorIndex.Sampler> allocatedSamplers = samplerRange;
-            Throwable cleanup = closeAll(allocated == null ? null : allocated::destroy,
-                    allocatedSamplers == null ? null : allocatedSamplers::destroy,
-                    new LeaseCloser(leases.values()));
-            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
+            closeAfterFailure(failure, releases.reversed().toArray(Runnable[]::new));
             throw failure;
         }
     }
