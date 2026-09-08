@@ -58,13 +58,13 @@ cmake --build build/cmake/slang_shim --config Release
 5. Run the Fabric client:
 
 ```powershell
-.\gradlew.bat --no-daemon -Ploader=fabric -PoptimizedClientJvm=true runClient --args="--renderDebugLabels --graphicsBackend VULKAN"
+.\gradlew.bat --no-daemon -Ploader=fabric runClient
 ```
 
 NeoForge uses the same shared sources and has its own run configuration:
 
 ```powershell
-.\gradlew.bat --no-daemon -Ploader=neoforge -PoptimizedClientJvm=true runClient --args="--renderDebugLabels --graphicsBackend VULKAN"
+.\gradlew.bat --no-daemon -Ploader=neoforge runClient
 ```
 
 The `runClient.ps1` helper defaults to Fabric. Pass `neoforge` to select the
@@ -73,6 +73,9 @@ NeoForge run configuration:
 ```powershell
 .\runClient.ps1 neoforge
 ```
+
+Gradle configures the Vulkan backend, debug labels, heap size and garbage collector
+for both development clients.
 
 ## Linux
 
@@ -85,7 +88,10 @@ export VULKAN_SDK=/path/to/vulkan-sdk
 ```
 
 `DLSS_SDK` must contain the NGX headers and static library. `VULKAN_SDK` must
-contain Vulkan headers.
+contain Vulkan headers and `bin/spirv-val`; `SLANG_SDK` must contain `bin/slangc`
+and the Slang shared libraries. These must be Linux binaries when building on Linux,
+including inside WSL. Shader generation runs during `check`, so Java and the native
+NRD toolchain alone are insufficient.
 
 Then configure and build the native shims:
 
@@ -161,5 +167,5 @@ Validate the Java FFM boundary and shader specialization with:
 Run the Vulkan RT/DLSS-RR client with:
 
 ```bash
-nvidia-offload ./gradlew --no-daemon -Ploader=fabric -PoptimizedClientJvm=true runClient --args='--renderDebugLabels --graphicsBackend VULKAN'
+nvidia-offload ./gradlew --no-daemon -Ploader=fabric runClient
 ```
