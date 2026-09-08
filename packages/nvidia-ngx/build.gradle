@@ -73,6 +73,7 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
     description = "Bundles the NGX shim and ${vendorConfig} DLSS native libraries."
     inputs.property "shimConfig", shimConfig
     inputs.property "vendorConfig", vendorConfig
+    inputs.property "platforms", selectedPlatforms*.name
     selectedPlatforms.each { platform ->
         inputs.files(fileTree(shimOutput) { include platform.shimIncludes })
                 .withPropertyName("ngxNatives.${platform.name}.shim")
@@ -81,7 +82,6 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
                 .withPropertyName("ngxNatives.${platform.name}.vendor")
     }
     outputs.dir(nativeResourceRoot)
-    outputs.upToDateWhen { false }
     doLast {
         delete(nativeResourceRoot)
         def sdkRoot = sdkRootProvider.orNull
