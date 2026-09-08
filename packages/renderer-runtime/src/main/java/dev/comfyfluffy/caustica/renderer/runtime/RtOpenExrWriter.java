@@ -38,12 +38,10 @@ final class RtOpenExrWriter {
             float evScene,
             float evTarget,
             float evApplied,
-            String look,
             long frame
     ) {
         Metadata {
             Objects.requireNonNull(exposureMode, "exposureMode");
-            Objects.requireNonNull(look, "look");
         }
     }
 
@@ -189,7 +187,6 @@ final class RtOpenExrWriter {
         finiteFloatAttribute(bytes, "causticaEvScene", metadata.evScene());
         finiteFloatAttribute(bytes, "causticaEvTarget", metadata.evTarget());
         finiteFloatAttribute(bytes, "causticaEvApplied", metadata.evApplied());
-        stringAttribute(bytes, "causticaLookIntent", metadata.look());
         stringAttribute(bytes, "causticaFrame", Long.toUnsignedString(metadata.frame()));
         bytes.write(0); // end of header attributes
         return bytes.toByteArray();

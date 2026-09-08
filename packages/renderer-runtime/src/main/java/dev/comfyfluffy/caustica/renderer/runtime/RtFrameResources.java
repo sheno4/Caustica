@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.presentation.PresentationResources;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
-import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
@@ -24,11 +23,11 @@ final class RtFrameResources {
     private int renderSizeConfiguration = Integer.MIN_VALUE;
 
     RtFrameResources(RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
-                     RtUpscaler upscaler, RtLookPackage look, RtExposure.Settings exposureSettings) {
+                     RtUpscaler upscaler, RtExposure.Settings exposureSettings) {
         this.presenter = presenter;
         this.rayReconstruction = rayReconstruction;
         this.upscaler = upscaler;
-        this.presentation = new PresentationResources(look, exposureSettings);
+        this.presentation = new PresentationResources(exposureSettings);
     }
 
     TraceResources trace() {

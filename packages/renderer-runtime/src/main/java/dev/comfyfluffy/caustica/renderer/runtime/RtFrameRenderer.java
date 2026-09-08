@@ -39,7 +39,6 @@ import dev.comfyfluffy.caustica.renderer.raytracing.accel.TlasBuilder;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
-import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
 import dev.comfyfluffy.caustica.renderer.presentation.PresentationResources;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceImages;
@@ -68,8 +67,6 @@ public final class RtFrameRenderer {
     // Modulus of the world-pinned procedural domain anchor. Documented engine constant, not a per-surface
     // tunable: a very low-frequency field could alias across it where the wave spectrum does not.
     private static final int PROCEDURAL_ANCHOR_MASK = 4095;
-    // Renderer look metadata is exposure/LMT only; scene providers own their photometric calibration.
-    private static final RtLookPackage LOOK = RtLookPackage.loadDefault();
     // Host-frame serial also detects gaps where the host rendered without an RT composite.
     private volatile long frameCounter;
 
@@ -125,7 +122,7 @@ public final class RtFrameRenderer {
                 denoiserFactory, denoisingSettings, telemetry);
         this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
         this.gpuTiming = new RtGpuTiming(context);
-        this.frameResources = new RtFrameResources(presenter, rayReconstruction, upscaler, LOOK, settings.exposure());
+        this.frameResources = new RtFrameResources(presenter, rayReconstruction, upscaler, settings.exposure());
     }
 
     public void configureSettings(RtRenderSettings settings) {
@@ -179,7 +176,7 @@ public final class RtFrameRenderer {
         }
 
         RtFrameCapture.exportResidualExposureExr(context, traceImages().reconstructedColor(), traceExtent(),
-                presentationResources().exposure(), LOOK, frameCounter, outputPath);
+                presentationResources().exposure(), frameCounter, outputPath);
         return true;
     }
 

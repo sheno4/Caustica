@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
-import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -33,7 +32,7 @@ final class RtFrameCapture {
      * The caller must be on the render thread with all frame commands submitted.
      */
     static void exportResidualExposureExr(VulkanDeviceContext context, GpuImage reconstructedColor,
-            TraceExtent extent, RtExposure exposure, RtLookPackage look, long frameCounter,
+            TraceExtent extent, RtExposure exposure, long frameCounter,
             Path outputPath) throws IOException {
         long pixelCount = Math.multiplyExact((long) extent.displayWidth(), (long) extent.displayHeight());
         long rgbaBytes = Math.multiplyExact(pixelCount, 4L * Short.BYTES);
@@ -75,7 +74,6 @@ final class RtFrameCapture {
                             exposureMetadata.evScene(),
                             exposureMetadata.evTarget(),
                             exposureMetadata.evApplied(),
-                            look.id() + "@" + look.packageVersion(),
                             frameCounter));
         } finally {
             readback.destroy();
@@ -142,7 +140,7 @@ final class RtFrameCapture {
             GpuImage reconstructedColor, TraceExtent extent, GpuImage exposureImage,
             GpuBuffer readback, long exposureOffset) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd,
+             var ignored = RtDebugLabels.scope(ctx, cmd,
                      "residual-exposure EXR readback")) {
             VkImageMemoryBarrier2.Buffer imageBarriers = VkImageMemoryBarrier2.calloc(2, stack);
             imageBarriers.get(0).sType$Default()

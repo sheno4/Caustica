@@ -9,7 +9,7 @@
 // without an authored fill term — high orders dominate exactly when the sun is below the horizon, which
 // is the case the previous single-scattering sky could not represent at all.
 //
-// Static (per look package: only the ground albedo enters from outside), so this runs once behind the
+// Only ground albedo enters from outside, so this runs once behind the
 // transmittance LUT and is never rebuilt per frame. The 64x20 inner work is why: ~1.3M medium samples for
 // the whole 32x32 table, trivial once and far too much per frame.
 module caustica_minecraft_sky_lut_multiscatter;

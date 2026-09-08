@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.renderer.presentation;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsQueue;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
@@ -32,27 +31,25 @@ public final class RtExposure {
     private static final Logger LOGGER = LoggerFactory.getLogger(RtExposure.class);
     /** {@code log2(100 / 12.5)} maps scene luminance in cd/m² onto the EV100 metering scale. */
     private static final float EV100_OFFSET = (float) (Math.log(8.0) / Math.log(2.0));
-    private final RtLookPackage look;
     private Settings settings;
     private GpuImage image;
     private GpuBuffer histogram;
     private GpuBuffer state;
-    private ReadbackSlot[] stateReadbacks;
-    private int stateReadbackIndex = -1;
-    private ReadbackSlot pendingStateReadback;
+    private RtExposureReadbacks<GpuBuffer> stateReadbacks;
+    private RtExposureReadbacks<GpuBuffer>.Reservation pendingStateReadback;
+    private boolean stateReadbackRecorded;
+    private long completedFrameId = -1;
     private ExposureStateData completedState;
     private RtExposurePipeline pipeline;
     private boolean logged;
     private long lastFrameNanos;
-    private String cachedCurveSpec;
-    private ExposureCurve cachedCurve;
     private boolean resetRequested = true;
     private int resetSequence;
-    /** This frame's latched pre-exposure; see {@link #beginFrame(GraphicsQueue.GraphicsUseWaiter, long)}. */
+    /** This frame's latched pre-exposure; see {@link #beginFrame(GraphicsUse, long)}. */
     private float framePreExposure = 1.0f;
     private long frameId;
 
-    private static final int STATE_READBACK_RING = 6;
+    private static final int STATE_READBACK_SLOTS = 6;
 
     public record Settings(String mode, float manualEv, float key,
             float adaptDarken, float adaptBrighten, float lowPercentile, float highPercentile,
@@ -61,26 +58,12 @@ public final class RtExposure {
             boolean preExposure, float gamma) {
     }
 
-    public RtExposure(RtLookPackage look, Settings settings) {
-        this.look = Objects.requireNonNull(look, "look");
+    public RtExposure(Settings settings) {
         this.settings = Objects.requireNonNull(settings, "settings");
     }
 
     public void configure(Settings settings) {
         this.settings = Objects.requireNonNull(settings, "settings");
-    }
-
-    private static final class ReadbackSlot {
-        final GpuBuffer buffer;
-        final GraphicsQueue.TrackedGraphicsUse graphicsUse = new GraphicsQueue.TrackedGraphicsUse();
-        boolean valid;
-        int resetSequence;
-        long frameId;
-        float preExposure;
-
-        ReadbackSlot(GpuBuffer buffer) {
-            this.buffer = buffer;
-        }
     }
 
     public GpuImage image() {
@@ -122,7 +105,7 @@ public final class RtExposure {
         float pre = preExposure();
         float absolute = pre * residualExposure;
         if (currentMode != Mode.AUTO || state == null || state.mapped() == 0L) {
-            float ev = manualEv();
+            float ev = settings.manualEv();
             return new CaptureMetadata(pre, residualExposure, absolute, currentMode.configName,
                     Float.NaN, ev, ev);
         }
@@ -146,21 +129,21 @@ public final class RtExposure {
         }
         if (mode() == Mode.AUTO) {
             if (stateReadbacks == null) {
-                ReadbackSlot[] created = new ReadbackSlot[STATE_READBACK_RING];
+                var created = new java.util.ArrayList<GpuBuffer>(STATE_READBACK_SLOTS);
                 try {
-                    for (int i = 0; i < created.length; i++) {
-                        created[i] = new ReadbackSlot(ctx.createReadbackBuffer(
+                    for (int i = 0; i < STATE_READBACK_SLOTS; i++) {
+                        created.add(ctx.createReadbackBuffer(
                                 ExposureStateData.BYTE_SIZE, "exposure state readback " + i));
                     }
                 } catch (Throwable t) {
-                    for (ReadbackSlot slot : created) {
-                        if (slot != null) {
-                            slot.buffer.destroy();
-                        }
-                    }
+                    created.forEach(GpuBuffer::destroy);
                     throw t;
                 }
-                stateReadbacks = created;
+                stateReadbacks = new RtExposureReadbacks<>(created, buffer -> {
+                    buffer.invalidate();
+                    return ExposureStateData.read(MemoryUtil.memByteBuffer(
+                            buffer.mapped(), ExposureStateData.BYTE_SIZE).order(ByteOrder.nativeOrder()));
+                }, buffer -> ctx.deferDestroy(buffer::destroy));
             }
             if (histogram == null) {
                 // Separate ordinary-surface/sky/emissive histograms let resolve enforce both
@@ -185,7 +168,7 @@ public final class RtExposure {
             recordAuto(ctx, cmd, stack, traceColor, guideDepth, guideAlbedo);
             return;
         }
-        try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure manual write")) {
+        try (var ignored = RtDebugLabels.scope(ctx, cmd, "exposure manual write")) {
             VkClearColorValue color = VkClearColorValue.calloc(stack);
             // Residual, not absolute: raygen already applied preExposure (which in manual mode IS
             // manualExposureScale, making this exactly 1.0). See preExposure().
@@ -211,9 +194,7 @@ public final class RtExposure {
             state = null;
         }
         if (stateReadbacks != null) {
-            for (ReadbackSlot slot : stateReadbacks) {
-                slot.buffer.destroy();
-            }
+            stateReadbacks.close();
             stateReadbacks = null;
         }
         if (image != null) {
@@ -222,8 +203,9 @@ public final class RtExposure {
         }
         resetRequested = true;
         resetSequence = 0;
-        stateReadbackIndex = -1;
         pendingStateReadback = null;
+        stateReadbackRecorded = false;
+        completedFrameId = -1;
         completedState = null;
         framePreExposure = 1.0f;
     }
@@ -231,7 +213,7 @@ public final class RtExposure {
     // Manual mode's exposure scale, also used as the auto-history seed (resetAutoHistory) so the very
     // first auto-exposure frame starts from the dialed-in EV bias instead of a bare 1.0.
     private float manualExposureScale() {
-        return Math.clamp((float) Math.pow(2.0, manualEv()), 1.0e-8f, 1.0e8f);
+        return Math.clamp((float) Math.pow(2.0, settings.manualEv()), 1.0e-8f, 1.0e8f);
     }
 
     private void recordAuto(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
@@ -239,7 +221,7 @@ public final class RtExposure {
         if (pipeline == null || histogram == null || state == null) {
             throw new IllegalStateException("RT auto exposure resources not created");
         }
-        try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure histogram clear")) {
+        try (var ignored = RtDebugLabels.scope(ctx, cmd, "exposure histogram clear")) {
             VK10.vkCmdFillBuffer(cmd, histogram.handle(), 0, histogram.size(), 0);
         }
         VulkanBarriers.memoryBarrier(cmd, stack);
@@ -274,7 +256,20 @@ public final class RtExposure {
         VkBufferCopy2.Buffer copy = VkBufferCopy2.calloc(1, stack);
         copy.get(0).sType$Default().srcOffset(0L).dstOffset(0L).size(ExposureStateData.BYTE_SIZE);
         VK13.vkCmdCopyBuffer2(cmd, VkCopyBufferInfo2.calloc(stack).sType$Default()
-                .srcBuffer(state.handle()).dstBuffer(pendingStateReadback.buffer.handle()).pRegions(copy));
+                .srcBuffer(state.handle()).dstBuffer(pendingStateReadback.buffer().handle()).pRegions(copy));
+        VkBufferMemoryBarrier2.Buffer toHost = VkBufferMemoryBarrier2.calloc(1, stack);
+        toHost.get(0).sType$Default()
+                .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
+                .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_HOST_BIT)
+                .dstAccessMask(VK13.VK_ACCESS_2_HOST_READ_BIT)
+                .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                .buffer(pendingStateReadback.buffer().handle())
+                .offset(0L).size(ExposureStateData.BYTE_SIZE);
+        VK14.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack)
+                .sType$Default().pBufferMemoryBarriers(toHost));
+        stateReadbackRecorded = true;
     }
 
     /** Attach the readback copy only after the command buffer has been accepted for frame submission. */
@@ -282,16 +277,15 @@ public final class RtExposure {
         if (pendingStateReadback == null) {
             return;
         }
-        pendingStateReadback.resetSequence = resetSequence;
-        pendingStateReadback.frameId = frameId;
-        pendingStateReadback.preExposure = framePreExposure;
-        pendingStateReadback.valid = true;
-        pendingStateReadback.graphicsUse.mark(graphicsUse);
+        if (stateReadbackRecorded) {
+            var slot = pendingStateReadback;
+            long submittedFrame = frameId;
+            float submittedPreExposure = framePreExposure;
+            int submittedResetSequence = resetSequence;
+            graphicsUse.whenSubmitted(() -> slot.submitted(
+                    submittedFrame, submittedPreExposure, submittedResetSequence));
+        }
         pendingStateReadback = null;
-    }
-
-    private static String fmt(float v) {
-        return String.format(java.util.Locale.ROOT, "%.2f", v);
     }
 
     /** Latest completed controller values for the optional F3 exposure entry. */
@@ -300,7 +294,7 @@ public final class RtExposure {
             return null;
         }
         if (mode() != Mode.AUTO) {
-            return String.format(java.util.Locale.ROOT, "Exposure: manual %s EV", fmt(manualEv()));
+            return String.format(java.util.Locale.ROOT, "Exposure: manual %.2f EV", settings.manualEv());
         }
         ExposureStateData snapshot = completedState;
         if (snapshot == null) {
@@ -312,8 +306,8 @@ public final class RtExposure {
         AutoConfig cfg = autoConfig();
         String clamp = evTarget <= cfg.minEv() + 0.01f ? " (min clamp)"
                 : evTarget >= cfg.maxEv() - 0.01f ? " (max clamp)" : "";
-        return String.format(java.util.Locale.ROOT, "Exposure: EV100 %s, applied %s EV%s",
-                fmt(evScene), fmt(evApplied), clamp);
+        return String.format(java.util.Locale.ROOT, "Exposure: EV100 %.2f, applied %.2f EV%s",
+                evScene, evApplied, clamp);
     }
 
     private float frameTimeSeconds() {
@@ -328,11 +322,8 @@ public final class RtExposure {
         if (state == null || state.mapped() == 0L) {
             return;
         }
-        // Under physical units this seed can be ~15 EV off for an auto-mode daylight scene, since
-        // manual-ev defaults to 0. That is a two-frame transient, not a bug: initialized == 0 makes the
-        // resolve snap to its computed target rather than smooth toward it, and the frame after that
-        // meters against a preExposure derived from it. Deliberately not special-cased -- a seed that
-        // guessed at scene brightness would be a second, unowned exposure model.
+        // The uninitialized state makes resolve snap to its computed target. Pre-exposure adopts that
+        // result once readback completes; the residual multiplier corrects the prediction until then.
         new ExposureStateData(
                 manualExposureScale(), 0,
                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0,
@@ -357,29 +348,25 @@ public final class RtExposure {
                 + ", centerWeight=" + autoConfig.centerWeightSigma + "/" + autoConfig.centerWeightFloor
                 + ", skyCap=" + autoConfig.skyWeightCap
                 + ", emissiveCap=" + autoConfig.emissiveWeightCap
-                + ", curve=" + look.exposure().curve() + ")"
+                + ")"
                 : Float.toString(manualExposureScale());
         LOGGER.info("RT display exposure: mode={}, exposure={}, "
-                        + "tonemap=aces2.0(lookPackage={},gamma={}), DLSS-RR pre-exposure=renderer",
-                mode.configName, exposureText, look.id(), settings.gamma());
+                        + "tonemap=aces2.0(gamma={}), DLSS-RR pre-exposure=renderer",
+                mode.configName, exposureText, settings.gamma());
     }
 
     private Mode mode() {
         return Mode.parse(settings.mode());
     }
 
-    private float manualEv() {
-        return settings.manualEv();
-    }
-
     private AutoConfig autoConfig() {
         return new AutoConfig(
                 settings.key(),
-                look.exposure().minEv(),
-                look.exposure().maxEv(),
+                -15.0f,
+                -2.0f,
                 settings.adaptDarken(),
                 settings.adaptBrighten(),
-                manualEv(),
+                settings.manualEv(),
                 settings.lowPercentile(),
                 settings.highPercentile(),
                 settings.stride(),
@@ -387,7 +374,6 @@ public final class RtExposure {
                 settings.centerWeightFloor(),
                 settings.skyWeightCap(),
                 settings.emissiveWeightCap(),
-                curveConfig(),
                 preExposure(),
                 resetSequence);
     }
@@ -401,7 +387,7 @@ public final class RtExposure {
      * different points in CPU time. The completed readback can be several frames old, so latching once
      * ensures both consumers use one prediction; the residual absorbs whatever it failed to predict.
      */
-    public void beginFrame(GraphicsQueue.GraphicsUseWaiter graphicsUseWaiter, long frameId) {
+    public void beginFrame(GraphicsUse graphicsUse, long frameId) {
         this.frameId = frameId;
         Mode currentMode = mode();
         boolean reset = currentMode == Mode.AUTO && resetRequested;
@@ -413,21 +399,21 @@ public final class RtExposure {
         }
 
         pendingStateReadback = null;
+        stateReadbackRecorded = false;
         if (currentMode == Mode.AUTO && stateReadbacks != null) {
-            stateReadbackIndex = (stateReadbackIndex + 1) % stateReadbacks.length;
-            ReadbackSlot slot = stateReadbacks[stateReadbackIndex];
-            graphicsUseWaiter.await(slot.graphicsUse);
-            if (slot.valid && slot.resetSequence == resetSequence) {
-                slot.buffer.invalidate();
-                completedState = ExposureStateData.read(MemoryUtil.memByteBuffer(
-                        slot.buffer.mapped(), ExposureStateData.BYTE_SIZE).order(ByteOrder.nativeOrder()));
-                ExposureEvent.record(slot.frameId, frameId, slot.preExposure, slot.resetSequence, completedState);
+            var feedback = stateReadbacks.latest(resetSequence);
+            if (feedback != null && feedback.frameId() > completedFrameId) {
+                completedFrameId = feedback.frameId();
+                completedState = feedback.state();
+                ExposureEvent.record(feedback.frameId(), frameId, feedback.preExposure(),
+                        feedback.resetSequence(), completedState);
             }
-            pendingStateReadback = slot;
+            pendingStateReadback = stateReadbacks.acquire();
+            if (pendingStateReadback != null) graphicsUse.keepAlive(pendingStateReadback);
         }
 
         // On a reset frame the previous scene's exposure is a poor storage-scale prediction. Unity is
-        // neutral and the resolve removes it exactly; subsequent frames resume last-frame prediction.
+        // neutral and the resolve removes it exactly; subsequent frames use completed feedback.
         framePreExposure = reset ? 1.0f : computePreExposure();
         if (currentMode == Mode.MANUAL) {
             ExposureEvent.recordManual(frameId, framePreExposure, manualExposureScale());
@@ -446,7 +432,7 @@ public final class RtExposure {
      *
      * <p>Correctness does not depend on this being <em>current</em> — the display pass divides by
      * exactly the same latched value, so any pre-exposure cancels algebraically. Staleness only
-     * affects how well-centred the stored values are, which is why last frame's readback is fine and
+     * affects how well-centred the stored values are, which is why completed feedback is sufficient and
      * no fence is needed. 1.0 disables the mechanism.
      */
     public float preExposure() {
@@ -465,10 +451,8 @@ public final class RtExposure {
         if (completedState == null) {
             return 1.0f;
         }
-        // Deliberately NOT Exposure.clampScale: its 1e-4 floor is a bound on the artistic exposure
-        // multiplier, and physical units put noon at ~3e-5 absolute, which that floor would
-        // truncate -- silently de-centring exactly the case pre-exposure exists to handle. The
-        // controller's own minEv/maxEv already bound this value; here we only reject garbage.
+        // The controller's EV limits already bound this scale. Bright scenes need values below 1e-4,
+        // so preserve every positive finite prediction without an additional exposure floor.
         float previous = completedState.previous();
         return Float.isFinite(previous) && previous > 0.0f ? previous : 1.0f;
     }
@@ -486,7 +470,7 @@ public final class RtExposure {
                       float lowPercentile, float highPercentile, int stride,
                       float centerWeightSigma, float centerWeightFloor, float skyWeightCap,
                       float emissiveWeightCap,
-                      ExposureCurve curve, float preExposure, int resetSequence) {
+                      float preExposure, int resetSequence) {
         /**
          * Offset taking the resolve's {@code log2(metered stored luminance)} to EV100. The metered
          * buffer holds {@code L * preExposure}, so the pre-exposure has to come back out before the
@@ -494,114 +478,6 @@ public final class RtExposure {
          */
         float evOffset() {
             return EV100_OFFSET - (float) (Math.log(Math.max(preExposure, 1.0e-12f)) / Math.log(2.0));
-        }
-    }
-
-    private ExposureCurve curveConfig() {
-        String spec = look.exposure().curve();
-        if (cachedCurve != null && Objects.equals(cachedCurveSpec, spec)) {
-            return cachedCurve;
-        }
-        ExposureCurve parsed;
-        try {
-            parsed = parseCurve(spec);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("Invalid exposure curve in look package '"
-                    + look.id() + "': " + spec, e);
-        }
-        cachedCurveSpec = spec;
-        cachedCurve = parsed;
-        return parsed;
-    }
-
-    static ExposureCurve parseCurve(String spec) {
-        if (spec == null) {
-            throw new IllegalArgumentException("curve is null");
-        }
-        if ("full".equalsIgnoreCase(spec.trim())) {
-            return new ExposureCurve(-6.0f, 0.0f, -3.0f, 0.0f, 0.0f, 0.0f, 4.0f, 0.0f);
-        }
-        String[] encodedPoints = spec.split(",");
-        if (encodedPoints.length != 4) {
-            throw new IllegalArgumentException("expected exactly four scene:compensation points");
-        }
-        float[] scene = new float[4];
-        float[] compensation = new float[4];
-        for (int i = 0; i < encodedPoints.length; i++) {
-            String[] pair = encodedPoints[i].trim().split(":", -1);
-            if (pair.length != 2) {
-                throw new IllegalArgumentException("point " + (i + 1) + " is not scene:compensation");
-            }
-            try {
-                scene[i] = Float.parseFloat(pair[0].trim());
-                compensation[i] = Float.parseFloat(pair[1].trim());
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("point " + (i + 1) + " contains a non-number", e);
-            }
-            if (!Float.isFinite(scene[i]) || !Float.isFinite(compensation[i])) {
-                throw new IllegalArgumentException("point " + (i + 1) + " is not finite");
-            }
-        }
-        // Four elements: insertion sort avoids a temporary point-object list.
-        for (int i = 1; i < 4; i++) {
-            float sceneValue = scene[i];
-            float compensationValue = compensation[i];
-            int j = i - 1;
-            while (j >= 0 && scene[j] > sceneValue) {
-                scene[j + 1] = scene[j];
-                compensation[j + 1] = compensation[j];
-                j--;
-            }
-            scene[j + 1] = sceneValue;
-            compensation[j + 1] = compensationValue;
-        }
-        for (int i = 1; i < 4; i++) {
-            if (scene[i] - scene[i - 1] < 1.0e-4f) {
-                throw new IllegalArgumentException("scene EV points must be distinct");
-            }
-        }
-        return new ExposureCurve(scene[0], compensation[0], scene[1], compensation[1],
-                scene[2], compensation[2], scene[3], compensation[3]);
-    }
-
-    record ExposureCurve(float scene0, float compensation0, float scene1, float compensation1,
-                         float scene2, float compensation2, float scene3, float compensation3) {
-        float compensationAt(float sceneEv) {
-            if (sceneEv <= scene0) {
-                return compensation0;
-            }
-            if (sceneEv < scene1) {
-                return interpolate(sceneEv, scene0, compensation0, scene1, compensation1);
-            }
-            if (sceneEv < scene2) {
-                return interpolate(sceneEv, scene1, compensation1, scene2, compensation2);
-            }
-            if (sceneEv < scene3) {
-                return interpolate(sceneEv, scene2, compensation2, scene3, compensation3);
-            }
-            return compensation3;
-        }
-
-        float effectiveSlopeAt(float sceneEv) {
-            if (sceneEv <= scene0 || sceneEv >= scene3) {
-                return 1.0f;
-            }
-            if (sceneEv < scene1) {
-                return 1.0f - slope(scene0, compensation0, scene1, compensation1);
-            }
-            if (sceneEv < scene2) {
-                return 1.0f - slope(scene1, compensation1, scene2, compensation2);
-            }
-            return 1.0f - slope(scene2, compensation2, scene3, compensation3);
-        }
-
-        private static float interpolate(float x, float x0, float y0, float x1, float y1) {
-            float t = (x - x0) / (x1 - x0);
-            return y0 + t * (y1 - y0);
-        }
-
-        private static float slope(float x0, float y0, float x1, float y1) {
-            return (y1 - y0) / (x1 - x0);
         }
     }
 

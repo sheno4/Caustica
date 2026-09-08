@@ -64,14 +64,7 @@ public final class RtToneLut {
 
     /** Loads a display-transform resource from {@code /caustica/color/luts/}. */
     public static RtToneLut load(VulkanDeviceContext ctx, String resourceName) {
-        return loadResource(ctx, "/caustica/color/luts/" + resourceName);
-    }
-
-    /** Loads an absolute classpath LUT resource, including an LMT owned by a look package. */
-    public static RtToneLut loadResource(VulkanDeviceContext ctx, String path) {
-        if (path == null || !path.startsWith("/")) {
-            throw new IllegalArgumentException("LUT resource path must be absolute: " + path);
-        }
+        String path = "/caustica/color/luts/" + resourceName;
         ByteBuffer data = readResource(path).order(ByteOrder.LITTLE_ENDIAN);
         int magic = data.getInt(0);
         if (magic != MAGIC) {

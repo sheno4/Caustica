@@ -10,8 +10,6 @@ import display_common;
 
 [[vk::push_constant]] DebugPresentPush pc;
 
-static const float3 ACESCG_LUMA = float3(0.27222872, 0.67408177, 0.05368952);
-
 // OCIO cg-config-v4.0.0 ACES 2.0: ACEScg/AP1/D60 to Linear Rec.709/D65. Debug guide colors cross
 // back to the rgba8 target here; semantic debug colors (normal, depth, motion, weight) are already
 // authored as literal sRGB code values and bypass this conversion.
@@ -57,13 +55,9 @@ float3 exposureFalseColor(float ev) {
     return float3(1.00, 1.00, 1.00);
 }
 
-// Exactly the metering weight used by the histogram: local Gaussian centre weighting multiplied by
-// the same frame-global sky/emissive scale computed by resolve from separate populations.
+// Histogram metering weight before fixed-point quantization, including resolve's population scales.
 float meteringWeight(float2 uv, float depth, bool emissive) {
-    float2 centered = uv * 2.0 - 1.0;
-    float sigma = max(pc.centerWeightSigma, 0.01);
-    float gaussian = exp(-0.5 * dot(centered, centered) / (sigma * sigma));
-    float centerWeight = lerp(clamp(pc.centerWeightFloor, 0.0, 1.0), 1.0, gaussian);
+    float centerWeight = exposureCenterWeight(uv, pc.centerWeightSigma, pc.centerWeightFloor);
     DevicePtr<ExposureState> exposureState = DevicePtr<ExposureState>(pc.exposureStateAddress);
     float populationWeight = depth <= 1.0e-6 ? exposureState[0].meteringSkyScale
             : (emissive ? exposureState[0].meteringEmissiveScale : 1.0);

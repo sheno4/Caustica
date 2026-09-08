@@ -8,7 +8,6 @@ import display_common;
 static const float LOG_MIN = -12.0;
 static const float LOG_MAX = 12.0;
 static const float INV_LOG_RANGE = 1.0 / (LOG_MAX - LOG_MIN);
-static const float3 ACESCG_LUMA = float3(0.27222872, 0.67408177, 0.05368952);
 
 // One 16x16 workgroup == 256 threads == one thread per luminance bin. Each thread initializes and
 // flushes all three population bins. Per-pixel atomics stay in shared memory; only non-empty bins
@@ -22,9 +21,10 @@ void main(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupInde
     [format("r32f")] RWTexture2D<float> depthImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.depthImageIndex)];
     [format("rgba16f")] RWTexture2D<float4> albedoImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.albedoImageIndex)];
     DevicePtr<uint> histBins = DevicePtr<uint>(pc.histogramAddress);
-    localBins[groupIndex] = 0u;
-    localBins[256u + groupIndex] = 0u;
-    localBins[512u + groupIndex] = 0u;
+    [unroll]
+    for (uint offset = 0u; offset < 768u; offset += 256u) {
+        localBins[offset + groupIndex] = 0u;
+    }
     GroupMemoryBarrierWithGroupSync();
 
     int2 pix = int2(dispatchId.xy * pc.stride);
@@ -42,10 +42,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupInde
             uint bin = min(uint(floor((logLum - LOG_MIN) * INV_LOG_RANGE * 256.0)), 255u);
 
             float2 uv = (float2(pix) + 0.5) / float2(w, h);
-            float2 centered = uv * 2.0 - 1.0;
-            float sigma = max(pc.centerWeightSigma, 0.01);
-            float gaussian = exp(-0.5 * dot(centered, centered) / (sigma * sigma));
-            float weight = lerp(clamp(pc.centerWeightFloor, 0.0, 1.0), 1.0, gaussian);
+            float weight = exposureCenterWeight(uv, pc.centerWeightSigma, pc.centerWeightFloor);
             uint fixedWeight = uint(round(weight * 256.0));
 
             uint depthW, depthH;
@@ -63,19 +60,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupInde
     }
 
     GroupMemoryBarrierWithGroupSync();
-    uint surfaceCount = localBins[groupIndex];
-    if (surfaceCount > 0u) {
-        uint unusedSurface;
-        InterlockedAdd(histBins[groupIndex], surfaceCount, unusedSurface);
-    }
-    uint skyCount = localBins[256u + groupIndex];
-    if (skyCount > 0u) {
-        uint unusedSky;
-        InterlockedAdd(histBins[256u + groupIndex], skyCount, unusedSky);
-    }
-    uint emissiveCount = localBins[512u + groupIndex];
-    if (emissiveCount > 0u) {
-        uint unusedEmissive;
-        InterlockedAdd(histBins[512u + groupIndex], emissiveCount, unusedEmissive);
+    [unroll]
+    for (uint offset = 0u; offset < 768u; offset += 256u) {
+        uint bin = offset + groupIndex;
+        uint count = localBins[bin];
+        if (count > 0u) {
+            uint unused;
+            InterlockedAdd(histBins[bin], count, unused);
+        }
     }
 }

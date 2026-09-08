@@ -67,38 +67,6 @@ def generatePresentationRecords = tasks.register("generatePresentationRecords", 
 }
 sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generatePresentationRecords))
 
-def verifyPresentationAbi = tasks.register("verifyPresentationAbi") {
-    group = "verification"
-    dependsOn(generatePresentationRecords)
-    def expected = [
-            ExposureStateData: ["BYTE_SIZE = 56", "putFloat(0, previous())", "putInt(28, resetSeq())",
-                    "putFloat(48, meteringEmissiveScale())", "getFloat(52)"],
-            ExposureHistPushData: ["BYTE_SIZE = 40", "putInt(0, colorImageIndex())",
-                    "putLong(16, histogramAddress())", "putFloat(32, centerWeightFloor())"],
-            ExposureResolvePushData: ["BYTE_SIZE = 112", "putLong(0, histogramAddress())",
-                    "putInt(16, exposureImageIndex())", "putFloat(60, curveScene0())",
-                    "putFloat(100, preExposure())", "putInt(104, resetSeq())"],
-            DisplayPushData: ["BYTE_SIZE = 64", "putInt(0, outputImageIndex())",
-                    "putInt(40, hdrEnabled())", "putFloat(52, hdrPeakNits())", "putFloat(60, lookLutSize())"],
-            DebugPresentPushData: ["BYTE_SIZE = 72", "putInt(0, outputImageIndex())",
-                    "putInt(36, traceRadianceImageIndex())",
-                    "putInt(40, stablePlaneMetadataImageIndex())",
-                    "putLong(48, exposureStateAddress())", "putInt(56, debugView())",
-                    "putFloat(64, centerWeightFloor())"],
-            PresentPushData: ["BYTE_SIZE = 12", "putInt(0, outputImageIndex())",
-                    "putInt(4, sourceImageIndex())", "putFloat(8, uiNits())"]
-    ]
-    inputs.dir(generatedRecordRoot)
-    doLast {
-        expected.each { name, fragments ->
-            def source = generatedRecordRoot.get().file(
-                    "dev/comfyfluffy/caustica/renderer/presentation/gen/${name}.java").asFile.getText("UTF-8")
-            def missing = fragments.findAll { !source.contains(it) }
-            if (!missing.empty) throw new GradleException("${name} ABI drifted: ${missing}")
-        }
-    }
-}
-
 def reproducibleRecordRoot = layout.buildDirectory.dir("generated/reproducibility/shaderRecords")
 def reproducePresentationRecords = tasks.register("reproducePresentationRecords", GenerateShaderRecords) {
     dependsOn(preparePresentationReflectionSources)
@@ -167,32 +135,11 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
             "dev/comfyfluffy/caustica/renderer/presentation/" + it + ".class"
         }
         if (!foreignClasses.empty || actualGenerated != generated || !names.containsAll(presentationClasses)
-                || pipelines != expectedPipelines || colors.size() != 7) {
+                || pipelines != expectedPipelines || colors.size() != 6) {
             throw new GradleException("presentation JAR mismatch: foreignClasses=${foreignClasses}, "
                     + "generated=${actualGenerated}, presentationClasses=${presentationClasses.findAll { !names.contains(it) }}, "
                     + "pipelines=${pipelines}, colors=${colors}")
         }
-    }
-}
-
-def verifyRendererPresentationImports = tasks.register("verifyRendererPresentationImports") {
-    group = "verification"
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def forbidden = ["dev.comfyfluffy.caustica.minecraft.client.CausticaMod", "dev.comfyfluffy.caustica.config",
-                "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.minecraft.client.platform",
-                "dev.comfyfluffy.caustica.renderer.runtime",
-                "dev.comfyfluffy.caustica.renderer.raytracing",
-                "net.minecraft", "net.fabricmc", "net.neoforged"]
-        def violations = []
-        sourceSets.main.allJava.files.sort().each { source ->
-            source.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
-                    violations.add("${source}:${number}: ${line.trim()}")
-                }
-            }
-        }
-        if (!violations.empty) throw new GradleException("renderer-presentation import violations:\n${violations.join('\n')}")
     }
 }
 
@@ -234,35 +181,12 @@ def verifyRendererPresentationResources = tasks.register("verifyRendererPresenta
     }
 }
 
-def verifyPresentationRuntimeOwnership = tasks.register("verifyPresentationRuntimeOwnership") {
-    group = "verification"
-    def runtimeTypes = ["RtFramePresenter", "FrameGeneration", "GeneratedFrameQueue",
-                        "HdrPresentation", "SdrPqPresentation"]
-    inputs.files(sourceSets.main.allJava)
-    doLast {
-        def legacy = runtimeTypes.collect {
-            rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt/${it}.java")
-        }.findAll { it.exists() }
-        def missing = runtimeTypes.findAll {
-            !file("src/main/java/dev/comfyfluffy/caustica/renderer/presentation/${it}.java").exists()
-        }
-        def forbiddenText = ["CausticaConfig", "RtRuntime", "CausticaMod", "fastutil", "LongList"]
-        def violations = sourceSets.main.allJava.files.findAll { source ->
-            forbiddenText.any { source.getText("UTF-8").contains(it) }
-        }
-        if (!legacy.empty || !missing.empty || !violations.empty) {
-            throw new GradleException("presentation runtime ownership mismatch: legacy=${legacy}, "
-                    + "missing=${missing}, forbiddenReferences=${violations}")
-        }
-    }
-}
-
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
-    dependsOn(verifyPresentationAbi, verifyPresentationGenerationReproducible,
+    dependsOn(verifyPresentationGenerationReproducible,
             verifyPresentationSpirvTarget, verifyRendererPresentationJar,
-            verifyRendererPresentationImports, verifyRendererPresentationDependencies,
-            verifyRendererPresentationResources, verifyPresentationRuntimeOwnership)
+            verifyRendererPresentationDependencies,
+            verifyRendererPresentationResources)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 java {

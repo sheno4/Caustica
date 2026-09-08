@@ -9,8 +9,8 @@ import bake_display_lut as baker
 
 
 class BakedLookResourceTest(unittest.TestCase):
-    def test_default_package_lmt_has_expected_header_and_finite_payload(self):
-        path = baker.LOOK_PACKAGE_DIR / "lmt.bin"
+    def test_lmt_has_expected_header_and_finite_payload(self):
+        path = baker.OUT_DIR / "lmt.bin"
         data = path.read_bytes()
         magic, version, size, lo_stops, hi_stops = struct.unpack_from("<4sIIff", data)
         self.assertEqual(magic, b"CLUT", path)

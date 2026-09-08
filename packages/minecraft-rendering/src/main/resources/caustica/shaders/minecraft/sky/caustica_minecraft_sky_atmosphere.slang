@@ -444,7 +444,7 @@ public ScatteringResult integrateScatteredLuminance(
 
 /**
  * World direction of a celestial body from Minecraft's own eased angle (EnvironmentAttributes.SUN_ANGLE /
- * MOON_ANGLE, radians) and the look package's noon tilt toward south. Angle 0 puts the body at its
+ * MOON_ANGLE, radians) and the configured noon tilt toward south. Angle 0 puts the body at its
  * highest point. Matches vanilla's arc: east-west travel, tilted toward +Z at its peak.
  */
 public float3 celestialDirection(float angleRad, float noonTiltRad) {
@@ -538,7 +538,7 @@ public struct SkyState {
     public float  sunDiscHalfAngle;    // drawn size, decoupled from the physical radius
     public float  moonDiscHalfAngle;
     public float  starAngle;
-    public float  starLuminance;       // cd/m², MC's star brightness times the look package's anchor
+    public float  starLuminance;       // cd/m², MC's star brightness times the lighting calibration's anchor
     public float  airglowLuminance;    // cd/m², the real moonless-night floor (airglow + unresolved stars)
     public float  noonTilt;
     public float  groundAlbedo;
@@ -560,7 +560,7 @@ public SkyState skyState(SkyInputs push) {
     s.moonDir = celestialDirection(push.celestial.y, s.noonTilt);
     s.sunIlluminance = push.skyLook0.x;
     // A fixed floor plus the visible phase: a new moon still casts a little directional light, which is
-    // a gameplay decision the look package owns rather than an astronomical one.
+    // a gameplay calibration independent of the astronomical phase.
     float phaseFixed = push.skyLook1.w;
     s.moonIlluminance = push.skyLook0.y
             * (phaseFixed + (1.0 - phaseFixed) * moonLitFraction(push.skyLook2.w));

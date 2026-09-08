@@ -9,7 +9,6 @@ import java.util.Objects;
 
 /** Owns presentation pipelines, color state, and display-extent images. */
 public final class PresentationResources {
-    private final RtLookPackage look;
     private final RtExposure exposure;
     private RtDisplayPipeline displayPipeline;
     private RtDebugPresentPipeline debugPresentPipeline;
@@ -25,9 +24,8 @@ public final class PresentationResources {
     private int width = -1;
     private int height = -1;
 
-    public PresentationResources(RtLookPackage look, RtExposure.Settings exposureSettings) {
-        this.look = Objects.requireNonNull(look, "look");
-        this.exposure = new RtExposure(look, exposureSettings);
+    public PresentationResources(RtExposure.Settings exposureSettings) {
+        this.exposure = new RtExposure(exposureSettings);
     }
 
     public RtExposure exposure() { return exposure; }
@@ -67,7 +65,7 @@ public final class PresentationResources {
             hdrToneLut = replacement;
             loadedHdrLutNits = wantedHdrNits;
         }
-        if (lookLut == null) lookLut = RtToneLut.loadResource(context, look.lmtResource());
+        if (lookLut == null) lookLut = RtToneLut.load(context, "lmt.bin");
     }
 
     public boolean matches(int wantedWidth, int wantedHeight) {

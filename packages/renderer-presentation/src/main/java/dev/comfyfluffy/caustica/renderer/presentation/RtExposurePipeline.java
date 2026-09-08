@@ -46,7 +46,7 @@ final class RtExposurePipeline {
     void dispatchHistogram(VkCommandBuffer command, GpuImage color, GpuImage depth, GpuImage albedo,
                            GpuBuffer histogram, RtExposure.AutoConfig config) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command, "exposure histogram")) {
+             var ignored = RtDebugLabels.scope(context, command, "exposure histogram")) {
             ByteBuffer push = stack.malloc(ExposureHistPushData.BYTE_SIZE);
             new ExposureHistPushData(storage(color), storage(depth), storage(albedo),
                     histogram.deviceAddress().value(), config.stride(), config.centerWeightSigma(),
@@ -61,15 +61,14 @@ final class RtExposurePipeline {
     void dispatchResolve(VkCommandBuffer command, GpuBuffer histogram, GpuImage exposure,
                          GpuBuffer state, RtExposure.AutoConfig config, float frameTimeSeconds) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command, "exposure resolve")) {
-            RtExposure.ExposureCurve curve = config.curve();
+             var ignored = RtDebugLabels.scope(context, command, "exposure resolve")) {
+            // Four ordered scene-EV/compensation-EV knots shape the metered exposure response.
             ByteBuffer push = stack.malloc(ExposureResolvePushData.BYTE_SIZE);
             new ExposureResolvePushData(histogram.deviceAddress().value(), state.deviceAddress().value(), storage(exposure),
                     config.key(), config.minEv(), config.maxEv(), config.adaptDarken(), config.adaptBrighten(),
                     frameTimeSeconds, config.evBias(), config.lowPercentile(), config.highPercentile(),
-                    config.skyWeightCap(), curve.scene0(), curve.compensation0(), curve.scene1(),
-                    curve.compensation1(), curve.scene2(), curve.compensation2(), curve.scene3(),
-                    curve.compensation3(), config.emissiveWeightCap(), config.evOffset(), config.preExposure(),
+                    config.skyWeightCap(), -2.0f, -3.0f, 2.0f, -2.0f, 8.0f, 0.0f, 15.0f,
+                    1.0f, config.emissiveWeightCap(), config.evOffset(), config.preExposure(),
                     config.resetSequence()).write(push);
             resolveShader.dispatch(command, push, 1, 1, 1);
         }

@@ -1,13 +1,18 @@
-// Push-constant structs shared between the display-chain compute passes and
-// presentation_probe.slang's build-time reflection probe generates the matching Java records.
-// Each struct is imported into exactly one production shader AND probed here so its Java writer is
-// generated from the compiler's reflected offsets, preventing Java/shader ABI drift when fields move.
-//
-// Each struct here needs a distinct name because reflection JSON parameters are named by struct type across the whole
-// probe module, and per-entry-point SPIR-V allows only one push-constant block reachable from any
-// single entry point, so the probe needs one small dedicated entry point per struct.
+// Shared display-chain definitions. presentation_probe.slang generates matching Java records from
+// compiler-reflected layouts, with one entry point per push-constant type to satisfy SPIR-V's
+// single reachable push-constant block requirement.
 
 public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
+
+public static const float3 ACESCG_LUMA = float3(0.27222872, 0.67408177, 0.05368952);
+
+// Normalized image coordinates keep the metering profile independent of render resolution.
+public float exposureCenterWeight(float2 uv, float sigma, float floorWeight) {
+    float2 centered = uv * 2.0 - 1.0;
+    sigma = max(sigma, 0.01);
+    float gaussian = exp(-0.5 * dot(centered, centered) / (sigma * sigma));
+    return lerp(clamp(floorWeight, 0.0, 1.0), 1.0, gaussian);
+}
 
 public struct ExposureHistPush {
     public uint colorImageIndex;
@@ -26,9 +31,7 @@ public struct ExposureResolvePush {
     public float key;
     public float minEv;
     public float maxEv;
-    // Adaptation time constants, in seconds, applied in EV space (see exposure_resolve's smoothing
-    // step). Named for what the SCENE did, not for which way the exposure multiplier moved: a darkening
-    // scene needs MORE exposure, so adaptDarken is the branch where target > prev.
+    // EV-space adaptation time constants in seconds. A darkening scene requires increasing exposure.
     public float adaptDarken;
     public float adaptBrighten;
     public float frameTimeSeconds;
@@ -45,12 +48,9 @@ public struct ExposureResolvePush {
     public float curveScene3;
     public float curveCompensation3;
     public float emissiveWeightCap;
-    // evOffset takes log2(metered stored luminance) to EV100:
-    // EV100_OFFSET - log2(preExposure). preExposure is the scalar raygen already
-    // multiplied into the stored radiance (1.0 when pre-exposure is disabled), so the metered
-    // buffer holds L*preExposure and the resolve divides it back out to recover absolute scene EV --
-    // and to keep minEv/maxEv bounding ABSOLUTE exposure rather than the residual.
+    // EV100_OFFSET - log2(preExposure) converts log2 of stored luminance to absolute scene EV100.
     public float evOffset;
+    // Positive frame-latched multiplier already applied to the stored radiance; 1.0 disables it.
     public float preExposure;
     // resetSeq invalidates GPU exposure history without a host write or fence.
     public uint resetSeq;

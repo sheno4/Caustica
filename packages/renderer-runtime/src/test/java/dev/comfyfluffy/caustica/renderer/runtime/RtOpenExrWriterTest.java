@@ -28,7 +28,7 @@ final class RtOpenExrWriterTest {
                 9, 10, 11, 12,  13, 14, 15, 16);
         Path output = temp.resolve("capture.exr");
         RtOpenExrWriter.write(output, 2, 2, pixels, new RtOpenExrWriter.Metadata(
-                0.25f, 1.5f, 0.375f, "auto", 12.0f, -1.5f, -1.75f, "none", 42L));
+                0.25f, 1.5f, 0.375f, "auto", 12.0f, -1.5f, -1.75f, 42L));
 
         ByteBuffer file = ByteBuffer.wrap(Files.readAllBytes(output)).order(ByteOrder.LITTLE_ENDIAN);
         assertEquals(20_000_630, file.getInt());

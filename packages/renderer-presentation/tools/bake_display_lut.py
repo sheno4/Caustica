@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Bakes the RT renderer's ACES display-transform LUTs and imports its packaged LMT.
+"""Bakes the RT renderer's ACES display-transform LUTs and imports its LMT.
 
 The renderer feeds these LUTs scene-linear ACEScg (AP1/D60) radiance, already multiplied by the
-auto-exposure scalar (RtExposure). The default look package's scene-referred LMT runs first, followed by ACES
+auto-exposure scalar (RtExposure). The scene-referred LMT runs first, followed by ACES
 2.0 output transform, gamut mapping, tone scale, and display transfer function.
 
 One SDR LUT (BT.709, sRGB OETF) plus one HDR LUT per REC2020 mastering-nits target ACES 2.0 ships
 (500/1000/2000/4000 -- see HDR_REC2020_NITS). Hdr.PEAK_NITS selects one of the baked HDR LUTs.
-The package LMT is a separate log-to-log scene-referred table, so it does not duplicate all five
+The LMT is a separate log-to-log scene-referred table, so it does not duplicate all five
 output LUTs.
 
 Requires: pip install opencolorio numpy  (tested with opencolorio 2.5.2 / numpy 2.5.1, Python 3.14)
@@ -18,8 +18,7 @@ Usage:
 
 Regenerate whenever SHAPER_LO/HI, LUT_SIZE, or the OCIO config/view below changes. The baked
 .bin files are committed binary resources. The display transforms live in
-packages/renderer-presentation/src/main/resources/caustica/color/luts/; the sole LMT lives beside the
-default package JSON.
+packages/renderer-presentation/src/main/resources/caustica/color/luts/.
 """
 import argparse
 import hashlib
@@ -47,9 +46,6 @@ PRESENTATION_RESOURCES = (
     Path(__file__).resolve().parent.parent / "src/main/resources"
 )
 OUT_DIR = PRESENTATION_RESOURCES / "caustica/color/luts"
-LOOK_PACKAGE_DIR = (
-    PRESENTATION_RESOURCES / "caustica/color/looks/default"
-)
 
 # ACES 2.0's built-in BT.2020 transforms use these fixed HDR mastering targets.
 HDR_REC2020_NITS = [500, 1000, 2000, 4000]
@@ -201,7 +197,7 @@ def main() -> None:
         "--import-lmt",
         type=Path,
         metavar="PATH",
-        help="replace the default look package's LMT from a normalized log-shaper .cube, then exit",
+        help="replace the LMT from a normalized log-shaper .cube, then exit",
     )
     args = parser.parse_args()
 
@@ -213,7 +209,7 @@ def main() -> None:
             f"importing default-package LMT: {size}^3 normalized log-shaper cube"
             f"{f' ({title})' if title else ''}; source SHA-256={digest}"
         )
-        write_lut(LOOK_PACKAGE_DIR / "lmt.bin", size, rgb)
+        write_lut(OUT_DIR / "lmt.bin", size, rgb)
         return
 
     cfg = OCIO.Config.CreateFromBuiltinConfig(OCIO_BUILTIN_CONFIG)

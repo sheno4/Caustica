@@ -20,7 +20,6 @@ CAUSTICA_KEYS = (
     "causticaEvScene",
     "causticaEvTarget",
     "causticaEvApplied",
-    "causticaLookIntent",
     "causticaFrame",
 )
 

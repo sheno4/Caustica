@@ -127,21 +127,13 @@ void main() {
     }
 
     float avgLogLum = weightedCount > 0.0 ? weightedLogLum / weightedCount : 0.0;
-    // avgLogLum is log2 of the PRE-EXPOSED stored luminance. evScene is the absolute scene value on
-    // the EV100 scale used by the compensation curve's control points and diagnostics.
+    // Remove pre-exposure and convert stored log2 luminance to the curve's absolute EV100 scale.
     float evScene = avgLogLum + pc.evOffset;
     float compensation = curveCompensation(evScene);
     float effectiveSlope = curveEffectiveSlope(evScene);
-    // Residual: what the display pass must still multiply the stored (already pre-exposed) value by.
-    // Deriving it from avgLogLum rather than evScene is deliberate and exact -- stored * residual =
-    // key * 2^(evBias + compensation) regardless of preExposure, so the pre-exposure cancels.
+    // Stored luminance times this residual equals key * 2^(evBias + compensation).
     float residualTarget = pc.key * exp2(pc.evBias - avgLogLum + compensation);
-    // Clamp and smooth in ABSOLUTE exposure space. The residual is near 1.0 by construction (it is
-    // whatever preExposure failed to anticipate), so clamping or smoothing it would bound the wrong
-    // quantity and would fight preExposure drifting between frames.
-    // Fail safe, not to white: a non-positive/non-finite value here can only mean the push layout
-    // desynced, and clamping it to a tiny epsilon would divide the residual up to infinity and blow
-    // the whole frame out. 1.0 safely disables pre-exposure for this frame.
+    // Clamp and smooth absolute exposure so changes to frame pre-exposure do not disturb history.
     float preExposure = (isfinite(pc.preExposure) && pc.preExposure > 0.0) ? pc.preExposure : 1.0;
     float target = clamp(residualTarget * preExposure, exp2(pc.minEv), exp2(pc.maxEv));
 
@@ -153,15 +145,8 @@ void main() {
     }
     float prevEv = reset ? targetEv : log2(max(stateBuf[0].previous, 1.0e-12));
 
-    // Smooth in EV space, not in linear exposure space. Linear smoothing is
-    // wildly asymmetric for reasons that have nothing to do with the time constants: lerping toward a
-    // much LARGER target crosses most of the ratio in the first frame, while lerping toward a much
-    // SMALLER one decays through it geometrically. Measured in game, that made day->night snap in a
-    // frame and night->day take ~3.5s of white screen -- the exact opposite of how eyes work, and it
-    // survived any choice of adaptUp/adaptDown because the asymmetry was in the interpolation itself.
-    // In EV space a 15 EV swing takes the same 3.4*tau either way, so the time constants below are the
-    // only thing that sets the asymmetry, and they can express the real one: light adaptation is quick,
-    // dark adaptation is slow.
+    // EV-space smoothing gives equal relative convergence for brightening and darkening;
+    // the scene-specific time constants control adaptation asymmetry.
     float exposureEv = prevEv;
     if (!reset) {
         float deltaEv = targetEv - prevEv;
@@ -171,8 +156,7 @@ void main() {
     }
     float exposure = exp2(exposureEv);
 
-    // previous stays ABSOLUTE: it is both the smoothing history and the value RtExposure reads back
-    // to choose next frame's preExposure.
+    // Absolute exposure is both smoothing history and feedback for a later frame's pre-exposure.
     stateBuf[0].previous = exposure;
     stateBuf[0].initialized = 1u;
     stateBuf[0].evScene = evScene;
