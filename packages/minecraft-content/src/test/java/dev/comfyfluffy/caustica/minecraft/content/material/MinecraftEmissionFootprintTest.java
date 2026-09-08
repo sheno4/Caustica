@@ -4,8 +4,30 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 final class MinecraftEmissionFootprintTest {
+    @Test
+    void builderOmitsFootprintsWithoutCoverage() {
+        var builder = new MinecraftEmissionFootprint.Builder(4, 2, 2);
+        builder.add(0, 0, 1, 1, 1, 0);
+        assertNull(builder.build());
+    }
+
+    @Test
+    void normalizedCoordinatesClampToTheFootprint() {
+        var builder = new MinecraftEmissionFootprint.Builder(16, 1, 1);
+        builder.add(0, 0, 1, 1, 1, 1);
+        var footprint = builder.build();
+        assertEquals(16, footprint.resolution());
+        assertEquals(0, footprint.sampleIndex(-1));
+        assertEquals(0, footprint.sampleIndex(0));
+        assertEquals(8, footprint.sampleIndex(0.5f));
+        assertEquals(15, footprint.sampleIndex(0.999f));
+        assertEquals(15, footprint.sampleIndex(1));
+        assertEquals(15, footprint.sampleIndex(2));
+    }
+
     @Test
     void oneTexelCoversTheWholeFootprint() {
         var builder = new MinecraftEmissionFootprint.Builder(16, 1, 1);
