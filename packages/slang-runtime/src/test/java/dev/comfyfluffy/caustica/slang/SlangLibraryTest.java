@@ -233,12 +233,66 @@ final class SlangLibraryTest {
         MemorySegment session = library.createSession(runtime, List.of(sourceDirectory),
                 SlangLibrary.SESSION_WARNINGS_AS_ERRORS);
         try {
-            SlangCompilationException failure = assertThrows(SlangCompilationException.class,
-                    () -> library.compileSpecialized(session,
-                            "entry_engine", "main", "entry_pack", "EntryPack"));
-            assertTrue(failure.diagnostics().contains("must not define shader entry points"));
+            for (int attempt = 0; attempt < 2; attempt++) {
+                SlangCompilationException failure = assertThrows(SlangCompilationException.class,
+                        () -> library.compileSpecialized(session,
+                                "entry_engine", "main", "entry_pack", "EntryPack"));
+                assertTrue(failure.diagnostics().contains("must not define shader entry points"));
+            }
         } finally {
             library.destroySession(session);
+        }
+    }
+
+    @Test
+    void validatesCachedImplementationDependenciesWithoutPoisoningOtherModules(@TempDir Path directory)
+            throws Exception {
+        String[] declarations = {
+                "[shader(\"compute\")] [numthreads(1, 1, 1)] void forbidden() {}",
+                "RWStructuredBuffer<uint> forbidden;"
+        };
+        String[] diagnostics = {"must not define shader entry points", "must not declare global shader parameters"};
+        for (int kind = 0; kind < declarations.length; kind++) {
+            Path sourceDirectory = Files.createDirectory(directory.resolve(Integer.toString(kind)));
+            Files.writeString(sourceDirectory.resolve("pack_api.slang"), """
+                    module pack_api;
+                    public interface IPack { public uint value(); }
+                    """);
+            Files.writeString(sourceDirectory.resolve("bad_dependency.slang"),
+                    "module bad_dependency;\n" + declarations[kind]);
+            for (String name : List.of("first_pack", "second_pack", "good_pack")) {
+                Files.writeString(sourceDirectory.resolve(name + ".slang"), """
+                        module %s;
+                        import pack_api;
+                        %s
+                        public struct Pack : IPack { public uint value() { return 42u; } }
+                        """.formatted(name, name.equals("good_pack") ? "" : "import bad_dependency;"));
+            }
+            Files.writeString(sourceDirectory.resolve("pack_engine.slang"), """
+                    module pack_engine;
+                    import pack_api;
+                    RWStructuredBuffer<uint> output;
+                    [shader("compute")] [numthreads(1, 1, 1)]
+                    void main<T : IPack>(uint3 id : SV_DispatchThreadID) {
+                        T pack;
+                        output[id.x] = pack.value();
+                    }
+                    """);
+            MemorySegment session = library.createSession(runtime, List.of(sourceDirectory),
+                    SlangLibrary.SESSION_WARNINGS_AS_ERRORS);
+            try {
+                for (String name : List.of("first_pack", "first_pack", "second_pack")) {
+                    SlangCompilationException failure = assertThrows(SlangCompilationException.class,
+                            () -> library.compileSpecialized(session, "pack_engine", "main", name, "Pack"));
+                    assertTrue(failure.diagnostics().contains(diagnostics[kind]));
+                }
+                SlangCompileResult result = library.compileSpecialized(session,
+                        "pack_engine", "main", "good_pack", "Pack");
+                assertEquals(0x07230203,
+                        ByteBuffer.wrap(result.spirv()).order(ByteOrder.LITTLE_ENDIAN).getInt());
+            } finally {
+                library.destroySession(session);
+            }
         }
     }
 

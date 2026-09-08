@@ -8,6 +8,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 struct CausticaSlangBlob
@@ -152,6 +153,56 @@ SlangResult emit_component(
     }
 
     publish_diagnostics(diagnostics_text, out_diagnostics);
+    return SLANG_OK;
+}
+
+SlangResult validate_implementation(
+    slang::IEntryPoint* entry,
+    slang::IComponentType* composite,
+    slang::IModule* implementation,
+    std::string& diagnostics_text)
+{
+    // The pinned SDK exposes transitive dependencies on entry points and composites through this
+    // interface; querying an IModule directly returns an empty dependency list.
+    Slang::ComPtr<slang::IModulePrecompileService_Experimental> engine_dependencies;
+    Slang::ComPtr<slang::IModulePrecompileService_Experimental> dependencies;
+    SLANG_RETURN_ON_FAIL(entry->queryInterface(SLANG_IID_PPV_ARGS(engine_dependencies.writeRef())));
+    SLANG_RETURN_ON_FAIL(composite->queryInterface(SLANG_IID_PPV_ARGS(dependencies.writeRef())));
+
+    // The input components retain these modules throughout validation.
+    std::unordered_set<slang::IModule*> engine_modules;
+    for (SlangInt index = 0; index < engine_dependencies->getModuleDependencyCount(); ++index)
+    {
+        Slang::ComPtr<slang::IModule> module;
+        SLANG_RETURN_ON_FAIL(engine_dependencies->getModuleDependency(index, module.writeRef()));
+        engine_modules.insert(module.get());
+    }
+
+    for (SlangInt index = 0; index < dependencies->getModuleDependencyCount(); ++index)
+    {
+        Slang::ComPtr<slang::IModule> module;
+        SLANG_RETURN_ON_FAIL(dependencies->getModuleDependency(index, module.writeRef()));
+        // Engine dependencies own resource declarations; the selected implementation is never exempt.
+        if (module.get() != implementation && engine_modules.contains(module.get()))
+            continue;
+        if (module->getDefinedEntryPointCount() != 0)
+        {
+            diagnostics_text = std::string("Implementation module ") + module->getName()
+                + " must not define shader entry points";
+            return SLANG_FAIL;
+        }
+        Slang::ComPtr<slang::IBlob> diagnostics;
+        slang::ProgramLayout* layout = module->getLayout(0, diagnostics.writeRef());
+        append_diagnostics(diagnostics_text, diagnostics);
+        if (!layout)
+            return SLANG_FAIL;
+        if (layout->getParameterCount() != 0)
+        {
+            diagnostics_text = std::string("Implementation module ") + module->getName()
+                + " must not declare global shader parameters";
+            return SLANG_FAIL;
+        }
+    }
     return SLANG_OK;
 }
 }
@@ -409,7 +460,6 @@ int32_t caustica_slang_compile_specialized_entry_point(
             return SLANG_FAIL;
         }
 
-        const SlangInt first_implementation_module = session->session->getLoadedModuleCount();
         diagnostics.setNull();
         slang::IModule* implementation = session->session->loadModule(implementation_module,
             diagnostics.writeRef());
@@ -418,36 +468,6 @@ int32_t caustica_slang_compile_specialized_entry_point(
         {
             publish_diagnostics(diagnostics_text, out_diagnostics);
             return SLANG_FAIL;
-        }
-        const SlangInt loaded_module_count = session->session->getLoadedModuleCount();
-        for (SlangInt index = first_implementation_module; index < loaded_module_count; ++index)
-        {
-            slang::IModule* implementation_dependency = session->session->getLoadedModule(index);
-            if (implementation_dependency->getDefinedEntryPointCount() != 0)
-            {
-                diagnostics_text = std::string("Implementation module ")
-                    + implementation_dependency->getName()
-                    + " must not define shader entry points";
-                publish_diagnostics(diagnostics_text, out_diagnostics);
-                return SLANG_FAIL;
-            }
-            diagnostics.setNull();
-            slang::ProgramLayout* dependency_layout = implementation_dependency->getLayout(
-                0, diagnostics.writeRef());
-            append_diagnostics(diagnostics_text, diagnostics);
-            if (!dependency_layout)
-            {
-                publish_diagnostics(diagnostics_text, out_diagnostics);
-                return SLANG_FAIL;
-            }
-            if (dependency_layout->getParameterCount() != 0)
-            {
-                diagnostics_text = std::string("Implementation module ")
-                    + implementation_dependency->getName()
-                    + " must not declare global shader parameters";
-                publish_diagnostics(diagnostics_text, out_diagnostics);
-                return SLANG_FAIL;
-            }
         }
 
         Slang::ComPtr<slang::IEntryPoint> entry;
@@ -501,6 +521,15 @@ int32_t caustica_slang_compile_specialized_entry_point(
         append_diagnostics(diagnostics_text, diagnostics);
         if (SLANG_FAILED(result))
         {
+            publish_diagnostics(diagnostics_text, out_diagnostics);
+            return result;
+        }
+
+        result = validate_implementation(entry, composite, implementation, diagnostics_text);
+        if (SLANG_FAILED(result))
+        {
+            if (diagnostics_text.empty())
+                diagnostics_text = "Could not inspect implementation module dependencies";
             publish_diagnostics(diagnostics_text, out_diagnostics);
             return result;
         }
