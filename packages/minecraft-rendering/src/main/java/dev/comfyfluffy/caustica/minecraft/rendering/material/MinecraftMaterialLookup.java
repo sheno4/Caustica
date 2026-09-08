@@ -163,9 +163,12 @@ public final class MinecraftMaterialLookup {
                 ? OpenPbrDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS : roughness(key.profile());
         float metalness = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY
                 ? 0.0f : key.profile() == MinecraftMaterialProfile.CONDUCTOR ? 1.0f : 0.0f;
+        float subsurface = 0.0f;
         if ((features & MinecraftMaterialPageCompiler.FEATURE_SPEC) != 0) {
+            // Authored texture channels carry the weights; the record supplies their multipliers.
             roughness = 1.0f;
             metalness = 1.0f;
+            subsurface = 1.0f;
         }
         float ior = topology == MinecraftMaterialTopology.MEDIUM_BOUNDARY
                 ? resource.dielectricIor() : OpenPbrDefaults.SPECULAR_IOR;
@@ -184,7 +187,7 @@ public final class MinecraftMaterialLookup {
         MinecraftMaterialEmission emission = luminance > 0.0f && footprint != null
                 ? new MinecraftMaterialEmission(luminance, true, footprint) : MinecraftMaterialEmission.NONE;
         MinecraftMaterialRecord record = MinecraftMaterialRecord.from(page,
-                MinecraftMaterialRecord.Color3.WHITE, metalness, roughness, ior, transmission, 0.0f,
+                MinecraftMaterialRecord.Color3.WHITE, metalness, roughness, ior, transmission, subsurface,
                 MinecraftMaterialRecord.Color3.WHITE, luminance);
         return new Compiled(record, topology, emission);
     }

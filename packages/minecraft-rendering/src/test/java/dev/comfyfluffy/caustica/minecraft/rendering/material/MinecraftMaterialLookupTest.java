@@ -56,6 +56,32 @@ final class MinecraftMaterialLookupTest {
     }
 
     private static MinecraftMaterialLookup overriddenMaterial(MinecraftMaterialRule.Parameters parameters) {
+        return overriddenMaterial(parameters, false);
+    }
+
+    @Test
+    void authoredSurfaceWeightsHaveUnitMultipliers() {
+        var parameters = new MinecraftMaterialRule.Parameters(null, null, null, null, null, null);
+        var lookup = overriddenMaterial(parameters, true);
+        var record = lookup.records().get(lookup.resolve(ResourceId.of("test", "material")).materialIndex());
+        assertEquals(1.0f, record.specularRoughness());
+        assertEquals(1.0f, record.baseMetalness());
+        assertEquals(1.0f, record.subsurfaceWeight());
+        var level = lookup.textures().get(record.surface0Texture()).levels().getFirst();
+        int x = Math.round(record.materialUv().u() * level.width());
+        int y = Math.round(record.materialUv().v() * level.height());
+        float textureWeight = Byte.toUnsignedInt(level.rgba8()[(y * level.width() + x) * 4 + 3]) / 255.0f;
+        assertEquals(0.6f, record.subsurfaceWeight() * textureWeight, 1.0f / 255.0f);
+
+        var untextured = overriddenMaterial(parameters);
+        assertEquals(0.0f, untextured.records().get(
+                untextured.resolve(ResourceId.of("test", "material")).materialIndex()).subsurfaceWeight());
+        assertEquals(0.0f, MinecraftMaterialRecord.waterBoundary().subsurfaceWeight());
+        assertEquals(0.0f, MinecraftMaterialRecord.fallback().subsurfaceWeight());
+    }
+
+    private static MinecraftMaterialLookup overriddenMaterial(MinecraftMaterialRule.Parameters parameters,
+                                                               boolean surfaceParameters) {
         var id = ResourceId.of("test", "material");
         var resource = new MaterialTextureResource(id, MaterialTextureKind.STANDALONE,
                 new MaterialTextureAnalysisSource(1, 1, 1, () -> new MaterialTextureImage() {
@@ -63,9 +89,11 @@ final class MinecraftMaterialLookupTest {
                     @Override public int height() { return 1; }
                     @Override public int albedoArgb(int x, int y) { return 0xFFFFFFFF; }
                     @Override public int alphaArgb(int frame, int x, int y) { return 0xFFFFFFFF; }
-                    @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
+                    @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) {
+                        out.subsurfaceWeight = 0.6f;
+                    }
                     @Override public void close() { }
-                }), MaterialUv.IDENTITY, false, false, false,
+                }), MaterialUv.IDENTITY, surfaceParameters, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT, 1.31f, 0.0f);
         return MinecraftMaterialLookup.compile(new ResourcePackEpoch(7),
                 List.of(new MinecraftMaterialRule(id, id, null, parameters)), List.of(resource),
