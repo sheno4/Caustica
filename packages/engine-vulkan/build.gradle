@@ -38,12 +38,14 @@ dependencies {
 def verifyEngineVulkanDependencies = tasks.register("verifyEngineVulkanDependencies") {
     group = "verification"
     description = "Verifies that the Vulkan engine boundary depends only on the public API and native libraries."
+    def allowedProjects = [project.path, ":packages:api", ":packages:shader-api"] as Set
+    def testClasspaths = [sourceSets.test.compileClasspathConfigurationName,
+                          sourceSets.test.runtimeClasspathConfigurationName]
+    def checkedConfigurations = configurations.matching { it.canBeResolved }
     doLast {
-        def allowedProjects = [project.path, ":packages:api", ":packages:shader-api"] as Set
         def violations = []
-        configurations.matching { it.canBeResolved }.each { configuration ->
-            def testClasspath = configuration.name in [sourceSets.test.compileClasspathConfigurationName,
-                    sourceSets.test.runtimeClasspathConfigurationName]
+        checkedConfigurations.each { configuration ->
+            def testClasspath = configuration.name in testClasspaths
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowedProjects.contains(dependency.path)
                         && !(testClasspath && dependency.path == ":packages:api-support")) {

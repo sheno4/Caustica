@@ -30,13 +30,14 @@ dependencies {
 
 def verifyRendererRuntimeDependencies = tasks.register("verifyRendererRuntimeDependencies") {
     group = "verification"
+    def allowed = [project.path, ":packages:api", ":packages:config", ":packages:engine",
+                   ":packages:engine-vulkan", ":packages:nvidia-ngx", ":packages:renderer-denoising",
+                   ":packages:renderer-presentation", ":packages:renderer-raytracing",
+                   ":packages:slang-runtime", ":packages:vulkan-support"] as Set
+    def checkedConfigurations = configurations.matching { it.canBeResolved }
     doLast {
-        def allowed = [project.path, ":packages:api", ":packages:config", ":packages:engine",
-                       ":packages:engine-vulkan", ":packages:nvidia-ngx", ":packages:renderer-denoising",
-                       ":packages:renderer-presentation", ":packages:renderer-raytracing",
-                       ":packages:slang-runtime", ":packages:vulkan-support"] as Set
         def violations = []
-        configurations.matching { it.canBeResolved }.each { configuration ->
+        checkedConfigurations.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowed.contains(dependency.path)) {
                     violations += "${configuration.name}: ${dependency.path}"

@@ -122,10 +122,11 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 sourceSets.main.resources.srcDir(files(nativeResourceRoot).builtBy(bundleNgxNatives))
 
 def verifyNvidiaNgxDependencies = tasks.register("verifyNvidiaNgxDependencies") {
+    def allowed = [project.path, ":packages:engine-vulkan"] as Set
+    def checkedConfigurations = configurations.matching { it.canBeResolved }
     doLast {
-        def allowed = [project.path, ":packages:engine-vulkan"] as Set
         def violations = []
-        configurations.matching { it.canBeResolved }.each { configuration ->
+        checkedConfigurations.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowed.contains(dependency.path)) violations += "${configuration.name}: ${dependency.path}"
             }

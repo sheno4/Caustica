@@ -196,12 +196,13 @@ def verifyRayTracingSpirvTarget = tasks.register("verifyRayTracingSpirvTarget") 
 def verifyRendererRayTracingDependencies = tasks.register("verifyRendererRayTracingDependencies") {
     group = "verification"
     description = "Verifies the ray-tracing shader compiler's physical package dependencies."
+    def allowedProjects = [project.path, ":packages:engine", ":packages:engine-vulkan",
+                           ":packages:slang-runtime", ":packages:vulkan-support", ":packages:api-support",
+                           ":packages:shader-api", ":packages:features-builtin"] as Set
+    def checkedConfigurations = configurations.matching { it.canBeResolved }
     doLast {
-        def allowedProjects = [project.path, ":packages:engine", ":packages:engine-vulkan",
-                               ":packages:slang-runtime", ":packages:vulkan-support", ":packages:api-support",
-                               ":packages:shader-api", ":packages:features-builtin"] as Set
         def violations = []
-        configurations.matching { it.canBeResolved }.each { configuration ->
+        checkedConfigurations.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowedProjects.contains(dependency.path)) {
                     violations.add("${configuration.name}: ${dependency.path}")

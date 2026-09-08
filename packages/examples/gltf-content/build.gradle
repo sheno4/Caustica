@@ -48,11 +48,12 @@ def validateContentShaders = tasks.register("validateContentShaders", CompileSla
 def checkContentBoundary = tasks.register("checkContentBoundary") {
     group = "verification"
     description = "Rejects Minecraft and renderer implementation dependencies from reusable glTF content."
+    def allowedProjects = [project.path, ":packages:api", ":packages:shader-api",
+                           ":packages:vulkan-support"] as Set
+    def checkedConfigurations = configurations.matching { it.canBeResolved }
     doLast {
         def violations = []
-        def allowedProjects = [project.path, ":packages:api", ":packages:shader-api",
-                               ":packages:vulkan-support"] as Set
-        configurations.matching { it.canBeResolved }.each { configuration ->
+        checkedConfigurations.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowedProjects.contains(dependency.path)) {
                     violations.add("${configuration.name}: project dependency ${dependency.path}")

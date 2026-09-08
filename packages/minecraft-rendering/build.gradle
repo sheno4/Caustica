@@ -126,12 +126,13 @@ def verifyMinecraftRenderingGenerationReproducible = tasks.register("verifyMinec
 
 def verifyMinecraftRenderingDependencies = tasks.register("verifyMinecraftRenderingDependencies") {
     group = "verification"
+    def allowed = [project.path, ":packages:api", ":packages:shader-api",
+                   ":packages:minecraft-api", ":packages:minecraft-content", ":packages:settings-api",
+                   ":packages:vulkan-support", ":packages:api-support"] as Set
+    def checkedConfigurations = configurations.matching { it.canBeResolved }
     doLast {
-        def allowed = [project.path, ":packages:api", ":packages:shader-api",
-                       ":packages:minecraft-api", ":packages:minecraft-content", ":packages:settings-api",
-                       ":packages:vulkan-support", ":packages:api-support"] as Set
         def violations = []
-        configurations.matching { it.canBeResolved }.each { configuration ->
+        checkedConfigurations.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowed.contains(dependency.path)) violations.add("${configuration.name}: ${dependency.path}")
             }
