@@ -45,14 +45,15 @@ final class RtDenoiserState implements AutoCloseable {
         DenoiserBackendDescriptor descriptor = new DenoiserBackendDescriptor(extent, settings.signalEncoding());
         if (backends[0] != null && backends[0].descriptor().equals(descriptor)) return;
         closeBackendAfterIdle();
-        for (int plane = 0; plane < PLANE_COUNT; plane++) {
-            backends[plane] = factory.create(descriptor);
+        try {
+            for (int plane = 0; plane < PLANE_COUNT; plane++) {
+                backends[plane] = factory.create(descriptor);
+            }
+        } catch (Throwable failure) {
+            closeBackendAfterIdle();
+            throw failure;
         }
         resetPending = true;
-    }
-
-    DenoiserBackend backend() {
-        return backend(0);
     }
 
     DenoiserBackend backend(int plane) {

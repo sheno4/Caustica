@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 
 import java.io.IOException;
@@ -16,14 +17,14 @@ import java.io.IOException;
 final class RtFrameResources {
     private final RtFramePresenter presenter;
     private final DlssRayReconstruction rayReconstruction;
-    private final RtUpscaler upscaler;
+    private final DlssSuperResolution upscaler;
     private final TraceResources trace = new TraceResources();
     private final PresentationResources presentation;
     private DenoiserRoute renderSizeRoute;
     private int renderSizeConfiguration = Integer.MIN_VALUE;
 
     RtFrameResources(RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
-                     RtUpscaler upscaler, RtExposure.Settings exposureSettings) {
+                     DlssSuperResolution upscaler, RtExposure.Settings exposureSettings) {
         this.presenter = presenter;
         this.rayReconstruction = rayReconstruction;
         this.upscaler = upscaler;

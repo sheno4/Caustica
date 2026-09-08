@@ -21,8 +21,6 @@ public record DenoiserCommonSettings(
         float frameTimeMilliseconds,
         int frameIndex,
         boolean motionInWorldSpace,
-        boolean alternateDisocclusionMixAvailable,
-        boolean validationEnabled,
         DenoiserReset reset) {
     public DenoiserCommonSettings {
         worldToView = matrix(worldToView, "worldToView");

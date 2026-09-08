@@ -25,7 +25,6 @@ public final class NrdBackendFactory implements DenoiserBackendFactory {
     @Override
     public DenoiserBackend create(DenoiserBackendDescriptor descriptor) {
         if (closed) throw new IllegalStateException("NRD backend factory is closed");
-        descriptor = DenoiserBackendFactory.requireDescriptor(descriptor);
         NrdMethod method = descriptor.signalEncoding() == DenoiserSignalEncoding.YCOCG_NORMALIZED_HIT_DISTANCE
                 ? NrdMethod.REBLUR_DIFFUSE_SPECULAR : NrdMethod.RELAX_DIFFUSE_SPECULAR;
         return new NrdBackend(nativeApi, device, method,

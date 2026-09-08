@@ -48,7 +48,7 @@ class NrdBackendTest {
         float[] identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         var common = new DenoiserCommonSettings(identity, identity, identity, identity,
                 0, 0, 0, 0, 1, 1, 0, 100, .01f, .02f, 16, 1,
-                false, false, false, DenoiserReset.CONTINUE);
+                false, DenoiserReset.CONTINUE);
         DenoiserImage image = new DenoiserImage(10, 97, 1, new DenoiserExtent(640, 360));
         return new DenoiserFrame(55, common, new DenoiserInputs(image, image, image, image, image, image, image,
                 Optional.empty(), Optional.empty()));

@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.nvidia.nrd;
 
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserCommonSettings;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserFrame;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserImage;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserInputs;
 
@@ -27,7 +28,8 @@ final class NrdAbi {
         target.set(ValueLayout.JAVA_INT, 44, 0);
     }
 
-    static void writeCommon(MemorySegment target, DenoiserCommonSettings value) {
+    static void writeCommon(MemorySegment target, DenoiserFrame frame) {
+        DenoiserCommonSettings value = frame.common();
         putMatrix(target, 0, value.worldToView());
         putMatrix(target, 64, value.worldToViewPrevious());
         putMatrix(target, 128, value.viewToClip());
@@ -38,8 +40,8 @@ final class NrdAbi {
         for (int i = 0; i < scalars.length; i++) target.set(ValueLayout.JAVA_FLOAT, 256L + i * 4L, scalars[i]);
         target.set(ValueLayout.JAVA_INT, 300, value.frameIndex());
         int flags = (value.motionInWorldSpace() ? 1 : 0)
-                | (value.alternateDisocclusionMixAvailable() ? 2 : 0)
-                | (value.validationEnabled() ? 4 : 0)
+                | (frame.inputs().disocclusionThresholdMix().isPresent() ? 2 : 0)
+                | (frame.inputs().validationOutput().isPresent() ? 4 : 0)
                 | (value.reset().ordinal() << 3);
         target.set(ValueLayout.JAVA_INT, 304, flags);
     }

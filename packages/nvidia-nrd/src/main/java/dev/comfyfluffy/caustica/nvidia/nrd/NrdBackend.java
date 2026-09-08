@@ -44,11 +44,13 @@ public final class NrdBackend implements DenoiserBackend {
     @Override
     public void record(DenoiserFrame frame) {
         requireOpen();
-        frame = requireCompatibleFrame(frame);
+        if (!descriptor.extent().equals(frame.extent())) {
+            throw new IllegalArgumentException("frame extent must match the backend descriptor extent");
+        }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment common = arena.allocate(NrdAbi.COMMON_SIZE, 4);
             MemorySegment resources = arena.allocate(NrdAbi.RESOURCES_SIZE, 8);
-            NrdAbi.writeCommon(common, frame.common());
+            NrdAbi.writeCommon(common, frame);
             NrdAbi.writeResources(resources, frame.inputs());
             if (nativeApi.record(handle, frame.commandBuffer(), common, resources) != 0) {
                 throw failure("recording NRD");

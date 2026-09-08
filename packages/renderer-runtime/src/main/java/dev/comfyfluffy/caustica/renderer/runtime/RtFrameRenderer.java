@@ -35,9 +35,9 @@ import org.lwjgl.vulkan.VkImageCopy2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
-import dev.comfyfluffy.caustica.renderer.raytracing.accel.TlasBuilder;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
 import dev.comfyfluffy.caustica.renderer.presentation.PresentationResources;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
@@ -108,7 +108,7 @@ public final class RtFrameRenderer {
     public RtFrameRenderer(VulkanDeviceContext context, RtProgramBackend programs, RtRetainedSceneBackend scenes,
                     RtPassSchedulerBackend passes, EngineSessionServices services,
                     RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
-                    RtUpscaler upscaler,
+                    DlssSuperResolution upscaler,
                     DenoiserBackendFactory denoiserFactory, RtDenoisingSettings denoisingSettings,
                     RtTelemetry telemetry, RtRenderSettings settings) {
         this.settings = settings;

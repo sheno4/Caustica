@@ -31,7 +31,6 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import dev.comfyfluffy.caustica.renderer.runtime.RtDenoisingSettings;
 import dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer;
-import dev.comfyfluffy.caustica.renderer.runtime.RtDlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry;
 import dev.comfyfluffy.caustica.renderer.runtime.pass.RtPassSchedulerBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
@@ -681,7 +680,7 @@ public final class MinecraftRtRuntime {
                         failure -> LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(context, programs, scenes, passes,
                         world.services(), presenter, rayReconstruction,
-                        new RtDlssSuperResolution(superResolution),
+                        superResolution,
                         requireDenoiserFactory(), denoising, telemetry, RtRenderSettings.capture(settings, swapchainPqActive));
                 worldEpoch = epoch;
             } catch (Throwable failure) {

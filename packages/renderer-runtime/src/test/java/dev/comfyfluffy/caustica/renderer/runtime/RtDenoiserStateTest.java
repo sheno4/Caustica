@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RtDenoiserStateTest {
     private static final DenoiserExtent EXTENT = new DenoiserExtent(1920, 1080);
@@ -81,7 +82,7 @@ class RtDenoiserStateTest {
         state.ensureBackend(new DenoiserExtent(1280, 720));
         assertTrue(first.closed);
         assertEquals(RtDenoiserState.PLANE_COUNT * 2, factory.created);
-        assertEquals(new DenoiserExtent(1280, 720), state.backend().descriptor().extent());
+        assertEquals(new DenoiserExtent(1280, 720), state.backend(0).descriptor().extent());
     }
 
     @Test
@@ -115,7 +116,7 @@ class RtDenoiserStateTest {
         assertTrue(first.closed);
         state.ensureBackend(EXTENT);
         assertEquals(DenoiserSignalEncoding.YCOCG_NORMALIZED_HIT_DISTANCE,
-                state.backend().descriptor().signalEncoding());
+                state.backend(0).descriptor().signalEncoding());
         assertEquals(DenoiserReset.CLEAR_AND_RESTART, state.frameReset(true));
     }
 
@@ -125,10 +126,29 @@ class RtDenoiserStateTest {
         RtDenoiserState state = new RtDenoiserState(factory, settings(DenoiserRoute.TEMPORAL_DENOISER));
         state.ensureBackend(EXTENT);
         List<FakeBackend> backends = List.copyOf(factory.backends);
-        assertSame(backends.get(0), state.backend());
+        assertSame(backends.get(0), state.backend(0));
         state.close();
         assertTrue(backends.stream().allMatch(backend -> backend.closed));
         assertFalse(factory.closed);
+    }
+
+    @Test
+    void failedPlaneCreationReleasesPartialSetAndAllowsCompleteRecreation() {
+        for (int failedPlane = 1; failedPlane <= RtDenoiserState.PLANE_COUNT; failedPlane++) {
+            FakeFactory factory = new FakeFactory();
+            factory.failOnAttempt = failedPlane;
+            try (var state = new RtDenoiserState(factory, settings(DenoiserRoute.TEMPORAL_DENOISER))) {
+                assertThrows(IllegalStateException.class, () -> state.ensureBackend(EXTENT));
+                assertTrue(factory.backends.stream().allMatch(backend -> backend.closed));
+                int releasedCount = factory.backends.size();
+                state.ensureBackend(EXTENT);
+                assertEquals(releasedCount + RtDenoiserState.PLANE_COUNT, factory.backends.size());
+                for (int plane = 0; plane < RtDenoiserState.PLANE_COUNT; plane++) {
+                    assertSame(factory.backends.get(releasedCount + plane), state.backend(plane));
+                }
+            }
+            assertTrue(factory.backends.stream().allMatch(backend -> backend.closed));
+        }
     }
 
     private static RtDenoisingSettings settings(DenoiserRoute route) {
@@ -137,6 +157,7 @@ class RtDenoiserStateTest {
 
     private static final class FakeFactory implements DenoiserBackendFactory {
         private int created;
+        private int failOnAttempt;
         private FakeBackend last;
         private final List<FakeBackend> backends = new ArrayList<>();
         private boolean closed;
@@ -144,6 +165,7 @@ class RtDenoiserStateTest {
         @Override
         public DenoiserBackend create(DenoiserBackendDescriptor descriptor) {
             created++;
+            if (created == failOnAttempt) throw new IllegalStateException("backend creation failed");
             last = new FakeBackend(descriptor);
             backends.add(last);
             return last;

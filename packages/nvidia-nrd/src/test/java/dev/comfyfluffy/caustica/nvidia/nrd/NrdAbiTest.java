@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.nvidia.nrd;
 
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserCommonSettings;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserExtent;
+import dev.comfyfluffy.caustica.renderer.denoising.DenoiserFrame;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserImage;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserInputs;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserReset;
@@ -39,13 +40,20 @@ class NrdAbiTest {
         try (Arena arena = Arena.ofConfined()) {
             var common = arena.allocate(NrdAbi.COMMON_SIZE, 4);
             float[] identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-            NrdAbi.writeCommon(common, new DenoiserCommonSettings(identity, identity, identity, identity,
+            var settings = new DenoiserCommonSettings(identity, identity, identity, identity,
                     1, 2, 3, 4, 5, 6, 7, 100, .01f, .02f, 16, 42,
-                    true, true, true, DenoiserReset.CLEAR_AND_RESTART));
+                    true, DenoiserReset.CLEAR_AND_RESTART);
+            var image = new DenoiserImage(101, 97, 1, new DenoiserExtent(1920, 1080));
+            for (int optionalFlags = 0; optionalFlags < 4; optionalFlags++) {
+                var inputs = new DenoiserInputs(image, image, image, image, image, image, image,
+                        (optionalFlags & 1) != 0 ? Optional.of(image) : Optional.empty(),
+                        (optionalFlags & 2) != 0 ? Optional.of(image) : Optional.empty());
+                NrdAbi.writeCommon(common, new DenoiserFrame(1, settings, inputs));
+                assertEquals(9 | (optionalFlags << 1), common.get(ValueLayout.JAVA_INT, 304));
+            }
             assertEquals(1.0f, common.get(ValueLayout.JAVA_FLOAT, 0));
             assertEquals(100.0f, common.get(ValueLayout.JAVA_FLOAT, 284));
             assertEquals(42, common.get(ValueLayout.JAVA_INT, 300));
-            assertEquals(15, common.get(ValueLayout.JAVA_INT, 304));
         }
     }
 }

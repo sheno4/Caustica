@@ -32,6 +32,7 @@ import org.lwjgl.vulkan.VkImageCopy2;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssSuperResolution;
 import dev.comfyfluffy.caustica.renderer.presentation.PresentationResources;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceImages;
@@ -46,12 +47,12 @@ final class RtReconstruction implements AutoCloseable {
     static final float NRD_DENOISING_RANGE = 50_000.0f;
     private final VulkanDeviceContext context;
     private final DlssRayReconstruction rayReconstruction;
-    private final RtUpscaler upscaler;
+    private final DlssSuperResolution upscaler;
     private final RtDenoiserState denoiser;
     private final RtTelemetry telemetry;
 
     RtReconstruction(VulkanDeviceContext context, DlssRayReconstruction rayReconstruction,
-                     RtUpscaler upscaler, DenoiserBackendFactory factory,
+                     DlssSuperResolution upscaler, DenoiserBackendFactory factory,
                      RtDenoisingSettings settings, RtTelemetry telemetry) {
         this.context = context;
         this.rayReconstruction = rayReconstruction;
@@ -91,16 +92,18 @@ final class RtReconstruction implements AutoCloseable {
                 GpuImage denoised = upscale ? source : output;
                 boolean reset;
                 try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.nrd")) {
-                    reset = recordTemporalDenoiser(context, commands, stack, graphicsUse,
+                    reset = recordTemporalDenoiser(commands, stack, graphicsUse,
                             frame, trace, presentation, denoised);
                 }
                 if (!upscale) yield true;
                 try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.upscale")) {
-                    boolean success = upscaler.record(new RtUpscaler.Frame(commands.external("temporal upscale"),
-                            denoised, trace.images().depth(), trace.images().motion(), output,
-                            new RtUpscaler.Extent(frame.extent().renderWidth(), frame.extent().renderHeight(),
-                                    frame.extent().displayWidth(), frame.extent().displayHeight()),
-                            frame.jitterX(), frame.jitterY(), reset, frame.preExposure()));
+                    VkCommandBuffer command = commands.external("DLSS super resolution");
+                    TraceExtent extent = frame.extent();
+                    boolean success = upscaler.ensureFeature(command, extent.renderWidth(), extent.renderHeight(),
+                            extent.displayWidth(), extent.displayHeight())
+                            && upscaler.evaluate(command, denoised, trace.images().depth(), trace.images().motion(), output,
+                                    extent.renderWidth(), extent.renderHeight(), extent.displayWidth(), extent.displayHeight(),
+                                    -frame.jitterX(), -frame.jitterY(), reset, frame.preExposure());
                     if (!success) upscaler.resetHistory();
                     yield success;
                 }
@@ -132,7 +135,7 @@ final class RtReconstruction implements AutoCloseable {
         }
     }
 
-    private boolean recordTemporalDenoiser(VulkanDeviceContext ctx, RtFrameCommands commands,
+    private boolean recordTemporalDenoiser(RtFrameCommands commands,
                                            MemoryStack stack, GraphicsUse graphicsUse,
                                            RtFrameInput frame, TraceResources trace,
                                            PresentationResources presentation, GpuImage output) {
@@ -152,7 +155,7 @@ final class RtReconstruction implements AutoCloseable {
                 frame.jitterX(), frame.jitterY(), previousJitterX, previousJitterY,
                 inverseWidth, inverseHeight, 1.0f, NRD_DENOISING_RANGE,
                 0.03f, 0.2f, frame.frameTimeMilliseconds(), (int) (frame.number() & 0x7fff_ffffL),
-                false, true, false,
+                false,
                 frameReset);
         DenoiserInputs inputs = new DenoiserInputs(
                 denoiserImage(trace.images().diffuseRadianceHitDistance()),
@@ -164,7 +167,7 @@ final class RtReconstruction implements AutoCloseable {
                 denoiserImage(trace.images().denoisedSpecularRadianceHitDistance()),
                 Optional.of(denoiserImage(trace.images().nrdDisocclusionThresholdMix())), Optional.empty());
 
-        GpuBuffer frameBuffer = ctx.createMappedGpuUploadBuffer(NrdPlaneFrameData.BYTE_SIZE,
+        GpuBuffer frameBuffer = context.createMappedGpuUploadBuffer(NrdPlaneFrameData.BYTE_SIZE,
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "NRD stable-plane frame");
         graphicsUse.whenComplete(frameBuffer::destroy);
         ByteBuffer frameData = MemoryUtil.memByteBuffer(frameBuffer.mapped(), NrdPlaneFrameData.BYTE_SIZE)
