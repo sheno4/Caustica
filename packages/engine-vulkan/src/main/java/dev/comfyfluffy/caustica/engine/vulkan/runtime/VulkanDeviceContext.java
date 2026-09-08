@@ -49,11 +49,9 @@ import java.util.function.Consumer;
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
 
 /**
- * Shared per-device GPU resources: a buffer-device-address-enabled VMA allocator (the host's
- * lacks the flag), the graphics queue + a transient command pool for synchronous one-shot
- * submits, and the RT pipeline limits (SBT handle size / alignment). Single owner for the
- * plumbing every renderer module needs. The public {@link GpuDevice} view exposes only extension-safe
- * Vulkan allocation and retirement services; the runtime composition root owns this concrete context.
+ * Owns the renderer's VMA allocator, descriptor heap, queue services, and transient command pool.
+ * Allocation and ray-tracing layout use the installed device's capabilities and alignment limits.
+ * The host owns the Vulkan device and queues; the runtime composition root owns this context.
  */
 public final class VulkanDeviceContext implements GpuDevice {
     private static final Logger LOGGER = LoggerFactory.getLogger(VulkanDeviceContext.class);
@@ -102,7 +100,7 @@ public final class VulkanDeviceContext implements GpuDevice {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDevice phys = vk.getPhysicalDevice();
 
-            // BDA-enabled allocator (the host allocator omits the flag).
+            // Every renderer buffer exposes a device address.
             VmaVulkanFunctions fns = VmaVulkanFunctions.calloc(stack).set(phys.getInstance(), vk);
             VmaAllocatorCreateInfo aci = VmaAllocatorCreateInfo.calloc(stack)
                     .flags(Vma.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT)
@@ -355,11 +353,10 @@ public final class VulkanDeviceContext implements GpuDevice {
                         + Long.toUnsignedString(deviceAddress.value(), 16) + " is not aligned to " + addressAlignment);
             }
             VulkanDiagnostics.registerBuffer(new VulkanDeviceAddressRange(deviceAddress, size), handle, label);
-            VulkanDeviceAddress registeredAddress = deviceAddress;
             long registeredHandle = handle;
             return new VmaGpuBuffer(vma, handle, allocation, deviceAddress, hostVisible ? info.pMappedData() : 0L,
                     size, hostVisible,
-                    () -> VulkanDiagnostics.unregisterBuffer(registeredAddress, registeredHandle));
+                    () -> VulkanDiagnostics.unregisterBuffer(deviceAddress, registeredHandle));
         } catch (Throwable t) {
             if (handle != 0L) {
                 Vma.vmaDestroyBuffer(vma, handle, allocation);
@@ -369,34 +366,26 @@ public final class VulkanDeviceContext implements GpuDevice {
     }
 
     /**
-     * Create a storage image of the given format (STORAGE + TRANSFER_SRC/DST), transitioned to GENERAL.
-     * The RT trace target uses an HDR float format (R16G16B16A16_SFLOAT) so radiance values above 1 are
-     * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match the host LDR target
-     * for the image-copy round-trip (copy requires texel-size-compatible formats).
+     * Create a sampled storage image with transfer support, transitioned to GENERAL before returning.
      */
     public GpuImage createStorageImage(int width, int height, int format, String label) {
         return createStorageImage(width, height, format, label, 0);
     }
 
     /**
-     * Same as {@link #createStorageImage(int, int, int, String)} plus caller-supplied usage bits — e.g.
-     * {@code VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT} for an image a graphics pipeline renders into via
-     * dynamic rendering (a plain storage image is invalid as a {@code VkRenderingInfo} colour attachment;
-     * see {@code VUID-VkRenderingInfo-colorAttachmentCount-06087}).
+     * Adds caller-supplied usage bits, including color-attachment support for dynamic rendering.
      */
     public GpuImage createStorageImage(int width, int height, int format, String label, int extraUsage) {
         int usage = VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT
                 | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | extraUsage;
         requireStorageImageSupport(width, height, format, usage, label);
-        long image;
-        long allocation;
-        long view;
+        long image = 0L;
+        long allocation = 0L;
+        long view = 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkImageCreateInfo ici = VkImageCreateInfo.calloc(stack).sType$Default()
                     .imageType(VK10.VK_IMAGE_TYPE_2D).format(format)
                     .mipLevels(1).arrayLayers(1).samples(VK10.VK_SAMPLE_COUNT_1_BIT).tiling(VK10.VK_IMAGE_TILING_OPTIMAL)
-                    // SAMPLED so DLSS-RR can read these as input textures (color + guide buffers);
-                    // STORAGE for raygen/compute writes; TRANSFER for the world-target copies.
                     .usage(usage)
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
             ici.extent().set(width, height, 1);
@@ -415,10 +404,14 @@ public final class VulkanDeviceContext implements GpuDevice {
             check(VK10.vkCreateImageView(vk, vci, null, pView), "vkCreateImageView");
             view = pView.get(0);
             RtDebugLabels.nameImageView(this, view, label + " view");
+        } catch (Throwable failure) {
+            if (view != 0L) VK10.vkDestroyImageView(vk, view, null);
+            if (image != 0L) Vma.vmaDestroyImage(vma, image, allocation);
+            throw failure;
         }
         long imageFinal = image;
         submitSync(cmd -> {
-            try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(this, cmd, "init " + label)) {
+            try (MemoryStack stack = MemoryStack.stackPush(); var ignored = RtDebugLabels.scope(this, cmd, "init " + label)) {
                 long destinationStages = VK13.VK_PIPELINE_STAGE_2_COPY_BIT
                         | VK13.VK_PIPELINE_STAGE_2_BLIT_BIT
                         | VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT
@@ -442,8 +435,8 @@ public final class VulkanDeviceContext implements GpuDevice {
             return new VmaGpuImage(vma, vk, descriptorHeap, image, allocation, view,
                     width, height, format, usage, label);
         } catch (Throwable failure) {
-            VK10.vkDestroyImageView(vk, view, null);
-            Vma.vmaDestroyImage(vma, image, allocation);
+            if (view != 0L) VK10.vkDestroyImageView(vk, view, null);
+            if (image != 0L) Vma.vmaDestroyImage(vma, image, allocation);
             throw failure;
         }
     }
@@ -489,9 +482,8 @@ public final class VulkanDeviceContext implements GpuDevice {
     }
 
     /**
-     * Record + submit a one-shot command buffer synchronously (own pool + queue submit + fence).
-     * Use for init work that must complete before a CPU read or before the buffers are reused —
-     * A host graphics submission is deferred, so initialization that must complete immediately uses this path.
+     * Record and submit one-shot graphics work, waiting for its fence before returning.
+     * Use when initialization or readback must finish before CPU access or resource reuse.
      */
     public synchronized void submitSync(Consumer<VkCommandBuffer> record) {
         ensurePool();
@@ -500,32 +492,41 @@ public final class VulkanDeviceContext implements GpuDevice {
                     .commandPool(commandPool).level(VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);
             PointerBuffer pCmd = stack.mallocPointer(1);
             check(VK10.vkAllocateCommandBuffers(vk, ai, pCmd), "vkAllocateCommandBuffers");
-            VkCommandBuffer cmd = new VkCommandBuffer(pCmd.get(0), vk);
-            RtDebugLabels.name(this, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "submitSync command buffer");
+            boolean pending = false;
+            try {
+                VkCommandBuffer cmd = new VkCommandBuffer(pCmd.get(0), vk);
+                RtDebugLabels.name(this, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "submitSync command buffer");
 
-            VkCommandBufferBeginInfo bi = VkCommandBufferBeginInfo.calloc(stack).sType$Default()
-                    .flags(VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-            check(VK10.vkBeginCommandBuffer(cmd, bi), "vkBeginCommandBuffer");
-            record.accept(cmd);
-            check(VK10.vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
+                VkCommandBufferBeginInfo bi = VkCommandBufferBeginInfo.calloc(stack).sType$Default()
+                        .flags(VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+                check(VK10.vkBeginCommandBuffer(cmd, bi), "vkBeginCommandBuffer");
+                record.accept(cmd);
+                check(VK10.vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
 
-            VkFenceCreateInfo fci = VkFenceCreateInfo.calloc(stack).sType$Default();
-            LongBuffer pFence = stack.mallocLong(1);
-            check(VK10.vkCreateFence(vk, fci, null, pFence), "vkCreateFence");
-            long fence = pFence.get(0);
-            RtDebugLabels.name(this, VK10.VK_OBJECT_TYPE_FENCE, fence, "submitSync fence");
+                VkFenceCreateInfo fci = VkFenceCreateInfo.calloc(stack).sType$Default();
+                LongBuffer pFence = stack.mallocLong(1);
+                check(VK10.vkCreateFence(vk, fci, null, pFence), "vkCreateFence");
+                long fence = pFence.get(0);
+                try {
+                    RtDebugLabels.name(this, VK10.VK_OBJECT_TYPE_FENCE, fence, "submitSync fence");
 
-            VkCommandBufferSubmitInfo.Buffer command = VkCommandBufferSubmitInfo.calloc(1, stack)
-                    .sType$Default().commandBuffer(cmd);
-            VkSubmitInfo2.Buffer submit = VkSubmitInfo2.calloc(1, stack)
-                    .sType$Default().pCommandBufferInfos(command);
-            synchronized (deviceQueueHostLock) {
-                check(VK13.vkQueueSubmit2(graphicsQueue.queue(), submit, fence), "vkQueueSubmit2");
+                    VkCommandBufferSubmitInfo.Buffer command = VkCommandBufferSubmitInfo.calloc(1, stack)
+                            .sType$Default().commandBuffer(cmd);
+                    VkSubmitInfo2.Buffer submit = VkSubmitInfo2.calloc(1, stack)
+                            .sType$Default().pCommandBufferInfos(command);
+                    synchronized (deviceQueueHostLock) {
+                        check(VK13.vkQueueSubmit2(graphicsQueue.queue(), submit, fence), "vkQueueSubmit2");
+                    }
+                    pending = true;
+                    check(VK10.vkWaitForFences(vk, pFence, true, Long.MAX_VALUE), "vkWaitForFences");
+                    pending = false;
+                } finally {
+                    // A failed wait does not prove completion; pending resources must remain alive.
+                    if (!pending) VK10.vkDestroyFence(vk, fence, null);
+                }
+            } finally {
+                if (!pending) VK10.vkFreeCommandBuffers(vk, commandPool, pCmd);
             }
-            check(VK10.vkWaitForFences(vk, pFence, true, Long.MAX_VALUE), "vkWaitForFences");
-
-            VK10.vkDestroyFence(vk, fence, null);
-            VK10.vkFreeCommandBuffers(vk, commandPool, pCmd);
         }
     }
 

@@ -4,11 +4,11 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
 
+import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR;
+
 /** Debug labels for renderer-owned raw Vulkan objects. */
 public final class RtDebugLabels {
     private static final String PREFIX = "RT ";
-    private static final int VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR = 1000150000;
-    private static final int VK_OBJECT_TYPE_MICROMAP_EXT = 1000396000;
 
     private RtDebugLabels() {}
 
@@ -35,22 +35,10 @@ public final class RtDebugLabels {
         name(ctx, VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, handle, label);
     }
 
-    public static void nameMicromap(VulkanDeviceContext ctx, long handle, String label) {
-        name(ctx, VK_OBJECT_TYPE_MICROMAP_EXT, handle, label);
-    }
-
-    public static Scope scope(VulkanDeviceContext ctx, VkCommandBuffer cmd, String label) {
+    public static DebugMarkers.Scope scope(VulkanDeviceContext ctx, VkCommandBuffer cmd, String label) {
         if (ctx == null || cmd == null || label == null || label.isBlank()) {
-            return Scope.NOOP;
+            return DebugMarkers.Scope.NOOP;
         }
-        DebugMarkers.Scope scope = ctx.backend().debugMarkers().begin(cmd, PREFIX + label);
-        return scope::close;
-    }
-
-    public interface Scope extends AutoCloseable {
-        Scope NOOP = () -> {};
-
-        @Override
-        void close();
+        return ctx.backend().debugMarkers().begin(cmd, PREFIX + label);
     }
 }
