@@ -188,7 +188,7 @@ final class GltfWorldContributionTest {
                 @Override public ResourceOwner primitiveDataResource() { return primitiveData; }
                 @Override public int vertexCount() { return 3; }
                 @Override public int indexCount() { return 3; }
-                @Override public void drop() {
+                @Override public void close() {
                     primitiveData.close();
                     indices.close();
                     positions.close();

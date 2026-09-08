@@ -3,13 +3,7 @@ module caustica_gltf_viewer_material_surface;
 import caustica_surface;
 import caustica_types;
 
-struct GltfPrimitiveData {
-    float4 baseColor;
-    float roughness;
-    float metallic;
-    float emission;
-    float reserved;
-};
+import caustica_gltf_viewer_primitive;
 
 public struct GltfViewerMaterialSurface : ISurfaceModel {
     public override OpenPbrSurface evaluateSurface(SurfaceInput input) {

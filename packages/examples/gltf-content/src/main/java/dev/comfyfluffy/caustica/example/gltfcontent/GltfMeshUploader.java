@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -24,17 +25,17 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
     public GltfPrimitiveUploader.Uploaded upload(ResourceFactory resources, GltfScene.Primitive primitive) {
         float[] positions = primitive.positions();
         int[] indices = primitive.indices();
-        OwnedBuffer positionsBuffer = createAsync(resources, (long) positions.length * Float.BYTES,
-                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                bytes -> { for (float value : positions) bytes.putFloat(value); });
+        OwnedBuffer positionsBuffer = create(resources, (long) positions.length * Float.BYTES,
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true,
+                bytes -> bytes.asFloatBuffer().put(positions));
         OwnedBuffer indexBuffer = null;
         OwnedBuffer primitiveBuffer = null;
         try {
-            indexBuffer = createAsync(resources, (long) indices.length * Integer.BYTES,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                    bytes -> { for (int index : indices) bytes.putInt(index); });
+            indexBuffer = create(resources, (long) indices.length * Integer.BYTES,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true,
+                    bytes -> bytes.asIntBuffer().put(indices));
             primitiveBuffer = create(resources, (long) indices.length / 3L * PRIMITIVE_BYTES,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, bytes -> {
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, bytes -> {
                         for (int triangle = 0; triangle < indices.length / 3; triangle++) {
                             bytes.putFloat(primitive.red()).putFloat(primitive.green())
                                     .putFloat(primitive.blue()).putFloat(primitive.alpha())
@@ -45,47 +46,25 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
             return new UploadedPrimitive(positionsBuffer, indexBuffer, primitiveBuffer,
                     positions.length / 3, indices.length);
         } catch (RuntimeException | Error failure) {
-            if (primitiveBuffer != null) primitiveBuffer.drop();
-            if (indexBuffer != null) indexBuffer.drop();
-            positionsBuffer.drop();
-            throw failure;
+            try (var positionsOwner = positionsBuffer; var indexOwner = indexBuffer;
+                 var primitiveOwner = primitiveBuffer) {
+                throw failure;
+            }
         }
     }
 
-    private OwnedBuffer create(ResourceFactory resources, long size, int extraUsage, Writer writer) {
-        return create(resources, size, extraUsage, writer, false);
-    }
-
-    private OwnedBuffer createAsync(ResourceFactory resources, long size, int extraUsage, Writer writer) {
-        return create(resources, size, extraUsage, writer, true);
-    }
-
-    private OwnedBuffer create(ResourceFactory resources, long size, int extraUsage, Writer writer,
-                               boolean asyncShared) {
+    private OwnedBuffer create(ResourceFactory resources, long size, int extraUsage,
+                               boolean asyncShared, Consumer<ByteBuffer> writer) {
         VmaMappedBuffer buffer = asyncShared
                 ? VmaMappedBuffer.createAsync(gpu, size, extraUsage, "glTF mesh data")
                 : VmaMappedBuffer.create(gpu, size, extraUsage, "glTF mesh data");
         try {
             ByteBuffer bytes = buffer.mapped().order(ByteOrder.LITTLE_ENDIAN);
-            writer.write(bytes);
+            writer.accept(bytes);
             buffer.flush(0L, size);
+            return new OwnedBuffer(buffer, resources.create(buffer::close));
         } catch (RuntimeException | Error failure) {
-            buffer.close();
-            throw failure;
-        }
-        ResourceOwner generation;
-        try {
-            generation = resources.create(buffer::close);
-        } catch (RuntimeException | Error failure) {
-            buffer.close();
-            throw failure;
-        }
-        try {
-
-            return new OwnedBuffer(buffer, generation);
-        } catch (RuntimeException | Error failure) {
-            generation.close();
-            throw failure;
+            try (buffer) { throw failure; }
         }
     }
 
@@ -94,28 +73,25 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
                                      int vertexCount, int indexCount) implements GltfPrimitiveUploader.Uploaded {
         @Override public MeshBuild.Stream positionsStream() {
             return new MeshBuild.Stream(positions.buffer.deviceRange(), 3 * Float.BYTES,
-                    positions.generation);
+                    positions.owner);
         }
         @Override public MeshBuild.Stream indexStream() {
             return new MeshBuild.Stream(indices.buffer.deviceRange(), Integer.BYTES,
-                    indices.generation);
+                    indices.owner);
         }
         @Override public VulkanDeviceAddress primitiveDataAddress() {
             return primitiveData.buffer.deviceRange().address();
         }
         @Override public ResourceOwner primitiveDataResource() {
-            return primitiveData.generation;
+            return primitiveData.owner;
         }
-        @Override public void drop() {
-            primitiveData.drop();
-            indices.drop();
-            positions.drop();
+        @Override public void close() {
+            try (positions; indices; primitiveData) { }
         }
     }
 
-    private record OwnedBuffer(VmaMappedBuffer buffer, ResourceOwner generation) {
-        void drop() { generation.close(); }
+    private record OwnedBuffer(VmaMappedBuffer buffer, ResourceOwner owner) implements AutoCloseable {
+        @Override public void close() { owner.close(); }
     }
 
-    @FunctionalInterface private interface Writer { void write(ByteBuffer bytes); }
 }

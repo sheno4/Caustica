@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.example.gltfviewer;
 
 import dev.comfyfluffy.caustica.api.geometry.ReadyMesh;
 import dev.comfyfluffy.caustica.api.scene.SceneEdit;
-import java.util.concurrent.CompletableFuture;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
@@ -21,6 +20,7 @@ import net.minecraft.core.BlockPos;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
@@ -71,11 +71,11 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
 
     @Override
     public void resourcePackChanged(ResourcePackEpoch epoch) {
-        if (stopped) throw new IllegalStateException("glTF world contribution is stopped");
         replace();
     }
 
     private synchronized void replace() {
+        if (stopped) throw new IllegalStateException("glTF world contribution is stopped");
         assets.reload();
         long preparing = ++request;
         GltfScene authored = assets.current();
@@ -93,6 +93,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
             var ready = pending.stream().filter(future -> !future.isCompletedExceptionally())
                     .map(CompletableFuture::join).toList();
             synchronized (this) {
+                // Only the newest request may publish; superseded builds still release their results.
                 if (failure != null || stopped || preparing != request) {
                     ready.forEach(ReadyMesh::close);
                     if (failure != null && !stopped) reportFailure(failure);
@@ -133,8 +134,8 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
 
     private CompletableFuture<ReadyMesh<GltfProgramExports.InstanceData>> prepare(
             GltfScene.Primitive primitive, boolean portal) {
-        var upload = uploader.upload(context.renderSession().resources(), primitive);
-        try (var data = GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
+        try (var upload = uploader.upload(context.renderSession().resources(), primitive);
+             var data = GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value(),
                 upload.primitiveDataResource())) {
             MeshBuild.CoveragePolicy coverage = primitive.cutout()
                     ? new MeshBuild.CoveragePolicy.Cutout(primitive.alphaCutoff())
@@ -145,8 +146,6 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                     new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()), MeshBuild.BuildPolicy.STATIC,
                     List.of(new MeshBuild.Geometry<>(slot, null, 0, upload.indexCount())));
             return context.renderSession().meshes().prepare(GltfProgramExports.INSTANCE, build);
-        } finally {
-            upload.drop();
         }
     }
 
@@ -170,8 +169,9 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
     @Override public void close() { assets.clear(); }
 
     private static List<SceneEdit> dropOperations(Live state) {
-        return new ArrayList<>(state.instances.stream().map(SceneEdit.DropInstance::new)
-                .map(SceneEdit.class::cast).toList());
+        List<SceneEdit> operations = new ArrayList<>();
+        for (InstanceId instance : state.instances) operations.add(new SceneEdit.DropInstance(instance));
+        return operations;
     }
 
     private static GltfScene.Primitive portalCube() {

@@ -9,6 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class GltfAssetAdapterTest {
     @Test
+    void triangleFilteringDoesNotDependOnAuthoredScale() {
+        for (float scale : new float[]{1.0e-20f, 1.0f, 1.0e20f}) {
+            float[] positions = {0, 0, 0, scale, 0, 0, 0, scale, 0};
+            assertArrayEquals(new int[]{0, 1, 2}, GltfAssetAdapter.nonDegenerateIndices(
+                    positions, new int[]{0, 1, 2, 0, 0, 1}));
+        }
+    }
+
+    @Test
     void retainsEachPrimitiveOnceAndPreservesAuthoredNodeInstances() {
         float[] positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
         GltfLoader.Primitive primitive = new GltfLoader.Primitive(

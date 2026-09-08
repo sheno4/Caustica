@@ -8,13 +8,13 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 public interface GltfPrimitiveUploader {
     Uploaded upload(ResourceFactory resources, GltfScene.Primitive primitive);
 
-    interface Uploaded {
+    interface Uploaded extends AutoCloseable {
         MeshBuild.Stream positionsStream();
         MeshBuild.Stream indexStream();
         VulkanDeviceAddress primitiveDataAddress();
         ResourceOwner primitiveDataResource();
         int vertexCount();
         int indexCount();
-        void drop();
+        @Override void close();
     }
 }

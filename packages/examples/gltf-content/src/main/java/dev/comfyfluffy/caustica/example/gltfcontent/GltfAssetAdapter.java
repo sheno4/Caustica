@@ -18,10 +18,11 @@ public final class GltfAssetAdapter {
                 GltfLoader.Primitive source = mesh.primitives().get(primitiveIndex);
                 GltfLoader.Material material = source.material() < 0
                         ? defaultMaterial() : asset.materials().get(source.material());
-                int[] indices = nonDegenerateIndices(source.positions(), source.indices());
+                float[] positions = source.positions();
+                int[] indices = nonDegenerateIndices(positions, source.indices());
                 boolean cutout = material.alphaMode() == GltfLoader.AlphaMode.MASK;
                 primitiveIds[meshIndex][primitiveIndex] = primitives.size();
-                primitives.add(new GltfScene.Primitive(source.positions(), indices,
+                primitives.add(new GltfScene.Primitive(positions, indices,
                         material.baseColorR(), material.baseColorG(), material.baseColorB(), material.baseColorA(),
                         material.roughness(), material.metallic(), cutout, material.alphaCutoff()));
             }
@@ -51,14 +52,15 @@ public final class GltfAssetAdapter {
             int a = indices[offset] * 3;
             int b = indices[offset + 1] * 3;
             int c = indices[offset + 2] * 3;
-            float abx = positions[b] - positions[a], aby = positions[b + 1] - positions[a + 1];
-            float abz = positions[b + 2] - positions[a + 2];
-            float acx = positions[c] - positions[a], acy = positions[c + 1] - positions[a + 1];
-            float acz = positions[c + 2] - positions[a + 2];
-            float nx = aby * acz - abz * acy;
-            float ny = abz * acx - abx * acz;
-            float nz = abx * acy - aby * acx;
-            if (nx * nx + ny * ny + nz * nz > 1.0e-16f) {
+            // Authored scale must not turn a nonzero triangle into a degenerate one.
+            double abx = (double) positions[b] - positions[a], aby = (double) positions[b + 1] - positions[a + 1];
+            double abz = (double) positions[b + 2] - positions[a + 2];
+            double acx = (double) positions[c] - positions[a], acy = (double) positions[c + 1] - positions[a + 1];
+            double acz = (double) positions[c + 2] - positions[a + 2];
+            double nx = aby * acz - abz * acy;
+            double ny = abz * acx - abx * acz;
+            double nz = abx * acy - aby * acx;
+            if (nx != 0 || ny != 0 || nz != 0) {
                 result[count++] = indices[offset];
                 result[count++] = indices[offset + 1];
                 result[count++] = indices[offset + 2];

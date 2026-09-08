@@ -531,21 +531,20 @@ public final class GltfLoader {
       if (position < 0) throw new IOException("mesh primitive has no POSITION attribute");
       float[] positions = floatAttribute(position, 3, "POSITION", false);
       int count = positions.length / 3;
-      float[]
-          normals =
-              attrs.has("NORMAL")
-                  ? floatAttribute(attrs.get("NORMAL").getAsInt(), 3, "NORMAL", false)
-                  : new float[0],
-          tangents =
-              attrs.has("TANGENT")
-                  ? floatAttribute(attrs.get("TANGENT").getAsInt(), 4, "TANGENT", false)
-                  : new float[0],
-          colors =
-              attrs.has("COLOR_0") ? colors(attrs.get("COLOR_0").getAsInt(), count) : new float[0],
-          uvs =
-              attrs.has("TEXCOORD_0")
-                  ? floatAttribute(attrs.get("TEXCOORD_0").getAsInt(), 2, "TEXCOORD_0", true)
-                  : new float[0];
+      float[] normals =
+          attrs.has("NORMAL")
+              ? floatAttribute(attrs.get("NORMAL").getAsInt(), 3, "NORMAL", false)
+              : new float[0];
+      float[] tangents =
+          attrs.has("TANGENT")
+              ? floatAttribute(attrs.get("TANGENT").getAsInt(), 4, "TANGENT", false)
+              : new float[0];
+      float[] colors =
+          attrs.has("COLOR_0") ? colors(attrs.get("COLOR_0").getAsInt(), count) : new float[0];
+      float[] uvs =
+          attrs.has("TEXCOORD_0")
+              ? floatAttribute(attrs.get("TEXCOORD_0").getAsInt(), 2, "TEXCOORD_0", true)
+              : new float[0];
       requireElements(normals, count, 3, "NORMAL");
       requireElements(tangents, count, 4, "TANGENT");
       requireElements(uvs, count, 2, "TEXCOORD_0");
@@ -589,26 +588,23 @@ public final class GltfLoader {
     }
 
     private void validateHierarchy(List<Node> nodes, int[] roots) throws IOException {
-      int[] parents = new int[nodes.size()];
-      Arrays.fill(parents, -1);
-      for (int parent = 0; parent < nodes.size(); parent++) {
-        for (int child : nodes.get(parent).children) {
+      boolean[] hasParent = new boolean[nodes.size()];
+      for (Node node : nodes) {
+        for (int child : node.children) {
           if (child < 0 || child >= nodes.size())
             throw new IOException("child index outside nodes");
-          if (parents[child] >= 0) throw new IOException("glTF node has multiple parents");
-          parents[child] = parent;
+          if (hasParent[child]) throw new IOException("glTF node has multiple parents");
+          hasParent[child] = true;
         }
       }
       for (int root : roots) {
-        if (parents[root] >= 0) throw new IOException("scene root node also has a parent");
+        if (hasParent[root]) throw new IOException("scene root node also has a parent");
       }
       byte[] state = new byte[nodes.size()];
-      for (int root : roots) validateNode(root, nodes, state);
       for (int i = 0; i < nodes.size(); i++) if (state[i] == 0) validateNode(i, nodes, state);
     }
 
     private void validateNode(int index, List<Node> nodes, byte[] state) throws IOException {
-      if (index < 0 || index >= nodes.size()) throw new IOException("child index outside nodes");
       if (state[index] == 1) throw new IOException("glTF node hierarchy contains a cycle");
       if (state[index] == 2) return;
       state[index] = 1;
@@ -702,7 +698,7 @@ public final class GltfLoader {
           || (long) viewOffset + viewLength > buffers.get(bufferIndex).length)
         throw new IOException("accessor exceeds its bufferView");
       return new Accessor(
-          buffers.get(bufferIndex),
+          ByteBuffer.wrap(buffers.get(bufferIndex)).order(ByteOrder.LITTLE_ENDIAN),
           viewOffset + offset,
           count,
           components,
@@ -734,7 +730,7 @@ public final class GltfLoader {
   }
 
   private record Accessor(
-      byte[] buffer,
+      ByteBuffer buffer,
       int offset,
       int count,
       int components,
@@ -745,12 +741,9 @@ public final class GltfLoader {
       int size = componentType == 5121 ? 1 : componentType == 5123 ? 2 : 4;
       int at = offset + element * stride + component * size;
       return switch (componentType) {
-        case 5121 -> (buffer[at] & 255) / 255f;
-        case 5123 ->
-            Short.toUnsignedInt(
-                    ByteBuffer.wrap(buffer, at, 2).order(ByteOrder.LITTLE_ENDIAN).getShort())
-                / 65535f;
-        case 5126 -> ByteBuffer.wrap(buffer, at, 4).order(ByteOrder.LITTLE_ENDIAN).getFloat();
+        case 5121 -> Byte.toUnsignedInt(buffer.get(at)) / 255f;
+        case 5123 -> Short.toUnsignedInt(buffer.getShort(at)) / 65535f;
+        case 5126 -> buffer.getFloat(at);
         default -> throw new IllegalStateException();
       };
     }
@@ -758,11 +751,9 @@ public final class GltfLoader {
     int indexValue(int element) {
       int at = offset + element * stride;
       return switch (componentType) {
-        case 5121 -> buffer[at] & 255;
-        case 5123 ->
-            Short.toUnsignedInt(
-                ByteBuffer.wrap(buffer, at, 2).order(ByteOrder.LITTLE_ENDIAN).getShort());
-        case 5125 -> ByteBuffer.wrap(buffer, at, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        case 5121 -> Byte.toUnsignedInt(buffer.get(at));
+        case 5123 -> Short.toUnsignedInt(buffer.getShort(at));
+        case 5125 -> buffer.getInt(at);
         default -> throw new IllegalStateException();
       };
     }

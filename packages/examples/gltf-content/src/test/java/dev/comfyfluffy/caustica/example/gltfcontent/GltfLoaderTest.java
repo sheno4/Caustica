@@ -90,6 +90,43 @@ final class GltfLoaderTest {
   }
 
   @Test
+  void decodesInterleavedNormalizedAttributesWithAccessorOffsets() throws Exception {
+    ByteBuffer bytes = ByteBuffer.allocate(72).order(ByteOrder.LITTLE_ENDIAN);
+    float[] positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    for (int vertex = 0; vertex < 3; vertex++) {
+      for (int component = 0; component < 3; component++)
+        bytes.putFloat(positions[vertex * 3 + component]);
+      bytes.put(new byte[] {(byte) 255, (byte) 128, 0, (byte) 255});
+      bytes.putShort((short) 65535).putShort((short) 32768);
+      bytes.putInt(0);
+    }
+    String json =
+        """
+        {"asset":{"version":"2.0"},
+         "buffers":[{"byteLength":72,"uri":"mesh.bin"}],
+         "bufferViews":[{"buffer":0,"byteLength":72,"byteStride":24}],
+         "accessors":[
+           {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+           {"bufferView":0,"byteOffset":12,"componentType":5121,"normalized":true,"count":3,"type":"VEC4"},
+           {"bufferView":0,"byteOffset":16,"componentType":5123,"normalized":true,"count":3,"type":"VEC2"}],
+         "meshes":[{"primitives":[{"attributes":{"POSITION":0,"COLOR_0":1,"TEXCOORD_0":2}}]}],
+         "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}]}
+        """;
+    GltfLoader.Primitive primitive =
+        GltfLoader.load(json.getBytes(), ignored -> bytes.array())
+            .meshes().getFirst().primitives().getFirst();
+
+    assertArrayEquals(positions, primitive.positions());
+    assertArrayEquals(new int[] {0, 1, 2}, primitive.indices());
+    assertArrayEquals(
+        new float[] {1, 128 / 255f, 0, 1, 1, 128 / 255f, 0, 1, 1, 128 / 255f, 0, 1},
+        primitive.colors());
+    assertArrayEquals(
+        new float[] {1, 32768 / 65535f, 1, 32768 / 65535f, 1, 32768 / 65535f},
+        primitive.textureCoordinates());
+  }
+
+  @Test
   void rejectsNonTrianglePrimitiveClearly() {
     String json =
         """
