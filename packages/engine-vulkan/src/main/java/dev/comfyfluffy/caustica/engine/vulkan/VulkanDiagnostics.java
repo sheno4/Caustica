@@ -48,7 +48,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 /** Startup Vulkan inventory and best-effort {@code VK_EXT_device_fault} reporting. */
 public final class VulkanDiagnostics {
     private static final Logger LOGGER = LoggerFactory.getLogger(VulkanDiagnostics.class);
-    private static final int MAX_FAULT_RECORDS = 64;
+    private static final int MAX_QUEUE_CHECKPOINTS = 64;
     private static final AtomicBoolean FAULT_REPORTED = new AtomicBoolean();
     private static final ConcurrentHashMap<String, String> IN_FLIGHT = new ConcurrentHashMap<>();
     private static final ConcurrentSkipListMap<VulkanDeviceAddress, BufferRange> BUFFERS =
@@ -196,16 +196,18 @@ public final class VulkanDiagnostics {
                 return;
             }
 
-            int addressCount = Math.min(counts.addressInfoCount(), MAX_FAULT_RECORDS);
-            int vendorCount = Math.min(counts.vendorInfoCount(), MAX_FAULT_RECORDS);
-            if (addressCount != counts.addressInfoCount() || vendorCount != counts.vendorInfoCount()) {
-                LOGGER.warn("Capping Vulkan fault records to {} (driver reported address={}, vendor={})",
-                        MAX_FAULT_RECORDS, counts.addressInfoCount(), counts.vendorInfoCount());
-            }
-            VkDeviceFaultAddressInfoEXT.Buffer addresses = addressCount == 0
-                    ? null : VkDeviceFaultAddressInfoEXT.calloc(addressCount, stack);
-            VkDeviceFaultVendorInfoEXT.Buffer vendors = vendorCount == 0
-                    ? null : VkDeviceFaultVendorInfoEXT.calloc(vendorCount, stack);
+            logFaultDetails(device, counts, stack);
+        } catch (Throwable t) {
+            LOGGER.error("Failed to query VK_EXT_device_fault after device loss", t);
+        }
+    }
+
+    private static void logFaultDetails(VkDevice device, VkDeviceFaultCountsEXT counts, MemoryStack stack) {
+        int addressCount = counts.addressInfoCount();
+        int vendorCount = counts.vendorInfoCount();
+        // Driver-sized reports can exceed the thread-local stack; retain every record in native heap storage.
+        try (var addresses = addressCount == 0 ? null : VkDeviceFaultAddressInfoEXT.calloc(addressCount);
+             var vendors = vendorCount == 0 ? null : VkDeviceFaultVendorInfoEXT.calloc(vendorCount)) {
             VkDeviceFaultInfoEXT info = VkDeviceFaultInfoEXT.calloc(stack).sType$Default();
             // LWJGL exposes these output pointer fields as getters only; Vulkan requires caller-owned arrays.
             MemoryUtil.memPutAddress(info.address() + VkDeviceFaultInfoEXT.PADDRESSINFOS,
@@ -215,7 +217,7 @@ public final class VulkanDiagnostics {
             counts.addressInfoCount(addressCount).vendorInfoCount(vendorCount)
                     .vendorBinarySize(0L);
 
-            result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, info);
+            int result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, info);
             if (result != VK10.VK_SUCCESS && result != VK10.VK_INCOMPLETE) {
                 LOGGER.error("vkGetDeviceFaultInfoEXT(info) failed: {}", result);
                 return;
@@ -225,7 +227,12 @@ public final class VulkanDiagnostics {
             if (addresses != null) {
                 for (int i = 0; i < Math.min(addressCount, counts.addressInfoCount()); i++) {
                     VkDeviceFaultAddressInfoEXT address = addresses.get(i);
-                    String resource = resolveBuffer(address.reportedAddress());
+                    String resource = switch (address.addressType()) {
+                        case EXTDeviceFault.VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_EXT,
+                             EXTDeviceFault.VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_EXT ->
+                                resolveBuffer(address.reportedAddress());
+                        default -> "not a buffer access";
+                    };
                     LOGGER.error("Vulkan fault address[{}]: type={}, address=0x{}, precision=0x{}, resource={}",
                             i, addressType(address.addressType()), Long.toUnsignedString(address.reportedAddress(), 16),
                             Long.toUnsignedString(address.addressPrecision(), 16), resource);
@@ -239,8 +246,6 @@ public final class VulkanDiagnostics {
                             Long.toUnsignedString(vendor.vendorFaultData(), 16));
                 }
             }
-        } catch (Throwable t) {
-            LOGGER.error("Failed to query VK_EXT_device_fault after device loss", t);
         }
     }
 
@@ -274,7 +279,7 @@ public final class VulkanDiagnostics {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             java.nio.IntBuffer count = stack.callocInt(1);
             NVDeviceDiagnosticCheckpoints.vkGetQueueCheckpointDataNV(queue, count, null);
-            int checkpointCount = Math.min(count.get(0), MAX_FAULT_RECORDS);
+            int checkpointCount = Math.min(count.get(0), MAX_QUEUE_CHECKPOINTS);
             if (checkpointCount == 0) {
                 LOGGER.error("NVIDIA checkpoints for {} queue 0x{}: <none>", label,
                         Long.toUnsignedString(queue.address(), 16));
