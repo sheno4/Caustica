@@ -23,16 +23,15 @@ import java.util.Objects;
 
 /** Vulkan-native pass scheduler over the command buffer and completion reservation of one renderer frame. */
 public final class RtPassSchedulerBackend implements PassSchedulerBackend {
-    private final GpuDevice gpu;
     private final WorldResourceSetup worldSetup;
     private final PostEffectSetup postSetup;
     private final UiSetup uiSetup;
     private final CommandHooks commands;
     private FrameState current;
+    // Only the active invocation can borrow frame state or advance the post-effect chain.
     private InvocationBase<?> active;
     private GpuImage sceneColor;
     private int nextPostTarget;
-    private long chainVersion;
 
     public RtPassSchedulerBackend(VulkanDeviceContext gpu, int sceneColorFormat, int exposureFormat, int uiLayerFormat) {
         this(gpu, sceneColorFormat, exposureFormat, uiLayerFormat, new NativeCommandHooks(gpu));
@@ -40,7 +39,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
 
     RtPassSchedulerBackend(GpuDevice gpu, int sceneColorFormat, int exposureFormat, int uiLayerFormat,
                            CommandHooks commands) {
-        this.gpu = Objects.requireNonNull(gpu, "gpu");
+        Objects.requireNonNull(gpu, "gpu");
         worldSetup = new WorldResourceSetup(gpu);
         postSetup = new PostEffectSetup(gpu, sceneColorFormat, exposureFormat);
         uiSetup = new UiSetup(gpu, uiLayerFormat);
@@ -57,7 +56,6 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
         current = Objects.requireNonNull(frame, "frame");
         sceneColor = frame.reconstructedSceneColor();
         nextPostTarget = 0;
-        chainVersion = 0L;
     }
 
     /** Ends the current borrow after every pass stage has recorded into its command buffer. */
@@ -67,7 +65,6 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
         current = null;
         sceneColor = null;
         nextPostTarget = 0;
-        chainVersion = 0L;
     }
 
     /** Last successfully published post-effect output, or the reconstruction if no effect participated. */
@@ -91,7 +88,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     public PostInvocation beginPostEffect(PassKey pass) {
         requireStage(pass, PassKey.Stage.POST_EFFECT);
         FrameState frame = beginInvocation();
-        return activate(new Post(frame, sceneColor, chainVersion, nextPostTarget));
+        return activate(new Post(frame, sceneColor, nextPostTarget));
     }
 
     @Override
@@ -201,11 +198,8 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     private abstract class InvocationBase<F extends PassFrame> implements Invocation<F> {
         final FrameState state;
         F frame;
-        private boolean finished;
-
-        InvocationBase(FrameState state, F frame) {
+        InvocationBase(FrameState state) {
             this.state = state;
-            this.frame = frame;
         }
 
         @Override public F frame() {
@@ -223,14 +217,13 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
         }
 
         final void requireLive() {
-            if (finished || active != this) throw new IllegalStateException("pass invocation is no longer active");
+            if (active != this) throw new IllegalStateException("pass invocation is no longer active");
         }
 
         private void finish(Runnable drained) {
             requireLive();
             Objects.requireNonNull(drained, "drained");
             commands.passBarrier(state.commandBuffer());
-            finished = true;
             active = null;
             state.gpuUse().whenComplete(drained);
         }
@@ -261,22 +254,20 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
 
     private final class PlainInvocation extends InvocationBase<PassFrame> {
         PlainInvocation(FrameState state) {
-            super(state, null);
+            super(state);
             this.frame = new BorrowedFrame(this, state) { };
         }
     }
 
     private final class Post extends InvocationBase<PostEffectFrame> implements PostInvocation {
         private final GpuImage input;
-        private final long inputVersion;
         private final int targetIndex;
         private GpuImage output;
         private boolean validated;
 
-        Post(FrameState state, GpuImage input, long inputVersion, int targetIndex) {
-            super(state, null);
+        Post(FrameState state, GpuImage input, int targetIndex) {
+            super(state);
             this.input = input;
-            this.inputVersion = inputVersion;
             this.targetIndex = targetIndex;
             this.frame = new PostFrame(this, state);
         }
@@ -284,13 +275,9 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
         @Override public void validateOutputChain() {
             requireLive();
             if (validated) throw new IllegalStateException("post output chain was already validated");
-            if (chainVersion != inputVersion || sceneColor != input) {
-                throw new IllegalStateException("post effect acquired against a stale scene-colour chain");
-            }
             if (output != null) {
                 sceneColor = output;
                 nextPostTarget = targetIndex ^ 1;
-                chainVersion++;
             }
             validated = true;
         }
@@ -305,7 +292,6 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             if (validated && output != null) {
                 sceneColor = input;
                 nextPostTarget = targetIndex;
-                chainVersion = inputVersion;
             }
             super.abandon(failure, drained);
         }
@@ -332,7 +318,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
 
     private final class Ui extends InvocationBase<UiFrame> {
         Ui(FrameState state) {
-            super(state, null);
+            super(state);
             this.frame = new UiBorrow(this, state);
         }
 

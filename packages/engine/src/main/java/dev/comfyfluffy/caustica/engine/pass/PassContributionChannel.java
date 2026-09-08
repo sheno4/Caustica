@@ -15,12 +15,10 @@ import dev.comfyfluffy.caustica.api.pass.WorldResourceSetup;
 /** Owner-scoped view of the passes in one render session. */
 public final class PassContributionChannel implements PassChannel {
     final PassSession session;
-    final Object owner;
     boolean accepting = true;
 
-    PassContributionChannel(PassSession session, Object owner) {
+    PassContributionChannel(PassSession session) {
         this.session = session;
-        this.owner = owner;
     }
 
     @Override

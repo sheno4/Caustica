@@ -56,7 +56,6 @@ final class EngineRenderSessionChannel implements RenderSessionChannel, AutoClos
     static final class Registration implements RenderSessionRegistration {
         private final EngineRenderSessionChannel channel;
         private final RenderSessionFactory factory;
-        private boolean closed;
 
         private Registration(EngineRenderSessionChannel channel, RenderSessionFactory factory) {
             this.channel = channel;
@@ -69,10 +68,6 @@ final class EngineRenderSessionChannel implements RenderSessionChannel, AutoClos
 
         @Override
         public void close() {
-            synchronized (this) {
-                if (closed) return;
-                closed = true;
-            }
             channel.remove(this);
         }
     }

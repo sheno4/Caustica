@@ -44,24 +44,24 @@ public final class EngineRenderSession implements AutoCloseable {
      */
     public void processPendingChanges() {
         requireOpen();
-        if (!reconcileRequested) return;
-        reconcileRequested = false;
-        List<EngineRenderSessionChannel.Registration> desired = channel.snapshot();
+        while (reconcileRequested) {
+            reconcileRequested = false;
+            List<EngineRenderSessionChannel.Registration> desired = channel.snapshot();
 
-        List<ActiveContribution> removed = new ArrayList<>();
-        active.entrySet().removeIf(entry -> {
-            if (desired.contains(entry.getKey())) return false;
-            removed.add(entry.getValue());
-            return true;
-        });
-        teardown(removed, true);
+            List<ActiveContribution> removed = new ArrayList<>();
+            active.entrySet().removeIf(entry -> {
+                if (desired.contains(entry.getKey())) return false;
+                removed.add(entry.getValue());
+                return true;
+            });
+            teardown(removed, true);
 
-        for (EngineRenderSessionChannel.Registration registration : desired) {
-            if (!active.containsKey(registration)) {
-                open(registration);
+            for (EngineRenderSessionChannel.Registration registration : desired) {
+                if (!active.containsKey(registration)) {
+                    open(registration);
+                }
             }
         }
-        if (reconcileRequested) processPendingChanges();
     }
 
     /** Number of successfully opened contributions currently owned by this session. */

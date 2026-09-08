@@ -33,7 +33,7 @@ final class PassSessionTest {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
         List<String> events = new ArrayList<>();
-        session.openChannel("materials").addWorldResourcePass(
+        session.openChannel().addWorldResourcePass(
                 setup -> pass(frame -> events.add("upload"), () -> { }));
 
         session.recordWorldResources();
@@ -46,8 +46,8 @@ final class PassSessionTest {
     void dispatchesEachStageInGlobalAcceptanceOrder() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel first = session.openChannel("first");
-        PassContributionChannel second = session.openChannel("second");
+        PassContributionChannel first = session.openChannel();
+        PassContributionChannel second = session.openChannel();
         List<String> events = new ArrayList<>();
 
         first.addWorldResourcePass(setup -> pass(frame -> events.add("world-a"), () -> events.add("close-a")));
@@ -71,7 +71,7 @@ final class PassSessionTest {
     void registrationRemovalWaitsForItsSubmittedFrameUse() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         AtomicInteger records = new AtomicInteger();
         AtomicInteger closes = new AtomicInteger();
         var registration = channel.addWorldResourcePass(
@@ -94,7 +94,7 @@ final class PassSessionTest {
         ManualBackend backend = new ManualBackend();
         List<Throwable> failures = new ArrayList<>();
         PassSession session = new PassSession(backend, (pass, failure) -> failures.add(failure));
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         AtomicInteger following = new AtomicInteger();
         AtomicInteger closed = new AtomicInteger();
         channel.addWorldResourcePass(setup -> pass(frame -> {
@@ -119,7 +119,7 @@ final class PassSessionTest {
         backend.rejectPost = true;
         List<Throwable> failures = new ArrayList<>();
         PassSession session = new PassSession(backend, (pass, failure) -> failures.add(failure));
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         AtomicInteger records = new AtomicInteger();
         channel.addPostEffectPass(id("post"),
                 setup -> pass(frame -> records.incrementAndGet(), () -> { }));
@@ -136,8 +136,8 @@ final class PassSessionTest {
     void resolvesPresentAnchorsAndUsesAcceptanceOrderForOtherTies() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel first = session.openChannel("first");
-        PassContributionChannel second = session.openChannel("second");
+        PassContributionChannel first = session.openChannel();
+        PassContributionChannel second = session.openChannel();
         List<String> events = new ArrayList<>();
         PassId bloom = id("bloom");
         PassId grade = id("grade");
@@ -162,7 +162,7 @@ final class PassSessionTest {
     void ignoresAnAbsentAnchor() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         List<String> events = new ArrayList<>();
 
         channel.addUiPass(id("marker"), PassPlacement.before(id("absent-hud")),
@@ -179,7 +179,7 @@ final class PassSessionTest {
     void rejectsTheRegistrationThatMakesAnExistingMissingAnchorCycle() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         AtomicInteger rejectedClose = new AtomicInteger();
         PassId first = id("first");
         PassId second = id("second");
@@ -199,7 +199,7 @@ final class PassSessionTest {
     void rejectsDuplicateLiveIdsAndReusesAnIdAsSoonAsTheOldRegistrationStops() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         AtomicInteger rejectedClose = new AtomicInteger();
         PassId shared = id("shared");
         PassRegistration first = channel.addUiPass(shared, setup -> pass(frame -> { }, () -> { }));
@@ -220,7 +220,7 @@ final class PassSessionTest {
     void rejectsSelfAnchorsBeforeCreatingThePass() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         AtomicInteger factories = new AtomicInteger();
         PassId self = id("self");
 
@@ -236,7 +236,7 @@ final class PassSessionTest {
     void idsAreStageLocalAndBecomeReusableWhenFailureDisablesAPass() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         PassId shared = id("cross-stage");
         channel.addPostEffectPass(shared, setup -> pass(frame -> {
             throw new IllegalStateException("disable this post pass");
@@ -255,7 +255,7 @@ final class PassSessionTest {
     void quiesceWaitsForAnAlreadyRunningCallbackAndRejectsNewFactories() throws Exception {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel channel = session.openChannel("owner");
+        PassContributionChannel channel = session.openChannel();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         channel.addWorldResourcePass(setup -> pass(frame -> {
@@ -284,8 +284,8 @@ final class PassSessionTest {
     void ownerDrainClosesOnlyAfterAllUsesAndSessionCloseCoversRemainingOwners() throws Exception {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
-        PassContributionChannel first = session.openChannel("first");
-        PassContributionChannel second = session.openChannel("second");
+        PassContributionChannel first = session.openChannel();
+        PassContributionChannel second = session.openChannel();
         List<String> closes = new ArrayList<>();
         first.addWorldResourcePass(setup -> pass(frame -> { }, () -> closes.add("first")));
         second.addWorldResourcePass(setup -> pass(frame -> { }, () -> closes.add("second")));

@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 
 
 import java.util.IdentityHashMap;
+import java.util.List;
 
 /** Deduplicated strong ownership for captured inputs or resources attached to one frame execution. */
 public final class ResourceOwners implements FrameResources, AutoCloseable {
@@ -74,7 +75,11 @@ public final class ResourceOwners implements FrameResources, AutoCloseable {
             }
             return result;
         } catch (Throwable failure) {
-            result.close();
+            try {
+                result.close();
+            } catch (Throwable cleanup) {
+                if (failure != cleanup) failure.addSuppressed(cleanup);
+            }
             throw failure;
         }
     }
@@ -82,9 +87,24 @@ public final class ResourceOwners implements FrameResources, AutoCloseable {
     /** Borrow a captured claim while this collection remains retained. */
     public synchronized ResourceOwner borrowed(ResourceOwner reference) { return owners.get(reference); }
 
-    @Override public synchronized void close() {
-        closed = true;
-        owners.values().forEach(ResourceOwner::close);
-        owners.clear();
+    @Override public void close() {
+        List<ResourceOwner> released;
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+            released = List.copyOf(owners.values());
+            owners.clear();
+        }
+        Throwable failure = null;
+        for (ResourceOwner owner : released) {
+            try {
+                owner.close();
+            } catch (RuntimeException | Error cleanup) {
+                if (failure == null) failure = cleanup;
+                else if (failure != cleanup) failure.addSuppressed(cleanup);
+            }
+        }
+        if (failure instanceof RuntimeException exception) throw exception;
+        if (failure instanceof Error error) throw error;
     }
 }

@@ -35,17 +35,16 @@ public final class PassSession implements AutoCloseable {
         this.failures = Objects.requireNonNull(failures, "failures");
     }
 
-    public synchronized PassContributionChannel openChannel(Object owner) {
-        Objects.requireNonNull(owner, "owner");
+    public synchronized PassContributionChannel openChannel() {
         if (!accepting) {
             throw new IllegalStateException("pass session is closed");
         }
-        return new PassContributionChannel(this, owner);
+        return new PassContributionChannel(this);
     }
 
     PassRegistration addWorldResource(
             PassContributionChannel channel, PassFactory<WorldResourceSetup, PassFrame> factory) {
-        return add(channel, PassKey.Stage.WORLD_RESOURCE, factory, backend.worldResourceSetup());
+        return add(channel, PassKey.Stage.WORLD_RESOURCE, null, null, factory, backend.worldResourceSetup());
     }
 
     PassRegistration addPostEffect(
@@ -58,11 +57,6 @@ public final class PassSession implements AutoCloseable {
             PassContributionChannel channel, PassId id, PassPlacement placement,
             PassFactory<UiSetup, UiFrame> factory) {
         return add(channel, PassKey.Stage.UI, id, placement, factory, backend.uiSetup());
-    }
-
-    private <S extends dev.comfyfluffy.caustica.api.pass.PassSetup, F extends PassFrame> PassRegistration add(
-            PassContributionChannel channel, PassKey.Stage stage, PassFactory<S, F> factory, S setup) {
-        return add(channel, stage, null, null, factory, setup);
     }
 
     private <S extends dev.comfyfluffy.caustica.api.pass.PassSetup, F extends PassFrame> PassRegistration add(
@@ -312,7 +306,6 @@ public final class PassSession implements AutoCloseable {
                 report(registration.key, failure);
             }
             synchronized (this) {
-                registration.closed = true;
                 registrations.remove(registration);
                 notifyAll();
             }
@@ -347,7 +340,7 @@ public final class PassSession implements AutoCloseable {
 
     private void scheduleCloseIfReady(Registration<?> registration) {
         if (registration.closeRequested && registration.callbacks == 0 && registration.uses == 0
-                && !registration.closeScheduled && !registration.closed) {
+                && !registration.closeScheduled) {
             registration.closeScheduled = true;
             closeQueue.add(registration);
             notifyAll();
@@ -387,7 +380,6 @@ public final class PassSession implements AutoCloseable {
         private boolean recording = true;
         private boolean closeRequested;
         private boolean closeScheduled;
-        private boolean closed;
         private int callbacks;
         private int uses;
 

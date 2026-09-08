@@ -19,6 +19,28 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineRenderSessionTest {
     @Test
+    void registrationsCreatedWhileOpeningAreReconciledBeforeReturning() {
+        List<String> events = new ArrayList<>();
+        try (var host = new RenderSessionHost()) {
+            host.api().sessions().add(context -> {
+                events.add("open:first");
+                host.api().sessions().add(next -> {
+                    events.add("open:second");
+                    return contribution("second", events);
+                });
+                return contribution("first", events);
+            });
+            try (var session = host.openSession(owner -> new TestScope("scope", events),
+                    failure -> { throw new AssertionError(failure); })) {
+                session.processPendingChanges();
+                session.processPendingChanges();
+                assertEquals(List.of("open:first", "open:second"), events);
+                assertEquals(2, session.contributionCount());
+            }
+        }
+    }
+
+    @Test
     void opensFreshOwnerScopesAndTearsDownInGlobalPhases() {
         List<String> events = new ArrayList<>();
         List<TestScope> created = new ArrayList<>();
