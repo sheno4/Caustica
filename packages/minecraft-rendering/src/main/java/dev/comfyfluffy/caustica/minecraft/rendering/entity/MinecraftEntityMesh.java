@@ -3,17 +3,40 @@ package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.rendering.texture.MinecraftTextureSampler;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
 /** Immutable CPU geometry captured from one Minecraft entity, block entity, or particle group. */
-public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs, float[] vertexColors,
-                                  List<Triangle> triangles, long indexRevision) {
-    public MinecraftEntityMesh {
-        positions = positions.clone();
-        indices = indices.clone();
-        uvs = uvs.clone();
-        vertexColors = vertexColors.clone();
+public final class MinecraftEntityMesh {
+    private final float[] positions;
+    private final int[] indices;
+    private final float[] uvs;
+    private final float[] vertexColors;
+    private final List<Triangle> triangles;
+    private final long indexRevision;
+
+    public MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs, float[] vertexColors,
+                               List<Triangle> triangles, long indexRevision) {
+        this(positions, indices, uvs, vertexColors, triangles, indexRevision,
+                positions.length, indices.length, uvs.length, vertexColors.length);
+    }
+
+    /** Copies the populated prefixes of reusable capture buffers into an immutable mesh. */
+    public static MinecraftEntityMesh copyOfRanges(float[] positions, int[] indices, float[] uvs,
+                                                   float[] vertexColors, int vertexCount, int indexCount,
+                                                   List<Triangle> triangles, long indexRevision) {
+        return new MinecraftEntityMesh(positions, indices, uvs, vertexColors, triangles, indexRevision,
+                vertexCount * 3, indexCount, vertexCount * 2, vertexCount * 4);
+    }
+
+    private MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs, float[] vertexColors,
+                                List<Triangle> triangles, long indexRevision,
+                                int positionCount, int indexCount, int uvCount, int colorCount) {
+        positions = Arrays.copyOf(positions, positionCount);
+        indices = Arrays.copyOf(indices, indexCount);
+        uvs = Arrays.copyOf(uvs, uvCount);
+        vertexColors = Arrays.copyOf(vertexColors, colorCount);
         triangles = List.copyOf(triangles);
         if (positions.length == 0 || positions.length % 3 != 0) {
             throw new IllegalArgumentException("positions must contain float3 vertices");
@@ -36,12 +59,20 @@ public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs,
                 throw new IllegalArgumentException("index exceeds the vertex stream");
             }
         }
+        this.positions = positions;
+        this.indices = indices;
+        this.uvs = uvs;
+        this.vertexColors = vertexColors;
+        this.triangles = triangles;
+        this.indexRevision = indexRevision;
     }
 
-    @Override public float[] positions() { return positions.clone(); }
-    @Override public int[] indices() { return indices.clone(); }
-    @Override public float[] uvs() { return uvs.clone(); }
-    @Override public float[] vertexColors() { return vertexColors.clone(); }
+    public float[] positions() { return positions.clone(); }
+    public int[] indices() { return indices.clone(); }
+    public float[] uvs() { return uvs.clone(); }
+    public float[] vertexColors() { return vertexColors.clone(); }
+    public List<Triangle> triangles() { return triangles; }
+    public long indexRevision() { return indexRevision; }
 
     public int vertexCount() { return positions.length / 3; }
     public int triangleCount() { return indices.length / 3; }

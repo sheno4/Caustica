@@ -8,24 +8,18 @@ import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 public interface MinecraftEntityUploader extends AutoCloseable {
     UploadedEntity upload(MinecraftEntityMesh source);
 
-    /** Captures host texture claims before a worker performs the upload's CPU packing. */
+    /** Captures required host state before a worker allocates and packs the upload. */
     default UploadJob prepareUpload(MinecraftEntityMesh source) {
         return new UploadJob() {
-            private UploadedEntity uploaded = upload(source);
-            @Override public UploadedEntity finish() {
-                var result = uploaded;
-                uploaded = null;
-                return result;
-            }
-            @Override public void close() {
-                var released = uploaded;
-                uploaded = null;
-                if (released != null) released.close();
-            }
+            @Override public UploadedEntity finish() { return upload(source); }
+            @Override public void close() { }
         };
     }
 
-    /** Owns upload inputs until finish transfers them to the returned uploaded revision. */
+    /**
+     * Owns captured inputs until one worker finish transfers them or close discards the unstarted job.
+     * The job owner serializes finish and close.
+     */
     interface UploadJob extends AutoCloseable {
         UploadedEntity finish();
         @Override void close();

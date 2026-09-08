@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
 import java.util.*;
 import java.util.concurrent.*;
 
-/** Keeps each live mesh visible while its replacement prepares, with independent rigid placement edits. */
+/** Captures host inputs on the caller and publishes retained entity deltas on one worker. */
 public final class MinecraftEntityGeometry implements MinecraftWorldSessionContribution {
     private static final jdk.jfr.EventType UPLOAD_EVENT =
             jdk.jfr.EventType.getEventType(EntityMeshUploadEvent.class);
@@ -19,29 +19,46 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     private final SceneChannel channel;
     private final SceneId scene;
     private final MinecraftEntityUploader uploader;
-    private final Executor executor;
-    private final ExecutorService ownedExecutor;
-    private final Set<CompletableFuture<Void>> packing = new HashSet<>();
+    private final Executor packingExecutor;
+    private final Executor publicationExecutor;
+    private final boolean ownsExecutors;
+    private final Set<CompletableFuture<Void>> packing = ConcurrentHashMap.newKeySet();
     private final Map<Key, Resident> residents = new LinkedHashMap<>();
-    private final ArrayDeque<Completion> completed = new ArrayDeque<>();
-    private PendingGroup group;
+    private final Object pendingLock = new Object();
+    private Map<Key, PendingChanges> pending = new LinkedHashMap<>();
+    private boolean drainScheduled;
+    private final Object submissionLock = new Object();
+    private boolean accepting = true;
+    private volatile Throwable failure;
+    private UpdateGroup group;
     private boolean stopped;
+    private boolean closed;
+    private CompletableFuture<Void> stopResult;
 
     public MinecraftEntityGeometry(MeshPreparer meshes, SceneChannel channel, SceneId scene,
                                    MinecraftEntityUploader uploader) {
         this(meshes, channel, scene, uploader, Executors.newFixedThreadPool(2,
-                Thread.ofPlatform().daemon().name("caustica-entity-upload-", 0).factory()), true);
+                        Thread.ofPlatform().daemon().name("caustica-entity-upload-", 0).factory()),
+                Executors.newSingleThreadExecutor(
+                        Thread.ofPlatform().daemon().name("caustica-entity-publication").factory()), true);
     }
 
     MinecraftEntityGeometry(MeshPreparer meshes, SceneChannel channel, SceneId scene,
-                            MinecraftEntityUploader uploader, Executor executor) {
-        this(meshes, channel, scene, uploader, executor, false);
+                            MinecraftEntityUploader uploader, Executor packingExecutor) {
+        this(meshes, channel, scene, uploader, packingExecutor, Runnable::run, false);
+    }
+
+    MinecraftEntityGeometry(MeshPreparer meshes, SceneChannel channel, SceneId scene,
+                            MinecraftEntityUploader uploader, Executor packingExecutor, Executor publicationExecutor) {
+        this(meshes, channel, scene, uploader, packingExecutor, publicationExecutor, false);
     }
 
     private MinecraftEntityGeometry(MeshPreparer meshes, SceneChannel channel, SceneId scene,
-                                    MinecraftEntityUploader uploader, Executor executor, boolean ownedExecutor) {
-        this.executor = executor;
-        this.ownedExecutor = ownedExecutor ? (ExecutorService) executor : null;
+                                    MinecraftEntityUploader uploader, Executor packingExecutor,
+                                    Executor publicationExecutor, boolean ownsExecutors) {
+        this.packingExecutor = packingExecutor;
+        this.publicationExecutor = publicationExecutor;
+        this.ownsExecutors = ownsExecutors;
         this.meshes = meshes;
         this.channel = channel;
         this.scene = scene;
@@ -51,63 +68,168 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     public synchronized UpdateGroup beginUpdateGroup() {
         requireRunning();
         if (group != null) throw new IllegalStateException("entity update group already active");
-        publishPrepared();
-        group = new PendingGroup();
+        group = new UpdateGroup();
         return group;
     }
 
-    public synchronized void put(Key key, MeshRevision revision, MinecraftEntityMesh mesh,
-                                 GeometryTransform transform, int mask) {
+    public void put(Key key, MeshRevision revision, MinecraftEntityMesh mesh,
+                    GeometryTransform transform, int mask) {
         put(key, revision, mesh, transform, mask, null);
     }
 
     public synchronized void put(Key key, MeshRevision revision, MinecraftEntityMesh mesh,
                                  GeometryTransform transform, int mask, Runnable accepted) {
         requireRunning();
-        var prior = residents.get(key);
-        if (prior != null && prior.revision.equals(revision)) {
-            transform(key, transform, mask);
-            return;
+        var capture = new Capture(revision, uploader.prepareUpload(mesh), accepted);
+        emit(new Put(key, capture, transform, mask));
+    }
+
+    public void transform(Key key, GeometryTransform transform, int mask) {
+        transform(key, transform, mask, null);
+    }
+
+    public synchronized void transform(Key key, GeometryTransform transform, int mask, Runnable accepted) {
+        requireRunning();
+        emit(new Transform(key, transform, mask, accepted));
+    }
+
+    public synchronized void drop(Key key) {
+        requireRunning();
+        emit(new Drop(key));
+    }
+
+    private void emit(Change change) {
+        if (group != null) group.changes.add(change);
+        else submit(List.of(change));
+    }
+
+    private void submit(List<Change> changes) {
+        var discarded = new ArrayList<Capture>();
+        synchronized (pendingLock) {
+            for (var change : changes)
+                pending.computeIfAbsent(change.key(), ignored -> new PendingChanges()).merge(change, discarded);
+            if (!drainScheduled) {
+                drainScheduled = true;
+                publicationExecutor.execute(this::drain);
+            }
         }
-        var instance = prior == null ? channel.newInstance() : prior.instance;
-        if (prior != null && prior.live != null) emit(new SceneEdit.SetTransform(instance, transform, mask));
-        var capture = new Capture(revision, mesh, accepted);
-        var target = new Resident(instance, revision, transform, mask,
-                prior == null ? null : prior.live, prior == null ? null : prior.request, null);
-        if (target.request != null) {
-            residents.put(key, new Resident(instance, revision, transform, mask, target.live, target.request, capture));
-        } else {
-            startPreparation(key, target, capture);
+        if (!discarded.isEmpty()) executePacking(() -> discarded.forEach(Capture::close));
+    }
+
+    private void drain() {
+        Map<Key, PendingChanges> selected;
+        synchronized (pendingLock) {
+            selected = pending;
+            pending = new LinkedHashMap<>();
+            drainScheduled = false;
+        }
+        var changes = new ArrayList<Change>();
+        selected.forEach((key, delta) -> {
+            if (delta.dropped) changes.add(new Drop(key));
+            if (delta.put != null) changes.add(delta.put);
+            if (delta.transform != null) changes.add(delta.transform);
+        });
+        if (failure != null) { closeCaptures(changes); return; }
+        try { apply(changes); }
+        catch (Throwable thrown) { failure = thrown; }
+    }
+
+    private void executePacking(Runnable action) {
+        var terminal = new CompletableFuture<Void>();
+        packing.add(terminal);
+        try {
+            packingExecutor.execute(() -> {
+                try { action.run(); }
+                finally { packing.remove(terminal); terminal.complete(null); }
+            });
+        } catch (RuntimeException | Error thrown) {
+            packing.remove(terminal);
+            throw thrown;
         }
     }
 
-    /** One running build and one newest CPU capture bound work without starving deforming entities. */
-    private void startPreparation(Key key, Resident resident, Capture capture) {
+    /** Only touched residents are staged; one channel edit commits the group's ready placements. */
+    private void apply(List<Change> changes) {
+        var changed = new LinkedHashMap<Key, Resident>();
+        var edits = new ArrayList<SceneEdit>();
+        var retired = new ArrayList<Generation>();
+        var discarded = new ArrayList<Capture>();
+        var cancelled = new ArrayList<Preparation>();
+        var accepted = new ArrayList<Runnable>();
+        try {
+            for (var change : changes) {
+                Key key = change.key();
+                Resident prior = changed.containsKey(key) ? changed.get(key) : residents.get(key);
+                switch (change) {
+                    case Put put -> {
+                        if (prior != null && prior.revision.equals(put.capture.revision)) {
+                            discarded.add(put.capture);
+                            if (prior.live != null) edits.add(new SceneEdit.SetTransform(
+                                    prior.instance, put.transform, put.mask));
+                            changed.put(key, new Resident(prior.instance, prior.revision, put.transform,
+                                    put.mask, prior.live, prior.request, prior.queued));
+                        } else {
+                            var instance = prior == null ? channel.newInstance() : prior.instance;
+                            if (prior != null && prior.live != null)
+                                edits.add(new SceneEdit.SetTransform(instance, put.transform, put.mask));
+                            if (prior != null && prior.queued != null) discarded.add(prior.queued);
+                            changed.put(key, new Resident(instance, put.capture.revision, put.transform,
+                                    put.mask, prior == null ? null : prior.live,
+                                    prior == null ? null : prior.request, put.capture));
+                        }
+                    }
+                    case Transform transform -> {
+                        if (prior == null) continue;
+                        if (prior.live != null) {
+                            edits.add(new SceneEdit.SetTransform(prior.instance, transform.transform, transform.mask));
+                            if (transform.accepted != null) accepted.add(transform.accepted);
+                        }
+                        changed.put(key, new Resident(prior.instance, prior.revision, transform.transform,
+                                transform.mask, prior.live, prior.request, prior.queued));
+                    }
+                    case Drop ignored -> {
+                        if (prior == null) continue;
+                        if (prior.live != null) {
+                            edits.add(new SceneEdit.DropInstance(prior.instance));
+                            retired.add(prior.live);
+                        }
+                        if (prior.queued != null) discarded.add(prior.queued);
+                        if (prior.request != null) cancelled.add(prior.request);
+                        changed.put(key, null);
+                    }
+                }
+            }
+            if (!edits.isEmpty()) channel.edit(edits);
+        } catch (RuntimeException | Error thrown) {
+            cleanup(thrown, () -> closeCaptures(changes));
+            throw thrown;
+        }
+        changed.forEach((key, resident) -> {
+            if (resident == null) residents.remove(key); else residents.put(key, resident);
+        });
+        cancelled.forEach(request -> request.cancelled = true);
+        discarded.forEach(Capture::close);
+        retired.forEach(Generation::close);
+        accepted.forEach(Runnable::run);
+        for (var key : changed.keySet()) startQueued(key);
+    }
+
+    /** One running build and one newest captured upload bound deformation work without starving publication. */
+    private void startQueued(Key key) {
+        var resident = residents.get(key);
+        if (resident == null || resident.request != null || resident.queued == null) return;
+        var capture = resident.queued;
         var request = new Preparation(capture.accepted);
-        var upload = uploader.prepareUpload(capture.mesh);
-        ReadyMesh<MinecraftProgramTypes.InstanceData> source;
-        try { source = resident.live == null ? null : resident.live.mesh.retain(); }
-        catch (RuntimeException | Error failure) { upload.close(); throw failure; }
-        var previous = residents.get(key);
-        residents.put(key, new Resident(resident.instance, capture.revision, resident.transform, resident.mask,
-                resident.live, request, null));
-        var terminal = new CompletableFuture<Void>();
-        packing.add(terminal);
+        var source = resident.live == null ? null : resident.live.mesh.retain();
+        residents.put(key, new Resident(resident.instance, resident.revision, resident.transform,
+                resident.mask, resident.live, request, null));
         long queuedNanos = UPLOAD_EVENT.isEnabled() ? System.nanoTime() : 0L;
         try {
-            executor.execute(() -> {
-                try { prepareOnWorker(key, request, upload, source, queuedNanos); }
-                finally {
-                    synchronized (MinecraftEntityGeometry.this) { packing.remove(terminal); }
-                    terminal.complete(null);
-                }
-            });
-        } catch (RuntimeException | Error failure) {
-            packing.remove(terminal);
-            if (previous == null) residents.remove(key); else residents.put(key, previous);
-            upload.close();
+            executePacking(() -> prepareOnWorker(key, request, capture.upload, source, queuedNanos));
+        } catch (RuntimeException | Error thrown) {
+            capture.close();
             if (source != null) source.close();
-            throw failure;
+            throw thrown;
         }
     }
 
@@ -126,18 +248,15 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         }
         MinecraftEntityUploader.UploadedEntity uploaded = null;
         try (upload; source) {
-            synchronized (this) {
-                var resident = residents.get(key);
-                if (stopped || resident == null || resident.request != request) return;
-            }
+            if (request.cancelled) return;
             uploaded = upload.finish();
             var future = meshes.prepare(MinecraftProgramTypes.INSTANCE_DATA, uploaded.build(), source);
             var retainedUpload = uploaded;
             uploaded = null;
-            future.whenComplete((ready, failure) -> complete(key, request, new Generation(ready, retainedUpload), failure));
-        } catch (Throwable failure) {
+            future.whenComplete((ready, thrown) -> complete(key, request, new Generation(ready, retainedUpload), thrown));
+        } catch (Throwable thrown) {
             if (uploaded != null) uploaded.close();
-            complete(key, request, new Generation(null, null), failure);
+            complete(key, request, new Generation(null, null), thrown);
         } finally {
             if (event != null) {
                 event.finishedNanos = System.nanoTime();
@@ -149,124 +268,147 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         }
     }
 
-    private void complete(Key key, Preparation request, Generation generation, Throwable failure) {
+    private void complete(Key key, Preparation request, Generation generation, Throwable thrown) {
         long readyNanos = PUBLICATION_EVENT.isEnabled() ? System.nanoTime() : 0L;
-        synchronized (this) {
-            if (stopped) generation.close();
-            else completed.add(new Completion(key, request, generation, failure, readyNanos));
+        synchronized (submissionLock) {
+            if (accepting) {
+                try {
+                    publicationExecutor.execute(() -> {
+                        try { publishPrepared(key, request, generation, thrown, readyNanos); }
+                        catch (Throwable rejected) { failure = rejected; }
+                    });
+                } catch (RuntimeException | Error rejected) {
+                    failure = cleanup(rejected, generation::close);
+                }
+                return;
+            }
         }
+        generation.close();
     }
 
-    public synchronized void transform(Key key, GeometryTransform transform, int mask) {
-        requireRunning();
+    /** Completion uses the latest committed placement and never publishes a removed request. */
+    private void publishPrepared(Key key, Preparation request, Generation generation, Throwable thrown,
+                                 long readyNanos) {
         var resident = residents.get(key);
-        if (resident == null) return;
-        if (resident.live != null) emit(new SceneEdit.SetTransform(resident.instance, transform, mask));
-        residents.put(key, new Resident(resident.instance, resident.revision, transform, mask,
-                resident.live, resident.request, resident.queued));
-    }
-
-    public synchronized void drop(Key key) {
-        requireRunning();
-        var resident = residents.get(key);
-        if (resident == null) return;
-        if (resident.live != null) {
-            emit(new SceneEdit.DropInstance(resident.instance));
-            retire(resident.live);
+        if (failure != null || resident == null || resident.request != request) {
+            generation.close();
+            return;
         }
-        residents.remove(key);
-    }
-
-    /** Completion publication uses the most recent transform, never the one captured by preparation. */
-    private void publishPrepared() {
-        Completion completion;
-        while ((completion = completed.poll()) != null) {
-            var resident = residents.get(completion.key);
-            if (resident == null || resident.request != completion.request) {
-                completion.generation.close();
-                continue;
-            }
-            if (completion.failure != null) {
-                completion.generation.close();
-                throw new IllegalStateException("Entity mesh preparation failed", completion.failure);
-            }
-            var generation = completion.generation;
-            try {
-                channel.edit(List.of(new SceneEdit.SetInstance<>(resident.instance, scene, generation.mesh,
-                        resident.transform, resident.mask, generation.uploaded.instanceData())));
-            } catch (RuntimeException | Error failure) {
-                generation.close();
-                throw failure;
-            }
-            if (completion.readyNanos != 0L && PUBLICATION_EVENT.isEnabled()) {
-                var event = new EntityMeshPublicationEvent();
-                event.keyDomain = completion.key.domain;
-                event.keyValue = completion.key.value;
-                event.readyNanos = completion.readyNanos;
-                event.publishedNanos = System.nanoTime();
-                event.commit();
-            }
-            var published = new Resident(resident.instance, resident.revision,
-                    resident.transform, resident.mask, generation, null, null);
-            residents.put(completion.key, published);
-            if (resident.live != null) resident.live.close();
-            if (completion.request.accepted != null) completion.request.accepted.run();
-            if (resident.queued != null) startPreparation(completion.key, published, resident.queued);
+        try {
+            if (thrown != null) throw new IllegalStateException("Entity mesh preparation failed", thrown);
+            channel.edit(List.of(new SceneEdit.SetInstance<>(resident.instance, scene, generation.mesh,
+                    resident.transform, resident.mask, generation.uploaded.instanceData())));
+        } catch (Throwable rejected) {
+            generation.close();
+            failure = rejected;
+            return;
         }
-    }
-
-    private void emit(SceneEdit edit) {
-        if (group != null) group.edits.add(edit);
-        else channel.edit(List.of(edit));
-    }
-
-    private void retire(Generation generation) {
-        if (group != null) group.displaced.add(generation);
-        else generation.close();
+        residents.put(key, new Resident(resident.instance, resident.revision, resident.transform,
+                resident.mask, generation, null, resident.queued));
+        if (readyNanos != 0L && PUBLICATION_EVENT.isEnabled()) {
+            var event = new EntityMeshPublicationEvent();
+            event.keyDomain = key.domain;
+            event.keyValue = key.value;
+            event.readyNanos = readyNanos;
+            event.publishedNanos = System.nanoTime();
+            event.commit();
+        }
+        if (resident.live != null) resident.live.close();
+        if (request.accepted != null) request.accepted.run();
+        startQueued(key);
     }
 
     @Override public void stop() {
-        CompletableFuture<?>[] pending;
+        CompletableFuture<Void> result;
         synchronized (this) {
-            if (stopped) return;
-            if (group != null) throw new IllegalStateException("cannot stop during entity update group");
-            var edits = new ArrayList<SceneEdit>();
-            for (var resident : residents.values()) {
-                if (resident.live != null) edits.add(new SceneEdit.DropInstance(resident.instance));
+            if (stopResult == null) {
+                if (group != null) throw new IllegalStateException("cannot stop during entity update group");
+                stopped = true;
+                stopResult = new CompletableFuture<>();
+                synchronized (submissionLock) {
+                    accepting = false;
+                    publicationExecutor.execute(() -> {
+                        Throwable failure = null;
+                        try {
+                            var edits = new ArrayList<SceneEdit>();
+                            for (var resident : residents.values()) {
+                                if (resident.live != null) edits.add(new SceneEdit.DropInstance(resident.instance));
+                            }
+                            if (!edits.isEmpty()) channel.edit(edits);
+                        } catch (Throwable thrown) { failure = thrown; }
+                        for (var resident : residents.values()) {
+                            if (resident.request != null) resident.request.cancelled = true;
+                            if (resident.queued != null) failure = cleanup(failure, resident.queued::close);
+                            if (resident.live != null) failure = cleanup(failure, resident.live::close);
+                        }
+                        residents.clear();
+                        if (failure == null) stopResult.complete(null);
+                        else stopResult.completeExceptionally(failure);
+                    });
+                }
             }
-            if (!edits.isEmpty()) channel.edit(edits);
-            stopped = true;
-            residents.values().forEach(resident -> { if (resident.live != null) resident.live.close(); });
-            residents.clear();
-            completed.forEach(completion -> completion.generation.close());
-            completed.clear();
-            pending = packing.toArray(CompletableFuture[]::new);
+            result = stopResult;
         }
-        CompletableFuture.allOf(pending).join();
-        if (ownedExecutor != null) ownedExecutor.close();
+        Throwable failure = cleanup(null, result::join);
+        failure = cleanup(failure, () -> CompletableFuture.allOf(packing.toArray(CompletableFuture[]::new)).join());
+        if (ownsExecutors) {
+            failure = cleanup(failure, ((ExecutorService) publicationExecutor)::close);
+            failure = cleanup(failure, ((ExecutorService) packingExecutor)::close);
+        }
+        throwFailure(failure);
     }
 
-    @Override public void close() { stop(); uploader.close(); }
+    @Override public void close() {
+        Throwable failure = cleanup(null, this::stop);
+        synchronized (this) {
+            if (!closed) {
+                closed = true;
+                failure = cleanup(failure, uploader::close);
+            }
+        }
+        throwFailure(failure);
+    }
+
+    private static Throwable cleanup(Throwable failure, Runnable action) {
+        try { action.run(); }
+        catch (Throwable thrown) {
+            if (failure == null) return thrown;
+            if (failure != thrown) failure.addSuppressed(thrown);
+        }
+        return failure;
+    }
+
+    private static void throwFailure(Throwable failure) {
+        if (failure instanceof RuntimeException runtime) throw runtime;
+        if (failure instanceof Error error) throw error;
+        if (failure != null) throw new IllegalStateException("entity resource cleanup failed", failure);
+    }
 
     private void requireRunning() {
         if (stopped) throw new IllegalStateException("entity geometry is stopped");
+        if (failure != null) throw new IllegalStateException("entity publication failed", failure);
     }
 
-    public interface UpdateGroup extends AutoCloseable {
-        void submit();
-        @Override void close();
+    private static void closeCaptures(List<Change> changes) {
+        Throwable failure = null;
+        for (var change : changes) {
+            if (change instanceof Put put) failure = cleanup(failure, put.capture::close);
+        }
+        throwFailure(failure);
     }
 
-    private final class PendingGroup implements UpdateGroup {
-        final Map<Key, Resident> snapshot = new LinkedHashMap<>(residents);
-        final List<SceneEdit> edits = new ArrayList<>();
-        final List<Generation> displaced = new ArrayList<>();
-        boolean finished;
+    /** Captures changes until submission, or releases every captured input when abandoned. */
+    public final class UpdateGroup implements AutoCloseable {
+        private final List<Change> changes = new ArrayList<>();
+        private boolean finished;
 
-        @Override public void submit() {
+        private UpdateGroup() { }
+
+        public void submit() {
             synchronized (MinecraftEntityGeometry.this) {
-                if (!edits.isEmpty()) channel.edit(edits);
-                displaced.forEach(Generation::close);
+                requireRunning();
+                if (finished) throw new IllegalStateException("entity update group is finished");
+                MinecraftEntityGeometry.this.submit(List.copyOf(changes));
                 finished = true;
                 group = null;
             }
@@ -275,29 +417,53 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         @Override public void close() {
             synchronized (MinecraftEntityGeometry.this) {
                 if (finished) return;
-                residents.clear();
-                residents.putAll(snapshot);
+                var abandoned = List.copyOf(changes);
                 finished = true;
                 group = null;
-                completed.removeIf(completion -> {
-                    var resident = residents.get(completion.key);
-                    boolean stale = resident == null || resident.request != completion.request;
-                    if (stale) completion.generation.close();
-                    return stale;
-                });
+                publicationExecutor.execute(() -> closeCaptures(abandoned));
             }
         }
     }
 
     public record Key(long domain, long value) { }
     public record MeshRevision(long epoch, long content, long topology) { }
-
+    private sealed interface Change { Key key(); }
+    private record Put(Key key, Capture capture, GeometryTransform transform, int mask) implements Change { }
+    private record Transform(Key key, GeometryTransform transform, int mask, Runnable accepted) implements Change { }
+    private record Drop(Key key) implements Change { }
+    /** Pending groups may be superseded together, while removal still gives a later put a new identity. */
+    private static final class PendingChanges {
+        boolean dropped;
+        Put put;
+        Transform transform;
+        void merge(Change next, List<Capture> discarded) {
+            switch (next) {
+                case Put value -> {
+                    if (put != null) discarded.add(put.capture);
+                    put = value;
+                    transform = null;
+                }
+                case Transform value -> transform = value;
+                case Drop ignored -> {
+                    if (put != null) discarded.add(put.capture);
+                    dropped = true;
+                    put = null;
+                    transform = null;
+                }
+            }
+        }
+    }
     private record Resident(InstanceId instance, MeshRevision revision, GeometryTransform transform,
                             int mask, Generation live, Preparation request, Capture queued) { }
-    private record Capture(MeshRevision revision, MinecraftEntityMesh mesh, Runnable accepted) { }
-    private record Preparation(Runnable accepted) { }
-    private record Completion(Key key, Preparation request, Generation generation, Throwable failure,
-                              long readyNanos) { }
+    private record Capture(MeshRevision revision, MinecraftEntityUploader.UploadJob upload,
+                           Runnable accepted) implements AutoCloseable {
+        @Override public void close() { upload.close(); }
+    }
+    private static final class Preparation {
+        final Runnable accepted;
+        volatile boolean cancelled;
+        Preparation(Runnable accepted) { this.accepted = accepted; }
+    }
 
     @jdk.jfr.Name("dev.comfyfluffy.caustica.EntityMeshUpload")
     @jdk.jfr.Label("Entity worker packing and mesh submission")
@@ -327,6 +493,10 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     }
     private record Generation(ReadyMesh<MinecraftProgramTypes.InstanceData> mesh,
                               MinecraftEntityUploader.UploadedEntity uploaded) implements AutoCloseable {
-        @Override public void close() { if (mesh != null) mesh.close(); if (uploaded != null) uploaded.close(); }
+        @Override public void close() {
+            Throwable failure = mesh == null ? null : cleanup(null, mesh::close);
+            if (uploaded != null) failure = cleanup(failure, uploaded::close);
+            throwFailure(failure);
+        }
     }
 }

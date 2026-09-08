@@ -3,12 +3,48 @@ package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftEntityMeshTest {
+    @Test
+    void copiesOnlyLogicalStreamRangesAndOwnsTheirContents() {
+        float[] positions = {0, 0, 0, 1, 0, 0, 0, 1, 0, 99, 99, 99};
+        int[] indices = {0, 1, 2, 99, 99, 99};
+        float[] uvs = {0, 0, 1, 0, 0, 1, 99, 99};
+        float[] colors = {1, 0, 0, .25f, 0, 1, 0, .5f, 0, 0, 1, .75f, 99, 99, 99, 99};
+        var material = new MinecraftEntityMesh.Material(ResourceId.of("minecraft", "stone"), null,
+                MinecraftEntityMesh.Program.MATERIAL);
+        var triangle = new MinecraftEntityMesh.Triangle(material, MinecraftEntityMesh.Coverage.OPAQUE,
+                0, 1, 0, 0);
+        var triangles = new ArrayList<>(List.of(triangle));
+
+        var mesh = MinecraftEntityMesh.copyOfRanges(positions, indices, uvs, colors, 3, 3, triangles, 17L);
+        positions[0] = 9;
+        indices[0] = 2;
+        uvs[0] = 9;
+        colors[0] = 9;
+        triangles.clear();
+        mesh.positions()[0] = 8;
+        mesh.indices()[0] = 1;
+        mesh.uvs()[0] = 8;
+        mesh.vertexColors()[0] = 8;
+
+        assertArrayEquals(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, mesh.positions());
+        assertArrayEquals(new int[]{0, 1, 2}, mesh.indices());
+        assertArrayEquals(new float[]{0, 0, 1, 0, 0, 1}, mesh.uvs());
+        assertArrayEquals(new float[]{1, 0, 0, .25f, 0, 1, 0, .5f, 0, 0, 1, .75f}, mesh.vertexColors());
+        assertEquals(3, mesh.vertexCount());
+        assertEquals(1, mesh.triangleCount());
+        assertEquals(17L, mesh.indexRevision());
+        assertEquals(List.of(triangle), mesh.triangles());
+        assertThrows(UnsupportedOperationException.class, () -> mesh.triangles().clear());
+    }
+
     @Test
     void ownsItsGeometryStreamsAndTriangleShadingData() {
         float[] positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};

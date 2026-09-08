@@ -26,6 +26,147 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftEntityGeometryTest {
+    @Test void coalescedRemovalAndRecreationKeepDistinctInstanceIdentity() throws Exception {
+        var scene = new PreparedScene();
+        var release = new java.util.concurrent.CountDownLatch(1);
+        try (var publication = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {},
+                    ignored -> new Uploaded(0x1000), Runnable::run, publication);
+            try {
+                var key = new MinecraftEntityGeometry.Key(1, 1);
+                geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                scene.jobs.getFirst().complete();
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                var old = assertInstanceOf(SceneEdit.SetInstance.class, scene.edits.getFirst().getFirst());
+                publication.submit(() -> {
+                    try { release.await(); }
+                    catch (InterruptedException failure) { throw new AssertionError(failure); }
+                });
+                geometry.put(key, revision(2), mesh(), GeometryTransform.translation(1, 0, 0), 255);
+                geometry.drop(key);
+                geometry.put(key, revision(3), mesh(), GeometryTransform.translation(3, 0, 0), 127);
+                release.countDown();
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(2, scene.jobs.size());
+                scene.jobs.getLast().complete();
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                var next = assertInstanceOf(SceneEdit.SetInstance.class, scene.edits.getLast().getFirst());
+                assertNotSame(old.instance(), next.instance());
+                assertEquals(GeometryTransform.translation(3, 0, 0), next.transform());
+                assertEquals(1, scene.jobs.getFirst().releases);
+            } finally { release.countDown(); geometry.close(); }
+        }
+    }
+
+    @Test void blockedPublicationDoesNotBlockHostCaptureAndPendingMeshesCoalesce() throws Exception {
+        var scene = new PreparedScene();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var block = new java.util.concurrent.atomic.AtomicBoolean();
+        var channel = new dev.comfyfluffy.caustica.api.scene.SceneChannel() {
+            @Override public InstanceId newInstance() { return scene.newInstance(); }
+            @Override public dev.comfyfluffy.caustica.api.light.LightId newLight() { return scene.newLight(); }
+            @Override public void edit(List<? extends SceneEdit> edits) {
+                if (block.compareAndSet(true, false)) {
+                    entered.countDown();
+                    try { release.await(); }
+                    catch (InterruptedException failure) { throw new AssertionError(failure); }
+                }
+                scene.edit(edits);
+            }
+        };
+        var uploads = new ArrayList<Uploaded>();
+        var closedInputs = new java.util.concurrent.atomic.AtomicInteger();
+        var captures = new java.util.concurrent.atomic.AtomicInteger();
+        var uploader = new MinecraftEntityUploader() {
+            @Override public UploadedEntity upload(MinecraftEntityMesh source) { throw new AssertionError(); }
+            @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
+                captures.incrementAndGet();
+                return new UploadJob() {
+                    @Override public UploadedEntity finish() {
+                        var upload = new Uploaded(0x1000);
+                        uploads.add(upload);
+                        return upload;
+                    }
+                    @Override public void close() { closedInputs.incrementAndGet(); }
+                };
+            }
+        };
+        try (var publication = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var geometry = new MinecraftEntityGeometry(scene, channel, new SceneId() {}, uploader,
+                    Runnable::run, publication);
+            try {
+                var key = new MinecraftEntityGeometry.Key(1, 2);
+                geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                block.set(true);
+                scene.jobs.getFirst().complete();
+                assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                var capture = new java.util.concurrent.FutureTask<Void>(() -> {
+                    for (int i = 2; i <= 100; i++) {
+                        try (var group = geometry.beginUpdateGroup()) {
+                            geometry.put(key, revision(i), mesh(), GeometryTransform.translation(i, 0, 0), 127);
+                            group.submit();
+                        }
+                    }
+                    return null;
+                });
+                Thread.ofPlatform().start(capture);
+                capture.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(100, captures.get());
+                assertEquals(1, scene.jobs.size());
+                assertEquals(99, closedInputs.get());
+                release.countDown();
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(2, scene.jobs.size());
+                scene.jobs.getLast().complete();
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                var last = assertInstanceOf(SceneEdit.SetInstance.class, scene.edits.getLast().getFirst());
+                assertEquals(GeometryTransform.translation(100, 0, 0), last.transform());
+                assertEquals(100, closedInputs.get());
+            } finally {
+                release.countDown();
+                geometry.close();
+            }
+        }
+        uploads.forEach(upload -> assertEquals(1, upload.closeCount));
+        scene.jobs.forEach(job -> assertEquals(1, job.releases));
+    }
+
+    @Test void placementGroupCommitsOnceOnWorkerAndAcknowledgesAfterCommit() throws Exception {
+        var scene = new PreparedScene();
+        var caller = Thread.currentThread();
+        var acknowledged = new ArrayList<Thread>();
+        try (var publication = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {},
+                    ignored -> new Uploaded(0x1000), Runnable::run, publication);
+            try {
+                var first = new MinecraftEntityGeometry.Key(1, 1);
+                var second = new MinecraftEntityGeometry.Key(1, 2);
+                geometry.put(first, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+                geometry.put(second, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                scene.jobs.forEach(PreparedScene.Job::complete);
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                int before = scene.edits.size();
+                try (var group = geometry.beginUpdateGroup()) {
+                    geometry.transform(first, GeometryTransform.translation(1, 0, 0), 255,
+                            () -> acknowledged.add(Thread.currentThread()));
+                    geometry.transform(second, GeometryTransform.translation(2, 0, 0), 255,
+                            () -> acknowledged.add(Thread.currentThread()));
+                    assertEquals(before, scene.edits.size());
+                    group.submit();
+                }
+                publication.submit(() -> {}).get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(before + 1, scene.edits.size());
+                assertEquals(2, scene.edits.getLast().size());
+                assertEquals(2, acknowledged.size());
+                acknowledged.forEach(thread -> assertNotSame(caller, thread));
+            } finally { geometry.close(); }
+        }
+    }
+
     @Test void publicationEventMeasuresReadinessBeforeThePublicationBoundary(
             @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
         var output = directory.resolve("entity-publication.jfr");
@@ -39,12 +180,11 @@ final class MinecraftEntityGeometryTest {
                 var key = new MinecraftEntityGeometry.Key(1, 2);
                 geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
                 beforeReady = System.nanoTime();
+                beforePublication = beforeReady;
                 scene.jobs.getFirst().complete();
                 afterReady = System.nanoTime();
-                assertTrue(scene.edits.isEmpty());
-                beforePublication = System.nanoTime();
-                flush(geometry);
-                afterPublication = System.nanoTime();
+                afterPublication = afterReady;
+                assertEquals(1, scene.edits.size());
                 var removed = new MinecraftEntityGeometry.Key(1, 3);
                 geometry.put(removed, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
                 geometry.drop(removed);
@@ -198,7 +338,7 @@ final class MinecraftEntityGeometryTest {
         assertEquals(1, scene.jobs.get(0).releases);
     }
 
-    @Test void rejectedCaptureEditRestoresLiveAndPendingState() {
+    @Test void rejectedCaptureEditLeavesLiveStateAndReportsWorkerFailure() {
         var scene = new PreparedScene();
         var geometry = geometry(scene, ignored -> new Uploaded(0x1000));
         var key = new MinecraftEntityGeometry.Key(1, 2);
@@ -208,12 +348,11 @@ final class MinecraftEntityGeometryTest {
         try (var group = geometry.beginUpdateGroup()) {
             geometry.put(key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 255);
             scene.reject = true;
-            assertThrows(IllegalStateException.class, group::submit);
+            group.submit();
         }
-        scene.jobs.get(1).complete();
-        flush(geometry);
+        assertThrows(IllegalStateException.class, geometry::beginUpdateGroup);
         assertEquals(1, scene.edits.size());
-        assertEquals(1, scene.jobs.get(1).releases);
+        assertEquals(1, scene.jobs.size());
         geometry.close();
         assertEquals(1, scene.jobs.get(0).releases);
     }
@@ -258,7 +397,7 @@ final class MinecraftEntityGeometryTest {
         var newest = mesh();
         geometry.put(key, revision(2), newest, GeometryTransform.translation(5, 0, 0), 255);
         assertEquals(1, queue.size());
-        assertEquals(1, captured.size());
+        assertEquals(2, captured.size());
         assertTrue(scene.jobs.isEmpty());
         var worker = Thread.ofPlatform().start(queue.remove());
         worker.join();
@@ -291,7 +430,8 @@ final class MinecraftEntityGeometryTest {
         geometry.put(key, revision(2), mesh(), GeometryTransform.translation(1, 0, 0), 255);
         geometry.drop(key);
         assertEquals(0, scene.jobs.getFirst().releases);
-        assertFalse(uploads.getLast().closed);
+        assertEquals(1, uploads.size());
+        assertTrue(uploads.getFirst().closed);
         queue.remove().run();
         assertEquals(1, scene.jobs.getFirst().releases);
         assertTrue(uploads.getLast().closed);

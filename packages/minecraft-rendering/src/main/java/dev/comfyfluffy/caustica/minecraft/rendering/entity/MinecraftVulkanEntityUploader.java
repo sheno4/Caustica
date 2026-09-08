@@ -32,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -63,77 +64,69 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
 
     @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
-        TextureSet textureSet = resolveTextures(source);
-        VmaMappedBuffer position = null, index = null, primitive = null, instance = null;
+        var captured = captureTextures(source);
         try {
             var materialIndices = new HashMap<MinecraftEntityMesh.Material, Integer>();
-            MinecraftEntityMesh.Material previousMaterial = null;
             for (var triangle : source.triangles()) {
-                var material = triangle.material();
-                if (material == previousMaterial) continue;
-                if (!materialIndices.containsKey(material)) {
-                    materialIndices.put(material, materials.resolveEntityOrFallback(materialKey(material)).materialIndex());
-                }
-                previousMaterial = material;
+                materialIndices.computeIfAbsent(triangle.material(),
+                        material -> materials.resolveEntityOrFallback(materialKey(material)).materialIndex());
             }
-            position = VmaMappedBuffer.createAsync(gpu, (long) source.vertexCount() * 12,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity positions");
-            index = VmaMappedBuffer.createAsync(gpu, (long) source.triangleCount() * 12,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity indices");
-            primitive = VmaMappedBuffer.create(gpu, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity primitives");
-            instance = VmaMappedBuffer.create(gpu, MinecraftInstanceData.BYTE_SIZE,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity instance");
-            return new PackingJob(source, textureSet, Map.copyOf(materialIndices), position, index, primitive, instance);
+            return new PackingJob(source, captured, Map.copyOf(materialIndices));
         } catch (RuntimeException | Error failure) {
-            Throwable cleanup = closeAll(instance, primitive, index, position, textureSet);
-            if (cleanup != null) failure.addSuppressed(cleanup);
+            Throwable cleanup = closeAll(captured);
+            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
             throw failure;
         }
     }
 
     private final class PackingJob implements UploadJob {
         final MinecraftEntityMesh source;
-        final TextureSet textures;
         final Map<MinecraftEntityMesh.Material, Integer> materialIndices;
-        final VmaMappedBuffer positions, indices, primitive, instance;
-        boolean transferred;
+        CapturedTextures captured;
 
-        PackingJob(MinecraftEntityMesh source, TextureSet textures,
-                   Map<MinecraftEntityMesh.Material, Integer> materialIndices,
-                   VmaMappedBuffer positions, VmaMappedBuffer indices, VmaMappedBuffer primitive, VmaMappedBuffer instance) {
+        PackingJob(MinecraftEntityMesh source, CapturedTextures captured,
+                   Map<MinecraftEntityMesh.Material, Integer> materialIndices) {
             this.source = source;
-            this.textures = textures;
+            this.captured = captured;
             this.materialIndices = materialIndices;
-            this.positions = positions;
-            this.indices = indices;
-            this.primitive = primitive;
-            this.instance = instance;
         }
 
         @Override public UploadedEntity finish() {
-            var positionValues = source.positions();
-            var indexValues = source.indices();
-            write(positions, (long) positionValues.length * 4, bytes -> {
-                for (float value : positionValues) bytes.putFloat(value);
-            });
-            write(indices, (long) indexValues.length * 4, bytes -> {
-                for (int value : indexValues) bytes.putInt(value);
-            });
-            write(primitive, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
-                    bytes -> writePrimitives(bytes, source, positionValues, indexValues, source.uvs(),
-                            source.vertexColors(), textures, materialIndices));
-            write(instance, MinecraftInstanceData.BYTE_SIZE,
-                    bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,
-                            new MinecraftInstanceData.SampledTexture2DIndex(0), 0).write(bytes));
-            transferred = true;
+            var claimed = captured;
+            captured = null;
+            TextureSet textures = allocateTextures(claimed);
+            VmaMappedBuffer positions = null, indices = null, primitive = null, instance = null;
+            try {
+                positions = VmaMappedBuffer.createAsync(gpu, (long) source.vertexCount() * 12,
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity positions");
+                indices = VmaMappedBuffer.createAsync(gpu, (long) source.triangleCount() * 12,
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity indices");
+                primitive = VmaMappedBuffer.create(gpu, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity primitives");
+                instance = VmaMappedBuffer.create(gpu, MinecraftInstanceData.BYTE_SIZE,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity instance");
+                var positionValues = source.positions();
+                var indexValues = source.indices();
+                write(positions, (long) positionValues.length * 4, bytes -> bytes.asFloatBuffer().put(positionValues));
+                write(indices, (long) indexValues.length * 4, bytes -> bytes.asIntBuffer().put(indexValues));
+                write(primitive, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
+                        bytes -> writePrimitives(bytes, source, positionValues, indexValues, source.uvs(),
+                                source.vertexColors(), textures, materialIndices));
+                write(instance, MinecraftInstanceData.BYTE_SIZE,
+                        bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,
+                                new MinecraftInstanceData.SampledTexture2DIndex(0), 0).write(bytes));
+            } catch (RuntimeException | Error failure) {
+                Throwable cleanup = closeAll(instance, primitive, indices, positions, textures);
+                if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
+                throw failure;
+            }
             return uploaded(source, positions, indices, primitive, instance, textures);
         }
 
         @Override public void close() {
-            if (transferred) return;
-            transferred = true;
-            throwIfFailed(closeAll(instance, primitive, indices, positions, textures));
+            var released = captured;
+            captured = null;
+            if (released != null) released.close();
         }
     }
 
@@ -144,6 +137,8 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         ResourceOwner indexGeneration = null;
         ResourceOwner bindingGeneration = null;
         ResourceOwner instanceGeneration = null;
+        // MeshBuild borrows its shader data; each created value still owns a separate resource claim.
+        List<ResourceOwner> claims = new ArrayList<>();
         try {
             positionGeneration = resources.create(positions::close);
             indexGeneration = resources.create(indices::close);
@@ -156,6 +151,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
                         primitive.deviceAddressAt((long) first * MinecraftPrimitiveData.BYTE_SIZE).value(),
                         bindingGeneration);
+                claims.add(binding);
                 MeshBuild.CoveragePolicy policy = coveragePolicy(triangle.coverage());
                 var surface = triangle.material().program() == MinecraftEntityMesh.Program.PORTAL
                         ? new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy)
@@ -169,16 +165,17 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             ShaderData<MinecraftProgramTypes.InstanceData> instanceData = MinecraftProgramTypes.INSTANCE_DATA.data(
                     instance.deviceRange().address().value(), instanceGeneration);
 
-            return new Uploaded(build, instanceData, positionGeneration, indexGeneration,
-                    bindingGeneration, instanceGeneration);
+            claims.add(instanceData);
+            return new Uploaded(build, instanceData, List.copyOf(claims),
+                    List.of(positionGeneration, indexGeneration, bindingGeneration, instanceGeneration));
         } catch (RuntimeException | Error failure) {
-            Throwable cleanup = closeAll(
+            Throwable cleanup = closeAll(new LeaseCloser(claims),
                     positionGeneration == null ? positions : positionGeneration::close,
                     indexGeneration == null ? indices : indexGeneration::close,
                     bindingGeneration == null ? () -> throwIfFailed(closeAll(textureSet, primitive))
                             : bindingGeneration::close,
                     instanceGeneration == null ? instance : instanceGeneration::close);
-            if (cleanup != null) failure.addSuppressed(cleanup);
+            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
             throw failure;
         }
     }
@@ -289,7 +286,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         return new MinecraftPrimitiveData.Float3(x / length, y / length, z / length);
     }
 
-    private TextureSet resolveTextures(MinecraftEntityMesh source) {
+    private CapturedTextures captureTextures(MinecraftEntityMesh source) {
         LinkedHashMap<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases = new LinkedHashMap<>();
         try {
             for (var triangle : source.triangles()) {
@@ -300,35 +297,43 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             }
         } catch (RuntimeException | Error failure) {
             Throwable cleanup = closeAll(new LeaseCloser(leases.values()));
-            if (cleanup != null) failure.addSuppressed(cleanup);
+            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
             throw failure;
         }
+        return new CapturedTextures(leases);
+    }
+
+    /** Consumes the captured host leases on both successful allocation and failure. */
+    private TextureSet allocateTextures(CapturedTextures captured) {
+        var leases = captured.leases;
         if (leases.isEmpty()) return new TextureSet(null, null, Map.of(), Map.of(), List.of());
         GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
         GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange = null;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
+        try {
             range = gpu.descriptorHeap().allocateResources(leases.size());
             samplerRange = gpu.descriptorHeap().allocateSamplers(leases.size());
-            int offset = 0;
             Map<MinecraftEntityMesh.Texture, Integer> indices = new LinkedHashMap<>();
             Map<MinecraftEntityMesh.Texture, Integer> samplerIndices = new LinkedHashMap<>();
-            for (var entry : leases.entrySet()) {
-                BorrowedMinecraftTexture borrowed = entry.getValue();
-                VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
-                        .image(borrowed.vkImage()).viewType(VK_IMAGE_VIEW_TYPE_2D)
-                        .format(borrowed.format());
-                view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                        .baseMipLevel(borrowed.baseMipLevel()).levelCount(borrowed.mipLevels())
-                        .baseArrayLayer(0).layerCount(1);
-                VkImageDescriptorInfoEXT image = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
-                        .pView(view).layout(borrowed.imageLayout());
-                gpu.descriptorHeap().writer().writeResource(range, offset,
-                        VkResourceDescriptorInfoEXT.calloc(stack).sType$Default().type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(d -> d.pImage(image)));
-                gpu.descriptorHeap().writer().writeSampler(samplerRange, offset,
-                        borrowed.sampler().write(VkSamplerCreateInfo.calloc(stack).sType$Default()));
-                indices.put(entry.getKey(), Math.addExact(range.firstIndex().value(), offset));
-                samplerIndices.put(entry.getKey(), Math.addExact(samplerRange.firstIndex().value(), offset));
-                offset++;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                int offset = 0;
+                for (var entry : leases.entrySet()) {
+                    BorrowedMinecraftTexture borrowed = entry.getValue();
+                    VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
+                            .image(borrowed.vkImage()).viewType(VK_IMAGE_VIEW_TYPE_2D)
+                            .format(borrowed.format());
+                    view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                            .baseMipLevel(borrowed.baseMipLevel()).levelCount(borrowed.mipLevels())
+                            .baseArrayLayer(0).layerCount(1);
+                    VkImageDescriptorInfoEXT image = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
+                            .pView(view).layout(borrowed.imageLayout());
+                    gpu.descriptorHeap().writer().writeResource(range, offset,
+                            VkResourceDescriptorInfoEXT.calloc(stack).sType$Default().type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(d -> d.pImage(image)));
+                    gpu.descriptorHeap().writer().writeSampler(samplerRange, offset,
+                            borrowed.sampler().write(VkSamplerCreateInfo.calloc(stack).sType$Default()));
+                    indices.put(entry.getKey(), Math.addExact(range.firstIndex().value(), offset));
+                    samplerIndices.put(entry.getKey(), Math.addExact(samplerRange.firstIndex().value(), offset));
+                    offset++;
+                }
             }
             return new TextureSet(range, samplerRange, Map.copyOf(indices), Map.copyOf(samplerIndices),
                     List.copyOf(leases.values()));
@@ -338,13 +343,13 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             Throwable cleanup = closeAll(allocated == null ? null : allocated::destroy,
                     allocatedSamplers == null ? null : allocatedSamplers::destroy,
                     new LeaseCloser(leases.values()));
-            if (cleanup != null) failure.addSuppressed(cleanup);
+            if (cleanup != null && cleanup != failure) failure.addSuppressed(cleanup);
             throw failure;
         }
     }
 
-    private static void write(VmaMappedBuffer buffer, long size, Writer writer) {
-        writer.write(buffer.mapped().order(ByteOrder.LITTLE_ENDIAN));
+    private static void write(VmaMappedBuffer buffer, long size, Consumer<ByteBuffer> writer) {
+        writer.accept(buffer.mapped().order(ByteOrder.LITTLE_ENDIAN));
         buffer.flush(0L, size);
     }
 
@@ -356,7 +361,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 value.close();
             } catch (Throwable next) {
                 if (failure == null) failure = next;
-                else failure.addSuppressed(next);
+                else if (next != failure) failure.addSuppressed(next);
             }
         }
         return failure;
@@ -383,22 +388,12 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                     samplerRange == null ? null : samplerRange::destroy, new LeaseCloser(leases)));
         }
     }
-    private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
-                            ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                            ResourceOwner positionGeneration,
-                            ResourceOwner indexGeneration,
-                            ResourceOwner bindingGeneration,
-                            ResourceOwner instanceGeneration) implements UploadedEntity {
+    record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
+                    ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
+                    List<ResourceOwner> shaderClaims,
+                    List<ResourceOwner> bufferClaims) implements UploadedEntity {
         @Override public void close() {
-            for (var geometry : build.geometries()) {
-                if (geometry.surface() != null) geometry.surface().bindingData().close();
-                if (geometry.volume() != null) geometry.volume().bindingData().close();
-            }
-            instanceData.close();
-            positionGeneration.close();
-            indexGeneration.close();
-            bindingGeneration.close();
-            instanceGeneration.close();
+            throwIfFailed(closeAll(new LeaseCloser(shaderClaims), new LeaseCloser(bufferClaims)));
         }
     }
     record GeometryRange(int firstTriangle, int endTriangle) { }
@@ -411,10 +406,13 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             throwIfFailed(closeAll(leases.toArray(AutoCloseable[]::new)));
         }
     }
+    private record CapturedTextures(Map<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases)
+            implements AutoCloseable {
+        @Override public void close() { new LeaseCloser(leases.values()).close(); }
+    }
     private static void throwIfFailed(Throwable failure) {
         if (failure instanceof RuntimeException runtime) throw runtime;
         if (failure instanceof Error error) throw error;
         if (failure != null) throw new IllegalStateException(failure);
     }
-    @FunctionalInterface private interface Writer { void write(ByteBuffer bytes); }
 }

@@ -5,18 +5,120 @@ import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTex
 import dev.comfyfluffy.caustica.minecraft.rendering.texture.MinecraftTextureSampler;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialPageCompiler;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
+import org.lwjgl.vulkan.VkDevice;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftVulkanEntityUploaderTest {
+    @Test void captureOwnsOneLeasePerTextureAndCancellationAllocatesNoGpuResources() {
+        var caller = Thread.currentThread();
+        var resolved = new ArrayList<MinecraftEntityMesh.Texture>();
+        var closed = new ArrayList<String>();
+        var texture = MinecraftEntityMesh.Texture.standalone(ResourceId.of("test", "entity"));
+        var material = new MinecraftEntityMesh.Material(ResourceId.of("test", "entity"), texture,
+                MinecraftEntityMesh.Program.MATERIAL);
+        var uploader = uploader(unavailableGpu(method -> fail("capture called GPU " + method)), input -> {
+            assertSame(caller, Thread.currentThread());
+            resolved.add(input);
+            return lease(closed, "texture", false);
+        });
+
+        var job = uploader.prepareUpload(mesh(List.of(triangle(material, MinecraftEntityMesh.Coverage.CUTOUT),
+                triangle(material, MinecraftEntityMesh.Coverage.CUTOUT))));
+
+        assertEquals(List.of(texture), resolved);
+        assertTrue(closed.isEmpty());
+        job.close();
+        job.close();
+        assertEquals(List.of("texture"), closed);
+    }
+
+    @Test void failedWorkerAllocationReleasesCapturedLeasesOnce() throws Exception {
+        var caller = Thread.currentThread();
+        var gpuThreads = new ArrayList<Thread>();
+        var closed = new ArrayList<String>();
+        var texture = MinecraftEntityMesh.Texture.standalone(ResourceId.of("test", "entity"));
+        var material = new MinecraftEntityMesh.Material(ResourceId.of("test", "entity"), texture,
+                MinecraftEntityMesh.Program.MATERIAL);
+        var failure = new IllegalStateException("allocation failed");
+        var uploader = uploader(unavailableGpu(method -> {
+            gpuThreads.add(Thread.currentThread());
+            throw failure;
+        }), input -> {
+            assertSame(caller, Thread.currentThread());
+            return lease(closed, "texture", false);
+        });
+        var job = uploader.prepareUpload(mesh(List.of(triangle(material, MinecraftEntityMesh.Coverage.CUTOUT))));
+        assertTrue(gpuThreads.isEmpty());
+
+        try (var worker = Executors.newSingleThreadExecutor()) {
+            worker.submit(() -> assertSame(failure, assertThrows(IllegalStateException.class, job::finish))).get();
+        }
+        assertEquals(1, gpuThreads.size());
+        assertNotSame(caller, gpuThreads.getFirst());
+        assertEquals(List.of("texture"), closed);
+        job.close();
+        assertEquals(List.of("texture"), closed);
+    }
+
+    @Test void failedHostCaptureClosesEarlierLeases() {
+        var closed = new ArrayList<String>();
+        var firstTexture = MinecraftEntityMesh.Texture.standalone(ResourceId.of("test", "first"));
+        var secondTexture = MinecraftEntityMesh.Texture.standalone(ResourceId.of("test", "second"));
+        var first = new MinecraftEntityMesh.Material(ResourceId.of("test", "first"), firstTexture,
+                MinecraftEntityMesh.Program.MATERIAL);
+        var second = new MinecraftEntityMesh.Material(ResourceId.of("test", "second"), secondTexture,
+                MinecraftEntityMesh.Program.MATERIAL);
+        var uploader = uploader(unavailableGpu(method -> fail("capture called GPU " + method)), input -> {
+            if (input.equals(secondTexture)) throw new IllegalStateException("capture failed");
+            return lease(closed, "first", false);
+        });
+
+        assertThrows(IllegalStateException.class, () -> uploader.prepareUpload(mesh(List.of(
+                triangle(first, MinecraftEntityMesh.Coverage.CUTOUT),
+                triangle(second, MinecraftEntityMesh.Coverage.CUTOUT)))));
+        assertEquals(List.of("first"), closed);
+    }
+
+    private static MinecraftVulkanEntityUploader uploader(GpuDevice gpu, EntityTextureResolver resolver) {
+        var materials = MinecraftMaterialLookup.compile(new ResourcePackEpoch(1), List.of(), List.of(),
+                MinecraftMaterialPageCompiler.compile(List.of()));
+        return new MinecraftVulkanEntityUploader(gpu, materials,
+                new MinecraftPrograms(null, null, null, null, null), resolver,
+                retired -> { throw new AssertionError("resource ownership requires a completed upload"); });
+    }
+
+    private static GpuDevice unavailableGpu(Consumer<String> access) {
+        return new GpuDevice() {
+            @Override public VkDevice vk() { access.accept("vk"); throw new AssertionError(); }
+            @Override public long vmaAllocator() { access.accept("vmaAllocator"); throw new AssertionError(); }
+            @Override public int[] asyncBufferSharingQueueFamilies() {
+                access.accept("asyncBufferSharingQueueFamilies");
+                throw new AssertionError();
+            }
+            @Override public GpuDescriptorHeap descriptorHeap() {
+                access.accept("descriptorHeap");
+                throw new AssertionError();
+            }
+        };
+    }
+
     @Test void groupsOnlyAdjacentMatchingProgramAndCoverage() {
         var material = material("stone", MinecraftEntityMesh.Program.MATERIAL);
         var portal = material("portal", MinecraftEntityMesh.Program.PORTAL);
@@ -90,6 +192,11 @@ final class MinecraftVulkanEntityUploaderTest {
 
     private static BorrowedMinecraftTexture lease(
             List<String> closed, String name, boolean fail) {
+        return lease(closed, name, fail ? new IllegalArgumentException(name) : null);
+    }
+
+    private static BorrowedMinecraftTexture lease(
+            List<String> closed, String name, RuntimeException failure) {
         return new BorrowedMinecraftTexture() {
             @Override public long vkImage() { return 1; }
             @Override public int format() { return 37; }
@@ -99,7 +206,7 @@ final class MinecraftVulkanEntityUploaderTest {
             @Override public MinecraftTextureSampler sampler() { return MinecraftTextureSampler.PIXEL_ART; }
             @Override public void close() {
                 closed.add(name);
-                if (fail) throw new IllegalArgumentException(name);
+                if (failure != null) throw failure;
             }
         };
     }
@@ -158,6 +265,58 @@ final class MinecraftVulkanEntityUploaderTest {
         assertInstanceOf(IllegalStateException.class, failure);
         assertEquals(1, failure.getSuppressed().length);
         assertInstanceOf(IllegalArgumentException.class, failure.getSuppressed()[0]);
+    }
+
+    @Test void repeatedCleanupFailureDoesNotSkipRemainingResources() {
+        var closed = new ArrayList<Integer>();
+        var failure = new IllegalStateException("shared failure");
+        assertSame(failure, MinecraftVulkanEntityUploader.closeAll(
+                () -> { closed.add(1); throw failure; },
+                () -> { closed.add(2); throw failure; },
+                () -> closed.add(3)));
+        assertEquals(List.of(1, 2, 3), closed);
+        assertEquals(0, failure.getSuppressed().length);
+    }
+
+    @Test void failedAllocationPreservesTheSameFailureThrownByLeaseCleanup() {
+        var closed = new ArrayList<String>();
+        var failure = new IllegalStateException("shared failure");
+        var texture = MinecraftEntityMesh.Texture.standalone(ResourceId.of("test", "entity"));
+        var material = new MinecraftEntityMesh.Material(ResourceId.of("test", "entity"), texture,
+                MinecraftEntityMesh.Program.MATERIAL);
+        var uploader = uploader(unavailableGpu(method -> { throw failure; }),
+                input -> lease(closed, "texture", failure));
+        try (var job = uploader.prepareUpload(mesh(List.of(triangle(material, MinecraftEntityMesh.Coverage.CUTOUT))))) {
+            assertSame(failure, assertThrows(IllegalStateException.class, job::finish));
+        }
+        assertEquals(List.of("texture"), closed);
+        assertEquals(0, failure.getSuppressed().length);
+    }
+
+    @Test void uploadedEntityReleasesAllClaimsAfterCleanupFailure() {
+        var closed = new ArrayList<Integer>();
+        var failure = new IllegalStateException("first claim");
+        var claims = new ArrayList<dev.comfyfluffy.caustica.api.resource.ResourceOwner>();
+        for (int i = 0; i < 3; i++) {
+            int index = i;
+            claims.add(new dev.comfyfluffy.caustica.api.resource.ResourceOwner() {
+                boolean released;
+                @Override public dev.comfyfluffy.caustica.api.resource.ResourceOwner retain() {
+                    throw new AssertionError("closing must not retain");
+                }
+                @Override public void close() {
+                    if (released) return;
+                    released = true;
+                    closed.add(index);
+                    if (index == 0) throw failure;
+                }
+            });
+        }
+        var uploaded = new MinecraftVulkanEntityUploader.Uploaded(null, null,
+                List.of(claims.get(0)), List.copyOf(claims.subList(1, 3)));
+        assertSame(failure, assertThrows(IllegalStateException.class, uploaded::close));
+        uploaded.close();
+        assertEquals(List.of(0, 1, 2), closed);
     }
 
     private static MinecraftEntityMesh mesh(List<MinecraftEntityMesh.Triangle> triangles) {
