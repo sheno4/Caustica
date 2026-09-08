@@ -1,23 +1,8 @@
-// Physically based sky: Hillaire 2020, "A Scalable and Production Ready Sky and Atmosphere Rendering
-// Technique" (EGSR). Three LUTs, all produced by compute passes in this directory:
-//
-//   sky_transmittance.comp  256x64   static  transmittance from a point to space, by (altitude, cos zenith)
-//   sky_multiscatter.comp    32x32   static  second-and-higher-order scattering, by (altitude, cos sun zenith)
-//   sky_view.comp           192x216  per-frame  the sky dome itself, one 192x108 slice per celestial body
-//
-// This module holds everything the three passes and world.rmiss/world.rgen share, so the LUT and the
-// shaded result can never be computed from different physics.
-//
-// The multiple-scattering LUT supplies twilight and anti-solar illumination directly, so the sky needs no
-// authored fill or crossfade between lighting states.
-//
-// Everything is photometric: illuminance in lux goes in and luminance in cd/m² comes out. Colour is
-// linear BT.709 inside this module and crosses to ACEScg exactly
-// once, at the consumer's output.
-//
-// Lengths are KILOMETRES and coefficients 1/km throughout. The LUT parameterisations take square roots of
-// differences of radii around 6360 vs 6460; in metres those differences lose most of their fp32
-// significand and the horizon row of the sky-view LUT visibly quantises.
+// Hillaire atmosphere model shared by the LUT bakes and the Overworld environment evaluator.
+// Transmittance and multiple-scattering tables are reused between bakes; the sky-view table stores
+// separate sun and moon slices each frame. Lengths are kilometres and extinction coefficients are 1/km.
+// Illuminance is in lux and output luminance in cd/m^2. Colors use linear BT.709 until the environment
+// evaluator converts the result to ACEScg.
 module caustica_minecraft_sky_atmosphere;
 
 import caustica_resources;
@@ -150,20 +135,14 @@ public void transmittanceLutParams(float2 uv, out float radiusKm, out float cosZ
     cosZenith = clamp(cosZenith, -1.0, 1.0);
 }
 
-// Sampling any of these LUTs must address texel CENTRES: the parameterisations above are defined on the
-// closed [0,1] range, while a sampler's [0,1] spans centre-to-centre of the outermost texels.
+// Map the parameterization's closed [0,1] interval to the outermost texel centers. Normalized texture
+// coordinates 0 and 1 lie at texture edges, so sampling needs this half-texel adjustment.
 public float2 unitToSubUv(float2 uv, float2 size) {
     return (uv * (size - 1.0) + 0.5) / size;
 }
 
 public float2 subUvToUnit(float2 uv, float2 size) {
     return (uv * size - 0.5) / (size - 1.0);
-}
-
-public float3 sampleTransmittance(Sampler2D lut, float radiusKm, float cosZenith) {
-    float2 uv = transmittanceLutUv(radiusKm, cosZenith);
-    uv = unitToSubUv(saturate(uv), float2(float(TRANSMITTANCE_LUT_W), float(TRANSMITTANCE_LUT_H)));
-    return lut.SampleLevel(uv, 0.0).rgb;
 }
 
 public float3 sampleTransmittance(SampledTexture2DIndex lut, SamplerIndex samplerIndex,
@@ -174,28 +153,10 @@ public float3 sampleTransmittance(SampledTexture2DIndex lut, SamplerIndex sample
 }
 
 /**
- * Transmittance from the viewer to space along a world direction (world up = +Y), zero below the local
- * horizon.
- *
- * <p>The horizon gate is NOT redundant with the LUT. The transmittance parameterisation runs from
- * straight up to the ground-tangent ray and stops there, so every direction below the horizon clamps to
- * that last column — about 5% in red at sea level, not zero. Sampling the raw LUT for a set sun therefore
- * hands back ~6,000 lux of deep red light that never goes away, which would leave the world lit from
- * below all night and keep the sun's disc drawn under the ground. (The raymarch has no such problem: its
- * per-sample `lightVisibility` already gates on the same geometry.)
- *
- * <p>{@code angularRadius} is the light's own angular size, so a body sets over its own width instead of
- * switching off at a mathematical line.
+ * Viewer-to-space transmittance for a unit world direction, with +Y up.
+ * The LUT ends at the ground-tangent ray, so lower directions need an explicit horizon gate.
+ * The light's angular radius softens that gate over its apparent width.
  */
-public float3 transmittanceToSpace(Sampler2D lut, float viewerRadiusKm, float3 dir, float angularRadius) {
-    // cos of the zenith angle of the ground-tangent ray: the viewer's horizon, which dips further below
-    // horizontal the higher the viewer is.
-    float horizonCos = horizonZenithCos(viewerRadiusKm);
-    float softness = max(sin(angularRadius), 1.0e-4);
-    float aboveHorizon = smoothstep(horizonCos - softness, horizonCos + softness, dir.y);
-    return sampleTransmittance(lut, viewerRadiusKm, dir.y) * aboveHorizon;
-}
-
 public float3 transmittanceToSpace(SampledTexture2DIndex lut, SamplerIndex samplerIndex,
         float viewerRadiusKm, float3 dir, float angularRadius) {
     float horizonCos = horizonZenithCos(viewerRadiusKm);
@@ -223,12 +184,6 @@ public void multiScatterLutParams(float2 uv, out float radiusKm, out float cosSu
                      ATMOS_TOP_KM - MIN_VIEWER_ALTITUDE_KM);
 }
 
-public float3 sampleMultiScatter(Sampler2D lut, float radiusKm, float cosSunZenith) {
-    float2 uv = multiScatterLutUv(radiusKm, cosSunZenith);
-    uv = unitToSubUv(uv, float2(float(MULTISCATTER_LUT_W), float(MULTISCATTER_LUT_H)));
-    return lut.SampleLevel(uv, 0.0).rgb;
-}
-
 public float3 sampleMultiScatter(SampledTexture2DIndex lut, SamplerIndex samplerIndex,
         float radiusKm, float cosSunZenith) {
     float2 uv = multiScatterLutUv(radiusKm, cosSunZenith);
@@ -236,28 +191,8 @@ public float3 sampleMultiScatter(SampledTexture2DIndex lut, SamplerIndex sampler
     return sampleTexture2DLod(lut, samplerIndex, uv, 0.0).rgb;
 }
 
-// Smallest viewer altitude the fp32 geometry can actually resolve, and the floor every consumer of a
-// radius here clamps to.
-//
-// At radius == ATMOS_BOTTOM_KM the model degenerates: the horizon collapses onto the horizontal, the
-// ray/ground test returns its tangent root at t == 0 so `tGround > 0` reads false, and the march runs
-// straight through the planet instead of stopping at it.
-//
-// The floor has to be far larger than it looks, for two reasons that both come from working in km at
-// planet scale:
-//
-//   * one fp32 ULP at 6360 km is 0.488 m, so any altitude below half a metre is not representable at all
-//     — `6360.0001f` IS `6360.0f`, and a floor of a tenth of a metre silently does nothing;
-//   * every horizon test computes `r*r - bottom*bottom`, a subtraction of two numbers near 4.0e7 where
-//     the ULP is 4 km². The exact value is `2*bottom*h`, so at 0.5 m altitude that difference carries 26%
-//     error, at 5 m 0.6%, and only past a few tens of metres does it stop mattering.
-//
-// 50 m is ~100 ULP of margin, leaves the horizon dip accurate to 0.001 degrees, and costs nothing: it is
-// 0.05% of the 100 km shell, and with RtComposite's 100-blocks-per-km scale it only raises cameras below
-// about y = 68 — which it moves by a fifth of a degree of horizon dip, well under the width of the
-// drawn sun. The alternative is reformulating every ray/sphere test to take altitude instead of radius
-// (the exact `2*bottom*h + h*h` form); that is worth doing only if the viewer ever needs to sit within
-// metres of the shell, which nothing here does.
+// Keep the viewer off the ground shell: exact contact gives a zero-distance ground intersection.
+// The 50 m floor also limits cancellation in fp32 radius-squared differences at planet scale.
 public static const float MIN_VIEWER_ALTITUDE_KM = 0.05;
 
 /** Cosine of the zenith angle of the ground-tangent direction: the viewer's geometric horizon. */
@@ -473,7 +408,7 @@ public void celestialSquareFrame(float3 bodyDir, out float3 right, out float3 up
 /**
  * Gnomonic projection of {@code dir} into a body's tangent square, in units of its half-angle:
  * {@code local} within [-1,1]² is on the body. A square (not a disc) because vanilla draws both bodies as
- * textured quads, and the sprite's own alpha then shapes what is actually visible.
+ * textured quads; the environment evaluator derives the visible shape from the sampled texels.
  */
 public bool celestialSquareLocal(float3 dir, float3 bodyDir, float halfAngle, out float2 local) {
     local = float2(2.0, 2.0);
@@ -489,7 +424,7 @@ public bool celestialSquareLocal(float3 dir, float3 bodyDir, float halfAngle, ou
     return all(abs(local) < float2(1.0, 1.0));
 }
 
-// The Overworld sky's own per-frame inputs: only what the CPU alone can know — Minecraft's four eased
+// The Overworld sky's own per-frame inputs: only what the CPU alone can know — Minecraft's three eased
 // celestial angles (the 26.2 timeline drives them through a cubic-bezier ease and a datapack may replace
 // the track, so they are read from the attribute probe rather than re-derived from the tick), its star
 // brightness and moon phase, the photometric anchors, and SkyLutPass's own sky.* geometry options. Every
@@ -522,7 +457,7 @@ public struct SkyInputs {
 
 // ---- Per-frame sky state ------------------------------------------------------------------------
 //
-// SkyInputs carries only what the CPU alone can know: Minecraft's four eased celestial
+// SkyInputs carries Minecraft's three eased celestial
 // angles, its star brightness, the moon phase, the photometric anchors, and SkyLutPass's sky.* options.
 // Every direction, colour, level, and transmittance is derived here so atmospheric physics has one
 // implementation — shared by the LUT bakes and the sky slot's LUT-lifetime device-address buffer.
@@ -543,7 +478,6 @@ public struct SkyState {
     public float  noonTilt;
     public float  groundAlbedo;
     public float  horizonSoften;       // radians below the horizon over which the ground fades in
-    public float  moonPhaseIndex;      // 0 full .. 4 new
     public float4 sunUv;
     public float4 moonUv;
 };
@@ -574,7 +508,6 @@ public SkyState skyState(SkyInputs push) {
     s.airglowLuminance = push.skyLook0.z;
     s.groundAlbedo = push.skyLook3.x;
     s.horizonSoften = push.skyLook3.y;
-    s.moonPhaseIndex = push.skyLook2.w;
     s.sunUv = push.sunUv;
     s.moonUv = push.moonUv;
     return s;

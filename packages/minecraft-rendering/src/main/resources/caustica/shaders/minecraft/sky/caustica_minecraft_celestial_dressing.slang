@@ -1,18 +1,8 @@
 module caustica_minecraft_celestial_dressing;
 
-// Small helpers for what a sky with a visible sun, moon, and starfield draws on top of its atmosphere
-// in-scatter. Shared by the Overworld sky slot and any other dimension sky, so a second sky can reuse
-// the star machinery with its own cell density and colour ramp instead of copy-pasting it.
-//
-// Deliberately independent of caustica_minecraft_sky_atmosphere and its SkyState: every value here is a plain
-// scalar or vector the caller derives however its own atmosphere model works, not a dependency on the
-// Hillaire LUT machinery.
+// Celestial sprite and starfield helpers consume plain scalar/vector inputs from the sky model.
 
-/**
- * Drawn disc radiance derived from illuminance and the solid angle a body is actually DRAWN at
- * (L = E / Ω), deliberately not from its true surface luminance because Minecraft draws oversized
- * celestial bodies.
- */
+/** Normalize illuminance by the tangent square's projected area for Minecraft's oversized bodies. */
 public float3 discRadiance(float illuminance, float halfAngle) {
     float side = 2.0 * tan(halfAngle); // the square spans this much on a side, gnomonically
     return float3(illuminance / max(side * side, 1.0e-8));
@@ -31,10 +21,8 @@ public float3 rotateAxis(float3 v, float3 axis, float ang) {
     return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
 }
 
-// Procedural starfield, a faithful port of vanilla's buildStars(): discrete stars at random sphere
-// directions, each a small SQUARE billboard of random size and rotation. A cube-map grid is the spatial
-// accelerator — at most one star per cell, at a hashed position inset from the cell edges (so its square
-// never crosses into a neighbour), drawn as a hash-rotated square of hashed size.
+// A cube-face grid selects at most one hashed square star per cell. Position, size and rotation are
+// fixed by the cell hash; the inset keeps each rotated square inside its cell.
 static const float STAR_HALF = 0.045; // star half-size as a fraction of a cell (≈ vanilla 0.11° at centre)
 
 /**
@@ -56,13 +44,20 @@ public float3 stars(float3 dir, float3 axis, float wheelAngle, float luminance, 
         return float3(0.0);
     }
     float3 sdir = rotateAxis(dir, axis, -wheelAngle);
-    // Cube-map face + 2D gnomonic uv → uniform square cells, no pole/equator distortion.
+    // Select the cube face and divide its gnomonic coordinates into square cells.
     float3 a = abs(sdir);
     float2 uv;
     float face;
-    if (a.x >= a.y && a.x >= a.z)      { uv = sdir.yz / a.x; face = sdir.x > 0.0 ? 0.0 : 1.0; }
-    else if (a.y >= a.z)               { uv = sdir.xz / a.y; face = sdir.y > 0.0 ? 2.0 : 3.0; }
-    else                               { uv = sdir.xy / a.z; face = sdir.z > 0.0 ? 4.0 : 5.0; }
+    if (a.x >= a.y && a.x >= a.z) {
+        uv = sdir.yz / a.x;
+        face = sdir.x > 0.0 ? 0.0 : 1.0;
+    } else if (a.y >= a.z) {
+        uv = sdir.xz / a.y;
+        face = sdir.y > 0.0 ? 2.0 : 3.0;
+    } else {
+        uv = sdir.xy / a.z;
+        face = sdir.z > 0.0 ? 4.0 : 5.0;
+    }
     float2 g = uv * cellDensity;
     float3 id = float3(floor(g), face);
     if (hash13(id) < threshold) {
