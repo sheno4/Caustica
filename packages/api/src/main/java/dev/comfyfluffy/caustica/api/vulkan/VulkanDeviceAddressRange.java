@@ -3,10 +3,11 @@ package dev.comfyfluffy.caustica.api.vulkan;
 import java.util.Objects;
 
 /**
- * A retained byte range in Vulkan device-addressable memory.
+ * A byte range in Vulkan device-addressable memory, without ownership of that memory.
  *
  * <p>This is the Java value counterpart of a {@code VkDeviceAddressRangeKHR}. It deliberately is not an
  * LWJGL native struct: retained API values must not borrow a {@code MemoryStack} or arena lifetime.
+ * The caller separately keeps the addressed allocation alive through every GPU use.
  *
  * @param address first byte in the range
  * @param byteSize positive range length in bytes
