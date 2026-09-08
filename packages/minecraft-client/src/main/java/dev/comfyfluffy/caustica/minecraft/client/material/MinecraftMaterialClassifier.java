@@ -10,7 +10,6 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockState;
 
-import java.util.Map;
 import java.util.Set;
 
 /** Translates Minecraft block and texture semantics into renderer OpenPBR compile inputs. */
@@ -18,14 +17,14 @@ public final class MinecraftMaterialClassifier {
     public static final float ICE_IOR = 1.309f;
     public static final float WATER_IOR = 1.333f;
 
-    private static final Map<String, Float> IOR_BY_MATERIAL = Map.of(
-            "block/ice", ICE_IOR,
-            "block/packed_ice", ICE_IOR,
-            "block/blue_ice", ICE_IOR,
-            "block/frosted_ice_0", ICE_IOR,
-            "block/frosted_ice_1", ICE_IOR,
-            "block/frosted_ice_2", ICE_IOR,
-            "block/frosted_ice_3", ICE_IOR);
+    private static final Set<ResourceId> ICE_MATERIALS = Set.of(
+            ResourceId.of("minecraft", "block/ice"),
+            ResourceId.of("minecraft", "block/packed_ice"),
+            ResourceId.of("minecraft", "block/blue_ice"),
+            ResourceId.of("minecraft", "block/frosted_ice_0"),
+            ResourceId.of("minecraft", "block/frosted_ice_1"),
+            ResourceId.of("minecraft", "block/frosted_ice_2"),
+            ResourceId.of("minecraft", "block/frosted_ice_3"));
 
     private static final Set<Block> POLISHED = Set.of(
             Blocks.QUARTZ_BLOCK, Blocks.SMOOTH_QUARTZ, Blocks.QUARTZ_BRICKS, Blocks.QUARTZ_PILLAR,
@@ -56,8 +55,7 @@ public final class MinecraftMaterialClassifier {
 
     public static float dielectricIor(ResourceId material) {
         if (material == null) return OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR;
-        return IOR_BY_MATERIAL.getOrDefault(material.path(),
-                OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR);
+        return ICE_MATERIALS.contains(material) ? ICE_IOR : OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR;
     }
 
     private static boolean isMetal(SoundType sound) {

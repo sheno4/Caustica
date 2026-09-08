@@ -28,7 +28,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -66,8 +66,8 @@ public final class MinecraftMaterialCatalogBuilder {
                                     alphaFrames,
                                     Math.max(1, original.getWidth() / sprite.contents().width()))),
                     new MaterialUv(sprite.getU0(), sprite.getV0(),
-                            inverseExtent(sprite.getU1() - sprite.getU0()),
-                            inverseExtent(sprite.getV1() - sprite.getV0())),
+                            1.0f / (sprite.getU1() - sprite.getU0()),
+                            1.0f / (sprite.getV1() - sprite.getV0())),
                     spec.isPresent(), normal.isPresent(), spec.isPresent() || inferEmission,
                     OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
                     MinecraftMaterialClassifier.dielectricIor(material), uniformEmissionLuminance));
@@ -82,20 +82,16 @@ public final class MinecraftMaterialCatalogBuilder {
     private static List<MaterialTextureResource> standaloneResources(Set<ResourceId> blockNames,
                                                                       List<MinecraftMaterialRule> rules,
                                                                       float uniformEmissionLuminance) {
-        Map<Identifier, Integer> discovered = discoverStandalone(blockNames, rules);
+        Set<Identifier> discovered = discoverStandalone(blockNames, rules);
         List<MaterialTextureResource> result = new ArrayList<>();
-        for (Map.Entry<Identifier, Integer> entry : discovered.entrySet()) {
-            Identifier albedoLocation = entry.getKey();
+        for (Identifier albedoLocation : discovered) {
             Optional<Resource> albedoResource = resource(albedoLocation);
             if (albedoResource.isEmpty()) continue;
             try (MaterialImage albedo = resourceImage(albedoResource.get(), false).open()) {
                 if (albedo.width() <= 0 || albedo.height() <= 0) continue;
                 ResourceId material = MinecraftResourceIds.logicalTexture(albedoLocation);
-                int features = entry.getValue();
-                Optional<Resource> spec = (features & 1) != 0
-                        ? resource(siblingTexture(albedoLocation, "_s")) : Optional.empty();
-                Optional<Resource> normal = (features & 2) != 0
-                        ? resource(siblingTexture(albedoLocation, "_n")) : Optional.empty();
+                Optional<Resource> spec = resource(siblingTexture(albedoLocation, "_s"));
+                Optional<Resource> normal = resource(siblingTexture(albedoLocation, "_n"));
                 MaterialImageSource albedoSource = resourceImage(albedoResource.get(), false);
                 MaterialImageSource specular = spec.map(value -> resourceImage(value, false)).orElse(null);
                 MaterialImageSource normalMap = normal.map(value -> resourceImage(value, false)).orElse(null);
@@ -112,26 +108,24 @@ public final class MinecraftMaterialCatalogBuilder {
         return result;
     }
 
-    private static Map<Identifier, Integer> discoverStandalone(Set<ResourceId> blockNames,
-                                                                List<MinecraftMaterialRule> rules) {
-        Map<Identifier, Integer> result = new LinkedHashMap<>();
+    private static Set<Identifier> discoverStandalone(Set<ResourceId> blockNames,
+                                                       List<MinecraftMaterialRule> rules) {
+        Set<Identifier> result = new LinkedHashSet<>();
         Map<Identifier, Resource> authored = Minecraft.getInstance().getResourceManager().listResources(
                 "textures", id -> id.getPath().endsWith("_s.png") || id.getPath().endsWith("_n.png"));
         List<Identifier> ordered = new ArrayList<>(authored.keySet());
         ordered.sort(Comparator.comparing(Identifier::toString));
         for (Identifier companion : ordered) {
             String path = companion.getPath();
-            boolean spec = path.endsWith("_s.png");
             Identifier albedo = Identifier.fromNamespaceAndPath(companion.getNamespace(),
                     path.substring(0, path.length() - 6) + ".png");
             ResourceId material = MinecraftResourceIds.logicalTexture(albedo);
-            if (blockNames.contains(material) || resource(albedo).isEmpty()) continue;
-            result.merge(albedo, spec ? 1 : 2, (a, b) -> a | b);
+            if (!blockNames.contains(material)) result.add(albedo);
         }
         for (MinecraftMaterialRule rule : rules) {
             if (rule.geometry() != null || blockNames.contains(rule.material())) continue;
             Identifier albedo = textureLocation(rule.material());
-            if (resource(albedo).isPresent()) result.merge(albedo, 0, (a, b) -> a | b);
+            result.add(albedo);
         }
         return result;
     }
@@ -144,7 +138,6 @@ public final class MinecraftMaterialCatalogBuilder {
     }
 
     private static MaterialImageSource borrowed(NativeImage image, int width, int height) {
-        if (image == null) return () -> new NeutralImage(width, height);
         return () -> new MinecraftMaterialImage(image::getPixel, width, height, () -> { });
     }
 
@@ -177,10 +170,6 @@ public final class MinecraftMaterialCatalogBuilder {
         return Identifier.fromNamespaceAndPath(material.namespace(), "textures/" + material.path() + ".png");
     }
 
-    private static float inverseExtent(float extent) {
-        return 1.0f / extent;
-    }
-
     static int[] exhaustiveAlphaFrames(int[] uniqueFrames, int rawWidth, int rawHeight,
                                        int frameWidth, int frameHeight) {
         if (frameWidth <= 0 || frameHeight <= 0 || rawWidth < frameWidth || rawHeight < frameHeight) {
@@ -200,14 +189,4 @@ public final class MinecraftMaterialCatalogBuilder {
         return valid.length == 0 ? new int[]{0} : valid;
     }
 
-    private record NeutralImage(int width, int height) implements MaterialImage {
-        @Override
-        public int argb(int x, int y) {
-            return -1;
-        }
-
-        @Override
-        public void close() {
-        }
-    }
 }

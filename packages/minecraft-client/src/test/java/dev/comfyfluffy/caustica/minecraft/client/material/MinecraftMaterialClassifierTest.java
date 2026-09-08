@@ -46,6 +46,12 @@ final class MinecraftMaterialClassifierTest {
     }
 
     @Test
+    void moddedTexturesWithVanillaPathsKeepTheNeutralDefault() {
+        assertEquals(OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR,
+                MinecraftMaterialClassifier.dielectricIor(ResourceId.of("somemod", "block/ice")));
+    }
+
+    @Test
     void blockStateClassificationProducesNeutralProfilesAndGeometryIds() {
         var anvil = MinecraftMaterialClassifier.classify(Blocks.ANVIL.defaultBlockState());
         assertEquals(ResourceId.parse("minecraft:anvil"), anvil.geometry());
