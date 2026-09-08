@@ -9,7 +9,7 @@ final class SlangToolResolver {
     }
 
     static String vulkan(String name) {
-        resolve("VULKAN_SDK", "Bin", name)
+        resolve("VULKAN_SDK", windows() ? "Bin" : "bin", name)
     }
 
     private static String resolve(String environmentVariable, String directory, String name) {

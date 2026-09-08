@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -18,6 +19,30 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class SlangToolingPluginTest {
+    @Test
+    void resolvesVulkanToolsFromTheSdkWithoutPathSetup(@TempDir Path project) throws Exception {
+        boolean windows = System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("windows");
+        Path sdk = project.resolve("vulkan-sdk");
+        Path tool = sdk.resolve(windows ? "Bin/spirv-val.exe" : "bin/spirv-val");
+        Files.createDirectories(tool.getParent());
+        Files.createFile(tool);
+        Files.writeString(project.resolve("settings.gradle"), "rootProject.name = 'sdk-resolution'\n");
+        Files.writeString(project.resolve("build.gradle"), """
+                plugins { id 'dev.comfyfluffy.caustica.slang-tooling' }
+                tasks.register('resolveTool') {
+                    doLast { file('resolved-tool.txt').text = slangTooling.spirvVal.get() }
+                }
+                """);
+        var environment = new HashMap<>(System.getenv());
+        environment.put("VULKAN_SDK", sdk.toString());
+
+        var result = GradleRunner.create().withProjectDir(project.toFile()).withPluginClasspath()
+                .withEnvironment(environment).withArguments("resolveTool", "--stacktrace").build();
+
+        assertEquals(SUCCESS, result.task(":resolveTool").getOutcome());
+        assertEquals(tool.toAbsolutePath().toString(), Files.readString(project.resolve("resolved-tool.txt")));
+    }
+
     @Test
     void findsOnlyBytesOutsideReflectedFieldStorage() {
         var floatType = Map.<String, Object>of("kind", "scalar", "scalarType", "float32");

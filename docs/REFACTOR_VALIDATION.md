@@ -670,3 +670,13 @@ Reviewed the root README, Vulkan support README and complete Slang tooling READM
 These documentation corrections do not claim complete sky reflection, HDR, frame-generation or Linux GPU validation. No executable code changed; referenced repository links exist and git diff --check passed. Full architecture/example-document verification remains outside this bounded pass.
 
 While checking Slang tooling documentation against its resolver, observed that Vulkan SDK lookup always probes `Bin`, including on Linux, before falling back to PATH. The Nix shell explicitly adds its lowercase `bin` to PATH, but a manual Linux setup supplying only VULKAN_SDK may not resolve the SDK tool. Follow up with a controlled Linux tool-resolution test before changing the resolver; this is a concrete build portability lead, not a completed validation.
+
+## Vulkan SDK tool discovery on case-sensitive hosts (2026-09-09)
+
+Added a Gradle TestKit regression that creates a host-layout SDK tool file, sets VULKAN_SDK for the fixture build and checks the absolute path resolved through the public slangTooling extension. It does not execute a fake validator or match source text. The assertion cannot be satisfied by a fallback command name on PATH. The Linux fixture lives on the case-sensitive /tmp filesystem, rather than the Windows-mounted checkout.
+
+Before the fix, the Linux test failed: expected `/tmp/junit-12769400149713731559/vulkan-sdk/bin/spirv-val`, actual `spirv-val` (process76390, terminal1). SlangToolResolver always probed uppercase Bin. Changed Vulkan SDK lookup to Bin on Windows and bin elsewhere, preserving executable suffix handling and PATH fallback. Updated the plugin README to describe those paths.
+
+After the fix, the full standalone Slang tooling Linux check passed7 tasks1m4s (process92397, terminal0); all11 tests passed without skips. Windows root checks passed187 tasks59s (process15487, terminal0;90 executed,97 up-to-date), including the same regression with Bin/spirv-val.exe and the plugin's existing consumers. This verifies SDK selection and plugin integration; it does not establish a full Linux application build or Linux GPU runtime.
+
+Evidence: `tmp/aesthetic-linux-tool-resolution-before.log`, `tmp/aesthetic-linux-tool-resolution-after.log`, `tmp/aesthetic-tool-resolution-root-check.log`, and the platform test XML reports. No client was launched. The previous documentation pass's Linux SDK lookup lead is resolved.

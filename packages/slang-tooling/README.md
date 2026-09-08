@@ -14,8 +14,9 @@ Apply `dev.comfyfluffy.caustica.slang-tooling` to obtain:
 - the `slangTooling` extension, which supplies `slangc`, `spirv-val`, SPIR-V profile, and Vulkan target
   conventions to every task above.
 
-The defaults resolve `slangc` from `SLANG_SDK/bin` and `spirv-val` from `VULKAN_SDK/Bin`, falling back to
-`PATH`. `slang_spirv_profile` and `slang_vulkan_target` Gradle properties override the defaults
+The defaults resolve `slangc` from `SLANG_SDK/bin` and `spirv-val` from `VULKAN_SDK/Bin` on Windows
+or `VULKAN_SDK/bin` elsewhere, falling back to `PATH`. The `slang_spirv_profile` and
+`slang_vulkan_target` Gradle properties override the defaults
 `spirv_1_6` and `vulkan1.4`. Individual tasks or the extension may override every value.
 
 Source checkouts make the plugin available from `settings.gradle`:
