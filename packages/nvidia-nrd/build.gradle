@@ -101,6 +101,14 @@ tasks.register("buildNrdNative", Exec) {
     commandLine "cmake", "--build", nativeBuildRoot.get().asFile, "--config", "Release"
 }
 
+tasks.register("testNrdNative", Exec) {
+    group = "verification"
+    description = "Runs native lifetime regressions against the pinned NRI integration."
+    dependsOn "buildNrdNative"
+    commandLine "ctest", "--test-dir", nativeBuildRoot.get().asFile,
+            "-C", "Release", "--output-on-failure"
+}
+
 def bundleNrdNative = tasks.register("bundleNrdNative") {
     group = "build"
     description = "Builds and stages the current platform NRD shim with the NVIDIA SDK license."

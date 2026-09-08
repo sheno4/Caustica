@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.30)
 project(nrd_dependencies LANGUAGES NONE)
 include(FetchContent)
+include(NriPatch.cmake)
 
 set(CAUSTICA_DEPENDENCY_ROOT "" CACHE PATH "Directory for pinned NRD build dependencies")
 
-# Existing checkouts are read-only inputs. Revision changes require explicitly
-# replacing them; preparation must not discard local SDK changes.
+# Revision changes require explicitly replacing existing checkouts. Preparation
+# preserves local SDK changes while applying the pinned lifetime fix.
 function(prepare_git name directory repository revision)
     set(source "${CAUSTICA_DEPENDENCY_ROOT}/${directory}")
     if(IS_DIRECTORY "${source}")
@@ -29,6 +30,7 @@ endfunction()
 prepare_git(shadermake shadermake https://github.com/NVIDIA-RTX/ShaderMake.git "${CAUSTICA_SHADERMAKE_REVISION}")
 prepare_git(mathlib mathlib https://github.com/NVIDIA-RTX/MathLib.git "${CAUSTICA_MATHLIB_REVISION}")
 prepare_git(nri nri https://github.com/NVIDIA-RTX/NRI.git "${CAUSTICA_NRI_REVISION}")
+prepare_nri_patch("${CAUSTICA_DEPENDENCY_ROOT}/nri")
 prepare_git(vulkan_headers vulkan-headers https://github.com/KhronosGroup/Vulkan-Headers.git "${CAUSTICA_VULKAN_HEADERS_REVISION}")
 prepare_git(vma vma https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git "${CAUSTICA_VMA_REVISION}")
 

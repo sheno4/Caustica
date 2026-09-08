@@ -38,6 +38,8 @@ if(NOT CAUSTICA_NRI_REVISION STREQUAL PINNED_NRI_REVISION)
     message(FATAL_ERROR "CAUSTICA_NRI_REVISION must equal ${PINNED_NRI_REVISION}")
 endif()
 require_git_revision("${FETCHCONTENT_SOURCE_DIR_NRI}" "${PINNED_NRI_REVISION}" "NRI")
+include(dependencies/NriPatch.cmake)
+require_nri_patch("${FETCHCONTENT_SOURCE_DIR_NRI}")
 require_git_revision("${FETCHCONTENT_SOURCE_DIR_SHADERMAKE}" "${CAUSTICA_SHADERMAKE_REVISION}" "ShaderMake")
 require_git_revision("${FETCHCONTENT_SOURCE_DIR_MATHLIB}" "${CAUSTICA_MATHLIB_REVISION}" "MathLib")
 require_git_revision("${FETCHCONTENT_SOURCE_DIR_VULKAN_HEADERS}" "${CAUSTICA_VULKAN_HEADERS_REVISION}" "Vulkan-Headers")
@@ -88,7 +90,7 @@ target_compile_definitions(NRI_Shared PRIVATE StdAllocator=NriStdAllocator)
 target_compile_definitions(NRI_VK PRIVATE StdAllocator=NriStdAllocator)
 
 add_library(nrdshim SHARED nrd_shim.cpp)
-target_include_directories(nrdshim PRIVATE
+target_include_directories(nrdshim SYSTEM PRIVATE
     "${NRD_SDK}/Include"
     "${NRD_SDK}/Integration"
     "${FETCHCONTENT_SOURCE_DIR_NRI}/Include")
@@ -107,4 +109,13 @@ if(MSVC)
     target_compile_options(nrdshim PRIVATE /W4 /WX)
 else()
     target_compile_options(nrdshim PRIVATE -Wall -Wextra -Werror)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(nri_lifetime_test tests/nri_lifetime_test.cpp)
+    target_include_directories(nri_lifetime_test SYSTEM PRIVATE
+        "${FETCHCONTENT_SOURCE_DIR_NRI}/Include"
+        "${FETCHCONTENT_SOURCE_DIR_NRI}/Source/Shared")
+    add_test(NAME nri_lifetime COMMAND nri_lifetime_test)
 endif()

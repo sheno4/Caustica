@@ -44,6 +44,10 @@ The integration is pinned to NVIDIA NRD revision
 `LICENSE.txt` and NRI's license as `NRI_LICENSE.txt` beside the native library
 under `caustica/natives/nrd/<revision>/<platform>/`.
 
+NRI builds apply the repository's `nri-destroy-lifetime.patch`, which captures
+allocation callbacks before object destruction. The pinned upstream revision and
+MIT license are unchanged.
+
 The NVIDIA SDK components remain subject to the NVIDIA RTX SDKs license:
 
 <https://github.com/NVIDIA-RTX/NRD/blob/b233cc3ec5b1db2763e45fd18c9bb19793016355/LICENSE.txt>

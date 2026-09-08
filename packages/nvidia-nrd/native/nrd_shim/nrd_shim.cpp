@@ -1,5 +1,6 @@
 #include "nrd_shim.h"
 
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <memory>

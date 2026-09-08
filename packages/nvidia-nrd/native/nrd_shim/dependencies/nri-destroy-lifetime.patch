@@ -1,0 +1,24 @@
+--- a/Source/Shared/SharedExternal.h
++++ b/Source/Shared/SharedExternal.h
+@@ -282,7 +282,7 @@
+ }
+ 
+ template <typename T>
+-inline void Destroy(const AllocationCallbacks& allocationCallbacks, T* object) {
++inline void Destroy(AllocationCallbacks allocationCallbacks, T* object) {
+     if (object) {
+         object->~T();
+         allocationCallbacks.Free(allocationCallbacks.userArg, object);
+@@ -292,10 +292,8 @@
+ template <typename T>
+ inline void Destroy(T* object) {
+     if (object) {
+-        object->~T();
+-
+-        const auto& allocationCallbacks = ((DeviceBase&)(object->GetDevice())).GetAllocationCallbacks();
+-        allocationCallbacks.Free(allocationCallbacks.userArg, object);
++        const auto allocationCallbacks = ((DeviceBase&)(object->GetDevice())).GetAllocationCallbacks();
++        Destroy(allocationCallbacks, object);
+     }
+ }
+ 

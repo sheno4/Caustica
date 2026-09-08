@@ -146,7 +146,7 @@ jobs:
 
       - name: Build Windows NRD runtime
         shell: pwsh
-        run: .\gradlew.bat :packages:nvidia-nrd:bundleNrdNative
+        run: .\gradlew.bat :packages:nvidia-nrd:bundleNrdNative :packages:nvidia-nrd:testNrdNative
 
       - name: Upload Windows NRD runtime
         uses: actions/upload-artifact@v4
@@ -260,7 +260,7 @@ jobs:
         run: bash ./gradlew :packages:nvidia-nrd:prepareNrdNativeDependencies
 
       - name: Build Linux NRD runtime
-        run: bash ./gradlew :packages:nvidia-nrd:bundleNrdNative
+        run: bash ./gradlew :packages:nvidia-nrd:bundleNrdNative :packages:nvidia-nrd:testNrdNative
 
       - name: Upload Linux NRD runtime
         uses: actions/upload-artifact@v4
