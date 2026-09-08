@@ -6,13 +6,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Tracks client resource-pack reloads. Worker completions are queued for the client thread so
- * listeners only detach or publish renderer resources there.
+ * Tracks client resource-pack reloads. Worker completions are queued so the client thread alone
+ * advances the epoch that the runtime may use to reopen a world.
  */
 final class MinecraftRtLifecycle {
     interface Listener {
         void resourcePackReloadStarting(ResourcePackEpoch pending);
-        void resourcePackApplied(ResourcePackEpoch epoch);
         void resourcePackReloadFailed(ResourcePackEpoch pending, Throwable failure);
     }
 
@@ -39,7 +38,6 @@ final class MinecraftRtLifecycle {
         }
         ResourcePackEpoch epoch = new ResourcePackEpoch(++nextResourcePackGeneration);
         resourcePackEpoch = epoch;
-        listener.resourcePackApplied(epoch);
         return epoch;
     }
 
@@ -82,7 +80,6 @@ final class MinecraftRtLifecycle {
             return;
         }
         resourcePackEpoch = pending;
-        listener.resourcePackApplied(pending);
     }
 
     /** Discard pack state at shutdown; late completions cannot match a future reload generation. */

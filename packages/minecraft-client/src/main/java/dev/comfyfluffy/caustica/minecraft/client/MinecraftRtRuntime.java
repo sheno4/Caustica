@@ -90,13 +90,6 @@ public final class MinecraftRtRuntime {
                 }
 
                 @Override
-                public void resourcePackApplied(ResourcePackEpoch epoch) {
-                    if (session != null) {
-                        session.resourcePackApplied(epoch);
-                    }
-                }
-
-                @Override
                 public void resourcePackReloadFailed(ResourcePackEpoch pending,
                                                      Throwable failure) {
                     if (session != null) {
@@ -694,12 +687,6 @@ public final class MinecraftRtRuntime {
             } catch (Throwable failure) {
                 closeWorld();
                 throw failure;
-            }
-        }
-
-        private void resourcePackApplied(ResourcePackEpoch epoch) {
-            if (world != null && epoch.generation() > world.resourcePackEpoch().generation()) {
-                world.resourcePackChanged(epoch);
             }
         }
 

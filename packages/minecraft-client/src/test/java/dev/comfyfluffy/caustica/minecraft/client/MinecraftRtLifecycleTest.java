@@ -19,7 +19,7 @@ final class MinecraftRtLifecycleTest {
 
         assertEquals(1, coordinator.observeResourcePackAvailable().generation());
 
-        assertEquals(List.of("pack:applied:1"), events.events);
+        assertEquals(List.of(), events.events);
         assertEquals(1, coordinator.resourcePackEpoch().generation());
     }
 
@@ -42,7 +42,7 @@ final class MinecraftRtLifecycleTest {
 
         coordinator.drainResourcePackCompletions();
         assertEquals(second, coordinator.resourcePackEpoch());
-        assertEquals(List.of("pack:applied:1", "pack:start:2", "pack:applied:3"),
+        assertEquals(List.of("pack:start:2"),
                 events.events);
     }
 
@@ -59,7 +59,7 @@ final class MinecraftRtLifecycleTest {
         coordinator.drainResourcePackCompletions();
         assertEquals(initial, coordinator.resourcePackEpoch());
         assertNull(coordinator.pendingResourcePackEpoch());
-        assertEquals(List.of("pack:applied:1", "pack:start:2", "pack:failed:2"),
+        assertEquals(List.of("pack:start:2", "pack:failed:2"),
                 events.events);
     }
 
@@ -77,7 +77,7 @@ final class MinecraftRtLifecycleTest {
         assertEquals(List.of("pack:start:1"), events.events);
         coordinator.drainResourcePackCompletions();
         assertEquals(pending, coordinator.resourcePackEpoch());
-        assertEquals(List.of("pack:start:1", "pack:applied:1"), events.events);
+        assertEquals(List.of("pack:start:1"), events.events);
     }
 
     @Test
@@ -108,11 +108,6 @@ final class MinecraftRtLifecycleTest {
         @Override
         public void resourcePackReloadStarting(ResourcePackEpoch epoch) {
             events.add("pack:start:" + epoch.generation());
-        }
-
-        @Override
-        public void resourcePackApplied(ResourcePackEpoch epoch) {
-            events.add("pack:applied:" + epoch.generation());
         }
 
         @Override
