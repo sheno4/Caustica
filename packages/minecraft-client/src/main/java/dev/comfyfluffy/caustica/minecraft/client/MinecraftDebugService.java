@@ -150,17 +150,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                 future.complete(runtimeStatus());
             }
             case "settings.set" -> {
-                var values = request.getAsJsonObject("values");
-                var options = MinecraftOptions.allSettings();
-                Map<Option<?>, Object> normalized = new LinkedHashMap<>();
-                for (var entry : values.entrySet()) {
-                    var option = options.stream().filter(o -> o.id().equals(entry.getKey())).findFirst()
-                            .orElseThrow(() -> new IllegalArgumentException("Unknown setting " + entry.getKey()));
-                    if (CausticaConfig.store().overridden(CausticaConfig.FEATURE, option))
-                        throw new IllegalArgumentException("Setting has a JVM override: " + option.id());
-                    normalized.put(option, option.normalize(JSON.fromJson(entry.getValue(), Object.class)));
-                }
-                normalized.forEach((option, value) -> CausticaConfig.store().apply(CausticaConfig.FEATURE, option, value));
+                applySettings(request.getAsJsonObject("values"));
                 future.complete(settings());
             }
             case "view.set" -> {
@@ -228,13 +218,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                     if (future.isDone()) return;
                     try {
                         if (op.equals("screenshot")) screenshot(future);
-                        else {
-                            if (request.has("names")) {
-                                List<Object> images = new ArrayList<>();
-                                for (var name : request.getAsJsonArray("names")) images.add(captureImage(name.getAsString()));
-                                future.complete(Map.of("images", images));
-                            } else future.complete(captureImage(request.get("name").getAsString()));
-                        }
+                        else future.complete(captureImages(request));
                     } catch (Exception e) { future.completeExceptionally(e); }
                 });
             }
@@ -270,6 +254,20 @@ public final class MinecraftDebugService implements AutoCloseable {
             }
             default -> throw new IllegalArgumentException("Unknown operation " + op);
         }
+    }
+
+    /** Validate every requested value before applying any setting in the batch. */
+    private void applySettings(JsonObject values) {
+        var options = MinecraftOptions.allSettings();
+        Map<Option<?>, Object> normalized = new LinkedHashMap<>();
+        for (var entry : values.entrySet()) {
+            var option = options.stream().filter(o -> o.id().equals(entry.getKey())).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown setting " + entry.getKey()));
+            if (CausticaConfig.store().overridden(CausticaConfig.FEATURE, option))
+                throw new IllegalArgumentException("Setting has a JVM override: " + option.id());
+            normalized.put(option, option.normalize(JSON.fromJson(entry.getValue(), Object.class)));
+        }
+        normalized.forEach((option, value) -> CausticaConfig.store().apply(CausticaConfig.FEATURE, option, value));
     }
 
     private void requireWorld() {
@@ -345,6 +343,13 @@ public final class MinecraftDebugService implements AutoCloseable {
         return Map.of("requested", CausticaConfig.get(option), "active", runtime.active(),
                 "frameActive", runtime.frameActive(),
                 "overridden", CausticaConfig.store().overridden(CausticaConfig.FEATURE, option));
+    }
+
+    private Object captureImages(JsonObject request) throws IOException {
+        if (!request.has("names")) return captureImage(request.get("name").getAsString());
+        List<Object> images = new ArrayList<>();
+        for (var name : request.getAsJsonArray("names")) images.add(captureImage(name.getAsString()));
+        return Map.of("images", images);
     }
 
     private Object captureImage(String name) throws IOException {

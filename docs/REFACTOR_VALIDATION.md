@@ -680,3 +680,11 @@ Before the fix, the Linux test failed: expected `/tmp/junit-12769400149713731559
 After the fix, the full standalone Slang tooling Linux check passed7 tasks1m4s (process92397, terminal0); all11 tests passed without skips. Windows root checks passed187 tasks59s (process15487, terminal0;90 executed,97 up-to-date), including the same regression with Bin/spirv-val.exe and the plugin's existing consumers. This verifies SDK selection and plugin integration; it does not establish a full Linux application build or Linux GPU runtime.
 
 Evidence: `tmp/aesthetic-linux-tool-resolution-before.log`, `tmp/aesthetic-linux-tool-resolution-after.log`, `tmp/aesthetic-tool-resolution-root-check.log`, and the platform test XML reports. No client was launched. The previous documentation pass's Linux SDK lookup lead is resolved.
+
+## Debug dispatch separates settings and raw-capture operations (2026-09-09)
+
+Moved settings-batch validation/application and raw-image request handling into named private methods, reducing nesting in the operation switch. The settings method normalizes and validates the entire batch before applying any value. Raw single/bundle captures still run in the queued frame-end callback; PNG completion remains asynchronous through Minecraft's screenshot callback. World requirements and response shapes are unchanged.
+
+Root checks passed187 tasks41s (process89018, terminal0). A live copied-world protocol check passed (observer62173): a valid preset change followed by an unknown setting rejected the batch and left the complete settings map unchanged; a valid preset change then succeeded and was restored. Single depth export succeeded. A two-image normal/reconstructed-color bundle shared frame serial60. Normal world departure reached the title screen, where PNG capture succeeded and was visually inspected, while raw capture rejected with No world/player loaded. Client52448 exited gracefully with terminal0 in33s. The menu PNG is protocol/rendering evidence, not computer-use interaction coverage.
+
+Evidence: `tmp/aesthetic-debug-dispatch-check.log`, `tmp/aesthetic-debug-dispatch-live.{py,json,log}`, `tmp/aesthetic-debug-dispatch-runtime.log`, and `run/screenshots/caustica-debug-033dc548-a626-406c-9bb0-155b6a73cbf0.png`. No visual-quality or performance comparison is claimed for the raw exports.
