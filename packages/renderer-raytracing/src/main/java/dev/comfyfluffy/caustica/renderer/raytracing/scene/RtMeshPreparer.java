@@ -164,7 +164,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
         try { releaseScratch.run(); }
         catch (Throwable cleanup) {
             if (failure == null) failure = cleanup;
-            else failure.addSuppressed(cleanup);
+            else if (failure != cleanup) failure.addSuppressed(cleanup);
         }
         if (failure != null) {
             RtRetainedSceneBackend.suppressCleanupFailure(failure, owner::close);

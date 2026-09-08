@@ -50,6 +50,18 @@ final class RtMeshPreparerTest {
         assertEquals(List.of("destroy"), events);
     }
 
+    @Test void repeatedFailureStillReleasesOwnershipAndCompletesTheConsumer() {
+        List<String> events = new ArrayList<>();
+        var result = new CompletableFuture<ResourceOwner>();
+        var failure = new IllegalStateException("device");
+        RtMeshPreparer.finish(result, owner(events), () -> { throw failure; },
+                new GpuComputeCompletion.Failed(failure));
+        assertTrue(result.isCompletedExceptionally());
+        assertSame(failure, assertThrows(java.util.concurrent.CompletionException.class, result::join).getCause());
+        assertEquals(List.of("destroy"), events);
+        assertEquals(0, failure.getSuppressed().length);
+    }
+
     @Test void compactedMeshPublishesOnlyAfterCopyCompletionAndSourceRelease() {
         List<String> events = new ArrayList<>();
         var source = owner(events, "source");
