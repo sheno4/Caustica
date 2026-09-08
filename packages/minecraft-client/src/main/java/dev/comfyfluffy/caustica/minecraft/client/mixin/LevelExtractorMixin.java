@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import dev.comfyfluffy.caustica.minecraft.client.CausticaClientBootstrap;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import it.unimi.dsi.fastutil.longs.LongCollection;
@@ -58,7 +57,7 @@ public class LevelExtractorMixin {
     private void caustica$invalidateRenderState(CallbackInfo ci) {
         if (caustica$rebuildingVanillaTerrain) return;
         try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
-            CausticaClientBootstrap.invalidateRenderState();
+            CausticaClientComposition.current().renderController().resetFailureLatch();
             CausticaClientComposition.current().terrain().requestFullClear();
         }
     }

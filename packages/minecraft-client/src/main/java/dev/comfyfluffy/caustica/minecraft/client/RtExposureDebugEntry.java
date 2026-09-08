@@ -16,8 +16,11 @@ import org.jspecify.annotations.Nullable;
  * <p>The renderer diagnostics contract owns the displayed controller values.
  */
 public final class RtExposureDebugEntry implements DebugScreenEntry {
-    public static final Identifier ID = DebugScreenEntriesAccessor.caustica$register(
-            Identifier.fromNamespaceAndPath("caustica", "rt_exposure"), new RtExposureDebugEntry());
+    /** Called once during the loader's single-threaded client setup. */
+    static void register() {
+        DebugScreenEntriesAccessor.caustica$register(
+                Identifier.fromNamespaceAndPath("caustica", "rt_exposure"), new RtExposureDebugEntry());
+    }
 
     @Override
     public void display(DebugScreenDisplayer displayer, @Nullable Level serverOrClientLevel,
