@@ -40,17 +40,12 @@ public final class ResourceDirectory implements AutoCloseable {
     }
 
     /** Resources may be shared across contributions in the same device session. */
-    public synchronized void validate(ContributionOwner owner, ResourceOwner reference) {
+    public synchronized void validate(ResourceOwner reference) {
         if (reference == ResourceOwner.none()) return;
         if (!(reference instanceof Claim claim) || claim.state.directory != this) {
             throw new IllegalArgumentException("resource belongs to another device session");
         }
         if (!claim.owner.isOpen()) throw new IllegalStateException("resource has been released");
-    }
-
-    public synchronized ResourceOwner acquire(ContributionOwner owner, ResourceOwner reference) {
-        validate(owner, reference);
-        return reference.retain();
     }
 
     private synchronized void retire(State state) {
@@ -82,7 +77,7 @@ public final class ResourceDirectory implements AutoCloseable {
     }
 
     /** Settle frame uses and eligible destruction without waiting for independent shared owners. */
-    public void drain(ContributionOwner owner, Runnable settleFrameUses) {
+    public void drain(Runnable settleFrameUses) {
         settleFrameUses.run();
         awaitRetirements();
     }

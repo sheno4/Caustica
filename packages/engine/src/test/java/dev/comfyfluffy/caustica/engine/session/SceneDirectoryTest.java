@@ -298,7 +298,7 @@ final class SceneDirectoryTest {
 
     @Test void capturedMeshesKeepProducerShaderIdentitiesAcrossProgramPublication() {
         var f = new Fixture();
-        var channel = f.programs.session.openChannel(new ContributionOwner(19));
+        var channel = f.programs.session.openChannel();
         var registration = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                 new ShaderDefinition(ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
                         "surface", "test.Surface"), null, IMPLEMENTATION.data(0), BINDING, INSTANCE)));
@@ -564,7 +564,7 @@ final class SceneDirectoryTest {
         private final ProgramSession session = new ProgramSession(
                 resources, backend, failure -> { throw new AssertionError(failure); });
         SurfaceId<Binding, Instance> surface(ContributionOwner owner) {
-            ProgramContributionChannel channel = session.openChannel(owner);
+            ProgramContributionChannel channel = session.openChannel();
             var registration = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                     new ShaderDefinition(ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
                             "surface", "test.Surface"), null, IMPLEMENTATION.data(0), BINDING, INSTANCE)));
@@ -573,7 +573,7 @@ final class SceneDirectoryTest {
             return registration.exports();
         }
         VolumeId<Binding, Instance> volume(ContributionOwner owner) {
-            ProgramContributionChannel channel = session.openChannel(owner);
+            ProgramContributionChannel channel = session.openChannel();
             var registration = channel.register(builder -> builder.volume(new VolumeDefinition<>(
                     new ShaderDefinition(ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
                             "volume", "test.Volume"), IMPLEMENTATION.data(0), BINDING, INSTANCE)));
@@ -582,7 +582,7 @@ final class SceneDirectoryTest {
             return registration.exports();
         }
         ProgramRegistration<EnvironmentId<EnvironmentBindingData>> environment(ContributionOwner owner) {
-            ProgramContributionChannel channel = session.openChannel(owner);
+            ProgramContributionChannel channel = session.openChannel();
             ProgramRegistration<EnvironmentId<EnvironmentBindingData>> registration = channel.register(
                     builder -> builder.environment(new EnvironmentDefinition<>(new ShaderDefinition(
                             ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),

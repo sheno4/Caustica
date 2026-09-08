@@ -31,7 +31,7 @@ final class RtProgramResolutionTest {
     void retainedProgramsResolveTheirOwnDeclarationsAfterSessionPublicationChanges() {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = session(backend);
-        var channel = session.openChannel(new ContributionOwner(1));
+        var channel = session.openChannel();
         var first = channel.register(builder -> declare(builder, "First"));
         session.progress();
         backend.succeed();
@@ -69,7 +69,7 @@ final class RtProgramResolutionTest {
     void publishedResolutionUsesFallbacksForFailedForeignAndAbsentIds() {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = session(backend);
-        var channel = session.openChannel(new ContributionOwner(1));
+        var channel = session.openChannel();
         var first = channel.register(builder -> declare(builder, "First"));
         session.progress();
         backend.succeed();
@@ -83,7 +83,7 @@ final class RtProgramResolutionTest {
 
         ManualBackend foreignBackend = new ManualBackend();
         ProgramSession foreignSession = session(foreignBackend);
-        var foreign = foreignSession.openChannel(new ContributionOwner(1))
+        var foreign = foreignSession.openChannel()
                 .register(builder -> declare(builder, "Foreign"));
         foreignSession.progress();
         foreignBackend.succeed();

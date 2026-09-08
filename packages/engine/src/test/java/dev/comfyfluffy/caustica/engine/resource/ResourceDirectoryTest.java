@@ -34,9 +34,9 @@ final class ResourceDirectoryTest {
         AtomicInteger destroyed = new AtomicInteger();
         try (var directory = new ResourceDirectory(failure -> fail(failure))) {
             var owner = directory.openFactory(producer).create(destroyed::incrementAndGet);
-            try (var consumer = directory.acquire(new ContributionOwner(2), owner)) {
+            try (var consumer = owner.retain()) {
                 directory.invalidate(producer);
-                directory.drain(producer, () -> {});
+                directory.drain(() -> {});
                 assertEquals(0, destroyed.get());
                 try (var retained = consumer.retain()) {
                     assertNotSame(owner, retained);
@@ -135,14 +135,14 @@ final class ResourceDirectoryTest {
         try (ResourceDirectory directory = new ResourceDirectory(failure -> fail(failure));
              ResourceDirectory otherDevice = new ResourceDirectory(failure -> fail(failure))) {
             var owner = directory.openFactory(producer).create();
-            var consumer = new ContributionOwner(2);
-            try (var shared = directory.acquire(consumer, owner)) {
+            directory.validate(owner);
+            try (var shared = owner.retain()) {
                 directory.invalidate(producer);
                 try (var another = shared.retain()) {
                     assertNotSame(owner, another);
                 }
                 assertThrows(IllegalArgumentException.class,
-                        () -> otherDevice.acquire(consumer, shared));
+                        () -> otherDevice.validate(shared));
             }
         }
     }
@@ -200,7 +200,7 @@ final class ResourceDirectoryTest {
             var frame = owner.retain();
             directory.invalidate(producer);
             assertThrows(IllegalStateException.class, factory::create);
-            directory.drain(producer, frame::close);
+            directory.drain(frame::close);
             assertEquals(1, destroyed.get());
         }
     }

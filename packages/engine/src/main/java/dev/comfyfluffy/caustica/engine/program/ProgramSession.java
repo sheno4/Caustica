@@ -14,7 +14,6 @@ import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
-import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -56,8 +55,8 @@ public final class ProgramSession {
     }
 
     /** Creates a distinct owner-scoped channel for one contribution. */
-    public synchronized ProgramContributionChannel openChannel(ContributionOwner owner) {
-        return new ProgramContributionChannel(this, Objects.requireNonNull(owner, "owner"));
+    public ProgramContributionChannel openChannel() {
+        return new ProgramContributionChannel(this);
     }
 
     /**
@@ -183,7 +182,7 @@ public final class ProgramSession {
         }
         requireNoTypeConflicts(builder.declarations);
 
-        List<ResourceOwner> resourceLeases = acquireImplementationResources(channel, builder.declarations);
+        List<ResourceOwner> resourceLeases = acquireImplementationResources(builder.declarations);
         try {
             Registration<E> registration = new Registration<>(
                     this, channel, exports, builder.declarations, resourceLeases);
@@ -358,11 +357,11 @@ public final class ProgramSession {
     }
 
     private List<ResourceOwner> acquireImplementationResources(
-            ProgramContributionChannel channel, List<Declaration> declarations) {
+            List<Declaration> declarations) {
         List<ResourceOwner> leases = new ArrayList<>();
         try {
             declarations.replaceAll(declaration -> {
-                resources.validate(channel.owner, declaration.implementationDataResource());
+                resources.validate(declaration.implementationDataResource());
                 return switch (declaration) {
                     case SurfaceDeclaration surface -> new SurfaceDeclaration(surface.reference(),
                             retainSurface(surface.definition(), leases));

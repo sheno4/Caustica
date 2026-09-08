@@ -47,7 +47,7 @@ final class ProgramSessionTest {
         ManualBackend backend = new ManualBackend();
         List<Throwable> failures = new ArrayList<>();
         ProgramSession session = new ProgramSession(resources(), backend, failures::add);
-        ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
+        ProgramContributionChannel channel = session.openChannel();
         List<String> events = new ArrayList<>();
 
         record Exports(SurfaceId<Binding, Instance> surface,
@@ -90,7 +90,7 @@ final class ProgramSessionTest {
     void failedRegistrationPublishesNothingAndLaterRegistrationUsesLastGoodBase() {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
+        ProgramContributionChannel channel = session.openChannel();
         List<String> retired = new ArrayList<>();
         ProgramRegistration<SurfaceId<Binding, Instance>> first = channel.register(
                 builder -> builder.surface(surface("sample.First", () -> retired.add("first"))));
@@ -133,8 +133,8 @@ final class ProgramSessionTest {
     void removingAnotherOwnerDoesNotRetargetRetainedProgramSlots() {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel removableOwner = session.openChannel(new ContributionOwner(1));
-        ProgramContributionChannel geometryOwner = session.openChannel(new ContributionOwner(2));
+        ProgramContributionChannel removableOwner = session.openChannel();
+        ProgramContributionChannel geometryOwner = session.openChannel();
 
         record Exports(SurfaceId<Binding, Instance> surface, VolumeId<Binding, Instance> volume) { }
         ProgramRegistration<Exports> removable = removableOwner.register(builder -> new Exports(
@@ -178,7 +178,7 @@ final class ProgramSessionTest {
     void closeLinearizesOnEitherSideOfPublicationAndRetiresAfterDisplacedProgram() {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
+        ProgramContributionChannel channel = session.openChannel();
         List<String> retired = new ArrayList<>();
 
         ProgramRegistration<SurfaceId<Binding, Instance>> cancelled = channel.register(
@@ -222,7 +222,7 @@ final class ProgramSessionTest {
     void ownerDrainForcesPublishedUseRetirementAfterRemovalPublication() {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
+        ProgramContributionChannel channel = session.openChannel();
         AtomicInteger retired = new AtomicInteger();
         channel.register(builder -> builder.surface(surface("sample.Ready", retired::incrementAndGet)));
         session.progress();
@@ -243,8 +243,8 @@ final class ProgramSessionTest {
     void declarationsSerializeAcrossThreadsAndTypeConflictTakesNoRetirementOwnership() throws Exception {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel first = session.openChannel(new ContributionOwner(1));
-        ProgramContributionChannel second = session.openChannel(new ContributionOwner(2));
+        ProgramContributionChannel first = session.openChannel();
+        ProgramContributionChannel second = session.openChannel();
         AtomicInteger inside = new AtomicInteger();
         AtomicInteger maximum = new AtomicInteger();
         CountDownLatch entered = new CountDownLatch(1);
@@ -280,7 +280,7 @@ final class ProgramSessionTest {
     void ownerInvalidationCancelsPendingSetsAndRejectsNewDeclarations() {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(resources(), backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
+        ProgramContributionChannel channel = session.openChannel();
         AtomicInteger retired = new AtomicInteger();
         ProgramRegistration<?> registration = channel.register(
                 builder -> builder.surface(surface("sample.Pending", retired::incrementAndGet)));
@@ -303,7 +303,7 @@ final class ProgramSessionTest {
         ManualBackend backend = new ManualBackend();
         List<Throwable> failures = new ArrayList<>();
         ProgramSession session = new ProgramSession(resources(), backend, failures::add);
-        ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
+        ProgramContributionChannel channel = session.openChannel();
         List<String> callbacks = new ArrayList<>();
         ProgramRegistration<?> registration = channel.register(builder -> {
             builder.surface(surface("sample.Throwing", () -> {
@@ -332,7 +332,7 @@ final class ProgramSessionTest {
         ContributionOwner owner = new ContributionOwner(1);
         ProgramSession session = new ProgramSession(
                 resources, new ManualBackend(), failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel channel = session.openChannel(owner);
+        ProgramContributionChannel channel = session.openChannel();
         var resourceChannel = resources.openFactory(owner);
         AtomicInteger firstRetired = new AtomicInteger();
         var first = resourceChannel.create(firstRetired::incrementAndGet);
@@ -368,7 +368,7 @@ final class ProgramSessionTest {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(
                 resources, backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel channel = session.openChannel(owner);
+        ProgramContributionChannel channel = session.openChannel();
         List<String> events = new ArrayList<>();
         var generation = resources.openFactory(owner).create(() -> events.add("resource"));
 
@@ -410,7 +410,7 @@ final class ProgramSessionTest {
         ManualBackend backend = new ManualBackend();
         ProgramSession session = new ProgramSession(
                 resources, backend, failure -> { throw new AssertionError(failure); });
-        ProgramContributionChannel channel = session.openChannel(owner);
+        ProgramContributionChannel channel = session.openChannel();
         List<String> retired = new ArrayList<>();
 
         var failedRoot = resources.openFactory(owner).create(() -> retired.add("failed-resource"));

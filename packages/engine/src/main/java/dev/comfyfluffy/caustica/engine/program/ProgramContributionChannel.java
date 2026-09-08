@@ -3,19 +3,16 @@ package dev.comfyfluffy.caustica.engine.program;
 import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.function.Function;
 
 /** Owner-scoped view of a render session's composed program. */
 public final class ProgramContributionChannel implements ProgramChannel {
     final ProgramSession session;
-    final ContributionOwner owner;
     boolean accepting = true;
 
-    ProgramContributionChannel(ProgramSession session, ContributionOwner owner) {
+    ProgramContributionChannel(ProgramSession session) {
         this.session = session;
-        this.owner = owner;
     }
 
     @Override

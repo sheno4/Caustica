@@ -108,7 +108,7 @@ public final class SceneDirectory {
             requireCreation(channel);
             Objects.requireNonNull(type);
             Objects.requireNonNull(build);
-            validateBuild(channel.owner, type, build);
+            validateBuild(type, build);
             if (source != null) {
                 requireReady(source);
                 if (source.instanceDataType() != type) {
@@ -192,7 +192,7 @@ public final class SceneDirectory {
         for (SceneEdit edit : List.copyOf(edits)) {
             if (edit instanceof SceneEdit.SetInstance<?> set) {
                 InstanceRef id = requireInstance(channel, set.instance());
-                validateInstance(channel, set);
+                validateInstance(set);
                 RetainedInstance current = changedInstances.containsKey(id) ? changedInstances.get(id) : instances.get(id);
                 changedInstances.put(id, new RetainedInstance(set,
                         current == null ? instanceOrdinal++ : current.placementOrdinal, null, primitiveEmitters(set)));
@@ -211,7 +211,7 @@ public final class SceneDirectory {
             } else if (edit instanceof SceneEdit.DropLight drop) {
                 changedLights.put(requireLight(channel, drop.light()), null);
             } else if (edit instanceof SceneEdit.SetEnvironment set) {
-                SceneRef scene = validateEnvironment(channel.owner, set.scene(), set.binding());
+                SceneRef scene = validateEnvironment(set.scene(), set.binding());
                 changedEnvironments.put(scene, set.binding());
             }
         }
@@ -283,11 +283,11 @@ public final class SceneDirectory {
                 owners.data(value.instanceData()), value.primitiveLights());
     }
 
-    private void validateInstance(SceneContributionChannel channel, SceneEdit.SetInstance<?> instance) {
+    private void validateInstance(SceneEdit.SetInstance<?> instance) {
         requireScene(instance.scene());
         ReadyState<?> mesh = requireReady(instance.mesh());
         mesh.type.require(instance.instanceData());
-        resources.validate(channel.owner, instance.instanceData().resource());
+        resources.validate(instance.instanceData().resource());
         int triangleCount = mesh.mesh.build().geometries().stream()
                 .mapToInt(geometry -> Math.addExact(geometry.firstIndex(), geometry.indexCount()) / 3)
                 .max().orElseThrow();
@@ -314,16 +314,16 @@ public final class SceneDirectory {
         if (!channel.accepting) {
             throw new IllegalStateException("environment scope closed");
         }
-        SceneRef scene = validateEnvironment(channel.owner, channel.scene, binding);
+        SceneRef scene = validateEnvironment(channel.scene, binding);
         replaceEnvironment(scene, channel,
                 ownEnvironment(binding));
         changed();
     }
 
-    private SceneRef validateEnvironment(ContributionOwner owner, SceneId id, EnvironmentBinding<?> binding) {
+    private SceneRef validateEnvironment(SceneId id, EnvironmentBinding<?> binding) {
         SceneRef scene = requireScene(id);
         programs.validateEnvironment(binding.implementation(), binding.bindingData());
-        resources.validate(owner, binding.bindingData().resource());
+        resources.validate(binding.bindingData().resource());
         return scene;
     }
 
@@ -511,8 +511,8 @@ public final class SceneDirectory {
                         range.primitiveCount(), ((LightRef) range.light()).identity)).toList();
     }
 
-    private void validateBuild(ContributionOwner owner, ShaderDataType<?> type, MeshBuild<?> build) {
-        buildReferences(build).forEach(ref -> resources.validate(owner, ref));
+    private void validateBuild(ShaderDataType<?> type, MeshBuild<?> build) {
+        buildReferences(build).forEach(resources::validate);
         for (var geometry : build.geometries()) {
             if (geometry.surface() != null) {
                 programs.validateSurface(geometry.surface().surface(),

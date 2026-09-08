@@ -114,7 +114,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
         private Scope(ContributionOwner owner) {
             this.owner = owner;
             compute = EngineSessionServices.this.compute.openChannel();
-            program = programs.openChannel(owner);
+            program = programs.openChannel();
             pass = passes.openChannel();
             scene = scenes.openChannel(owner);
             resources = EngineSessionServices.this.resources.openFactory(owner);
@@ -159,7 +159,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             pass.drain();
             scene.drain();
             program.drain();
-            EngineSessionServices.this.resources.drain(owner, scenes::settleFrameUses);
+            EngineSessionServices.this.resources.drain(scenes::settleFrameUses);
             drained = true;
         }
 

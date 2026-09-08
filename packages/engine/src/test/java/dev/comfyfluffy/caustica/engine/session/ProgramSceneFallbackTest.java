@@ -49,7 +49,7 @@ final class ProgramSceneFallbackTest {
                 failure -> { throw new AssertionError(failure); });
         ProgramSession programs = new ProgramSession(
                 resources, programsBackend, failure -> { throw new AssertionError(failure); });
-        var programChannel = programs.openChannel(new ContributionOwner(1));
+        var programChannel = programs.openChannel();
         ProgramRegistration<Exports> registration = programChannel.register(builder -> new Exports(
                 builder.surface(new SurfaceDefinition<>(shader("surface", "test.Surface"),
                         shader("coverage", "test.Coverage"), IMPLEMENTATION.data(11),
@@ -97,7 +97,7 @@ final class ProgramSceneFallbackTest {
         var resources=new ResourceDirectory(failure->{throw new AssertionError(failure);});
         var programBackend = new ImmediateProgramBackend();
         var programs=new ProgramSession(resources,programBackend,failure->{throw new AssertionError(failure);});
-        var registration=programs.openChannel(new ContributionOwner(1)).register(builder->new Exports(
+        var registration=programs.openChannel().register(builder->new Exports(
             builder.surface(new SurfaceDefinition<>(shader("surface","test.Surface"),shader("coverage","test.Coverage"),
                 IMPLEMENTATION.data(0),BINDING,INSTANCE)),
             builder.volume(new VolumeDefinition<>(shader("volume","test.Volume"),IMPLEMENTATION.data(0),BINDING,INSTANCE))));
