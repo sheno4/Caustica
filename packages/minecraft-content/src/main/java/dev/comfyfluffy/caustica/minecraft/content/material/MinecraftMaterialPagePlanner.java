@@ -35,25 +35,23 @@ final class MinecraftMaterialPagePlanner {
         int rowHeight;
         int channels;
 
-        MutableLayout(int size, boolean reserveFallback, int gutter, int alignment) {
+        MutableLayout(int size) {
             this.size = size;
-            if (reserveFallback) y = align(1 + 2 * gutter, alignment);
         }
 
         Placement place(Input input, int pageIndex, int gutter, int alignment) {
             int cellWidth = align(input.width + 2 * gutter, alignment);
             int cellHeight = align(input.height + 2 * gutter, alignment);
             if (cellWidth > size || cellHeight > size) return null;
-            if (x + cellWidth > size) {
-                x = 0;
-                y += rowHeight;
-                rowHeight = 0;
-            }
-            if (y + cellHeight > size) return null;
-            Placement placement = new Placement(input.index, pageIndex, x + gutter, y + gutter);
+            boolean newRow = x + cellWidth > size;
+            int nextX = newRow ? 0 : x;
+            int nextY = newRow ? y + rowHeight : y;
+            if (nextY + cellHeight > size) return null;
+            Placement placement = new Placement(input.index, pageIndex, nextX + gutter, nextY + gutter);
             channels |= input.channels;
-            x += cellWidth;
-            rowHeight = Math.max(rowHeight, cellHeight);
+            x = nextX + cellWidth;
+            y = nextY;
+            rowHeight = newRow ? cellHeight : Math.max(rowHeight, cellHeight);
             return placement;
         }
     }
@@ -80,7 +78,6 @@ final class MinecraftMaterialPagePlanner {
                 .thenComparingInt(Input::index));
 
         List<MutableLayout> mutableLayouts = new ArrayList<>();
-        mutableLayouts.add(new MutableLayout(pageSize, true, gutter, alignment));
         List<Placement> placements = new ArrayList<>(inputs.size());
         for (Input input : inputs) {
             Placement placement = null;
@@ -89,7 +86,7 @@ final class MinecraftMaterialPagePlanner {
                 if (placement != null) break;
             }
             if (placement == null) {
-                MutableLayout layout = new MutableLayout(pageSize, false, gutter, alignment);
+                MutableLayout layout = new MutableLayout(pageSize);
                 mutableLayouts.add(layout);
                 placement = layout.place(input, mutableLayouts.size() - 1, gutter, alignment);
             }

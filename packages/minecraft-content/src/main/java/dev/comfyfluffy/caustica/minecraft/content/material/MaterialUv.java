@@ -11,20 +11,4 @@ public record MaterialUv(float u, float v, float inverseDu, float inverseDv) {
         }
     }
 
-    @Override
-    public final boolean equals(Object other) {
-        return this == other || other instanceof MaterialUv uv
-                && Float.compare(inverseDv, uv.inverseDv) == 0
-                && Float.compare(inverseDu, uv.inverseDu) == 0
-                && Float.compare(v, uv.v) == 0
-                && Float.compare(u, uv.u) == 0;
-    }
-
-    @Override
-    public final int hashCode() {
-        int result = Float.hashCode(u);
-        result = 31 * result + Float.hashCode(v);
-        result = 31 * result + Float.hashCode(inverseDu);
-        return 31 * result + Float.hashCode(inverseDv);
-    }
 }

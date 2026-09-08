@@ -86,7 +86,7 @@ public final class MinecraftMaterialTextureSource implements MaterialTextureSour
             int frame = alphaFrames[frameIndex];
             int frameX = frame % alphaFrameRowSize * width();
             int frameY = frame / alphaFrameRowSize * height();
-            return ((MinecraftMaterialImage) albedo).rawArgb(frameX + x, frameY + y);
+            return albedo.argb(frameX + x, frameY + y);
         }
 
         @Override

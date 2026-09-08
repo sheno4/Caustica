@@ -12,6 +12,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftMaterialPagePlannerTest {
     @Test
+    void fullPageMaterialDoesNotReserveSpaceForSeparateNeutralTextures() {
+        var plan = MinecraftMaterialPagePlanner.plan(List.of(
+                new MinecraftMaterialPagePlanner.Input(0, "full", 28, 28,
+                        MinecraftMaterialPagePlanner.CHANNEL_MATERIAL)), 32, 32, 2, 1);
+
+        assertEquals(1, plan.layouts().size());
+        assertEquals(List.of(new MinecraftMaterialPagePlanner.Placement(0, 0, 2, 2)), plan.placements());
+    }
+
+    @Test
+    void rejectedPlacementLeavesTheCurrentRowAvailableToSmallerInputs() {
+        var plan = MinecraftMaterialPagePlanner.plan(List.of(
+                new MinecraftMaterialPagePlanner.Input(0, "first", 10, 10,
+                        MinecraftMaterialPagePlanner.CHANNEL_MATERIAL),
+                new MinecraftMaterialPagePlanner.Input(1, "next-page", 8, 8,
+                        MinecraftMaterialPagePlanner.CHANNEL_MATERIAL),
+                new MinecraftMaterialPagePlanner.Input(2, "remaining-row", 6, 7,
+                        MinecraftMaterialPagePlanner.CHANNEL_MATERIAL)), 16, 16, 0, 1);
+
+        assertEquals(List.of(new MinecraftMaterialPagePlanner.Placement(0, 0, 0, 0),
+                new MinecraftMaterialPagePlanner.Placement(1, 1, 0, 0),
+                new MinecraftMaterialPagePlanner.Placement(2, 0, 10, 0)), plan.placements());
+    }
+
+    @Test
     void semanticBaseColorFlagsDoNotRequireMaterialImages() {
         int semanticOnly = MinecraftMaterialPageCompiler.FEATURE_SUBSURFACE_COLOR_BASE
                 | MinecraftMaterialPageCompiler.FEATURE_EMISSION_COLOR_BASE;
@@ -46,7 +71,7 @@ final class MinecraftMaterialPagePlannerTest {
                 new MinecraftMaterialPagePlanner.Input(0, "metadata", 16, 16, 0)), 32, 32, 2, 1);
 
         assertNull(plan.placement(0));
-        assertFalse(plan.layouts().get(0).has(MinecraftMaterialPagePlanner.CHANNEL_MATERIAL));
+        assertTrue(plan.layouts().isEmpty());
 
         MaterialPagePacker pixels = new MaterialPagePacker(32, 6, 2, false, false);
         assertNull(pixels.surface0);
@@ -62,8 +87,7 @@ final class MinecraftMaterialPagePlannerTest {
 
         assertTrue(plan.rejectedOversizedInput());
         assertNull(plan.placement(0));
-        assertEquals(1, plan.layouts().size());
-        assertEquals(0, plan.layouts().get(0).channels());
+        assertTrue(plan.layouts().isEmpty());
     }
 
     @Test

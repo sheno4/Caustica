@@ -31,10 +31,6 @@ public final class MinecraftMaterialImage implements MaterialImage {
         return pixels.applyAsInt(x, y);
     }
 
-    int rawArgb(int x, int y) {
-        return pixels.applyAsInt(x, y);
-    }
-
     @Override
     public void close() {
         closeAction.run();

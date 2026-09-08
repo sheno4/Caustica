@@ -23,6 +23,8 @@ final class MaterialPagePacker {
         emission = emissionPresent ? allocate(pageSize, mipCount, 255, 255, 255, 255) : null;
     }
 
+    /** Writes only this placement's padded rectangle; aligned planner cells keep parallel writes disjoint. */
+    /** Writes only this placement's padded rectangle; aligned planner cells keep parallel writes disjoint. */
     void write(int x, int y, List<MaterialTextureLevels.Level> levels) {
         if (surface0 == null) return;
         for (int mip = 0; mip < levels.size(); mip++) {

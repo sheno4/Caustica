@@ -54,24 +54,27 @@ final class MaterialTextureLevels {
     private static float[] downsample(float[] source, int sourceWidth, int sourceHeight,
                                       int width, int height) {
         float[] result = new float[width * height * 4];
+        double scaleX = (double) sourceWidth / width;
+        double scaleY = (double) sourceHeight / height;
+        // Equal-area footprints include trailing odd texels and split fractional boundary texels.
         for (int y = 0; y < height; y++) {
+            double top = (double) y * sourceHeight / height;
+            double bottom = (double) (y + 1) * sourceHeight / height;
             for (int x = 0; x < width; x++) {
-                int samples = 0;
+                double left = (double) x * sourceWidth / width;
+                double right = (double) (x + 1) * sourceWidth / width;
                 int destination = (y * width + x) * 4;
-                for (int dy = 0; dy < 2; dy++) {
-                    int sy = y * 2 + dy;
-                    if (sy >= sourceHeight) continue;
-                    for (int dx = 0; dx < 2; dx++) {
-                        int sx = x * 2 + dx;
-                        if (sx >= sourceWidth) continue;
+                for (int sy = (int) top; sy < Math.ceil(bottom); sy++) {
+                    double overlapY = Math.min(bottom, sy + 1) - Math.max(top, sy);
+                    for (int sx = (int) left; sx < Math.ceil(right); sx++) {
+                        double overlapX = Math.min(right, sx + 1) - Math.max(left, sx);
+                        float weight = (float) (overlapX * overlapY / (scaleX * scaleY));
                         int sourceOffset = (sy * sourceWidth + sx) * 4;
                         for (int channel = 0; channel < 4; channel++) {
-                            result[destination + channel] += source[sourceOffset + channel];
+                            result[destination + channel] += source[sourceOffset + channel] * weight;
                         }
-                        samples++;
                     }
                 }
-                for (int channel = 0; channel < 4; channel++) result[destination + channel] /= samples;
             }
         }
         return result;

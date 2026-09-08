@@ -83,7 +83,7 @@ public final class MinecraftMaterialPageCompiler {
     }
 
     static Result compile(List<MaterialTextureResource> resources, int defaultPageSize, int maxPageSize, int gutter) {
-        List<MaterialTextureResource> ordered = new ArrayList<>(List.copyOf(resources));
+        List<MaterialTextureResource> ordered = new ArrayList<>(resources);
         ordered.sort(Comparator.comparing(MaterialTextureResource::material));
         Set<ResourceId> ids = new java.util.HashSet<>();
         for (MaterialTextureResource resource : ordered) {
@@ -128,10 +128,10 @@ public final class MinecraftMaterialPageCompiler {
         AtomicBoolean loggedFailure = new AtomicBoolean();
         candidates.parallelStream().filter(candidate -> candidate.page >= 0).forEach(candidate -> {
             try {
-                MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
+                var levels = MaterialTextureAnalyzer.decode(
                         candidate.resource.analysisSource(),
                         maxLodFor(candidate.width(), candidate.height()));
-                pixels[candidate.page].write(candidate.x, candidate.y, decoded.levels());
+                pixels[candidate.page].write(candidate.x, candidate.y, levels);
             } catch (Throwable failure) {
                 if (loggedFailure.compareAndSet(false, true)) {
                     LOGGER.warn("RT canonical material decode failed for " + candidate.resource.material(), failure);

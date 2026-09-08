@@ -4,11 +4,9 @@ import java.util.List;
 
 /** Decodes source images into canonical page levels. */
 final class MaterialTextureAnalyzer {
-    record Decoded(List<MaterialTextureLevels.Level> levels) { }
-
     private MaterialTextureAnalyzer() { }
 
-    static Decoded decode(MaterialTextureAnalysisSource source, int maxLod) throws Exception {
+    static List<MaterialTextureLevels.Level> decode(MaterialTextureAnalysisSource source, int maxLod) throws Exception {
         try (MaterialTextureImage texture = source.texture().open()) {
             int width = source.width(), height = source.height();
             float[] surface0 = new float[width * height * 4];
@@ -36,8 +34,8 @@ final class MaterialTextureAnalyzer {
                 surface1[i + 2] = texel.metalBaseColorB;
                 surface1[i + 3] = MaterialPagePacker.encodeIor(texel.specularIor);
             }
-            return new Decoded(MaterialTextureLevels.mipChain(new MaterialTextureLevels.Level(width, height,
-                    surface0, normal, surface1, emissionColor), maxLod));
+            return MaterialTextureLevels.mipChain(new MaterialTextureLevels.Level(width, height,
+                    surface0, normal, surface1, emissionColor), maxLod);
         }
     }
 

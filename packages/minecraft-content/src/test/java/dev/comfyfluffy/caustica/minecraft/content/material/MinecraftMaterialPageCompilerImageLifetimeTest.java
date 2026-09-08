@@ -73,9 +73,9 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
                     @Override public void close() { }
                 });
 
-        MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
+        var decoded = MaterialTextureAnalyzer.decode(
                 source, 0);
-        MaterialTextureLevels.Level level = decoded.levels().getFirst();
+        MaterialTextureLevels.Level level = decoded.getFirst();
 
         assertEquals(0.75f, level.surface0()[2], 1.0e-6f);
         assertEquals(0.5f, level.emissionColor()[0], 1.0e-6f);
