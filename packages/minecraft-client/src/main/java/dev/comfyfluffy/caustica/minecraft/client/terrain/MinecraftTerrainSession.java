@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainGeometry;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftVulkanTerrainUploader;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 
 /** Session-owned construction hook for the retained terrain producer. */
@@ -53,7 +54,7 @@ public final class MinecraftTerrainSession {
             terrain.bindGeometry(next);
             geometry = next;
         } catch (RuntimeException | Error failure) {
-            uploader.close();
+            ResourceLifetime.closeAfterFailure(failure, uploader::close);
             throw failure;
         }
     }
@@ -62,9 +63,9 @@ public final class MinecraftTerrainSession {
     public void stop() {
         terrain.clearMaterialLookup();
         if (geometry == null) return;
-        terrain.unbindGeometry(geometry);
-        geometry.close();
+        MinecraftTerrainGeometry retiring = geometry;
         geometry = null;
+        new ResourceLifetime(() -> terrain.unbindGeometry(retiring), retiring::close).close();
     }
 
 }

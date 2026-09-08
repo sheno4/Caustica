@@ -37,6 +37,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftProgramSessionTest {
     @Test
+    void pendingCleanupReleasesRegistrationAfterUploadCancellationFails() {
+        var request = new MinecraftProgramSession.Pending(1, null);
+        var failure = new IllegalStateException("upload cancellation failed");
+        var registrationFailure = new IllegalStateException("registration close failed");
+        List<String> releases = new ArrayList<>();
+        request.upload = () -> {
+            releases.add("upload");
+            throw failure;
+        };
+        request.registration = new ProgramRegistration<>() {
+            @Override public MinecraftPrograms exports() { throw new AssertionError(); }
+            @Override public void whenComplete(java.util.function.Consumer<? super Completion> callback) {
+                throw new AssertionError();
+            }
+            @Override public void close() {
+                releases.add("registration");
+                throw registrationFailure;
+            }
+        };
+
+        assertSame(failure, assertThrows(IllegalStateException.class, request::close));
+        assertEquals(List.of("upload", "registration"), releases);
+        assertEquals(List.of(registrationFailure), List.of(failure.getSuppressed()));
+        request.close();
+        assertEquals(List.of("upload", "registration"), releases);
+    }
+
+    @Test
     void preparedEpochRegistersProgramsBeforeItsUploadPassRecords() {
         CapturingChannel channel = new CapturingChannel();
         List<String> events = new ArrayList<>();

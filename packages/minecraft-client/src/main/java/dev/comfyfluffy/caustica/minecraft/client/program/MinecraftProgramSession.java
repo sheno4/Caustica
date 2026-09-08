@@ -28,6 +28,7 @@ import dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftTerrainSession
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.entity.*;
 import dev.comfyfluffy.caustica.settings.*;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -122,11 +123,13 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
-            if (overlayRegistration != null) overlayRegistration.close();
-            if (lightRegistration != null) lightRegistration.close();
-            if (lights != null) lights.close();
-            if (frameCapture != null) frameCapture.close();
-            resources.close();
+            var releases = new ArrayList<Runnable>();
+            if (overlayRegistration != null) releases.add(overlayRegistration::close);
+            if (lightRegistration != null) releases.add(lightRegistration::close);
+            if (lights != null) releases.add(lights::close);
+            if (frameCapture != null) releases.add(frameCapture::close);
+            releases.add(resources::close);
+            ResourceLifetime.closeAfterFailure(failure, releases.toArray(Runnable[]::new));
             throw failure;
         }
     }
@@ -152,7 +155,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             request.upload = prepared.job();
             request.prepared = prepared.epoch();
         } catch (RuntimeException | Error failure) {
-            request.close();
+            ResourceLifetime.closeAfterFailure(failure, request::close);
             CausticaMod.LOGGER.error("Minecraft material epoch {} could not be prepared",
                     resourcePack.generation(), failure);
             return;
@@ -181,7 +184,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             request.registration.whenComplete(result -> completed(request, result));
         } catch (RuntimeException | Error failure) {
             pending = null;
-            request.close();
+            ResourceLifetime.closeAfterFailure(failure, request::close);
             CausticaMod.LOGGER.error("Minecraft material epoch {} could not publish its resources",
                     request.generation, failure);
         }
@@ -202,7 +205,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             activate(request);
         } catch (RuntimeException | Error failure) {
             pending = null;
-            request.close();
+            ResourceLifetime.closeAfterFailure(failure, request::close);
             CausticaMod.LOGGER.error("Minecraft program epoch {} could not bind its producers",
                     request.generation, failure);
         }
@@ -211,9 +214,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private void activate(Pending request) {
         ProgramRegistration<MinecraftPrograms> registration = request.registration;
         MinecraftPrograms programs = registration.exports();
-        PassRegistration sky = createSky(programs, request.generation);
         Active displaced = active;
-        if (displaced != null) displaced.stopSceneProducers();
 
         MinecraftTerrainSession terrainSession = new MinecraftTerrainSession(
                 context.renderSession().gpu(), context.renderSession().resources(), terrain, entityTextures);
@@ -221,7 +222,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         MinecraftEntityGeometry entityGeometry = null;
         dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease = null;
         MinecraftFrameSelector frameSelector = null;
+        PassRegistration sky = createSky(programs, request.generation);
         try {
+            if (displaced != null) displaced.stopSceneProducers();
             terrainSession.bind(programs, context.renderSession().meshes(),
                     context.renderSession().scene(), context.scene());
             terrainSession.publishMaterialLookup(request.lookup);
@@ -236,11 +239,16 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             entityLease = java.util.Objects.requireNonNull(entityCapture.install(entityGeometry),
                     "entity capture lease");
         } catch (RuntimeException | Error failure) {
-            if (entityLease != null) entityLease.close();
-            if (entityGeometry != null) { entityGeometry.stop(); entityGeometry.close(); }
-            if (frameSelection != null) frameSelection.close();
-            terrainSession.stop();
-            if (sky != null) sky.close();
+            var releases = new ArrayList<Runnable>();
+            if (entityLease != null) releases.add(entityLease::close);
+            if (entityGeometry != null) {
+                releases.add(entityGeometry::stop);
+                releases.add(entityGeometry::close);
+            }
+            if (frameSelection != null) releases.add(frameSelection::close);
+            releases.add(terrainSession::stop);
+            if (sky != null) releases.add(sky::close);
+            ResourceLifetime.closeAfterFailure(failure, releases.toArray(Runnable[]::new));
             throw failure;
         }
 
@@ -317,17 +325,17 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     @Override public synchronized void stop() {
         if (stopped) return;
         stopped = true;
-        frameCapture.close();
-        overlayRegistration.close();
-        lightRegistration.close();
-        if (active != null && active.sky != null) active.sky.close();
-        if (active != null) active.stopSceneProducers();
-        lights.close();
-        if (pending != null) pending.close();
+        Active retiring = active;
+        Pending cancelled = pending;
         pending = null;
-        if (active != null) active.closePrograms();
         active = null;
-        terrain.shutdown();
+        new ResourceLifetime(frameCapture::close, overlayRegistration::close, lightRegistration::close,
+                () -> { if (retiring != null && retiring.sky != null) retiring.sky.close(); },
+                () -> { if (retiring != null) retiring.stopSceneProducers(); },
+                lights::close,
+                () -> { if (cancelled != null) cancelled.close(); },
+                () -> { if (retiring != null) retiring.closePrograms(); },
+                terrain::shutdown).close();
     }
 
     @Override public void close() { resources.close(); }
@@ -345,7 +353,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         }
     }
 
-    private static final class Pending {
+    static final class Pending {
         final long generation;
         final MinecraftMaterialLookup lookup;
         GpuComputeJob upload;
@@ -356,12 +364,14 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             this.lookup = lookup;
         }
         void close() {
-            if (upload != null) upload.close();
-            if (registration != null) registration.close();
-            if (prepared != null) prepared.gpu().close();
+            var releases = new ArrayList<Runnable>();
+            if (upload != null) releases.add(upload::close);
+            if (registration != null) releases.add(registration::close);
+            if (prepared != null) releases.add(prepared.gpu()::close);
             upload = null;
             registration = null;
             prepared = null;
+            new ResourceLifetime(releases.toArray(Runnable[]::new)).close();
         }
     }
 
@@ -398,30 +408,26 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         void stopSceneProducers() {
             if (producersStopped) return;
             producersStopped = true;
-            frameSelection.close();
-            entityLease.close();
-            entityGeometry.stop();
-            entityGeometry.close();
-            terrain.stop();
+            new ResourceLifetime(frameSelection::close, entityLease::close,
+                    entityGeometry::stop, entityGeometry::close, terrain::stop).close();
         }
         void releaseDisplacedPrograms() {
-            delayed.forEach(RetiredPrograms::close);
+            Runnable[] releases = delayed.stream().<Runnable>map(retired -> retired::close)
+                    .toArray(Runnable[]::new);
             delayed.clear();
+            new ResourceLifetime(releases).close();
         }
         void closePrograms() {
-            if (sky != null) sky.close();
-            releaseDisplacedPrograms();
-            registration.close();
-            epoch.close();
+            new ResourceLifetime(() -> { if (sky != null) sky.close(); },
+                    this::releaseDisplacedPrograms, registration::close, epoch::close).close();
         }
     }
 
     private record RetiredPrograms(PassRegistration sky, ProgramRegistration<MinecraftPrograms> registration,
                                    MinecraftProgramResources.Epoch epoch) {
         void close() {
-            if (sky != null) sky.close();
-            registration.close();
-            epoch.close();
+            new ResourceLifetime(() -> { if (sky != null) sky.close(); },
+                    registration::close, epoch::close).close();
         }
     }
 
