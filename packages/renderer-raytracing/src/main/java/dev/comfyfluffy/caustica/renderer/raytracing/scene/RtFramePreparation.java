@@ -33,18 +33,20 @@ final class RtFramePreparation implements AutoCloseable {
     static <T> List<List<T>> chunks(List<T> inputs, ToIntFunction<? super T> work) {
         if (inputs.isEmpty()) return List.of(inputs);
         long totalWork = 0L;
-        for (T input : inputs) totalWork = Math.addExact(totalWork, Math.max(1, work.applyAsInt(input)));
-        int count = Math.min(Math.min(WORKERS, inputs.size()),
-                Math.max(1, Math.toIntExact(Math.ceilDiv(totalWork, WORK_PER_CHUNK))));
+        for (T input : inputs) totalWork += Math.max(1, work.applyAsInt(input));
+        int count = (int) Math.min(Math.min(WORKERS, inputs.size()),
+                Math.ceilDiv(totalWork, WORK_PER_CHUNK));
+        long workPerChunk = Math.ceilDiv(totalWork, count);
         List<List<T>> chunks = new ArrayList<>(count);
         int first = 0;
         long completedWork = 0L;
         for (int index = 1; index < count; index++) {
-            long target = Math.ceilDiv(Math.multiplyExact(totalWork, index), count);
+            long target = workPerChunk * index;
+            // Keep at least one input for each remaining worker, even with uneven weights.
             int lastExclusive = inputs.size() - (count - index);
             int end = first;
             while (end < lastExclusive && (end == first || completedWork < target)) {
-                completedWork = Math.addExact(completedWork, Math.max(1, work.applyAsInt(inputs.get(end))));
+                completedWork += Math.max(1, work.applyAsInt(inputs.get(end)));
                 end++;
             }
             chunks.add(inputs.subList(first, end));

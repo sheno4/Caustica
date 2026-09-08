@@ -44,6 +44,25 @@ final class RtFramePreparationTest {
     }
 
     @Test
+    void largeWorkEstimatesRemainCappedByWorkerCount() {
+        List<Integer> inputs = java.util.Collections.nCopies(257, Integer.MAX_VALUE);
+        List<List<Integer>> chunks = RtFramePreparation.chunks(inputs, Integer::intValue);
+        assertEquals(4, chunks.size());
+        assertEquals(inputs, chunks.stream().flatMap(List::stream).toList());
+        assertTrue(chunks.stream().allMatch(chunk -> chunk.size() >= 64 && chunk.size() <= 65));
+    }
+
+    @Test
+    void unevenWeightsLeaveEveryChunkNonempty() {
+        for (List<Integer> inputs : List.of(List.of(4000, 0, 0, 0), List.of(0, 0, 0, 4000))) {
+            List<List<Integer>> chunks = RtFramePreparation.chunks(inputs, Integer::intValue);
+            assertEquals(4, chunks.size());
+            assertTrue(chunks.stream().allMatch(chunk -> chunk.size() == 1));
+            assertEquals(inputs, chunks.stream().flatMap(List::stream).toList());
+        }
+    }
+
+    @Test
     void singleChunkRunsOnPreparationWorker() {
         String caller = Thread.currentThread().getName();
         String[] worker = new String[1];
