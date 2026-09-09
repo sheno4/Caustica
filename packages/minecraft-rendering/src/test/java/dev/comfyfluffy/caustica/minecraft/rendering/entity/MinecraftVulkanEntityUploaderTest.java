@@ -143,8 +143,8 @@ final class MinecraftVulkanEntityUploaderTest {
                 new MinecraftPrimitiveData.Float4(.2f, .3f, .4f, .5f),
                 new MinecraftPrimitiveData.Float4(.3f, .4f, .5f, .75f)};
 
-        MinecraftPrimitiveData record = MinecraftVulkanEntityUploader.primitiveRecord(
-                triangle, uv, colors, 17, 23, 29, MinecraftVulkanEntityUploader.TangentBasis.ZERO);
+        MinecraftPrimitiveData record = MinecraftEntityPrimitives.primitiveRecord(
+                triangle, uv, colors, 17, 23, 29, MinecraftEntityPrimitives.TangentBasis.ZERO);
 
         assertEquals(17, record.materialIndex());
         assertEquals(23, record.baseTexture().value());
@@ -219,7 +219,7 @@ final class MinecraftVulkanEntityUploaderTest {
         var uvs = java.nio.FloatBuffer.wrap(new float[]{0, 0, 1, 0, 0, 1}).asReadOnlyBuffer();
         positions.position(positions.limit());
         indices.position(indices.limit());
-        var basis = MinecraftVulkanEntityUploader.tangentBasis(positions, indices, uvs, 0);
+        var basis = MinecraftEntityPrimitives.tangentBasis(positions, indices, uvs, 0);
         assertEquals(1, basis.tangent().x());
         assertEquals(1, basis.bitangent().y());
         assertEquals(positions.limit(), positions.position());

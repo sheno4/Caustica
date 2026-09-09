@@ -23,9 +23,8 @@ import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityPrimitives.TextureBinding;
 import java.nio.ByteBuffer;
-import java.nio.FloatBuffer;
-import java.nio.IntBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -44,7 +43,6 @@ import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure
 
 /** VMA-backed uploader for retained Minecraft entity geometry and per-triangle shader records. */
 public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploader {
-    private static final int TEXTURE_PRESENT = 1;
     private final GpuDevice gpu;
     private final MinecraftMaterialLookup materials;
     private final MinecraftPrograms programs;
@@ -113,8 +111,8 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 write(positions, (long) positionValues.capacity() * 4, bytes -> bytes.asFloatBuffer().put(positionValues));
                 write(indices, (long) indexValues.capacity() * 4, bytes -> bytes.asIntBuffer().put(indexValues));
                 write(primitive, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
-                        bytes -> writePrimitives(bytes, source, positionValues, indexValues, source.uvs(),
-                                source.vertexColors(), textures, materialIndices));
+                        bytes -> MinecraftEntityPrimitives.write(bytes, source, positionValues, indexValues, source.uvs(),
+                                source.vertexColors(), textures.bindings, materialIndices));
                 write(instance, MinecraftInstanceData.BYTE_SIZE,
                         bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,
                                 new MinecraftInstanceData.SampledTexture2DIndex(0), 0).write(bytes));
@@ -213,74 +211,10 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         return a.material().program() == b.material().program() && a.coverage() == b.coverage();
     }
 
-    private static void writePrimitives(ByteBuffer bytes, MinecraftEntityMesh source, FloatBuffer positions,
-                                 IntBuffer indices, FloatBuffer uvs, FloatBuffer colors,
-                                 TextureSet textureSet, Map<MinecraftEntityMesh.Material, Integer> materialIndices) {
-        for (int t = 0; t < source.triangleCount(); t++) {
-            var triangle = source.triangles().get(t);
-            MinecraftPrimitiveData.Float2[] uv = new MinecraftPrimitiveData.Float2[3];
-            MinecraftPrimitiveData.Float4[] vertexColors = new MinecraftPrimitiveData.Float4[3];
-            for (int corner = 0; corner < 3; corner++) {
-                int vertex = indices.get(t * 3 + corner);
-                uv[corner] = new MinecraftPrimitiveData.Float2(
-                        uvs.get(vertex * 2), uvs.get(vertex * 2 + 1));
-                vertexColors[corner] = new MinecraftPrimitiveData.Float4(colors.get(vertex * 4),
-                        colors.get(vertex * 4 + 1), colors.get(vertex * 4 + 2), colors.get(vertex * 4 + 3));
-            }
-            TextureBinding binding = triangle.material().texture() == null
-                    ? null : textureSet.bindings.get(triangle.material().texture());
-            TangentBasis basis = tangentBasis(positions, indices, uvs, t);
-            var record = primitiveRecord(triangle, uv, vertexColors,
-                    materialIndices.get(triangle.material()),
-                    binding == null ? null : binding.image(), binding == null ? null : binding.sampler(), basis);
-            record.write(bytes.slice(t * MinecraftPrimitiveData.BYTE_SIZE, MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
-        }
-        bytes.position(source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE);
-    }
-
-    static MinecraftPrimitiveData primitiveRecord(MinecraftEntityMesh.Triangle triangle,
-                                                   MinecraftPrimitiveData.Float2[] uv,
-                                                   MinecraftPrimitiveData.Float4[] colors,
-                                                   int materialIndex, Integer descriptor, Integer samplerDescriptor,
-                                                   TangentBasis basis) {
-        if (colors.length != 3) throw new IllegalArgumentException("triangle needs three vertex colors");
-        return new MinecraftPrimitiveData(uv, colors,
-                    new MinecraftPrimitiveData.Float3(1, 1, 1), materialIndex,
-                    new MinecraftPrimitiveData.SampledTexture2DIndex(descriptor == null ? 0 : descriptor),
-                    new MinecraftPrimitiveData.SamplerIndex(samplerDescriptor == null ? 0 : samplerDescriptor),
-                    descriptor == null ? 0 : TEXTURE_PRESENT, triangle.emission(),
-                    basis.tangent(), basis.bitangent());
-    }
-
     static MinecraftMaterialKey materialKey(MinecraftEntityMesh.Material material) {
         MinecraftMaterialTopology topology = material.mediumBoundary()
                 ? MinecraftMaterialTopology.MEDIUM_BOUNDARY : MinecraftMaterialTopology.SURFACE;
         return new MinecraftMaterialKey(material.material(), null, material.profile(), topology);
-    }
-
-    static TangentBasis tangentBasis(FloatBuffer positions, IntBuffer indices, FloatBuffer uvs, int triangle) {
-        int i0 = indices.get(triangle * 3), i1 = indices.get(triangle * 3 + 1), i2 = indices.get(triangle * 3 + 2);
-        float x1 = positions.get(i1 * 3) - positions.get(i0 * 3);
-        float y1 = positions.get(i1 * 3 + 1) - positions.get(i0 * 3 + 1);
-        float z1 = positions.get(i1 * 3 + 2) - positions.get(i0 * 3 + 2);
-        float x2 = positions.get(i2 * 3) - positions.get(i0 * 3);
-        float y2 = positions.get(i2 * 3 + 1) - positions.get(i0 * 3 + 1);
-        float z2 = positions.get(i2 * 3 + 2) - positions.get(i0 * 3 + 2);
-        float u1 = uvs.get(i1 * 2) - uvs.get(i0 * 2), v1 = uvs.get(i1 * 2 + 1) - uvs.get(i0 * 2 + 1);
-        float u2 = uvs.get(i2 * 2) - uvs.get(i0 * 2), v2 = uvs.get(i2 * 2 + 1) - uvs.get(i0 * 2 + 1);
-        float determinant = u1 * v2 - u2 * v1;
-        if (Math.abs(determinant) <= 1.0e-8f) return TangentBasis.ZERO;
-        float inverse = 1.0f / determinant;
-        return new TangentBasis(normalized((x1 * v2 - x2 * v1) * inverse,
-                (y1 * v2 - y2 * v1) * inverse, (z1 * v2 - z2 * v1) * inverse),
-                normalized((x2 * u1 - x1 * u2) * inverse,
-                        (y2 * u1 - y1 * u2) * inverse, (z2 * u1 - z1 * u2) * inverse));
-    }
-
-    private static MinecraftPrimitiveData.Float3 normalized(float x, float y, float z) {
-        float length = (float) Math.sqrt(x * x + y * y + z * z);
-        if (length <= 1.0e-8f) return new MinecraftPrimitiveData.Float3(0, 0, 0);
-        return new MinecraftPrimitiveData.Float3(x / length, y / length, z / length);
     }
 
     private CapturedTextures captureTextures(MinecraftEntityMesh source) {
@@ -379,12 +313,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             lifetime.close();
         }
     }
-    record TextureBinding(int image, int sampler) { }
     record GeometryRange(int firstTriangle, int endTriangle) { }
-    record TangentBasis(MinecraftPrimitiveData.Float3 tangent, MinecraftPrimitiveData.Float3 bitangent) {
-        static final TangentBasis ZERO = new TangentBasis(new MinecraftPrimitiveData.Float3(0, 0, 0),
-                new MinecraftPrimitiveData.Float3(0, 0, 0));
-    }
     private record CapturedTextures(Map<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases,
                                     ResourceLifetime lifetime)
             implements AutoCloseable {
