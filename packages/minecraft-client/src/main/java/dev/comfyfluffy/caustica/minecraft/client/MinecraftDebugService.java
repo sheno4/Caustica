@@ -136,7 +136,7 @@ public final class MinecraftDebugService implements AutoCloseable {
     private void execute(String op, JsonObject request, CompletableFuture<Object> future) throws Exception {
         switch (op) {
             case "schema" -> future.complete(Map.of("views", VIEWS,
-                    "images", dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames(),
+                    "images", debugImageNames(),
                     "operations", List.of("schema", "status",
                     "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
             case "status" -> future.complete(status());
@@ -391,8 +391,32 @@ public final class MinecraftDebugService implements AutoCloseable {
         return Map.of("images", images);
     }
 
+    private static List<String> debugImageNames() {
+        var names = new ArrayList<>(dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames());
+        names.addAll(List.of("main-color", "ui-color"));
+        return names;
+    }
+
     private Object captureImage(String name) throws IOException {
         Path output = directory.resolve("image-" + UUID.randomUUID() + ".exr");
+        if (name.equals("main-color") || name.equals("ui-color")) {
+            var composition = CausticaClientComposition.current();
+            var target = name.equals("main-color") ? client.gameRenderer.mainRenderTarget()
+                    : composition.uiOverlay().captureTarget();
+            var view = (com.mojang.blaze3d.vulkan.VulkanGpuTextureView) target.getColorTextureView();
+            var gpu = composition.runtime().vulkanContextOrNull();
+            long frame = composition.runtime().telemetry().frameSerial();
+            String encoding = "RGBA: normalized UNORM8 host target, before file-format conversion";
+            try (var image = MinecraftVulkanImage.sampled(gpu, view, target.width, target.height,
+                    org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM)) {
+                dev.comfyfluffy.caustica.renderer.runtime.RtFrameCapture.exportRaw(gpu, image, output,
+                        Map.of("causticaBuffer", name, "causticaFrame", Long.toString(frame),
+                                "causticaEncoding", encoding));
+            }
+            return Map.of("path", output.toString(), "metadata", Map.of("name", name,
+                    "frameSerial", frame, "width", target.width, "height", target.height,
+                    "vulkanFormat", org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM, "encoding", encoding));
+        }
         var metadata = CausticaClientComposition.current().runtime().exportLatestDebugImage(name, output);
         if (metadata == null) throw new IllegalStateException("No completed renderer image available");
         return Map.of("path", output.toString(), "metadata", metadata);

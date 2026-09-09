@@ -22,8 +22,8 @@ import java.io.IOException;
 import java.nio.ShortBuffer;
 import java.nio.file.Path;
 
-/** Reads completed reconstructed color and exposure for an EXR capture at the Look/LMT input. */
-final class RtFrameCapture {
+/** Synchronous Vulkan image readback for raw diagnostics and residual-exposure EXR export. */
+public final class RtFrameCapture {
     private RtFrameCapture() {
     }
 
@@ -83,7 +83,8 @@ final class RtFrameCapture {
         return result;
     }
 
-    static void exportRaw(VulkanDeviceContext context, GpuImage image, Path output,
+    /** The render-thread caller must submit all commands that write the image before readback. */
+    public static void exportRaw(VulkanDeviceContext context, GpuImage image, Path output,
                           java.util.Map<String, String> metadata) throws IOException {
         int channels = switch (image.format()) {
             case VK10.VK_FORMAT_R8G8B8A8_UNORM, VK10.VK_FORMAT_R16G16B16A16_SFLOAT -> 4;

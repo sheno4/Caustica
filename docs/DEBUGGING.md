@@ -122,6 +122,8 @@ it no longer contains the original noisy trace output when captured at frame end
 
 `display-color` captures the SDR display-mapped RGBA8 image before copying to Minecraft's target and adding UI. Its EXR stores normalized byte values, not scene radiance. Compare it with `screenshot` targets `main` and `ui` to investigate presentation corruption.
 
+`main-color` and `ui-color` read Minecraft's final target and hand/GUI overlay directly into EXR, preserving all RGBA components. Include them with `display-color` in one `image.capture` bundle to compare the same submitted frame without going through Minecraft's PNG readback path.
+
 - **NRD guides:** capture normal/roughness, NRD view Z and diffuse/specular signals together. Inspect finite values, edges and packing before blaming denoising. Named views help inspect spatial errors quickly.
 - **Periodic darkness:** record stationary-camera exposure; find jumps in Python, then compare trace/reconstructed radiance. Stable controller exposure alone does not prove stable lighting. Use short capture bursts only for visual diagnosis.
 - **Streaming:** issue repeated teleports with tick waits, inspect screenshots and geometry queue/resident counters, then stop and let work drain. Counts can suggest leaks or stalls but do not prove exact chunk coverage.
