@@ -98,20 +98,26 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $jfrPath = Join-Path $outDir "$RecordingName-$timestamp.jfr"
 $targetPidText = [string]$target.Id
+# jcmd parses the diagnostic command again, so value quotes must reach its parser.
+$recordingArgument = "name=`"$RecordingName`""
+$outputArgument = "filename=`"$jfrPath`""
 $started = $false
 
 Write-Host "Target JVM: $($target.Raw)"
 Write-Host "Recording:  $jfrPath"
 
 try {
-	Invoke-Jcmd $targetPidText "JFR.start" "name=$RecordingName" "settings=$Settings" "filename=$jfrPath"
+	Invoke-Jcmd $targetPidText "JFR.start" $recordingArgument "settings=`"$Settings`"" $outputArgument
 	$started = $true
 	Write-Host ""
 	Read-Host "Profiling started. Press Enter to stop"
 } finally {
 	if ($started) {
 		Write-Host "Stopping JFR recording..."
-		Invoke-Jcmd $targetPidText "JFR.stop" "name=$RecordingName" "filename=$jfrPath"
+		Invoke-Jcmd $targetPidText "JFR.stop" $recordingArgument $outputArgument
+		if (-not (Test-Path -LiteralPath $jfrPath -PathType Leaf)) {
+			throw "JFR recording was not saved to $jfrPath."
+		}
 		Write-Host "Saved JFR recording to $jfrPath"
 	}
 }
