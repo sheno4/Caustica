@@ -1971,3 +1971,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Reviewed leash-ribbon emission, moving/block-model submission, and the complete line vertex consumer. Kept the leash and line math distinct because they describe different shapes and width rules.
 - Moved `RtLineVertexConsumer` out of the collector's nested implementation. Its reusable instance now receives the target `RtEntityCapture` in `begin`, while retaining endpoint pairing, width/color selection, cardinal-axis perpendiculars, two-ribbon emission, and unmatched-vertex rejection.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-line-capture-extraction-check.log`). Inspected the moved arithmetic and call site. No new live line-rendering comparison was performed.
+
+### Share entity quad vertex accumulation
+
+- Reviewed `RtEntityCapture` buffer reset/reservation, immutable mesh export, bulk/baked/direct submission, normal fallback, decal offset, color conversion, and index/surface emission.
+- Extracted the duplicated four-vertex accumulator into `captureVertex`, used by bulk model vertices and baked quads. Model UV remapping stays outside the accumulator; baked quads retain atlas UVs and supply a zero authored normal for geometric fallback.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 9 seconds; all 12 capture tests passed. Evidence: `tmp/aesthetic-entity-vertex-accumulator-check.log`. No new live model/item comparison was performed.

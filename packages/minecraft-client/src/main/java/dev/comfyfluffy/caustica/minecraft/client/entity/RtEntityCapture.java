@@ -114,6 +114,11 @@ public final class RtEntityCapture implements VertexConsumer {
             u = uvU0 + u * uvDU;
             v = uvV0 + v * uvDV;
         }
+        captureVertex(x, y, z, color, u, v, nx, ny, nz);
+    }
+
+    private void captureVertex(float x, float y, float z, int color, float u, float v,
+                               float nx, float ny, float nz) {
         qx[n] = x; qy[n] = y; qz[n] = z;
         qu[n] = u; qv[n] = v;
         if (n == 0) {
@@ -137,17 +142,9 @@ public final class RtEntityCapture implements VertexConsumer {
             Vector3fc p = quad.position(i);
             pose.transformPosition(p.x(), p.y(), p.z(), scratch);
             long uv = quad.packedUV(i);
-            qx[n] = scratch.x; qy[n] = scratch.y; qz[n] = scratch.z;
-            qu[n] = Float.intBitsToFloat((int) (uv >>> 32));
-            qv[n] = Float.intBitsToFloat((int) uv);
-            if (n == 0) {
-                qnx = 0f; qny = 0f; qnz = 0f; // no authored normal; derive it from the edges
-            }
-            qcol[n] = color;
-            if (++n == 4) {
-                emitQuad();
-                n = 0;
-            }
+            captureVertex(scratch.x, scratch.y, scratch.z, color,
+                    Float.intBitsToFloat((int) (uv >>> 32)), Float.intBitsToFloat((int) uv),
+                    0f, 0f, 0f);
         }
     }
 
