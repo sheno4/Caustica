@@ -1380,3 +1380,9 @@ NrdAbi now bulk-copies the existing eleven-float common-settings array, matching
 The explicit native build compiled nrd_shim.cpp and produced nrdshim.dll; the NRI lifetime regression passed (testNrdNative, 4s, 7 tasks/3 executed). A rebuilt copied-city run exercised REBLUR, RELAX and REBLUR again, waiting 120 world composites per state. The launch staged the rebuilt native bundle. Settings restored exactly; observer 62463 and client 87602 exited zero, client duration 38s. Targeted NRD failure, rejected-settings and device-loss searches were empty. Inspected the RELAX and final REBLUR PNGs: scene/UI rendered without duplicate texture contamination; separate SR diagnostic bars remain. This short run does not establish denoising temporal quality or performance.
 
 Evidence: tmp/aesthetic-nrd-common-native-check.log, tmp/aesthetic-nrd-common-live.{py,json}, tmp/aesthetic-nrd-common-observer.log and tmp/aesthetic-nrd-common-client.log. Linux native compilation remains outside this Windows validation.
+
+## Denoiser API contract review (2026-09-09)
+
+Read all eleven renderer-denoising Java source files and traced the production frame construction in RtReconstruction plus NRD's resource snapshot. The API's full-resolution wording was ambiguous: resources use the internal render extent before SR upscaling. Comments now state that extent, borrowed image lifetime through GPU completion, caller-owned submission/ordering, and restoration of supplied image layouts. The matrix snapshot comment describes the existing construction/access copies.
+
+Evidence is the current RtReconstruction renderWidth/renderHeight and image extent construction, NrdAbi's native packing, and nrd_shim.cpp's restoreInitialState setting. The records, checks, matrix copies, enum policies and factory/backend split remain intact. Changes are comments only; git diff --check passed, and no runtime or test rerun was needed. The whole-project completion audit remains open.
