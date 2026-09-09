@@ -194,11 +194,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private static TlasBuilder.InstanceWriter<FrameInstanceSnapshot> instanceWriter(SceneOrigin origin) {
         return (instance, target) -> {
             target.transform().matrix().put(instance.current.transform().relativeTo(origin.x(), origin.y(), origin.z()));
-            target.instanceCustomIndex(instance.geometryBase)
+            target.instanceCustomIndex(instance.geometryBase())
                     .mask(instance.current.mask())
-                    .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset)
+                    .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset())
                     .flags(org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instance.nativeInstance.mesh.blas().accel.deviceAddress.value());
+                    .accelerationStructureReference(instance.mesh.blas().accel.deviceAddress.value());
         };
     }
 
@@ -256,7 +256,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             for (var page : SnapshotList.pagesOf(inputs.instances)) {
                 for (var instance : page) tableInputs.add(new RtInstanceTablePlan.Input(
                         instance.current.identity(), instance.current.placementOrdinal(),
-                        instance.resolvedMesh.build(), instance.current.transform(), instance.current.instanceData().bits()));
+                        instance.resolvedMesh().build(), instance.current.transform(), instance.current.instanceData().bits()));
             }
             var previous = preparedGeometryByScene.get(scene);
             var instanceTable = instanceTables.build(tableInputs, previous == null ? null : previous.get().instanceTable);
@@ -747,9 +747,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 if (retainedSources.contains(entry.getKey())) continue;
                 entry.getValue().forEach((scene, page) -> {
                     for (var instance : page.instances) {
-                        var next = changedInstances.get(instance.nativeInstance.placementOrdinal);
+                        var next = changedInstances.get(instance.current.placementOrdinal());
                         if (next != null && next.scene() == scene && next.identity() == instance.current.identity()) {
-                            previousInstances.put(instance.nativeInstance.placementOrdinal, page);
+                            previousInstances.put(instance.current.placementOrdinal(), page);
                         } else traceRanges.get(scene).release(instance.range);
                     }
                 });
@@ -1083,14 +1083,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             geometryBase = range.geometryBase();
             var spans = new ArrayList<EmitterSpan>();
             int bytes = 0;
-            NativeInstance instance = frame.nativeInstance;
-            List<? extends MeshBuild.Geometry<?>> geometries = instance.mesh.logical.build().geometries();
+            List<? extends MeshBuild.Geometry<?>> geometries = frame.mesh.logical.build().geometries();
             for (int index = 0; index < geometries.size(); index++) {
                 MeshBuild.Geometry<?> geometry = geometries.get(index);
-                if (!hasEmitterMapping(instance.logical.primitiveEmitters(), geometry.firstIndex() / 3,
+                if (!hasEmitterMapping(frame.current.primitiveEmitters(), geometry.firstIndex() / 3,
                         geometry.triangleCount())) continue;
                 spans.add(new EmitterSpan(index, bytes, geometry.firstIndex() / 3,
-                        geometry.triangleCount(), instance.logical.primitiveEmitters()));
+                        geometry.triangleCount(), frame.current.primitiveEmitters()));
                 bytes = Math.addExact(bytes, Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
             }
             records = frame.geometryRecords;
@@ -1310,12 +1309,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
-    record FrameInstanceSnapshot(NativeInstance nativeInstance,
-                                 RetainedSceneSnapshot.Instance current,
-                                 RtRetainedGeometryPlan.ResolvedMesh resolvedMesh,
+    record FrameInstanceSnapshot(RetainedSceneSnapshot.Instance current, FrameMesh mesh,
                                  RtStableTraceRanges.PageRange range,
-                                 int geometryBase, int sbtRecordOffset,
-                                 List<RtRetainedGeometryPlan.GeometryRecord> geometryRecords) { }
+                                 List<RtRetainedGeometryPlan.GeometryRecord> geometryRecords) {
+        int geometryBase() { return range.geometryBase(); }
+
+        int sbtRecordOffset() {
+            return Math.multiplyExact(geometryBase(), RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY);
+        }
+
+        RtRetainedGeometryPlan.ResolvedMesh resolvedMesh() { return mesh.resolved; }
+    }
 
     /** Storage pages group iteration; each instance revision owns its own trace range generation. */
     static final class InstancePage {
@@ -1331,7 +1335,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 var previousPage = previousPages.get(logical.placementOrdinal());
                 FrameInstanceSnapshot previous = previousPage == null ? null
                         : previousPage.instance(logical.placementOrdinal(), logical.identity());
-                if (previous != null && previous.current == logical && previous.nativeInstance.mesh == mesh) {
+                if (previous != null && previous.current == logical && previous.mesh == mesh) {
                     frames.add(previous);
                     continue;
                 }
@@ -1339,11 +1343,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 int emitterBytes = FrameAssembly.emitterBytes(logical, mesh);
                 var range = previous == null ? ranges.reserve(count, emitterBytes)
                         : ranges.replace(previous.range, count, emitterBytes);
-                int base = range.geometryBase();
-                var instance = new NativeInstance(logical, mesh, logical.placementOrdinal());
                 var records = RtRetainedGeometryPlan.records(mesh.resolved, 0);
-                var value = new FrameInstanceSnapshot(instance, instance.logical, instance.mesh.resolved, range,
-                        base, Math.multiplyExact(base, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY), records);
+                var value = new FrameInstanceSnapshot(logical, mesh, range, records);
                 frames.add(value);
             }
             instances = List.copyOf(frames);
@@ -1361,12 +1362,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             int end = instances.size();
             while (first < end) {
                 int middle = (first + end) >>> 1;
-                if (instances.get(middle).nativeInstance.placementOrdinal < placementOrdinal) first = middle + 1;
+                if (instances.get(middle).current.placementOrdinal() < placementOrdinal) first = middle + 1;
                 else end = middle;
             }
             if (first == instances.size()) return null;
             var instance = instances.get(first);
-            return instance.nativeInstance.placementOrdinal == placementOrdinal && instance.current.identity() == identity
+            return instance.current.placementOrdinal() == placementOrdinal && instance.current.identity() == identity
                     ? instance : null;
         }
 
@@ -1553,9 +1554,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
         InstanceUploadSlot(GpuBuffer buffer) { this.buffer = buffer; }
     }
-
-    record NativeInstance(RetainedSceneSnapshot.Instance logical, FrameMesh mesh,
-                                  long placementOrdinal) { }
 
     /**
      * Immutable CPU resolution reused for one captured mesh and composition. The preparation cache
