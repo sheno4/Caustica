@@ -24,6 +24,35 @@ VolumeInput volumeInput(SurfaceInput surface, uint64_t bindingData, uint evaluat
     return query;
 }
 
+void resolveShadowBoundary<TComposition : IComposition>(inout WorldPayload payload,
+        RetainedGeometryRecord record, SurfaceInput input) {
+    float incomingIor = payload.volumeIor;
+    payload.hitDistance = RayTCurrent();
+    payload.pathFlags &= ~(WORLD_PATH_MISS | WORLD_PATH_VOLUME_ACTIVE);
+    payload.volumeAbsorption = float3(0.0);
+    payload.volumeIor = 1.0;
+    payload.radiance = float3(0.0);
+    if (payload.surface.boundaryWeight <= 0.0) return;
+    payload.radiance = payload.surface.thinTransmissionColor * payload.surface.boundaryWeight;
+    TComposition.Volumes volumes = {};
+    VolumeInput query = volumeInput(input, record.volumeBinding,
+            input.evaluationFlags & EVALUATION_ANIMATION_ENABLED);
+    if (worldHitEntering(input.objectToScene)) {
+        VolumeProperties properties = volumes.evaluateVolume(record.volumeImplementation, query);
+        payload.volumeAbsorption = max(properties.absorptionCoefficient, float3(0.0));
+        payload.volumeIor = max(properties.indexOfRefraction, 1.0);
+        payload.pathFlags |= WORLD_PATH_VOLUME_ACTIVE;
+    } else {
+        VolumeBoundaryLightingInput boundary = {};
+        boundary.volume = query;
+        boundary.lightDirection = normalize(WorldRayDirection());
+        boundary.boundaryDistance = payload.hitDistance;
+        boundary.interiorIor = incomingIor;
+        payload.radiance *= max(volumes.evaluateBoundaryLighting(
+                record.volumeImplementation, boundary), float3(0.0));
+    }
+}
+
 public void runClosestHit<TComposition : IComposition>(inout WorldPayload payload,
         in BuiltInTriangleIntersectionAttributes attributes) {
     RetainedGeometryRecord record = worldGeometryRecord();
@@ -42,31 +71,7 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     material.geometry_thin_walled = !volume;
     payload.surface = surfaceClosure(material, input.geometricNormal);
     if ((payload.pathFlags & WORLD_PATH_SHADOW) != 0u) {
-        float incomingIor = payload.volumeIor;
-        payload.hitDistance = RayTCurrent();
-        payload.pathFlags &= ~(WORLD_PATH_MISS | WORLD_PATH_VOLUME_ACTIVE);
-        payload.volumeAbsorption = float3(0.0);
-        payload.volumeIor = 1.0;
-        payload.radiance = float3(0.0);
-        if (payload.surface.boundaryWeight <= 0.0) return;
-        payload.radiance = payload.surface.thinTransmissionColor * payload.surface.boundaryWeight;
-        TComposition.Volumes volumes = {};
-        VolumeInput query = volumeInput(input, record.volumeBinding,
-                input.evaluationFlags & EVALUATION_ANIMATION_ENABLED);
-        if (worldHitEntering(input.objectToScene)) {
-            VolumeProperties properties = volumes.evaluateVolume(record.volumeImplementation, query);
-            payload.volumeAbsorption = max(properties.absorptionCoefficient, float3(0.0));
-            payload.volumeIor = max(properties.indexOfRefraction, 1.0);
-            payload.pathFlags |= WORLD_PATH_VOLUME_ACTIVE;
-        } else {
-            VolumeBoundaryLightingInput boundary = {};
-            boundary.volume = query;
-            boundary.lightDirection = normalize(WorldRayDirection());
-            boundary.boundaryDistance = payload.hitDistance;
-            boundary.interiorIor = incomingIor;
-            payload.radiance *= max(volumes.evaluateBoundaryLighting(
-                    record.volumeImplementation, boundary), float3(0.0));
-        }
+        resolveShadowBoundary<TComposition>(payload, record, input);
         return;
     }
     payload.position = input.position;
