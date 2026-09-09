@@ -107,9 +107,12 @@ final class RtScenePublication<I extends AutoCloseable, O> implements AutoClosea
             completed = null;
             failure = null;
         }
-        closeInput(discarded == null ? null : discarded.input);
-        if (released != null) released.close();
-        if (!worker.isShutdown()) CompletableFuture.runAsync(() -> { }, worker).join();
+        try (released) {
+            closeInput(discarded == null ? null : discarded.input);
+        } finally {
+            // Preparation resources must remain alive until the worker drains, even when release fails.
+            if (!worker.isShutdown()) CompletableFuture.runAsync(() -> { }, worker).join();
+        }
     }
 
     private static void closeInput(AutoCloseable input) {
@@ -128,8 +131,11 @@ final class RtScenePublication<I extends AutoCloseable, O> implements AutoClosea
         synchronized (this) {
             closed = true;
         }
-        clear();
-        worker.close();
+        try {
+            clear();
+        } finally {
+            worker.close();
+        }
     }
 
     private record Request<I>(long generation, I input) { }

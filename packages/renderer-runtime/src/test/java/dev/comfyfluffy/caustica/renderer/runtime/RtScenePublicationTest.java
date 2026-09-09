@@ -13,6 +13,57 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class RtScenePublicationTest {
+    @Test void failedQueuedInputReleaseStillDrainsPreparationAndReleasesCompletedState() throws Exception {
+        var entered = new CountDownLatch(1);
+        var resume = new CountDownLatch(1);
+        var discarded = new CountDownLatch(1);
+        var released = new CopyOnWriteArrayList<Integer>();
+        record FailingInput(int value, Runnable release) implements AutoCloseable {
+            @Override public void close() { release.run(); }
+        }
+        try (var publication = new RtScenePublication<FailingInput, Integer>(input -> {
+            if (input.value == 2) {
+                entered.countDown();
+                await(resume);
+            }
+            return SharedResource.owned(input.value, released::add);
+        })) {
+            publication.request(1, new FailingInput(1, () -> { }));
+            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+                while (true) {
+                    try (var revision = publication.acquire()) {
+                        if (revision != null) break;
+                    }
+                    Thread.yield();
+                }
+            });
+            publication.request(2, new FailingInput(2, () -> { }));
+            await(entered);
+            publication.request(3, new FailingInput(3, () -> {
+                discarded.countDown();
+                throw new IllegalStateException("queued input release");
+            }));
+            var clearing = java.util.concurrent.CompletableFuture.runAsync(publication::clear);
+            try {
+                await(discarded);
+                assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+                    while (!released.contains(1)) {
+                        if (clearing.isDone()) fail("clear returned before releasing completed state");
+                        Thread.yield();
+                    }
+                });
+                assertFalse(clearing.isDone());
+            } finally {
+                resume.countDown();
+            }
+            var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> clearing.get(10, TimeUnit.SECONDS));
+            assertEquals("queued input release", failure.getCause().getMessage());
+            assertTrue(released.containsAll(List.of(1, 2)));
+            assertNull(publication.acquire());
+        }
+    }
+
     @Test void readersKeepTheCompleteRevisionWhileWorkerPreparesAndCoalescesReplacements() throws Exception {
         var entered = new CountDownLatch(1);
         var resume = new CountDownLatch(1);
