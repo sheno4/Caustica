@@ -225,20 +225,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             }
             case "jfr.start" -> {
                 if (recording != null) throw new IllegalStateException("Debug recording already running");
-                recording = new Recording(Configuration.getConfiguration("profile"));
-                recording.setName("Caustica debug");
-                List<String> events = new ArrayList<>();
-                if (request.has("events")) {
-                    for (var name : request.getAsJsonArray("events")) events.add(name.getAsString());
-                } else {
-                    events.addAll(List.of("Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
-                            "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
-                            "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication",
-                            "TerrainDispatchPlan"));
-                }
-                for (String name : events)
-                    recording.enable("dev.comfyfluffy.caustica." + name).withThreshold(java.time.Duration.ZERO);
-                recording.start();
+                recording = startRecording(request);
                 future.complete(Map.of("recordingId", recording.getId()));
             }
             case "jfr.dump", "jfr.stop" -> {
@@ -255,6 +242,29 @@ public final class MinecraftDebugService implements AutoCloseable {
                 CompletableFuture.delayedExecutor(1, TimeUnit.SECONDS).execute(() -> client.execute(client::stop));
             }
             default -> throw new IllegalArgumentException("Unknown operation " + op);
+        }
+    }
+
+    static Recording startRecording(JsonObject request) throws IOException, java.text.ParseException {
+        List<String> events = new ArrayList<>();
+        if (request.has("events")) {
+            for (var name : request.getAsJsonArray("events")) events.add(name.getAsString());
+        } else {
+            events.addAll(List.of("Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
+                    "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
+                    "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication",
+                    "TerrainDispatchPlan"));
+        }
+        var recording = new Recording(Configuration.getConfiguration("profile"));
+        try {
+            recording.setName("Caustica debug");
+            for (String name : events)
+                recording.enable("dev.comfyfluffy.caustica." + name).withThreshold(java.time.Duration.ZERO);
+            recording.start();
+            return recording;
+        } catch (RuntimeException | Error failure) {
+            dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure(failure, recording::close);
+            throw failure;
         }
     }
 

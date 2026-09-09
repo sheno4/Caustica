@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
 import jdk.jfr.Event;
+import jdk.jfr.FlightRecorder;
+import com.google.gson.JsonParser;
 import jdk.jfr.Recording;
 import jdk.jfr.RecordingState;
 import jdk.jfr.consumer.RecordingFile;
@@ -14,6 +16,30 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftDebugRecordingTest {
     static final class Marker extends Event { int value = 42; }
+
+    @Test
+    void successfulStartReturnsARunningConfiguredRecording() throws Exception {
+        var request = JsonParser.parseString("{\"events\":[\"Frame\"]}").getAsJsonObject();
+        try (var recording = MinecraftDebugService.startRecording(request)) {
+            assertEquals(RecordingState.RUNNING, recording.getState());
+            assertEquals("Caustica debug", recording.getName());
+            assertEquals("true", recording.getSettings().get("dev.comfyfluffy.caustica.Frame#enabled"));
+        }
+    }
+
+    @Test
+    void malformedEventRequestDoesNotAllocateARecording() {
+        var recorder = FlightRecorder.getFlightRecorder();
+        var before = recorder.getRecordings();
+        try {
+            var request = JsonParser.parseString("{\"events\":[{}]}").getAsJsonObject();
+            assertThrows(UnsupportedOperationException.class, () -> MinecraftDebugService.startRecording(request));
+            assertEquals(before, recorder.getRecordings());
+        } finally {
+            recorder.getRecordings().stream().filter(recording -> !before.contains(recording))
+                    .forEach(Recording::close);
+        }
+    }
 
     @Test
     void stoppingSavesReadableEventsAndClosesRecording(@TempDir Path directory) throws Exception {
