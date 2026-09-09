@@ -1686,3 +1686,9 @@ Raytracing checks passed in 6s (45 tasks, 10 executed), with no test edits requi
 Reviewed RtShaderCode and the pipeline's hit-region, retained-record packing, alignment, destruction and descriptor-decoration validation sections. Kept those packing/validation algorithms unchanged. Pipeline destruction now sets its existing destroyed state before callbacks and uses ResourceLifetime to attempt both SBT-buffer and pipeline release. A failed SBT release no longer skips native pipeline destruction or permits a later retry of an already attempted release. Existing post-destruction checks continue to use the same flag.
 
 Raytracing checks passed in 8s (45 tasks, 9 executed), including SBT/ABI tests. Evidence: tmp/aesthetic-pipeline-destruction-check.log. git diff --check passed. No native pipeline destruction failure was injected or new client run performed. Full pipeline creation/rollback review remains open; this is not a complete pipeline or project audit.
+
+## Pipeline stage creation and SBT assembly are separate (2026-09-09)
+
+Read pipeline creation in full. Extracted createBindingTable so shader module/stage/group assembly ends with native pipeline creation and delegates handle readback, aligned SBT allocation/upload and retained-hit handles to one ownership scope. Debug naming now occurs inside that scope. Rollback attempts both SBT and pipeline release and preserves the setup failure. Stage/group order, descriptor mapping, recursion depth, stride limits, handle bytes and upload layout remain unchanged. Shader-module cleanup in the outer finally remains separate.
+
+Raytracing checks passed in 5s (45 tasks, 9 executed), including existing SBT/ABI coverage. Evidence: tmp/aesthetic-pipeline-sbt-assembly-check.log. Corrected only brace/continuation indentation after checking; git diff --check passed. No fresh live pipeline creation or native failure injection was performed. Broader source and runtime coverage remain incomplete.

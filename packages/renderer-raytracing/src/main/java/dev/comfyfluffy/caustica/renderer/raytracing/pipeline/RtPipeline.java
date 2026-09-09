@@ -124,40 +124,52 @@ public final class RtPipeline {
                 check(vkCreateRayTracingPipelinesKHR(device, VK10.VK_NULL_HANDLE, VK10.VK_NULL_HANDLE,
                         info, null, out), "vkCreateRayTracingPipelinesKHR");
                 long pipeline = out.get(0);
-                RtDebugLabels.name(context, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, "world RT pipeline");
-                VmaMappedBuffer sbt = null;
-                try {
-                    int handleSize = context.shaderGroupHandleSize();
-                    ByteBuffer handles = stack.malloc(groupCount * handleSize);
-                    check(vkGetRayTracingShaderGroupHandlesKHR(device, pipeline, 0, groupCount, handles),
-                            "vkGetRayTracingShaderGroupHandlesKHR");
-                    long stride = align(handleSize, Math.max(context.shaderGroupBaseAlignment(),
-                            context.shaderGroupHandleAlignment()));
-                    if (stride > Integer.toUnsignedLong(context.maxShaderGroupStride())) {
-                        throw new UnsupportedOperationException("SBT stride exceeds maxShaderGroupStride");
-                    }
-                    // Scene-specific hit tables use CPU handles; only raygen and miss records live in this SBT.
-                    ByteBuffer hitHandles = ByteBuffer.allocate(hitCount * handleSize);
-                    hitHandles.put(0, handles, firstHit * handleSize, hitHandles.capacity());
-                    long sbtSize = stride * firstHit;
-                    sbt = VmaMappedBuffer.create(context, sbtSize,
-                            VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
-                            context.shaderGroupBaseAlignment(), "world shader binding table");
-                    ByteBuffer mapped = sbt.mapped();
-                    for (int i = 0; i < firstHit; i++) {
-                        mapped.put(Math.toIntExact(i * stride), handles, i * handleSize, handleSize);
-                    }
-                    sbt.flush(0L, sbtSize);
-                    return new RtPipeline(context, pipeline, sbt, stride, handleSize,
-                            raygenCount, missCount, hitHandles);
-                } catch (RuntimeException | Error failure) {
-                    if (sbt != null) sbt.close();
-                    VK10.vkDestroyPipeline(device, pipeline, null);
-                    throw failure;
-                }
+                return createBindingTable(context, stack, pipeline, raygenCount, missCount);
             } finally {
                 for (long module : modules) if (module != 0L) VK10.vkDestroyShaderModule(device, module, null);
             }
+        }
+    }
+
+    /** Owns the new pipeline until its SBT and retained hit handles are ready. */
+    private static RtPipeline createBindingTable(VulkanDeviceContext context, MemoryStack stack,
+                                                 long pipeline, int raygenCount, int missCount) {
+        VkDevice device = context.vk();
+        int firstHit = raygenCount + missCount;
+        int hitCount = HIT_GROUPS.length;
+        int groupCount = firstHit + hitCount;
+        VmaMappedBuffer sbt = null;
+        try {
+            RtDebugLabels.name(context, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, "world RT pipeline");
+            int handleSize = context.shaderGroupHandleSize();
+            ByteBuffer handles = stack.malloc(groupCount * handleSize);
+            check(vkGetRayTracingShaderGroupHandlesKHR(device, pipeline, 0, groupCount, handles),
+                    "vkGetRayTracingShaderGroupHandlesKHR");
+            long stride = align(handleSize, Math.max(context.shaderGroupBaseAlignment(),
+                    context.shaderGroupHandleAlignment()));
+            if (stride > Integer.toUnsignedLong(context.maxShaderGroupStride())) {
+                throw new UnsupportedOperationException("SBT stride exceeds maxShaderGroupStride");
+            }
+            // Scene-specific hit tables use CPU handles; only raygen and miss records live in this SBT.
+            ByteBuffer hitHandles = ByteBuffer.allocate(hitCount * handleSize);
+            hitHandles.put(0, handles, firstHit * handleSize, hitHandles.capacity());
+            long sbtSize = stride * firstHit;
+            sbt = VmaMappedBuffer.create(context, sbtSize,
+                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
+                    context.shaderGroupBaseAlignment(), "world shader binding table");
+            ByteBuffer mapped = sbt.mapped();
+            for (int i = 0; i < firstHit; i++) {
+                mapped.put(Math.toIntExact(i * stride), handles, i * handleSize, handleSize);
+            }
+            sbt.flush(0L, sbtSize);
+            return new RtPipeline(context, pipeline, sbt, stride, handleSize,
+                    raygenCount, missCount, hitHandles);
+        } catch (RuntimeException | Error failure) {
+            VmaMappedBuffer allocatedSbt = sbt;
+            ResourceLifetime.closeAfterFailure(failure,
+                    () -> { if (allocatedSbt != null) allocatedSbt.close(); },
+                    () -> VK10.vkDestroyPipeline(device, pipeline, null));
+            throw failure;
         }
     }
 
