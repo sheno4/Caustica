@@ -230,8 +230,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         source.append("\npublic struct SurfaceDispatch : ISurfaceDispatch {\n")
                 .append("    public OpenPbrSurface evaluateSurface(uint implementation, SurfaceInput input) {\n")
                 .append("        switch (implementation) {\n");
-        for (int i = 0; i < surfaces.size(); i++) {
-            ProgramComposition.Surface value = surfaces.get(i);
+        for (ProgramComposition.Surface value : surfaces) {
             source.append("            case ").append(value.key().implementationIndex())
                     .append("u: { input.implementationData = ")
                     .append("ShaderDataPtr<uint64_t>(input.shaderRoot.compositionData)[")
@@ -244,8 +243,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("public struct CoverageDispatch : ICoverageDispatch {\n")
                 .append("    public float evaluateCoverage(uint implementation, CoverageInput input) {\n")
                 .append("        switch (implementation) {\n");
-        for (int i = 0; i < surfaces.size(); i++) {
-            ProgramComposition.Surface value = surfaces.get(i);
+        for (ProgramComposition.Surface value : surfaces) {
             ShaderDefinition coverage = value.definition().coverage();
             if (coverage == null) continue;
             source.append("            case ").append(value.key().implementationIndex())
@@ -272,10 +270,10 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("    public float3 evaluateEnvironment(uint implementation, EnvironmentQuery query) {\n")
                 .append("        switch (implementation) {\n")
                 .append("            case 0u: { BuiltinEnvironment value; return value.evaluateEnvironment(query); }\n");
-        for (int i = 0; i < environments.size(); i++) {
-            source.append("            case ").append(environments.get(i).key().implementationIndex())
+        for (ProgramComposition.Environment value : environments) {
+            source.append("            case ").append(value.key().implementationIndex())
                     .append("u: { ")
-                    .append(environments.get(i).definition().implementation().type())
+                    .append(value.definition().implementation().type())
                     .append(" value; return value.evaluateEnvironment(query); }\n");
         }
         source.append("            default: { ErrorEnvironment value; return value.evaluateEnvironment(query); }\n")
@@ -290,14 +288,15 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
 
     private static void appendVolumeCases(StringBuilder source, List<ProgramComposition.Volume> volumes,
                                           Map<ProgramKey, Integer> offsets, boolean lighting) {
-        for (int i = 0; i < volumes.size(); i++) {
-            ProgramComposition.Volume value = volumes.get(i);
-            source.append("            case ").append(value.key().implementationIndex()).append("u: { input")
-                    .append(lighting ? ".volume" : "").append(".implementationData = ")
-                    .append("ShaderDataPtr<uint64_t>(input").append(lighting ? ".volume" : "")
+        String dataInput = lighting ? "input.volume" : "input";
+        String method = lighting ? "evaluateBoundaryLighting" : "evaluateVolume";
+        for (ProgramComposition.Volume value : volumes) {
+            source.append("            case ").append(value.key().implementationIndex()).append("u: { ")
+                    .append(dataInput).append(".implementationData = ")
+                    .append("ShaderDataPtr<uint64_t>(").append(dataInput)
                     .append(".shaderRoot.compositionData)[").append(offsets.get(value.key())).append("u]; ")
                     .append(value.definition().implementation().type()).append(" value; return value.")
-                    .append(lighting ? "evaluateBoundaryLighting" : "evaluateVolume").append("(input); }\n");
+                    .append(method).append("(input); }\n");
         }
     }
 

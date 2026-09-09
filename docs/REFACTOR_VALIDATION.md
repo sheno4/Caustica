@@ -1716,3 +1716,9 @@ Raytracing checks passed in 5s (45 tasks, 9 executed). Evidence: tmp/aesthetic-c
 Read module-definition selection, recursive resolution, source reading/extraction, aliases, provided-module names and compiler cleanup helpers. Removed ResolvedModule, whose name duplicated its map key; resolution now returns LinkedHashMap-backed name-to-byte entries consumed directly during extension source writing. Source-provider identity deduplication, conflict checks, provided-module skipping, register-before-import traversal and source hashing inputs remain unchanged. Generated composition dispatch is not included in this completed section review.
 
 Raytracing checks passed in 5s (45 tasks, 10 executed). Evidence: tmp/aesthetic-resolved-module-map-check.log. git diff --check passed. No new native compile run, import-cycle/conflict experiment or performance measurement was performed. Broader compiler/project review remains active.
+
+## Generated composition dispatch iterates declarations directly (2026-09-09)
+
+Read compositionRoot and appendVolumeCases in full. Replaced unused index-based loops for surface, coverage, volume and environment cases with direct declaration iteration. Volume generation selects its implementation-data input path and evaluation method once per dispatch function instead of repeating those choices per case. Preserved stable implementation indices, packed surface-then-volume data order, fallback dispatch, sorted imports and all generated expressions.
+
+Raytracing checks passed in 5s (45 tasks, 9 executed). Inspected current XML reports for WorldShaderCompilerTest and WorldShaderFallbackTest: one test each, zero skipped, zero failures. Evidence: tmp/aesthetic-composition-dispatch-check.log and module test reports. git diff --check passed. No new live world run or performance measurement was performed. This completes this bounded generated-dispatch source review, not whole-project coverage or every compiler input case.
