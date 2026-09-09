@@ -176,11 +176,14 @@ public NormalTransform worldNormalTransform(AffineTransform affine) {
     float3 row0 = affine.row0.xyz;
     float3 row1 = affine.row1.xyz;
     float3 row2 = affine.row2.xyz;
-    float inverseDeterminant = 1.0 / dot(row0, cross(row1, row2));
+    float3 cofactor0 = cross(row1, row2);
+    float3 cofactor1 = cross(row2, row0);
+    float3 cofactor2 = cross(row0, row1);
+    float inverseDeterminant = 1.0 / dot(row0, cofactor0);
     NormalTransform value = {};
-    value.row0 = cross(row1, row2) * inverseDeterminant;
-    value.row1 = cross(row2, row0) * inverseDeterminant;
-    value.row2 = cross(row0, row1) * inverseDeterminant;
+    value.row0 = cofactor0 * inverseDeterminant;
+    value.row1 = cofactor1 * inverseDeterminant;
+    value.row2 = cofactor2 * inverseDeterminant;
     return value;
 }
 
@@ -222,8 +225,8 @@ public SurfaceInput worldSurfaceInput(BuiltInTriangleIntersectionAttributes attr
     return input;
 }
 
-public CoverageInput worldCoverageInput(BuiltInTriangleIntersectionAttributes attributes) {
-    RetainedGeometryRecord record = worldGeometryRecord();
+public CoverageInput worldCoverageInput(BuiltInTriangleIntersectionAttributes attributes,
+        RetainedGeometryRecord record) {
     CoverageInput input = {};
     input.shaderRoot = worldShaderRoot();
     input.bindingData = record.surfaceBinding;

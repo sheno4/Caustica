@@ -11,7 +11,7 @@ public void runRadianceAnyHit<TComposition : IComposition>(inout WorldPayload pa
     var record = worldGeometryRecord();
     if ((record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u) return;
     float coverage = clamp(coverages.evaluateCoverage(record.coverageImplementation,
-            worldCoverageInput(attributes)), 0.0, 1.0);
+            worldCoverageInput(attributes, record)), 0.0, 1.0);
     bool stochastic = (record.flags & RETAINED_GEOMETRY_STOCHASTIC) != 0u
             && (payload.pathFlags & (WORLD_PATH_GUIDE | WORLD_PATH_PRIMARY)) == 0u;
     if (stochastic ? worldCoverageRandom(payload.seed, worldInstanceCustomIndex(),
