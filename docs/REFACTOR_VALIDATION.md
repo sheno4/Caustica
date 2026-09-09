@@ -1436,3 +1436,9 @@ Renderer-runtime checks passed in 2s (56 tasks, 7 executed). RtViewResourceOwner
 Reviewed RtFrameHistory and RtJitter. Named the existing camera forward-dot, projection-relative-change, squared-distance, animation-period and animation-gap thresholds. cameraCut now takes its previous frame explicitly as a static calculation. Preserved all numeric values, unit conversions, comparisons, submitted-only jitter advancement and reset behavior. The Halton sampler remains direct and unchanged.
 
 Renderer-runtime checks passed in 2s (56 tasks, 6 executed). All nine RtFrameHistoryTest cases passed, covering cuts, scale/scene/extent changes, abandoned frames, origin rebasing, ordinary motion, jitter and animation discontinuities. Evidence: tmp/aesthetic-history-thresholds-check.log and module test results. No new runtime behavior or performance claim is made.
+
+## Exposure readback submission metadata is one value (2026-09-09)
+
+RtExposureReadbacks.Reservation now holds a nullable Submission record instead of a submitted flag plus independent frame ID, pre-exposure and reset-sequence fields. Completion constructs feedback only from a present submission value. Slot ownership/recycling, latest-frame ordering and reset filtering remain unchanged.
+
+Renderer-presentation checks passed in 2s. All five RtExposureReadbacksTest cases passed, covering pending slots, out-of-order completion, abandoned copies, reset epochs and shutdown with in-flight work. Evidence: tmp/aesthetic-exposure-submission-check.log and packages/renderer-presentation/build/test-results/test/. This pass reviewed the readback pool and its tests; the larger RtExposure controller was only partially read and is not claimed as newly reviewed in full. No live exposure-quality or performance claim follows.
