@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.renderer.runtime;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.Frame;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.Scope;
-import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.StageMetric;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -21,37 +20,37 @@ public final class RtFrameStats {
     private static final EventType STAGE_EVENT = EventType.getEventType(CpuStageEvent.class);
     private static final EventType COUNTER_EVENT = EventType.getEventType(FrameCounterEvent.class);
     private static final MetricSchema RENDERER_FRAME_METRICS = new MetricSchema(List.of(
-            new StageMetric("frame.capture"),
-            new StageMetric("frame.composite"),
-            new StageMetric("frame.recordUi"),
-            new StageMetric("frame.finishGraphicsUse"),
-            new StageMetric("geometry.providerCollect"),
-            new StageMetric("geometry.providerConvert"),
-            new StageMetric("geometry.schedulerSubmit"),
-            new StageMetric("geometry.schedulerValidate"),
-            new StageMetric("geometry.publishTerminal"),
-            new StageMetric("geometry.prepareCandidates"),
-            new StageMetric("geometry.packMaterial"),
-            new StageMetric("geometry.snapshotAppend"),
-            new StageMetric("frame.prepareWorldGeometry"),
-            new StageMetric("frame.captureScenes"),
-            new StageMetric("frame.assembleScenes"),
-            new StageMetric("frame.recordTlas"),
-            new StageMetric("frame.prepareLighting"),
-            new StageMetric("frame.finishTrace"),
-            new StageMetric("frame.skyLut"),
-            new StageMetric("frame.buildStablePlanes"),
-            new StageMetric("frame.fillStablePlanes"),
-            new StageMetric("frame.bakeLocal"),
-            new StageMetric("frame.exposure"),
-            new StageMetric("frame.dlssRr"),
-            new StageMetric("frame.nrd"),
-            new StageMetric("frame.rawCopy"),
-            new StageMetric("frame.upscale"),
-            new StageMetric("frame.postChain"),
-            new StageMetric("frame.displayMap"),
-            new StageMetric("frame.debugPresent"),
-            new StageMetric("frame.copyOutput")), List.of());
+            "frame.capture",
+            "frame.composite",
+            "frame.recordUi",
+            "frame.finishGraphicsUse",
+            "geometry.providerCollect",
+            "geometry.providerConvert",
+            "geometry.schedulerSubmit",
+            "geometry.schedulerValidate",
+            "geometry.publishTerminal",
+            "geometry.prepareCandidates",
+            "geometry.packMaterial",
+            "geometry.snapshotAppend",
+            "frame.prepareWorldGeometry",
+            "frame.captureScenes",
+            "frame.assembleScenes",
+            "frame.recordTlas",
+            "frame.prepareLighting",
+            "frame.finishTrace",
+            "frame.skyLut",
+            "frame.buildStablePlanes",
+            "frame.fillStablePlanes",
+            "frame.bakeLocal",
+            "frame.exposure",
+            "frame.dlssRr",
+            "frame.nrd",
+            "frame.rawCopy",
+            "frame.upscale",
+            "frame.postChain",
+            "frame.displayMap",
+            "frame.debugPresent",
+            "frame.copyOutput"), List.of());
 
     private volatile long frameSerial;
     private boolean renderFrameStarted;
@@ -108,7 +107,7 @@ public final class RtFrameStats {
         }
 
         private void applyMetrics(MetricSchema metrics) {
-            stageNames = Set.copyOf(metrics.stages().stream().map(StageMetric::name).toList());
+            stageNames = Set.copyOf(metrics.stages());
             counterNames = metrics.counters().toArray(String[]::new);
             counterIndices = index(counterNames);
             counters = new long[counterNames.length];

@@ -126,7 +126,7 @@ final class MinecraftFrameMetricsTest {
     @Test
     void schemaIncludesCurrentTerrainAndEntityMetrics() {
         MetricSchema schema = MinecraftFrameMetrics.schema();
-        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("terrain.lightScenePublish")));
+        assertTrue(schema.stages().contains("terrain.lightScenePublish"));
         assertTrue(schema.counters().contains("terrainMaterialEpochRejects"));
         assertTrue(schema.counters().contains("entityPlacementFreshnessEligible"));
         assertTrue(schema.counters().contains("entityPlacementInitialSubmissions"));

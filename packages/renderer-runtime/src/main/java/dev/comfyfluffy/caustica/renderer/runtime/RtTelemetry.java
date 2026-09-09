@@ -37,23 +37,16 @@ public interface RtTelemetry {
         void set(String name, long value);
     }
 
-    /** One timed stage recorded under its stable name. */
-    record StageMetric(String name) {
-        public StageMetric {
-            requireMetricName(name);
-        }
-    }
-
-    /** Immutable stage and counter vocabulary contributed by Minecraft. */
-    record MetricSchema(List<StageMetric> stages, List<String> counters) {
+    /** Immutable stage and counter names, with one shared namespace across schema contributions. */
+    record MetricSchema(List<String> stages, List<String> counters) {
         public MetricSchema {
             stages = List.copyOf(stages);
             counters = List.copyOf(counters);
             Set<String> names = new HashSet<>();
-            for (StageMetric stage : stages) {
-                Objects.requireNonNull(stage, "stage metric");
-                if (!names.add(stage.name())) {
-                    throw new IllegalArgumentException("Duplicate telemetry name: " + stage.name());
+            for (String stage : stages) {
+                requireMetricName(stage);
+                if (!names.add(stage)) {
+                    throw new IllegalArgumentException("Duplicate telemetry name: " + stage);
                 }
             }
             for (String counter : counters) {
@@ -66,7 +59,7 @@ public interface RtTelemetry {
 
         public MetricSchema append(MetricSchema extension) {
             Objects.requireNonNull(extension, "metric schema");
-            ArrayList<StageMetric> combinedStages = new ArrayList<>(stages.size() + extension.stages.size());
+            ArrayList<String> combinedStages = new ArrayList<>(stages.size() + extension.stages.size());
             combinedStages.addAll(stages);
             combinedStages.addAll(extension.stages);
             ArrayList<String> combinedCounters = new ArrayList<>(counters.size() + extension.counters.size());

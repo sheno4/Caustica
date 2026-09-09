@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
-import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.StageMetric;
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
@@ -81,9 +80,12 @@ final class RtFrameStatsBoundaryTest {
 
     @Test
     void metricSchemasRejectDuplicatesAndProfilesRejectLateOrRepeatedConfiguration() {
+        assertThrows(IllegalArgumentException.class, () -> new MetricSchema(List.of(" "), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new MetricSchema(List.of("invalid,name"), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new MetricSchema(List.of("shared"), List.of("shared")));
         assertThrows(IllegalArgumentException.class, () -> new MetricSchema(List.of(
-                new StageMetric("duplicate"), new StageMetric("duplicate")), List.of()));
-        MetricSchema base = new MetricSchema(List.of(new StageMetric("base")), List.of());
+                "duplicate", "duplicate"), List.of()));
+        MetricSchema base = new MetricSchema(List.of("base"), List.of());
         RtFrameStats.Profile repeated = new RtFrameStats.Profile("repeated", base, () -> 1L);
         repeated.configureMetrics(new MetricSchema(List.of(), List.of("host")));
         assertThrows(IllegalStateException.class, () -> repeated.configureMetrics(new MetricSchema(List.of(), List.of("other"))));
