@@ -21,7 +21,7 @@ public final class MinecraftMaterialEmissionAnalyzer {
             boolean usesBaseColor = resource.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR;
             for (int y = 0; y < source.height(); y++) {
                 for (int x = 0; x < source.width(); x++) {
-                    int pixel = sample(image, x, y, source.width(), source.height());
+                    int pixel = image.albedoArgb(x, y);
                     float alpha = (pixel >>> 24) / 255.0f;
                     float baseR = linear(pixel >>> 16 & 255);
                     float baseG = linear(pixel >>> 8 & 255);
@@ -53,11 +53,6 @@ public final class MinecraftMaterialEmissionAnalyzer {
             }
         }
         return builder.build();
-    }
-
-    private static int sample(MaterialTextureImage image, int x, int y, int width, int height) {
-        return image.albedoArgb(Math.min(image.width() - 1, x * image.width() / width),
-                Math.min(image.height() - 1, y * image.height() / height));
     }
 
     private static float linear(int channel) {
