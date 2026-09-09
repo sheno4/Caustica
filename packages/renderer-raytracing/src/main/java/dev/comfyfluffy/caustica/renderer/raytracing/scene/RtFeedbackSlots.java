@@ -1,12 +1,17 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.support.SharedResource;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import java.util.ArrayDeque;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
-/** Storage becomes writable only after every submitted reader and history owner releases it. */
+/**
+ * Storage becomes writable only after every submitted reader and history owner releases it.
+ * Final-release callbacks can run on completion threads; the available queue is protected by this
+ * pool's monitor, while resource callbacks run outside it.
+ */
 final class RtFeedbackSlots<T> implements AutoCloseable {
     private final ArrayDeque<T> available = new ArrayDeque<>();
     private final Consumer<T> recycle;
@@ -39,11 +44,7 @@ final class RtFeedbackSlots<T> implements AutoCloseable {
         try {
             recycle.accept(value);
         } catch (RuntimeException | Error failure) {
-            try {
-                destroy.accept(value);
-            } catch (RuntimeException | Error cleanup) {
-                if (failure != cleanup) failure.addSuppressed(cleanup);
-            }
+            ResourceLifetime.closeAfterFailure(failure, () -> destroy.accept(value));
             throw failure;
         }
         synchronized (this) {
