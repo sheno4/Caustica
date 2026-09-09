@@ -84,11 +84,10 @@ abstract class CompileSlangShaders extends DefaultTask {
             SlangIncludeRoots.directoryTree(root)
         } + SlangIncludeRoots.directoryTree(sourceRoot))
                 .unique().sort { it.absolutePath }
-        Set<File> shaderFiles = [] as LinkedHashSet
-        sourcePatterns.get().each { pattern ->
-            shaderFiles.addAll(sourceDirectory.get().asFileTree.matching { include pattern }.files)
-        }
-        List<File> ordered = shaderFiles.sort { it.absolutePath }
+        List<String> patterns = sourcePatterns.get()
+        List<File> ordered = patterns.empty ? [] : sourceDirectory.get().asFileTree.matching {
+            include patterns
+        }.files.sort { it.absolutePath }
         def outputs = ordered.groupBy { outputBase(sourceRoot, it) + ".spv" }
                 .findAll { ignored, files -> files.size() > 1 }
         if (!outputs.isEmpty()) throw new GradleException("duplicate shader output names: ${outputs}")
@@ -96,14 +95,14 @@ abstract class CompileSlangShaders extends DefaultTask {
         File scratch = new File(temporaryDir, "spv")
         if (scratch.exists() && !scratch.deleteDir()) throw new GradleException("failed to clear ${scratch}")
         scratch.mkdirs()
+        List<String> descriptorHeapOptions = descriptorHeapNative.get()
+                ? ["-capability", "spvDescriptorHeapEXT", "-spirv-unified-descriptor-heap-stride"]
+                : []
         ordered.each { source ->
             File output = new File(scratch, outputBase(sourceRoot, source) + ".spv")
             output.parentFile.mkdirs()
             List<String> includes = ([source.parentFile] + includeRoots.findAll { it != source.parentFile })
                     .collectMany { ["-I", it.absolutePath] }
-            List<String> descriptorHeapOptions = descriptorHeapNative.get()
-                    ? ["-capability", "spvDescriptorHeapEXT", "-spirv-unified-descriptor-heap-stride"]
-                    : []
             execOps.exec {
                 commandLine([slangc.get(), source.absolutePath, "-target", "spirv"]
                         + descriptorHeapOptions + [
