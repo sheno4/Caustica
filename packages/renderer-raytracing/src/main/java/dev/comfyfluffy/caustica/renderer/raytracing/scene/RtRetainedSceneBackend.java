@@ -109,10 +109,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     /** Called after the preparation worker is quiescent; existing frame claims remain valid. */
     public void clearScenePreparation() {
-        scenePreparation.clear();
         var released = new ArrayList<>(preparedGeometryByScene.values());
         preparedGeometryByScene.clear();
-        closeAll(released, null);
+        new ResourceLifetime(scenePreparation::clear, () -> closeAll(released, null)).close();
     }
 
     private void quiesceScenePreparation() {
@@ -533,17 +532,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     public void shutdownAfterDeviceIdle() {
         synchronized (this) { if (closed) return; }
         quiesceScenePreparation();
-        synchronized (this) {
-            closed = true;
-            framePreparation.close();
-            releaseTerminalFrameRoots();
-            capture = null;
-            neeAt.destroyAfterDeviceIdle();
-            traceSlots.close();
-            instanceBuffers.close();
-            tlasSlots.close();
-        }
-        retirement.close();
+        framePreparation.close();
+        // Retirement callbacks may acquire this monitor, so join their executor outside it.
+        new ResourceLifetime(this::releaseDeviceIdleResources, retirement::close).close();
+    }
+
+    private synchronized void releaseDeviceIdleResources() {
+        closed = true;
+        capture = null;
+        new ResourceLifetime(this::releaseTerminalFrameRoots, neeAt::destroyAfterDeviceIdle,
+                traceSlots::close, instanceBuffers::close, tlasSlots::close).close();
     }
 
     private void releaseTerminalFrameRoots() {
