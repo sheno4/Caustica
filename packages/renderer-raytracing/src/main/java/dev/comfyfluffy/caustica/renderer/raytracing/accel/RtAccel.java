@@ -384,26 +384,25 @@ public final class RtAccel {
     private static VkAccelerationStructureBuildSizesInfoKHR queryGeometryRangeBlasSizes(
             VkDevice vk, MemoryStack stack, VulkanDeviceAddress vertexAddr,
             VulkanDeviceAddress indexAddr, BlasLayout layout, boolean updateable) {
-        VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
-                vertexAddr, layout.vertexStride(), indexAddr, layout.vertexCount(), layout.geometryRanges());
-        java.nio.IntBuffer maxPrimitives = null;
-        try {
-            maxPrimitives = MemoryUtil.memAllocInt(layout.geometryRanges().size());
-            VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
-                    VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
-            build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                    .flags(buildFlags(updateable)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
-                    .geometryCount(geometries.capacity()).pGeometries(geometries);
-            for (GeometryRange range : layout.geometryRanges()) maxPrimitives.put(range.triangleCount());
-            maxPrimitives.flip();
-            VkAccelerationStructureBuildSizesInfoKHR sizes =
-                    VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
-            vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    build.get(0), maxPrimitives, sizes);
-            return sizes;
-        } finally {
-            if (maxPrimitives != null) MemoryUtil.memFree(maxPrimitives);
-            geometries.free();
+        try (VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
+                vertexAddr, layout.vertexStride(), indexAddr, layout.vertexCount(), layout.geometryRanges())) {
+            var maxPrimitives = MemoryUtil.memAllocInt(layout.geometryRanges().size());
+            try {
+                VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
+                        VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
+                build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+                        .flags(buildFlags(updateable)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                        .geometryCount(geometries.capacity()).pGeometries(geometries);
+                for (GeometryRange range : layout.geometryRanges()) maxPrimitives.put(range.triangleCount());
+                maxPrimitives.flip();
+                VkAccelerationStructureBuildSizesInfoKHR sizes =
+                        VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
+                vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                        build.get(0), maxPrimitives, sizes);
+                return sizes;
+            } finally {
+                MemoryUtil.memFree(maxPrimitives);
+            }
         }
     }
 

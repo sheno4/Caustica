@@ -1662,3 +1662,9 @@ While the client ran, reviewed BLAS compact-destination allocation, compaction r
 Updated compact-destination and ordinary/update BLAS allocation rollback to use ResourceLifetime.closeAfterFailure. Compact allocation preserves the original error if backing release fails. Multi-resource rollback releases either the completed acceleration owner or its untransferred backing, then attempts scratch release regardless of earlier cleanup errors. The shared createOn handle-ownership contract remains unchanged. Also reviewed triangle/range packing and size-query scratch data; retained their existing allocation choices.
 
 Raytracing and vulkan-support checks passed in 5s (47 tasks, 9 executed). Evidence: tmp/aesthetic-blas-rollback-check.log. Shared lifetime failure tests ran; no native allocation failure was injected, and no fresh live run followed this failure-path-only change. git diff --check passed. Native geometry temporary-buffer cleanup, query-pool lifetime and broader source review remain separate work.
+
+## BLAS size-query temporary storage has explicit scopes (2026-09-09)
+
+Reviewed the size-query and command-recording temporary buffer scopes. Converted the query's geometry buffer to try-with-resources and placed primitive-count allocation/free in a nested local scope, removing its nullable initialization and conditional cleanup. Failure allocating counts still releases geometry storage; normal release remains counts before geometry. Kept heap-native storage for variable-length arrays and stack storage for the fixed query/build structs. No wrapper or allocation policy was added.
+
+Raytracing checks passed in 5s (45 tasks, 9 executed), including geometry-range and copy-on-write BLAS contract tests. Evidence: tmp/aesthetic-blas-query-scope-check.log. git diff --check passed. No native allocation failure injection or new live query run was performed. Query-pool lifetime and broader project review remain open.
