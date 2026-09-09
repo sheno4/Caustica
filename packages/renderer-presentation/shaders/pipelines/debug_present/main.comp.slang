@@ -123,15 +123,16 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         break;
     }
     case 10u: { // Stable-plane validity
-        float validity = stablePlaneMetadata[guidePix].x;
-        dbg = validity > 0.5 ? float3(0.1, 0.9, 0.2) : float3(0.9, 0.05, 0.05);
+        // X stores the available plane count divided by three; one plane is already present.
+        float planeShare = stablePlaneMetadata[guidePix].x;
+        dbg = planeShare > 0.0 ? float3(0.1, 0.9, 0.2) : float3(0.9, 0.05, 0.05);
         break;
     }
     case 11u: { // Stable-plane path type
         float4 metadata = stablePlaneMetadata[guidePix];
         bool reflection = metadata.z > 0.0;
         bool transmission = metadata.w > 0.5;
-        dbg = metadata.x <= 0.5 ? float3(0.0)
+        dbg = metadata.x <= 0.0 ? float3(0.0)
                 : reflection && transmission ? float3(0.8, 0.2, 0.95)
                 : transmission ? float3(0.1, 0.8, 0.9)
                 : reflection ? float3(0.15, 0.35, 1.0) : float3(0.7);
@@ -151,7 +152,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     }
     case 15u: { // Stable-plane metadata
         float4 metadata = stablePlaneMetadata[guidePix];
-        dbg = metadata.x > 0.5 ? float3(metadata.z, metadata.w * metadata.y, metadata.y)
+        dbg = metadata.x > 0.0 ? float3(metadata.z, metadata.w * metadata.y, metadata.y)
                 : float3(0.0);
         break;
     }
