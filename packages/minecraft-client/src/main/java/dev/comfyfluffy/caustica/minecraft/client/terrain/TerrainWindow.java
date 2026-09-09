@@ -31,13 +31,13 @@ final class TerrainWindow {
         for (long key : nextAvailable) if (!available.contains(key)) availability.put(key, true);
         var invalidated = new LongOpenHashSet();
         for (long key : availability.keySet()) {
-            invalidateColumn(invalidated, key, Math.min(minY, next.minY) - 1, Math.max(maxY, next.maxY) + 1);
+            forEachSection(key, Math.min(minY, next.minY) - 1, Math.max(maxY, next.maxY) + 1, invalidated::add);
         }
         boolean heightChanged = minY != next.minY || maxY != next.maxY;
         var removed = new ArrayList<Long>();
         for (long key : columns) {
             if (!heightChanged && loaded.contains(key)) continue;
-            for (int y = minY; y <= maxY; y++) removed.add(RtTerrain.sectionKey((int) (key >> 32), y, (int) key));
+            forEachSection(key, minY, maxY, removed::add);
         }
         for (long key : removed) invalidated.add(key);
         invalidationsQueued.accept(new ArrayList<>(invalidated));
@@ -45,7 +45,7 @@ final class TerrainWindow {
         for (long key : removed) remove.accept(key);
         for (long key : loaded) {
             if (!heightChanged && columns.contains(key)) continue;
-            for (int y = next.minY; y <= next.maxY; y++) want.accept(RtTerrain.sectionKey((int) (key >> 32), y, (int) key));
+            forEachSection(key, next.minY, next.maxY, want);
         }
         columns = loaded;
         available = nextAvailable;
@@ -57,13 +57,14 @@ final class TerrainWindow {
                  Consumer<List<Long>> invalidationsQueued) {
         if (!(present ? available.add(key) : available.remove(key))) return;
         var invalidated = new LongOpenHashSet();
-        invalidateColumn(invalidated, key, minY - 1, maxY + 1);
+        forEachSection(key, minY - 1, maxY + 1, invalidated::add);
         invalidationsQueued.accept(new ArrayList<>(invalidated));
         changed.accept(key, present);
     }
 
-    private static void invalidateColumn(LongOpenHashSet keys, long column, int minY, int maxY) {
-        for (int y = minY; y <= maxY; y++) keys.add(RtTerrain.sectionKey((int) (column >> 32), y, (int) column));
+    private static void forEachSection(long column, int minY, int maxY, LongConsumer action) {
+        int x = (int) (column >> 32), z = (int) column;
+        for (int y = minY; y <= maxY; y++) action.accept(RtTerrain.sectionKey(x, y, z));
     }
 
     boolean neighborsLoaded(int x, int z) {

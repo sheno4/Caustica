@@ -1878,3 +1878,9 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terr
 Read TerrainDispatchPlanner in full. Made prepare(Input), rank, available and neighborsLoaded static; they consume explicit context/retained state and do not need coordinator mailbox, callbacks or publication fields. Availability helpers use Retained<?> because they only inspect loaded columns. The computation still mutates its worker-owned retained state; it is not a pure function. Preserved delta coalescing, reranking conditions, replacement priority, generation checks and scheduling behavior.
 
 Minecraft client tests and rendering checks passed; inspected TerrainDispatchPlannerTest's current XML report. Evidence: tmp/aesthetic-dispatch-planner-inputs-check.log. No new reset/cancellation race experiment or dispatch performance measurement was performed. Whole-project coverage remains incomplete.
+
+## Terrain window shares column-to-section traversal (2026-09-09)
+
+Read TerrainWindow in full. Replaced duplicated column unpacking and vertical-range loops with forEachSection, used by invalidation, removal collection and replacement requests. The helper decodes X/Z once and emits section keys in ascending Y order. Preserved availability diffing, halo extent, height-change behavior and the callback ordering of invalidation before eligibility/removal/replacement.
+
+Minecraft client tests and rendering checks passed; inspected TerrainWindowTest's XML report. Existing fixtures cover callback ordering, departure/return and height/window changes. Evidence: tmp/aesthetic-terrain-window-traversal-check.log. No new live traversal or performance measurement was performed. Whole-project coverage remains incomplete.
