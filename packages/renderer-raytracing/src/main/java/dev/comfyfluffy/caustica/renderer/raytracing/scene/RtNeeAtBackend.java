@@ -243,22 +243,27 @@ final class RtNeeAtBackend {
     }
 
     void destroyAfterDeviceIdle() {
-        views.values().forEach(SceneState::retire);
-        views.clear();
-        if (cachedLightRevision != null) cachedLightRevision.close();
+        var released = new RtRevisionResources();
+        released.add(bake::close);
+        if (cachedLightRevision != null) released.add(cachedLightRevision::close);
         cachedLightRevision = null;
         cachedPlan = null;
-        bake.close();
+        views.values().forEach(state -> released.add(state::retire));
+        views.clear();
+        // Detach all owners before callbacks; views release before shared lighting and the pipeline.
+        released.close();
     }
 
     void retainScenes(Set<SceneId> retained) {
+        var released = new RtRevisionResources();
         var iterator = views.values().iterator();
         while (iterator.hasNext()) {
             SceneState state = iterator.next();
             if (retained.contains(state.scene)) continue;
             iterator.remove();
-            state.retire();
+            released.add(state::retire);
         }
+        released.close();
     }
 
     private void dispatch(VkCommandBuffer commandBuffer, Frame target, Frame previous,
