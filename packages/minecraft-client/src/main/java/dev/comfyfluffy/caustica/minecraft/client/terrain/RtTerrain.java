@@ -445,8 +445,7 @@ public final class RtTerrain {
             submitBuild(build, geometry, () -> {
                 var state = WORKER_TESS.get();
                 state.reset(colors);
-                return buildCpuSection(region, models, state.blockRandom, state.modelParts,
-                        state.capture, fluids, state.fluidCapture, state.mesh, state.pos, lookup, x, y, z);
+                return buildCpuSection(region, models, fluids, state, lookup, x, y, z);
             });
         } catch (RuntimeException | Error failure) {
             coordinate(() -> updates.retry(request));

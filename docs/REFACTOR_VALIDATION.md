@@ -1830,3 +1830,9 @@ Minecraft client tests and rendering checks passed in 6s (80 tasks, 6 executed).
 Reviewed RtTerrainMesher's worker state, section assembly, routing buckets, light remapping and reusable geometry storage. Removed three intermediate Arrays.copyOf calls before bucketTriangles, which already copies all active data into new output arrays. Routing count now determines exact output lengths, allowing source arrays to retain unused worker capacity. Vertex publication still makes its required ownership copy. Added a regression with surplus source capacity that overwrites all source arrays after packing and verifies exact output data, output lengths, primitive mapping and geometry index count.
 
 Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terrain-routing-copy-check.log and RtTerrainMesherPackingTest XML. This removes redundant copies without claiming measured throughput improvement. Remaining mesher capture/tessellation code, live streaming behavior and whole-project review are incomplete.
+
+## Terrain construction passes its existing worker state directly (2026-09-09)
+
+Reviewed terrain tessellation and its dispatch caller. buildCpuSection and tessellate now take WorkerTessState directly instead of receiving its random source, model parts, two captures, mesh and mutable position as separate arguments. The caller still obtains thread-local state and resets it immediately before each job. Material lookup assignment, capture initialization, fluid/block ordering, culling and packed-output ownership remain unchanged. Local aliases inside tessellate keep its block loop readable without exposing worker internals in its signature.
+
+Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terrain-worker-state-check.log. git diff --check passed. No new live streaming run or worker-reuse stress experiment was performed. Capture implementations and whole-project coverage remain incomplete.

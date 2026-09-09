@@ -77,16 +77,12 @@ final class RtTerrainMesher {
      * and light extraction therefore use the same resource epoch. Empty sections return a null mesh.
      */
     static CpuSection buildCpuSection(BlockAndTintGetter region, BlockStateModelSet modelSet,
-                                              RandomSource blockRandom, List<BlockStateModelPart> modelParts,
-                                              QuadCapture capture,
-                                              FluidStateModelSet fluidModels, FluidCapture fluidCapture,
-                                              SectionMesh mesh, BlockPos.MutableBlockPos m,
-                                              MinecraftMaterialLookup materials,
-                                              int scx, int scy, int scz) {
-        capture.materials = materials;
-        fluidCapture.materials = materials;
-        tessellate(region, modelSet, blockRandom, modelParts, capture,
-                fluidModels, fluidCapture, mesh, m, scx, scy, scz);
+                                       FluidStateModelSet fluidModels, WorkerTessState worker,
+                                       MinecraftMaterialLookup materials, int scx, int scy, int scz) {
+        worker.capture.materials = materials;
+        worker.fluidCapture.materials = materials;
+        tessellate(region, modelSet, fluidModels, worker, scx, scy, scz);
+        SectionMesh mesh = worker.mesh;
         if (mesh.isEmpty()) {
             return new CpuSection(null, List.of());
         }
@@ -185,13 +181,17 @@ final class RtTerrainMesher {
     }
 
     private static void tessellate(BlockAndTintGetter region, BlockStateModelSet modelSet,
-                                   RandomSource blockRandom, List<BlockStateModelPart> modelParts,
-                                   QuadCapture capture, FluidStateModelSet fluidModels, FluidCapture fluidCapture,
-                                   SectionMesh mesh, BlockPos.MutableBlockPos m, int scx, int scy, int scz) {
+                                   FluidStateModelSet fluidModels, WorkerTessState worker,
+                                   int scx, int scy, int scz) {
+        QuadCapture capture = worker.capture;
+        FluidCapture fluidCapture = worker.fluidCapture;
+        RandomSource blockRandom = worker.blockRandom;
+        List<BlockStateModelPart> modelParts = worker.modelParts;
+        BlockPos.MutableBlockPos m = worker.pos;
         int sox = scx << 4, soy = scy << 4, soz = scz << 4;
-        capture.cur = mesh;
+        capture.cur = worker.mesh;
         capture.view = region;
-        fluidCapture.cur = mesh;
+        fluidCapture.cur = worker.mesh;
         for (int lx = 0; lx < 16; lx++) {
             for (int ly = 0; ly < 16; ly++) {
                 for (int lz = 0; lz < 16; lz++) {
