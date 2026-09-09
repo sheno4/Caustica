@@ -121,21 +121,13 @@ abstract class GenerateRtBindings extends DefaultTask {
                     "${spec.source} omitted or misshaped ${spec.pushParameter} (expected ${spec.pushType})")
         }
         def rootFields = root.fields.collectEntries { [(it.name): it] }
-        def missingAddresses = spec.addresses.values().findAll { !rootFields.containsKey(it) }
-        def missingWords = spec.words.values().findAll { !rootFields.containsKey(it) }
-        def missingScalars = spec.scalars.values().findAll { !rootFields.containsKey(it) }
-        def missingFloats = spec.floats.values().findAll { !rootFields.containsKey(it) }
-        def unexpectedRootFields = rootFields.keySet().findAll {
-            it != "resources" && !spec.addresses.containsValue(it)
-                    && !spec.words.containsValue(it) && !spec.scalars.containsValue(it)
-                    && !spec.floats.containsValue(it)
-        }
-        if (!missingAddresses.isEmpty() || !missingWords.isEmpty() || !missingScalars.isEmpty()
-                || !missingFloats.isEmpty()
-                || !unexpectedRootFields.isEmpty()) {
+        def expectedRootFields = ["resources"] + [spec.addresses, spec.words, spec.scalars, spec.floats]
+                .collectMany { it.values() }
+        def missingRootFields = expectedRootFields.findAll { !rootFields.containsKey(it) }
+        def unexpectedRootFields = rootFields.keySet().findAll { !expectedRootFields.contains(it) }
+        if (!missingRootFields.isEmpty() || !unexpectedRootFields.isEmpty()) {
             throw new GradleException("${spec.source} world roots differ; missing="
-                    + "${missingAddresses + missingWords + missingScalars + missingFloats}, "
-                    + "unexpected=${unexpectedRootFields}")
+                    + "${missingRootFields}, unexpected=${unexpectedRootFields}")
         }
         spec.addresses.each { constantName, name ->
             def field = rootFields[name]
