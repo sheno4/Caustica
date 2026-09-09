@@ -1,6 +1,10 @@
 package dev.comfyfluffy.caustica.minecraft.adapter.session;
 
+import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.engine.session.EnvironmentSelectionScope;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
+import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionChannel;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionRegistration;
@@ -9,6 +13,7 @@ import dev.comfyfluffy.caustica.engine.session.ContributionScopeFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 /** Process-scoped Minecraft registration and creation of host-owned world-epoch controllers. */
 public final class MinecraftWorldSessionHost implements AutoCloseable {
@@ -21,12 +26,13 @@ public final class MinecraftWorldSessionHost implements AutoCloseable {
 
     public MinecraftApi api() { return api; }
 
+    /** The environment factory creates a fresh selection scope for each contribution in the borrowed scene. */
     public MinecraftWorldSession openSession(
             ContributionScopeFactory scopes,
-            MinecraftEnvironmentScopeFactory environments,
-            dev.comfyfluffy.caustica.api.scene.SceneId scene,
-            dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey dimension,
-            dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch resourcePackEpoch,
+            Function<SceneId, EnvironmentSelectionScope> environments,
+            SceneId scene,
+            MinecraftDimensionKey dimension,
+            ResourcePackEpoch resourcePackEpoch,
             MinecraftSessionFailureHandler failures) {
         return channel.open(scopes, environments, scene, dimension, resourcePackEpoch, failures);
     }
@@ -57,10 +63,10 @@ public final class MinecraftWorldSessionHost implements AutoCloseable {
 
         MinecraftWorldSession open(
                 ContributionScopeFactory scopes,
-                MinecraftEnvironmentScopeFactory environments,
-                dev.comfyfluffy.caustica.api.scene.SceneId scene,
-                dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey dimension,
-                dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch resourcePackEpoch,
+                Function<SceneId, EnvironmentSelectionScope> environments,
+                SceneId scene,
+                MinecraftDimensionKey dimension,
+                ResourcePackEpoch resourcePackEpoch,
                 MinecraftSessionFailureHandler failures) {
             MinecraftWorldSession session;
             synchronized (this) {

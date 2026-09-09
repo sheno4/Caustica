@@ -25,12 +25,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 /** Session-control-thread lifecycle for one host-owned Minecraft client-world/dimension epoch. */
 public final class MinecraftWorldSession implements AutoCloseable {
     private final MinecraftWorldSessionHost.Channel channel;
     private final ContributionScopeFactory scopes;
-    private final MinecraftEnvironmentScopeFactory environments;
+    private final Function<SceneId, EnvironmentSelectionScope> environments;
     private final SceneId scene;
     private final MinecraftDimensionKey dimension;
     private final MinecraftSessionFailureHandler failures;
@@ -46,7 +47,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
     MinecraftWorldSession(
             MinecraftWorldSessionHost.Channel channel,
             ContributionScopeFactory scopes,
-            MinecraftEnvironmentScopeFactory environments,
+            Function<SceneId, EnvironmentSelectionScope> environments,
             SceneId scene,
             MinecraftDimensionKey dimension,
             ResourcePackEpoch resourcePackEpoch,
@@ -137,7 +138,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
         }
         EnvironmentSelectionScope environment;
         try {
-            environment = Objects.requireNonNull(environments.create(scene),
+            environment = Objects.requireNonNull(environments.apply(scene),
                     "environment scope factory returned null");
         } catch (Throwable failure) {
             teardown(List.of(new ActiveContribution(owner, scope, null, null)), false);
