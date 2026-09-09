@@ -112,8 +112,9 @@ public final class MinecraftUiOverlay {
         }
     }
 
-    /** Reset the per-frame clear latch. Called at the start of {@code GameRenderer.render} (every frame). */
+    /** Begin an active render frame with no populated UI, even if prior presentation was skipped. */
     public void beginFrame() {
+        usedThisFrame = false;
         overlayClearedThisFrame = false;
     }
 
