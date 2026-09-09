@@ -17,9 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Daemon workers for terrain tessellation and buffer/BLAS preparation, with separate serial
  * executors for retained coordination, dispatch planning, and ready publication.
- * Workers may create distinct Vulkan/VMA objects and enqueue command recording onto
- * {@code RtGpuExecutor}; they never access or submit the graphics queue. Each task delivers exactly one
- * terminal result through the terrain lifecycle barrier.
+ * Terrain builds hand extracted meshes to asynchronous geometry preparation. Their dispatch slots
+ * remain owned until preparation completes or the queued build is cancelled.
  *
  * <p>The configured worker count leaves cores for Minecraft's own chunk meshers. Core threads time
  * out when idle; all are daemon so they never block JVM exit.

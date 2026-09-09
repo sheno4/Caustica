@@ -1896,3 +1896,10 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terr
 Read RtWorkerPool in full. Used the existing ResourceLifetime helper to attempt shutdown of all four executors and to run all queued cancellation callbacks followed by joining each executor. Extracted the uninterruptible join loop without changing interrupt restoration. A callback failure no longer bypasses later callbacks, worker joins or shutdown of another executor. The pool's stopping state is still released in finally.
 
 Added a regression that forces the first queued cancellation to throw, verifies the second callback runs and shutdown remains blocked until its running worker is released, checks the original exception, and successfully restarts the pool. Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-worker-cancellation-cleanup-check.log. Cross-executor simultaneous callback failures and live GPU-drain behavior were not newly exercised. Whole-project review remains incomplete.
+
+### Terrain worker handoff documentation and live regression
+
+- Updated `RtWorkerPool` documentation to describe asynchronous geometry preparation and dispatch-slot ownership, removing a superseded executor name.
+- Launched the copied world through the debug API and captured REBLUR -> RELAX -> REBLUR after 120 successful composite frames per stage. All three samples reported an 854 x 480 framebuffer; inspected RELAX and final REBLUR PNGs showed terrain and UI intact, with the existing black diagnostic bars still present.
+- The observer asserted full settings restoration and restored the original requested RT state before stopping the client. Observer and Gradle exited successfully; the client build completed in 41 seconds. No terrain preparation/publication failure or targeted GPU-invalid marker appeared in the log search.
+- Evidence: `tmp/aesthetic-terrain-workers-live.json`, `tmp/aesthetic-terrain-workers-observer.log`, `tmp/aesthetic-terrain-workers-client.log`. This is a bounded stationary runtime check, not resize, remote transport, or complete terrain lifecycle coverage. The comment-only edit adds no behavioral test requirement.
