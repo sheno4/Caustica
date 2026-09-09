@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,10 +45,7 @@ public final class MinecraftDebugService implements AutoCloseable {
     private final Path directory;
     private final Map<String, CompletableFuture<Object>> jobs = new ConcurrentHashMap<>();
     private final List<FrameWait> waits = new ArrayList<>();
-    private final List<Runnable> captures = new ArrayList<>();
-    private final List<Runnable> beforeUiCaptures = new ArrayList<>();
-    private final List<Runnable> afterWorldCaptures = new ArrayList<>();
-    private final List<Runnable> afterHandCaptures = new ArrayList<>();
+    private final Map<CapturePhase, List<Runnable>> captures = new EnumMap<>(CapturePhase.class);
     private long frames;
     private long ticks;
     private Recording recording;
@@ -56,6 +54,20 @@ public final class MinecraftDebugService implements AutoCloseable {
     private String passPhase;
 
     private record FrameWait(long frames, long ticks, CompletableFuture<Object> future) { }
+
+    /** Render-thread boundaries shared by queued captures and host pass tracing. */
+    public enum CapturePhase {
+        AFTER_WORLD("after-world"), AFTER_HAND("after-hand"), BEFORE_UI("before-ui"), FRAME_END("frame-end");
+
+        private final String id;
+
+        CapturePhase(String id) { this.id = id; }
+
+        private static CapturePhase parse(String id) {
+            for (var phase : values()) if (phase.id.equals(id)) return phase;
+            throw new IllegalArgumentException("Unknown capture phase: " + id);
+        }
+    }
 
     public static void start(Minecraft client) {
         if (!Boolean.getBoolean("caustica.debug.enabled")) return;
@@ -242,13 +254,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "screenshot", "image.capture" -> {
                 if (op.equals("image.capture")) requireWorld();
                 String phase = request.has("phase") ? request.get("phase").getAsString() : "frame-end";
-                var queue = switch (phase) {
-                    case "frame-end" -> captures;
-                    case "before-ui" -> beforeUiCaptures;
-                    case "after-world" -> afterWorldCaptures;
-                    case "after-hand" -> afterHandCaptures;
-                    default -> throw new IllegalArgumentException("Unknown capture phase: " + phase);
-                };
+                var queue = captures.computeIfAbsent(CapturePhase.parse(phase), key -> new ArrayList<>());
                 queue.add(() -> {
                     if (future.isDone()) return;
                     try {
@@ -465,32 +471,16 @@ public final class MinecraftDebugService implements AutoCloseable {
             instance.passTrace = null;
         }
         if (composited && instance.client.level != null) instance.frames++;
-        drainCaptures(instance.captures);
+        captureBoundary(CapturePhase.FRAME_END);
         instance.advanceWaits();
     }
 
-    /** Observes the populated UI and destination before the final SDR blend is recorded. */
-    public static void beforeUiComposite() {
-        if (instance != null) instance.passPhase = "final-ui";
-        if (instance != null) drainCaptures(instance.beforeUiCaptures);
-    }
-
-    /** Observes the world copy before Minecraft records hand, screen-effect and GUI draws. */
-    public static void afterWorldComposite() {
-        if (instance != null) instance.passPhase = "hand";
-        if (instance != null) drainCaptures(instance.afterWorldCaptures);
-    }
-
-    /** Observes the redirected hand before subsequent screen-effect and GUI draws. */
-    public static void afterHand() {
-        if (instance != null) instance.passPhase = "after-hand";
-        if (instance != null) drainCaptures(instance.afterHandCaptures);
-    }
-
-    private static void drainCaptures(List<Runnable> queue) {
-        var pending = List.copyOf(queue);
-        queue.clear();
-        pending.forEach(Runnable::run);
+    /** Detaches this boundary's work before running it, so newly queued captures wait for its next visit. */
+    public static void captureBoundary(CapturePhase phase) {
+        if (instance == null) return;
+        instance.passPhase = phase.id;
+        var pending = instance.captures.remove(phase);
+        if (pending != null) pending.forEach(Runnable::run);
     }
 
     public static void beginFrame() {

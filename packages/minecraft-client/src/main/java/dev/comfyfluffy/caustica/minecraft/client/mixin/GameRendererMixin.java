@@ -8,6 +8,8 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugCapture;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.CapturePhase;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
@@ -46,7 +48,7 @@ public abstract class GameRendererMixin {
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("HEAD"))
 	private void caustica$beginOverlayFrame(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
 		caustica$worldComposited = false;
-		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.beginFrame();
+		MinecraftDebugService.beginFrame();
 		CausticaClientComposition.current().runtime().beginRenderFrame();
 		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
@@ -71,7 +73,7 @@ public abstract class GameRendererMixin {
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("TAIL"))
 	private void caustica$endRtFrameStats(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.frameRendered(
+		MinecraftDebugService.frameRendered(
 				caustica$worldComposited);
 		MinecraftDebugCapture.poll(Minecraft.getInstance(),
 				caustica$worldComposited);
@@ -104,7 +106,7 @@ public abstract class GameRendererMixin {
 				overlay.endOutputRedirect();
 			}
 		}
-		if (redirect) dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.afterHand();
+		if (redirect) MinecraftDebugService.captureBoundary(CapturePhase.AFTER_HAND);
 	}
 
 	// Redirect the screen-effect flush (fire, underwater, view-blocking-block overlays submitted by
@@ -190,7 +192,7 @@ public abstract class GameRendererMixin {
 			// Completion follows the world and owned UI command buffers in the host submission.
 			CausticaClientComposition.current().runtime().finishGraphicsUse();
 		}
-		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.afterWorldComposite();
+		MinecraftDebugService.captureBoundary(CapturePhase.AFTER_WORLD);
 	}
 
 	// Composite the redirected UI overlay back over the world once the GUI has fully rendered into it.

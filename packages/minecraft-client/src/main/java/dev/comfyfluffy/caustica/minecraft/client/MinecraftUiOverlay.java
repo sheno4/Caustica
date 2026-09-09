@@ -180,7 +180,7 @@ public final class MinecraftUiOverlay {
             return;
         }
         CommandEncoder enc = RenderSystem.getDevice().createCommandEncoder();
-        MinecraftDebugService.beforeUiComposite();
+        MinecraftDebugService.captureBoundary(MinecraftDebugService.CapturePhase.BEFORE_UI);
         try (RenderPass pass = enc.createRenderPass(() -> "UI overlay composite", main.getColorTextureView(), Optional.empty())) {
             pass.setPipeline(COMPOSITE_PIPELINE);
             RenderSystem.bindDefaultUniforms(pass);
