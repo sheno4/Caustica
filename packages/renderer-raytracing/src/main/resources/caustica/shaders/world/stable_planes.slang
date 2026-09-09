@@ -17,50 +17,32 @@ public void stablePlaneStoreRecord(uint2 pixel, uint2 extent, uint plane, Stable
 }
 
 // The dominant endpoint owns screen depth/motion; NRD consumes each plane's own endpoint separately.
-// Build exports immutable guides and dominance; fill exports the accumulated radiance and hit distances.
-public void stablePlaneExport(uint2 pixel, uint2 extent, WorldPush frame, bool finalSignals) {
+// Build selects dominance and exports guides before local lighting and radiance fill consume them.
+public void stablePlaneExportGuides(uint2 pixel, uint2 extent, WorldPush frame) {
     uint dominant = 0u, available = 0u;
     float largest = -1.0;
-    float3 diffuse = float3(0.0), specular = float3(0.0);
     float3 diffuseEstimate = float3(0.0), specularEstimate = float3(0.0);
     for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
         uint address = stablePlaneRecordIndex(pixel, extent, i);
         if (stablePlaneRecords()[address].branchId == STABLE_PLANE_INVALID_BRANCH) continue;
         StablePlaneRecord record = stablePlaneRecords()[address];
-        if (finalSignals) {
-            if ((record.flags & STABLE_PLANE_FLAG_DOMINANT) != 0u) dominant = i;
-            diffuse += record.noisyDiffuseRadiance;
-            specular += record.noisySpecularRadiance;
-        } else {
-            available++;
-            if (record.throughputLuminance > largest) {
-                largest = record.throughputLuminance;
-                dominant = i;
-            }
+        available++;
+        if (record.throughputLuminance > largest) {
+            largest = record.throughputLuminance;
+            dominant = i;
         }
         diffuseEstimate += record.diffuseBsdfEstimate;
         specularEstimate += record.specularBsdfEstimate;
     }
-    if (!finalSignals) {
-        for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
-            uint address = stablePlaneRecordIndex(pixel, extent, i);
-            uint flags = stablePlaneRecords()[address].flags & ~STABLE_PLANE_FLAG_DOMINANT;
-            if (i == dominant) flags |= STABLE_PLANE_FLAG_DOMINANT;
-            stablePlaneRecords()[address].flags = flags;
-        }
+    for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
+        uint address = stablePlaneRecordIndex(pixel, extent, i);
+        uint flags = stablePlaneRecords()[address].flags & ~STABLE_PLANE_FLAG_DOMINANT;
+        if (i == dominant) flags |= STABLE_PLANE_FLAG_DOMINANT;
+        stablePlaneRecords()[address].flags = flags;
     }
     StablePlaneRecord record = stablePlaneRecords()[stablePlaneRecordIndex(pixel, extent, dominant)];
     bool valid = (record.flags & STABLE_PLANE_FLAG_VALID) != 0u;
     float4 current = mul(frame.curViewProj, float4(record.currentVirtualPosition - frame.camOffset, 1.0));
-    if (finalSignals) {
-        float3 stable = worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel].xyz;
-        worldFloat4StorageImage(worldBindings.resources.outputImage)[pixel] =
-                float4(clamp((stable + diffuse + specular) * frame.preExposure, 0.0, 65504.0), 1.0);
-        nrdWritePrimarySignals(pixel, valid, current.w, record.roughness,
-                diffuse, specular, stable, record.diffuseHitDistance, record.specularHitDistance,
-                diffuseEstimate, specularEstimate);
-        return;
-    }
     float4 previous = mul(frame.prevViewProj,
             float4(record.previousVirtualPosition - frame.camOffset + frame.camDelta, 1.0));
     float2 motion = current.w > 0.0 && previous.w > 0.0
@@ -81,4 +63,30 @@ public void stablePlaneExport(uint2 pixel, uint2 extent, WorldPush frame, bool f
             float4(float(available) / 3.0, float(dominant) * 0.5,
                     float((record.flags >> 8u) & 255u) / 9.0,
                     (record.flags & STABLE_PLANE_FLAG_TRANSMISSION) != 0u ? 1.0 : 0.0);
+}
+
+// Fill preserves build's dominant endpoint while combining radiance from every available plane.
+public void stablePlaneExportSignals(uint2 pixel, uint2 extent, WorldPush frame) {
+    uint dominant = 0u;
+    float3 diffuse = float3(0.0), specular = float3(0.0);
+    float3 diffuseEstimate = float3(0.0), specularEstimate = float3(0.0);
+    for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
+        uint address = stablePlaneRecordIndex(pixel, extent, i);
+        if (stablePlaneRecords()[address].branchId == STABLE_PLANE_INVALID_BRANCH) continue;
+        StablePlaneRecord record = stablePlaneRecords()[address];
+        if ((record.flags & STABLE_PLANE_FLAG_DOMINANT) != 0u) dominant = i;
+        diffuse += record.noisyDiffuseRadiance;
+        specular += record.noisySpecularRadiance;
+        diffuseEstimate += record.diffuseBsdfEstimate;
+        specularEstimate += record.specularBsdfEstimate;
+    }
+    StablePlaneRecord record = stablePlaneRecords()[stablePlaneRecordIndex(pixel, extent, dominant)];
+    bool valid = (record.flags & STABLE_PLANE_FLAG_VALID) != 0u;
+    float4 current = mul(frame.curViewProj, float4(record.currentVirtualPosition - frame.camOffset, 1.0));
+    float3 stable = worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel].xyz;
+    worldFloat4StorageImage(worldBindings.resources.outputImage)[pixel] =
+            float4(clamp((stable + diffuse + specular) * frame.preExposure, 0.0, 65504.0), 1.0);
+    nrdWritePrimarySignals(pixel, valid, current.w, record.roughness,
+            diffuse, specular, stable, record.diffuseHitDistance, record.specularHitDistance,
+            diffuseEstimate, specularEstimate);
 }

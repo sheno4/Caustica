@@ -110,5 +110,5 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
         stablePlaneRecords()[address].diffuseHitDistance = diffuseHitDistance;
         stablePlaneRecords()[address].specularHitDistance = specularHitDistance;
     }
-    stablePlaneExport(pixel, extent, frame, true);
+    stablePlaneExportSignals(pixel, extent, frame);
 }

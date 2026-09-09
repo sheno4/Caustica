@@ -140,7 +140,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
         stablePlaneRecords()[address].flags = 0u;
     }
     worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel] = float4(stableRadiance, 1.0);
-    stablePlaneExport(pixel, extent, frame, false);
+    stablePlaneExportGuides(pixel, extent, frame);
 }
 
 [shader("raygeneration")]
