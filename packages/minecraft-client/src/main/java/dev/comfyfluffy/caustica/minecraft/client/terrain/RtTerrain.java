@@ -157,7 +157,7 @@ public final class RtTerrain {
 
     private void recordState(Minecraft mc) {
         if (!TERRAIN_STATE_EVENT.isEnabled()) return;
-        coordinate(this::captureState);
+        coordinate(() -> stateCounts = StateCounts.capture(updates, window, geometry));
         var counts = stateCounts;
         TerrainStateEvent event = new TerrainStateEvent();
         event.observedFrameId = instrumentation.frameSerial();
@@ -179,20 +179,7 @@ public final class RtTerrain {
         event.originBlockX = blockX;
         event.originBlockY = blockY;
         event.originBlockZ = blockZ;
-        event.loadedWindowColumns = counts.columns;
-        event.trackedSections = counts.sections;
-        event.residentGeometrySections = counts.geometry;
-        event.wantedSections = counts.wanted;
-        event.removingSections = counts.removing;
-        event.publishedSections = counts.published;
-        event.requests = counts.requests;
-        event.completedRequests = counts.complete;
-        event.dispatchedRequests = counts.dispatched;
-        event.undispatchedRequests = counts.pending;
-        event.neighborBlockedRequests = counts.blocked;
-        event.pendingGroups = counts.groups;
-        event.readyGroups = counts.ready;
-        event.neighborBlockedColumns = counts.blockedColumns;
+        counts.writeTo(event);
         var workerState = workers.state();
         event.workerThreads = workerState.threads();
         event.activeWorkers = workerState.active();
@@ -202,42 +189,6 @@ public final class RtTerrain {
         event.publicationScheduled = publicationScheduled.get();
         event.dirtyGroupsQueue = dirty.size();
         event.commit();
-    }
-
-    private void captureState() {
-        int wanted = 0, removing = 0, published = 0, requests = 0, complete = 0, dispatched = 0, pending = 0, blocked = 0;
-        var groups = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<TerrainUpdates.Group<Build>, Boolean>());
-        var blockedColumns = new LongOpenHashSet();
-        var checkedColumns = new LongOpenHashSet();
-        for (var section : updates.sections.values()) {
-            if (section.wanted) wanted++; else removing++;
-            if (section.ready) published++;
-            var request = section.request;
-            if (request == null) continue;
-            requests++;
-            groups.add(request.group);
-            if (request.complete()) complete++;
-            else if (request.dispatched()) dispatched++;
-            else {
-                pending++;
-                long column = columnKey(sectionX(section.key), sectionZ(section.key));
-                if (checkedColumns.add(column) && !window.neighborsLoaded(sectionX(section.key), sectionZ(section.key))) {
-                    blockedColumns.add(column);
-                }
-                if (blockedColumns.contains(column)) blocked++;
-            }
-        }
-        int ready = 0;
-        for (var group : groups) if (group.remaining == 0) ready++;
-        stateCounts = new StateCounts(window.columns(), updates.sections.size(),
-                geometry == null ? 0 : geometry.sectionKeys().size(), wanted, removing, published,
-                requests, complete, dispatched, pending, blocked, groups.size(), ready, blockedColumns.size());
-    }
-
-    private record StateCounts(int columns, int sections, int geometry, int wanted, int removing, int published,
-                               int requests, int complete, int dispatched, int pending, int blocked,
-                               int groups, int ready, int blockedColumns) {
-        static final StateCounts EMPTY = new StateCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     private void recordJob(Build build, String action) {

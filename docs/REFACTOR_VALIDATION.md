@@ -1916,3 +1916,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Split reset into the coordinator-owned retained-state operation and a shared render-side captured-state cleanup. Reset now clears snapshots, the dispatch plan/cursor, and dirty observations in `finally`; shutdown uses the same cleanup after its worker barrier.
 - Extended the existing release-failure regressions with a retained dispatch plan. The unbind regression failed before the change because that plan survived reset failure; both shutdown entry points now release it.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds; all 10 worker-preparation tests passed. Evidence: `tmp/aesthetic-terrain-reset-before.log`, `tmp/aesthetic-terrain-reset-check.log`. No new live GPU or world-transition run was performed for this cleanup change.
+
+### Keep terrain worker telemetry with its event model
+
+- Moved the existing immutable `StateCounts` record, worker-state traversal, and 14-field event mapping into `TerrainEvents`. `RtTerrain` schedules capture and composes client-tick fields; the telemetry model owns its count collection and serialization.
+- Preserved the enabled-event gate, coordinator/preparation-lock execution, volatile snapshot handoff, counter classification, and JFR event fields. Added the active invariant that a tick may observe counters collected before that tick.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-terrain-telemetry-check.log`). Reviewed the moved field mapping and traversal directly. No new live JFR capture or telemetry concurrency experiment was performed.
