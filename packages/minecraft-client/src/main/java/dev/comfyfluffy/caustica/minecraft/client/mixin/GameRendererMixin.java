@@ -103,6 +103,7 @@ public abstract class GameRendererMixin {
 				overlay.endOutputRedirect();
 			}
 		}
+		if (redirect) dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.afterHand();
 	}
 
 	// Redirect the screen-effect flush (fire, underwater, view-blocking-block overlays submitted by

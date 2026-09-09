@@ -47,6 +47,7 @@ public final class MinecraftDebugService implements AutoCloseable {
     private final List<Runnable> captures = new ArrayList<>();
     private final List<Runnable> beforeUiCaptures = new ArrayList<>();
     private final List<Runnable> afterWorldCaptures = new ArrayList<>();
+    private final List<Runnable> afterHandCaptures = new ArrayList<>();
     private long frames;
     private long ticks;
     private Recording recording;
@@ -237,6 +238,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                     case "frame-end" -> captures;
                     case "before-ui" -> beforeUiCaptures;
                     case "after-world" -> afterWorldCaptures;
+                    case "after-hand" -> afterHandCaptures;
                     default -> throw new IllegalArgumentException("Unknown capture phase: " + phase);
                 };
                 queue.add(() -> {
@@ -463,6 +465,11 @@ public final class MinecraftDebugService implements AutoCloseable {
     /** Observes the world copy before Minecraft records hand, screen-effect and GUI draws. */
     public static void afterWorldComposite() {
         if (instance != null) drainCaptures(instance.afterWorldCaptures);
+    }
+
+    /** Observes the redirected hand before subsequent screen-effect and GUI draws. */
+    public static void afterHand() {
+        if (instance != null) drainCaptures(instance.afterHandCaptures);
     }
 
     private static void drainCaptures(List<Runnable> queue) {
