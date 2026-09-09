@@ -114,10 +114,7 @@ final class RtTerrainMesher {
                     : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
             routing.add(new TriangleRouting(program, surface.coverage(), 0.5f));
         }
-        var packed = bucketTriangles(
-                java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size()),
-                java.util.Arrays.copyOf(geom.cornerUv.elements(), geom.cornerUv.size()),
-                java.util.Arrays.copyOf(geom.prim.elements(), geom.prim.size()), routing);
+        var packed = bucketTriangles(geom.idx.elements(), geom.cornerUv.elements(), geom.prim.elements(), routing);
         return new PackedSection(new MinecraftTerrainMesh(
                 java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
                 packed.indices(), packed.cornerUvs(), packed.primitiveData(), packed.geometries(), 0L),
@@ -152,6 +149,7 @@ final class RtTerrainMesher {
                            List<MinecraftTerrainMesh.Geometry> geometries,
                            int[] sourceToDestinationPrimitives) { }
 
+    /** Routing defines the active triangle count; source arrays may contain unused worker capacity. */
     static PackedTriangles bucketTriangles(int[] sourceIndices, float[] sourceCornerUvs,
                                            float[] sourcePrimitiveData, List<TriangleRouting> routing) {
         var buckets = new LinkedHashMap<TriangleRouting, IntArrayList>();
@@ -159,9 +157,9 @@ final class RtTerrainMesher {
             buckets.computeIfAbsent(routing.get(triangle), ignored -> new IntArrayList()).add(triangle);
         }
 
-        int[] indices = new int[sourceIndices.length];
-        float[] cornerUvs = new float[sourceCornerUvs.length];
-        float[] primitiveData = new float[sourcePrimitiveData.length];
+        int[] indices = new int[routing.size() * 3];
+        float[] cornerUvs = new float[routing.size() * 6];
+        float[] primitiveData = new float[routing.size() * MinecraftTerrainMesh.PRIMITIVE_FLOATS];
         int[] sourceToDestinationPrimitives = new int[routing.size()];
         ArrayList<MinecraftTerrainMesh.Geometry> geometries = new ArrayList<>(buckets.size());
         int destinationTriangle = 0;

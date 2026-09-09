@@ -12,6 +12,27 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtTerrainMesherPackingTest {
     @Test
+    void packingIgnoresSpareWorkerCapacityAndOwnsItsOutput() {
+        int[] indices = integerTriangleLanes(4, 3);
+        float[] cornerUvs = triangleLanes(4, 6);
+        float[] primitiveData = triangleLanes(4, MinecraftTerrainMesh.PRIMITIVE_FLOATS);
+        var material = route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
+                MinecraftTerrainMesh.Coverage.OPAQUE, 0.5f);
+
+        var packed = RtTerrainMesher.bucketTriangles(indices, cornerUvs, primitiveData,
+                List.of(material, material));
+        java.util.Arrays.fill(indices, -1);
+        java.util.Arrays.fill(cornerUvs, -1);
+        java.util.Arrays.fill(primitiveData, -1);
+
+        assertArrayEquals(integerTriangleLanes(2, 3), packed.indices());
+        assertArrayEquals(triangleLanes(2, 6), packed.cornerUvs());
+        assertArrayEquals(triangleLanes(2, MinecraftTerrainMesh.PRIMITIVE_FLOATS), packed.primitiveData());
+        assertArrayEquals(new int[]{0, 1}, packed.sourceToDestinationPrimitives());
+        assertEquals(6, packed.geometries().getFirst().indexCount());
+    }
+
+    @Test
     void emitterRangesFollowBucketedPrimitiveOrderAndStaySorted() {
         var descriptor = new LightDescriptor.Parallelogram(0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1);
         var records = List.of(new MinecraftTerrainEmitter(descriptor, 0, 2),
