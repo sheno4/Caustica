@@ -34,9 +34,10 @@ final class GeneratedFrameQueue {
 
     private long[] acquireSemaphores = new long[0];
     private int acquireCursor;
-    private int pendingImageIndex = -1;
-    private long pendingPresentSemaphore;
+    private PendingPresent pending;
     private boolean failed;
+
+    private record PendingPresent(int imageIndex, long semaphore) { }
 
     boolean failed() {
         return failed;
@@ -45,8 +46,7 @@ final class GeneratedFrameQueue {
     void prepare(GraphicsSubmission submission, PresentationSwapchain swapchain,
             BorrowedImage source, boolean hdrBackbuffer,
             UiPresentationResources ui, RtFramePresenter.RenderedFrame frame, FrameGeneration generation) {
-        pendingImageIndex = -1;
-        pendingPresentSemaphore = 0L;
+        pending = null;
         if (failed || swapchain.swapchain() == 0L || source.image() == 0L) {
             return;
         }
@@ -63,6 +63,7 @@ final class GeneratedFrameQueue {
             long acquireSemaphore = acquireSemaphores[acquireCursor];
             acquireCursor = (acquireCursor + 1) % acquireSemaphores.length;
 
+            int acquiredIndex;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 IntBuffer imageIndex = stack.callocInt(1);
                 int result = KHRSwapchain.vkAcquireNextImageKHR(
@@ -74,28 +75,26 @@ final class GeneratedFrameQueue {
                 if (result != VK10.VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
                     throw new IllegalStateException("vkAcquireNextImageKHR(FG) failed: " + result);
                 }
-                pendingImageIndex = imageIndex.get(0);
+                acquiredIndex = imageIndex.get(0);
             }
-            PresentationSwapchain.Image target = swapchain.images().get(pendingImageIndex);
-            pendingPresentSemaphore = target.presentSemaphore();
+            PresentationSwapchain.Image target = swapchain.images().get(acquiredIndex);
             recordBlit(submission, blitSource, target.image(),
-                    copyWidth, copyHeight, acquireSemaphore, pendingPresentSemaphore);
+                    copyWidth, copyHeight, acquireSemaphore, target.presentSemaphore());
+            pending = new PendingPresent(acquiredIndex, target.presentSemaphore());
         } catch (Throwable error) {
             failed = true;
-            pendingImageIndex = -1;
-            pendingPresentSemaphore = 0L;
             LOGGER.error("DLSS-FG present-record failed; frame generation disabled", error);
         }
     }
 
     void flush(PresentationSwapchain swapchain, VkQueue presentQueue) {
-        if (!failed && pendingImageIndex >= 0) {
+        if (!failed && pending != null) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkPresentInfoKHR present = VkPresentInfoKHR.calloc(stack).sType$Default();
-                present.pWaitSemaphores(stack.longs(pendingPresentSemaphore));
+                present.pWaitSemaphores(stack.longs(pending.semaphore()));
                 present.swapchainCount(1);
                 present.pSwapchains(stack.longs(swapchain.swapchain()));
-                present.pImageIndices(stack.ints(pendingImageIndex));
+                present.pImageIndices(stack.ints(pending.imageIndex()));
                 int result = KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
                 if (result != VK10.VK_SUCCESS && result != VK_SUBOPTIMAL_KHR
                         && result != VK_ERROR_OUT_OF_DATE_KHR) {
@@ -105,8 +104,7 @@ final class GeneratedFrameQueue {
                 failed = true;
                 LOGGER.error("DLSS-FG present failed; frame generation disabled", error);
             } finally {
-                pendingImageIndex = -1;
-                pendingPresentSemaphore = 0L;
+                pending = null;
             }
         }
     }
@@ -151,8 +149,7 @@ final class GeneratedFrameQueue {
 
     void destroy(VkDevice device) {
         destroyAcquireSemaphores(device);
-        pendingImageIndex = -1;
-        pendingPresentSemaphore = 0L;
+        pending = null;
         failed = false;
     }
 
