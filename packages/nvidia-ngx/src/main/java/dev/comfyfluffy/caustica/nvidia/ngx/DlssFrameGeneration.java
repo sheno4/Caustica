@@ -30,16 +30,13 @@ public final class DlssFrameGeneration {
     }
 
     private NgxLibrary lib;
-    private MemorySegment feature = MemorySegment.NULL;
+    private Feature feature;
     private boolean failed;
     private boolean probed;
     private boolean available;
 
-    private int featureWidth = -1;
-    private int featureHeight = -1;
-    private int featureRenderWidth = -1;
-    private int featureRenderHeight = -1;
-    private int featureBackbufferFormat = Integer.MIN_VALUE;
+    private record Feature(MemorySegment handle, int width, int height,
+                           int renderWidth, int renderHeight, int backbufferFormat) { }
 
     public DlssFrameGeneration(NgxRuntime runtime, Settings settings) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -55,14 +52,14 @@ public final class DlssFrameGeneration {
     }
 
     public boolean isReady() {
-        return !failed && !feature.equals(MemorySegment.NULL);
+        return !failed && feature != null;
     }
 
     /** Whether a live feature already matches these dimensions/format (no recreate needed). */
     public boolean featureReadyFor(int width, int height, int renderWidth, int renderHeight, int backbufferFormat) {
-        return isReady() && featureWidth == width && featureHeight == height
-                && featureRenderWidth == renderWidth && featureRenderHeight == renderHeight
-                && featureBackbufferFormat == backbufferFormat;
+        return isReady() && feature.width() == width && feature.height() == height
+                && feature.renderWidth() == renderWidth && feature.renderHeight() == renderHeight
+                && feature.backbufferFormat() == backbufferFormat;
     }
 
     /**
@@ -99,16 +96,12 @@ public final class DlssFrameGeneration {
             }
             if (!featureReadyFor(width, height, renderWidth, renderHeight, backbufferFormat)) {
                 releaseFeature();
-                feature = lib.createDlssg(commandBuffer.address(), width, height, backbufferFormat);
-                if (feature.equals(MemorySegment.NULL)) {
+                MemorySegment handle = lib.createDlssg(commandBuffer.address(), width, height, backbufferFormat);
+                if (handle.equals(MemorySegment.NULL)) {
                     throw new IllegalStateException("ngxshim_create_dlssg failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
                 }
-                featureWidth = width;
-                featureHeight = height;
-                featureRenderWidth = renderWidth;
-                featureRenderHeight = renderHeight;
-                featureBackbufferFormat = backbufferFormat;
+                feature = new Feature(handle, width, height, renderWidth, renderHeight, backbufferFormat);
                 LOGGER.info("DLSS-FG feature created: {}x{} (render {}x{}, backbuffer format {})",
                         width, height, renderWidth, renderHeight, backbufferFormat);
             }
@@ -146,7 +139,7 @@ public final class DlssFrameGeneration {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment clipToPrev = matrixSegment(arena, clipToPrevClip);
             MemorySegment prevToClip = matrixSegment(arena, prevClipToClip);
-            int rc = lib.evaluateDlssg(commandBuffer.address(), feature,
+            int rc = lib.evaluateDlssg(commandBuffer.address(), feature.handle(),
                     backbufferView, backbufferImage, backbufferFormat,
                     depthView, depthImage, depthFormat,
                     mvecView, mvecImage, mvecFormat,
@@ -190,15 +183,10 @@ public final class DlssFrameGeneration {
     }
 
     private void releaseFeature() {
-        if (!feature.equals(MemorySegment.NULL)) {
-            lib.release(feature);
+        if (feature != null) {
+            lib.release(feature.handle());
         }
-        feature = MemorySegment.NULL;
-        featureWidth = -1;
-        featureHeight = -1;
-        featureRenderWidth = -1;
-        featureRenderHeight = -1;
-        featureBackbufferFormat = Integer.MIN_VALUE;
+        feature = null;
     }
 
 }
