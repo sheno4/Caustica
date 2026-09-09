@@ -46,6 +46,7 @@ public abstract class GameRendererMixin {
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("HEAD"))
 	private void caustica$beginOverlayFrame(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
 		caustica$worldComposited = false;
+		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.beginFrame();
 		CausticaClientComposition.current().runtime().beginRenderFrame();
 		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;

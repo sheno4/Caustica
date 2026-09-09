@@ -51,6 +51,7 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | `jfr.stop` | Stop/save recording and return its path |
 | `job` | `jobId`; returns pending/completed/failed state |
 | `client.stop` | Stop the debug client gracefully after returning acknowledgement |
+| `passes.capture` | Records the next GameRenderer frame's host render-pass labels, coarse phases and color attachment identities/dimensions. `main` identifies the current main texture by object identity. Includes host render passes only, not external renderer commands, transfers or clears. No image readback or GPU wait is added. |
 
 Both capture operations accept optional `phase`: `frame-end` (default), `after-world`, `after-hand`, or `before-ui`. `after-world` runs after a successful world composite and its renderer-owned UI passes, before Minecraft's hand, screen-effect and GUI draws. `after-hand` runs after the redirected hand, before screen effects and GUI. `before-ui` runs immediately before the final SDR UI blend, after the overlay has been populated. The selected boundary must be reached or the job times out; `before-ui` requires SDR presentation. Raw readback submits preceding host commands at each phase. Separate requests still observe separate frames; use a raw bundle to compare targets at one phase in one frame.
 
