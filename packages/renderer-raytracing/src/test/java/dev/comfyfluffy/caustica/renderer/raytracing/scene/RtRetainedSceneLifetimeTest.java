@@ -22,6 +22,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtRetainedSceneLifetimeTest {
     @Test
+    void traceSlotDestructionDrainsItsOwnerAfterFailures() {
+        var resources = new RtRevisionResources();
+        var released = new ArrayList<String>();
+        var bufferFailure = new IllegalStateException("buffer release");
+        var descriptorFailure = new IllegalArgumentException("descriptor release");
+        resources.add(() -> released.add("geometry"));
+        resources.add(() -> { released.add("hits"); throw bufferFailure; });
+        resources.add(() -> released.add("lights"));
+        resources.add(() -> released.add("emitters"));
+        resources.add(() -> { released.add("descriptor"); throw descriptorFailure; });
+        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null, resources);
+
+        assertSame(descriptorFailure, assertThrows(IllegalArgumentException.class, slot::destroy));
+        assertEquals(List.of("descriptor", "emitters", "lights", "hits", "geometry"), released);
+        assertEquals(List.of(bufferFailure), List.of(descriptorFailure.getSuppressed()));
+        slot.destroy();
+        assertEquals(5, released.size());
+    }
+
+    @Test
     void terminalFrameRootsRetireDisplacedSnapshotBeforeContributionDrain() {
         AtomicInteger retirements = new AtomicInteger();
         SharedResource<String> published = SharedResource.owned(

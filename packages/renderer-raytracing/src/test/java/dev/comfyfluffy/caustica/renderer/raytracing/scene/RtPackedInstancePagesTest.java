@@ -118,7 +118,7 @@ final class RtPackedInstancePagesTest {
     void rebasingInstanceBytesPreservesResidentGeometryBindings() {
         var table = new RtInstanceTablePlan.Builder().build(inputs(1, mesh()));
         var packed = new RtPackedInstancePages();
-        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null);
+        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null, new RtRevisionResources());
         slot.setInstanceTable(table);
         var batch = new RtRetainedSceneBackend.TraceBatch(new RtRetainedSceneBackend.TracePagePlan[0]);
         var residency = slot.batch(batch, batch);

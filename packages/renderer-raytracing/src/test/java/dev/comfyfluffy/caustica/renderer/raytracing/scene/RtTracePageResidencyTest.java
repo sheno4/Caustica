@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class RtTracePageResidencyTest {
     @Test void instanceMembershipChangesPreserveIndependentHitAndEmitterResidency() {
-        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null);
+        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null, new RtRevisionResources());
         var builder = new RtInstanceTablePlan.Builder();
         slot.setInstanceTable(builder.build(java.util.List.of()));
         var ranges = new RtStableTraceRanges();

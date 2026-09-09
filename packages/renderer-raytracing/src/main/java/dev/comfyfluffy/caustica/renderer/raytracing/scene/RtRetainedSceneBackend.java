@@ -1439,33 +1439,30 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     private static TraceSlot createTraceSlot(VulkanDeviceContext ctx, int geometryBytes, int hitBytes,
                                              int lightBytes, int emitterBytes, RtPipeline pipeline) {
-        GpuBuffer geometry = null;
-        GpuBuffer hits = null;
-        GpuBuffer lights = null;
-        GpuBuffer emitters = null;
-        GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
+        var resources = new RtRevisionResources();
         try {
-            geometry = ctx.createMappedGpuUploadBuffer(
+            var geometry = ctx.createMappedGpuUploadBuffer(
                     RtCompletionSlotPool.capacity(Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes)),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained geometry records");
-            hits = ctx.createMappedGpuUploadBuffer(
+            resources.add(geometry::destroy);
+            var hits = ctx.createMappedGpuUploadBuffer(
                     RtCompletionSlotPool.capacity(Math.max(pipeline.retainedHitRecordStride(), hitBytes)),
                     VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, "retained hit SBT",
                     pipeline.retainedHitTableAlignment());
-            lights = ctx.createMappedGpuUploadBuffer(
+            resources.add(hits::destroy);
+            var lights = ctx.createMappedGpuUploadBuffer(
                     RtCompletionSlotPool.capacity(Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes)),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained light records");
-            emitters = ctx.createMappedGpuUploadBuffer(
+            resources.add(lights::destroy);
+            var emitters = ctx.createMappedGpuUploadBuffer(
                     RtCompletionSlotPool.capacity(Math.max(Integer.BYTES, emitterBytes)),
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained primitive-light indices");
-            descriptor = ctx.descriptorHeap().allocateResources(1);
-            return new TraceSlot(geometry, hits, lights, emitters, descriptor);
+            resources.add(emitters::destroy);
+            var descriptor = ctx.descriptorHeap().allocateResources(1);
+            resources.add(descriptor::destroy);
+            return new TraceSlot(geometry, hits, lights, emitters, descriptor, resources);
         } catch (Throwable failure) {
-            if (descriptor != null) descriptor.destroy();
-            if (emitters != null) emitters.destroy();
-            if (lights != null) lights.destroy();
-            if (hits != null) hits.destroy();
-            if (geometry != null) geometry.destroy();
+            suppressCleanupFailure(failure, resources::close);
             throw failure;
         }
     }
@@ -1485,14 +1482,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final GpuBuffer lights;
         final GpuBuffer emitters;
         final GpuDescriptorRange<GpuDescriptorIndex.Resource> tlasDescriptor;
+        private final RtRevisionResources resources;
 
         TraceSlot(GpuBuffer geometry, GpuBuffer hits, GpuBuffer lights, GpuBuffer emitters,
-                  GpuDescriptorRange<GpuDescriptorIndex.Resource> tlasDescriptor) {
+                  GpuDescriptorRange<GpuDescriptorIndex.Resource> tlasDescriptor, RtRevisionResources resources) {
             this.geometry = geometry;
             this.hits = hits;
             this.lights = lights;
             this.emitters = emitters;
             this.tlasDescriptor = tlasDescriptor;
+            this.resources = resources;
         }
 
         void setInstanceTable(RtInstanceTablePlan table) {
@@ -1541,11 +1540,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
 
         void destroy() {
-            geometry.destroy();
-            hits.destroy();
-            lights.destroy();
-            emitters.destroy();
-            tlasDescriptor.destroy();
+            resources.close();
         }
     }
 

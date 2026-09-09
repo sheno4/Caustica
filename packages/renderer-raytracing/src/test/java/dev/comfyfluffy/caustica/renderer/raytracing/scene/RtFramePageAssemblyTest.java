@@ -373,7 +373,7 @@ class RtFramePageAssemblyTest {
         var first = resolve(snapshot(List.of(mesh), List.of(List.of(instance(1, 1, mesh, 0)), stable)))
                 .get(scene);
         var cache = new RtRetainedSceneBackend.TracePlanCache();
-        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null);
+        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null, new RtRevisionResources());
         try (var preparation = new RtFramePreparation()) {
             var initial = cache.resolveBatches(first.stream().map(page -> page.instances).toList(), preparation);
             var firstStamp = slot.batch(initial[0], initial);
@@ -458,7 +458,7 @@ class RtFramePageAssemblyTest {
             assertEquals(4, batch.emitterBytes);
             assertEquals(1, batch.emitters.length);
             assertSame(batch.plans[1], batch.emitters[0]);
-            var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null);
+            var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null, new RtRevisionResources());
             var batches = new RtRetainedSceneBackend.TraceBatch[] {batch};
             var stamp = slot.batch(batch, batches);
             slot.page(batch.plans[0].range, stamp);
@@ -485,7 +485,7 @@ class RtFramePageAssemblyTest {
         var first = resolve(snapshot(List.of(mesh), List.of(List.of(instance(1, 1, mesh, 0), emitter))))
                 .get(scene).getFirst();
         var cache = new RtRetainedSceneBackend.TracePlanCache();
-        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null);
+        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null, new RtRevisionResources());
         Object lights = new Object();
         try (var preparation = new RtFramePreparation()) {
             var batches = cache.resolveBatches(List.of(first.instances), preparation);
