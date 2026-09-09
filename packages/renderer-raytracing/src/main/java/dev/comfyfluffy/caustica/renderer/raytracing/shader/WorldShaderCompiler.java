@@ -72,7 +72,10 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     private final Path worldDirectory;
     private final Path cleanupDirectory;
     private final Composition composition;
-    private final Map<String, byte[]> spirvByKey = new ConcurrentHashMap<>();
+    private final Map<StageKey, byte[]> spirvByKey = new ConcurrentHashMap<>();
+
+    /** Composition identity is fixed by the compiler that owns this cache. */
+    private record StageKey(String module, String entryPoint, boolean specialized) { }
 
     private WorldShaderCompiler(SlangSession session, Path worldDirectory, Path cleanupDirectory,
                                 Composition composition) {
@@ -153,7 +156,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     }
 
     public byte[] compileSpecialized(String engineModule, String entryPoint) {
-        String key = "composition:" + composition.contentHash() + '/' + engineModule + '/' + entryPoint;
+        var key = new StageKey(engineModule, entryPoint, true);
         return cached(key, () -> session.compileSpecialized(engineModule, entryPoint,
                 composition.rootModule(), composition.rootType()).spirv(),
                 engineModule + ':' + entryPoint + " for " + composition.contentHash().substring(0, 12));
@@ -171,7 +174,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     public byte[] compilePlain(String moduleFileName, String entryPoint) {
         Objects.requireNonNull(moduleFileName, "moduleFileName");
         Objects.requireNonNull(entryPoint, "entryPoint");
-        return cached("plain:" + moduleFileName + '/' + entryPoint, () -> {
+        return cached(new StageKey(moduleFileName, entryPoint, false), () -> {
             Path file = worldDirectory.resolve(moduleFileName);
             try {
                 String source = Files.readString(file, StandardCharsets.UTF_8);
@@ -183,7 +186,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         }, moduleFileName + ':' + entryPoint);
     }
 
-    private byte[] cached(String key, Supplier<byte[]> compile, String label) {
+    private byte[] cached(StageKey key, Supplier<byte[]> compile, String label) {
         return spirvByKey.computeIfAbsent(key, ignored -> {
             long startNanos = System.nanoTime();
             byte[] spirv = compile.get();
