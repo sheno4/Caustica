@@ -177,7 +177,7 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
         int vertStart = capture.verts.size();
         int idxStart = capture.idx.size();
         RtCuboidEmitter.PartTemplate directTemplate = cuboidEmitter.prepare(model);
-        long directCubeCounts = 0L;
+        RtCuboidEmitter.Counts directCubeCounts = null;
         long drawStart = profileDynamicEntity ? instrumentation.startStage() : 0L;
         try {
             if (directTemplate != null) {
@@ -200,8 +200,8 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
             if (directTemplate != null) {
                 instrumentation.count("entityDirectVertices", addedVertices);
                 instrumentation.count("entityDirectQuads", addedQuads);
-                instrumentation.count("entitySpecializedCuboids", directCubeCounts >>> 32);
-                instrumentation.count("entityGenericCuboids", directCubeCounts & 0xffffffffL);
+                instrumentation.count("entitySpecializedCuboids", directCubeCounts.specialized);
+                instrumentation.count("entityGenericCuboids", directCubeCounts.generic);
             }
         }
     }

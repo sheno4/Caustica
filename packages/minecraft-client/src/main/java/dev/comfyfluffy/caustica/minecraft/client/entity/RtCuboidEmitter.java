@@ -63,40 +63,45 @@ final class RtCuboidEmitter {
         templates.clear();
     }
 
-    /** Return packed actual cube counts: specialized in the high 32 bits, generic in the low 32 bits. */
-    long emit(PartTemplate template, PoseStack poseStack, RtEntityCapture capture, int color) {
+    Counts emit(PartTemplate template, PoseStack poseStack, RtEntityCapture capture, int color) {
         capture.ensureAdditionalVertexCapacity(template.maxVertices);
-        return emitPart(template, poseStack, capture, color);
+        var counts = new Counts();
+        emitPart(template, poseStack, capture, color, counts);
+        return counts;
     }
 
-    private long emitPart(PartTemplate template, PoseStack poseStack, RtEntityCapture capture, int color) {
+    private void emitPart(PartTemplate template, PoseStack poseStack, RtEntityCapture capture, int color,
+                          Counts counts) {
         ModelPart part = template.part;
         if (!part.visible || template.empty()) {
-            return 0L;
+            return;
         }
         poseStack.pushPose();
         try {
             part.translateAndRotate(poseStack);
-            long counts = 0L;
             if (!part.skipDraw) {
                 PoseStack.Pose pose = poseStack.last();
                 for (CubeTemplate cube : template.cubes) {
                     if (cube instanceof EightCornerCube eight) {
                         emitEightCornerCube(eight, pose, capture, color);
-                        counts += 1L << 32;
+                        counts.specialized++;
                     } else {
                         emitGenericCube(cube.cube, pose, capture, color);
-                        counts++;
+                        counts.generic++;
                     }
                 }
             }
             for (PartTemplate child : template.children) {
-                counts += emitPart(child, poseStack, capture, color);
+                emitPart(child, poseStack, capture, color, counts);
             }
-            return counts;
         } finally {
             poseStack.popPose();
         }
+    }
+
+    static final class Counts {
+        int specialized;
+        int generic;
     }
 
     private void emitEightCornerCube(EightCornerCube cube, PoseStack.Pose pose,

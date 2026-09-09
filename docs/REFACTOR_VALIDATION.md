@@ -1947,3 +1947,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Reviewed the remaining entity uploader allocation/ownership assembly and the texture resolver/sampler boundary. Kept the resource resolver interfaces because they express retained host-image and sampler contracts.
 - Extracted prepared-texture selection from `RtEntityTextures.resolveBinding`: Sampler0 wins; otherwise the first binding other than Sampler1/Sampler2 remains the fallback. Removed the redundant empty constructor and shortened cache documentation to current lifetime invariants.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-entity-texture-selection-check.log`). Existing texture tests cover material selection and sampler snapshots, not a live prepared-render-type binding capture; selection equivalence was reviewed directly.
+
+### Replace packed cuboid telemetry with named counters
+
+- Replaced `RtCuboidEmitter`'s high/low 32-bit packed return value with one `Counts` accumulator per direct model emission. Recursive traversal increments named specialized/generic fields, and the collector reports them directly.
+- Preserved visibility/skip-draw rules, traversal order, pose-stack cleanup, and geometry emission. The accumulator avoids a separate object at each recursive node; one object is created per top-level direct emission.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-cuboid-named-counts-check.log`). The arithmetic/traversal change was inspected directly; no dedicated cuboid traversal test, live JFR count comparison, or allocation benchmark was added. No performance improvement is claimed.
