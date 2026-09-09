@@ -18,6 +18,55 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class RtTerrainWorkerPreparationTest {
+    @Test void unbindStopsWorkersWhenDiscardFails() throws Exception {
+        stopsWorkersWhenDiscardFails(false);
+    }
+
+    @Test void shutdownStopsWorkersWhenDiscardFails() throws Exception {
+        stopsWorkersWhenDiscardFails(true);
+    }
+
+    private void stopsWorkersWhenDiscardFails(boolean shutdown) throws Exception {
+        try (var fixture = new Fixture()) {
+            var failure = new IllegalStateException("mesh release failed");
+            fixture.beforeMeshClose = () -> { throw failure; };
+            var build = fixture.build();
+            var prepared = fixture.geometry.prepare(new MinecraftTerrainGeometry.Put(0, 0, 0, 0,
+                    new MinecraftTerrainMesh(new float[]{0,0,0, 1,0,0, 0,1,0}, new int[]{0,1,2},
+                            new float[6], new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS],
+                            List.of(new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
+                                    MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f)), 1),
+                    MinecraftTerrainLightAdapter.describe(0, 1, 0, 0, 0, List.of())));
+            fixture.ready.complete(fixture.mesh);
+            assertTrue(fixture.updates().complete(build.request(), build.result(null, prepared.join(), null)));
+
+            var entered = new CountDownLatch(1);
+            var finished = new CountDownLatch(1);
+            var cancelled = new CountDownLatch(1);
+            fixture.workers.submit(() -> {
+                entered.countDown();
+                try { new CountDownLatch(1).await(); }
+                catch (InterruptedException expected) { Thread.currentThread().interrupt(); }
+                finally { finished.countDown(); }
+            });
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                fixture.workers.submit(() -> fail("queued work must be cancelled"), cancelled::countDown);
+                var thrown = assertThrows(CompletionException.class, () -> {
+                    if (shutdown) fixture.terrain.shutdown();
+                    else fixture.terrain.unbindGeometry(fixture.geometry);
+                });
+                assertSame(failure, thrown.getCause());
+                assertEquals(0, cancelled.getCount());
+                assertEquals(0, finished.getCount());
+                assertEquals(1, fixture.meshClosed.get());
+                assertEquals(1, fixture.uploadClosed.get());
+            } finally {
+                fixture.workers.shutdown();
+            }
+        }
+    }
+
     @Test void dirtyInvalidationDoesNotWaitForTheCoordinationStateLock() throws Exception {
         try (var fixture = new Fixture()) {
             var request = fixture.build().request();
@@ -188,12 +237,13 @@ final class RtTerrainWorkerPreparationTest {
         final CompletableFuture<ReadyMesh<MinecraftProgramTypes.InstanceData>> ready = new CompletableFuture<>();
         Runnable beforeUpload = () -> {};
         Runnable beforeInstanceData = () -> {};
+        Runnable beforeMeshClose = () -> {};
         final ReadyMesh<MinecraftProgramTypes.InstanceData> mesh = new ReadyMesh<>() {
             @Override public ShaderDataType<MinecraftProgramTypes.InstanceData> instanceDataType() {
                 return MinecraftProgramTypes.INSTANCE_DATA;
             }
             @Override public ReadyMesh<MinecraftProgramTypes.InstanceData> retain() { throw new AssertionError(); }
-            @Override public void close() { meshClosed.incrementAndGet(); }
+            @Override public void close() { meshClosed.incrementAndGet(); beforeMeshClose.run(); }
         };
         final MinecraftTerrainGeometry geometry = new MinecraftTerrainGeometry(new MeshPreparer() {
             @Override @SuppressWarnings("unchecked")

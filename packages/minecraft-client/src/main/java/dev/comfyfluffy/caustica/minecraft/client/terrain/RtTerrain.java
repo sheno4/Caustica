@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.OptionValues;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
@@ -93,8 +94,7 @@ public final class RtTerrain {
     public void unbindGeometry(MinecraftTerrainGeometry geometry) {
         if (this.geometry == geometry) {
             this.geometry = null;
-            reset();
-            workers.shutdown();
+            new ResourceLifetime(this::reset, workers::shutdown).close();
         }
     }
 
@@ -637,14 +637,15 @@ public final class RtTerrain {
 
     public void shutdown() {
         geometry = null;
-        reset();
-        workers.shutdown();
-        drainDiscardedBuilds();
-        dirty.clear();
-        snapshots.clear();
-        dispatchPlan = null;
-        dispatchCursor = 0;
-        world = null;
+        try {
+            new ResourceLifetime(this::reset, workers::shutdown, this::drainDiscardedBuilds).close();
+        } finally {
+            dirty.clear();
+            snapshots.clear();
+            dispatchPlan = null;
+            dispatchCursor = 0;
+            world = null;
+        }
     }
 
     private void drainDiscardedBuilds() {

@@ -1903,3 +1903,10 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Launched the copied world through the debug API and captured REBLUR -> RELAX -> REBLUR after 120 successful composite frames per stage. All three samples reported an 854 x 480 framebuffer; inspected RELAX and final REBLUR PNGs showed terrain and UI intact, with the existing black diagnostic bars still present.
 - The observer asserted full settings restoration and restored the original requested RT state before stopping the client. Observer and Gradle exited successfully; the client build completed in 41 seconds. No terrain preparation/publication failure or targeted GPU-invalid marker appeared in the log search.
 - Evidence: `tmp/aesthetic-terrain-workers-live.json`, `tmp/aesthetic-terrain-workers-observer.log`, `tmp/aesthetic-terrain-workers-client.log`. This is a bounded stationary runtime check, not resize, remote transport, or complete terrain lifecycle coverage. The comment-only edit adds no behavioral test requirement.
+
+### Terrain shutdown after a discarded-resource failure
+
+- `unbindGeometry` now attempts worker shutdown even when reset fails. Full shutdown attempts reset, worker shutdown, and the final discarded-build drain in order through `ResourceLifetime`, then clears render-side references in `finally`.
+- Added two behavioral regressions with a prepared mesh whose release throws, one blocked worker, and one queued cancellation callback. Both tests fail on the original implementation at the uncancelled queued-work assertion. With the fix, both confirm cancellation, joined running work, the original reset failure, and one mesh/upload release each.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds; all 10 worker-preparation tests passed. Logs: `tmp/aesthetic-terrain-stop-failure-before.log` and `tmp/aesthetic-terrain-stop-failure-check.log`.
+- These tests inject a CPU-side resource release failure; they do not establish real GPU destruction-failure recovery or exhaustive concurrent failure handling.
