@@ -43,12 +43,11 @@ final class RtExposureReadbacks<T> implements AutoCloseable {
 
     record Feedback(long frameId, float preExposure, int resetSequence, ExposureStateData state) { }
 
+    private record Submission(long frameId, float preExposure, int resetSequence) { }
+
     final class Reservation implements AutoCloseable {
         private T buffer;
-        private boolean submitted;
-        private long frameId;
-        private float preExposure;
-        private int resetSequence;
+        private Submission submission;
 
         private Reservation(T buffer) { this.buffer = buffer; }
 
@@ -56,10 +55,7 @@ final class RtExposureReadbacks<T> implements AutoCloseable {
 
         /** Only a successfully submitted copy can become controller feedback. */
         void submitted(long frameId, float preExposure, int resetSequence) {
-            this.frameId = frameId;
-            this.preExposure = preExposure;
-            this.resetSequence = resetSequence;
-            submitted = true;
+            submission = new Submission(frameId, preExposure, resetSequence);
         }
 
         /** Called when accepted GPU work completes, or when an unsubmitted frame is abandoned. */
@@ -70,7 +66,10 @@ final class RtExposureReadbacks<T> implements AutoCloseable {
             Feedback feedback = null;
             boolean recycle;
             try {
-                if (submitted) feedback = new Feedback(frameId, preExposure, resetSequence, read.apply(released));
+                if (submission != null) {
+                    feedback = new Feedback(submission.frameId(), submission.preExposure(),
+                            submission.resetSequence(), read.apply(released));
+                }
             } finally {
                 synchronized (RtExposureReadbacks.this) {
                     recycle = !closed;
