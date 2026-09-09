@@ -52,6 +52,8 @@ import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.lwjgl.vulkan.EXTSwapchainColorspace.VK_COLOR_SPACE_HDR10_ST2084_EXT;
+
 /**
  * HDR capability logging and PQ swapchain selection.
  *
@@ -65,7 +67,6 @@ import java.util.List;
  */
 @Mixin(VulkanGpuSurface.class)
 public abstract class VulkanGpuSurfaceMixin {
-	private static final int VK_COLOR_SPACE_HDR10_ST2084_EXT = 1000104008;
 
 	@Shadow
 	@Final
@@ -394,10 +395,9 @@ public abstract class VulkanGpuSurfaceMixin {
 				&& this.caustica$metadataPeakNits == peakNits) {
 			return;
 		}
-		if (MinecraftHdr.applyMasteringMetadata(this.device.vkDevice(), this.swapchain, peakNits)) {
-			this.caustica$metadataSwapchain = this.swapchain;
-			this.caustica$metadataPeakNits = peakNits;
-		}
+		MinecraftHdr.applyMasteringMetadata(this.device.vkDevice(), this.swapchain, peakNits);
+		this.caustica$metadataSwapchain = this.swapchain;
+		this.caustica$metadataPeakNits = peakNits;
 	}
 
 	@Unique

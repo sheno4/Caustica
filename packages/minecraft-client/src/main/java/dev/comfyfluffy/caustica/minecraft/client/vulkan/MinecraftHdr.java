@@ -1,22 +1,25 @@
 package dev.comfyfluffy.caustica.minecraft.client.vulkan;
 
+import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
-
-import java.nio.IntBuffer;
-import java.util.ArrayList;
-import java.util.List;
-
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTHdrMetadata;
 import org.lwjgl.vulkan.KHRGetSurfaceCapabilities2;
+import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkHdrMetadataEXT;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceSurfaceInfo2KHR;
 import org.lwjgl.vulkan.VkSurfaceFormat2KHR;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
+import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.lwjgl.vulkan.EXTSwapchainColorspace.*;
+import static org.lwjgl.vulkan.KHRSurface.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
 /**
  * HDR display support — capability detection/logging plus static mastering metadata for PQ swapchains.
@@ -30,40 +33,21 @@ import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
  * HDR10/PQ capability from the advertised pairs.
  */
 public final class MinecraftHdr {
-    // VK_EXT_swapchain_colorspace color-space enum values (not all are in the LWJGL VK10 constants).
-    private static final int CS_SRGB_NONLINEAR = 0;
-    private static final int CS_DISPLAY_P3_NONLINEAR = 1000104001;
-    private static final int CS_EXTENDED_SRGB_LINEAR = 1000104002;
-    private static final int CS_DISPLAY_P3_LINEAR = 1000104003;
-    private static final int CS_DCI_P3_NONLINEAR = 1000104004;
-    private static final int CS_BT709_LINEAR = 1000104005;
-    private static final int CS_BT709_NONLINEAR = 1000104006;
-    private static final int CS_BT2020_LINEAR = 1000104007;
-    private static final int CS_HDR10_ST2084 = 1000104008;
-    private static final int CS_DOLBYVISION = 1000104009;
-    private static final int CS_HDR10_HLG = 1000104010;
-    private static final int CS_ADOBERGB_LINEAR = 1000104011;
-    private static final int CS_ADOBERGB_NONLINEAR = 1000104012;
-    private static final int CS_PASS_THROUGH = 1000104013;
-    private static final int CS_EXTENDED_SRGB_NONLINEAR = 1000104014;
-
     private static volatile boolean surfaceLogged;
 
     private MinecraftHdr() {
     }
 
     /**
-     * Assigns SMPTE ST 2086 / CTA-861.3 static metadata to one PQ swapchain.
+     * Assigns SMPTE ST 2086 / CTA-861.3 static metadata to a live PQ swapchain on a device with
+     * {@code VK_EXT_hdr_metadata} enabled.
      *
      * <p>The ACES HDR output LUT is a Rec.2020/D65 virtual master capped at one of the baked mastering
      * peaks, so that peak is both the mastering-display maximum and MaxCLL. MaxFALL cannot be known without
      * analysing every rendered frame; Vulkan explicitly permits unknown fields to be zero, which is more
      * truthful than inventing a scene-average value.
      */
-    public static boolean applyMasteringMetadata(VkDevice device, long swapchain, int masteringPeakNits) {
-        if (swapchain == 0L) {
-            return false;
-        }
+    public static void applyMasteringMetadata(VkDevice device, long swapchain, int masteringPeakNits) {
         MasteringMetadata values = masteringMetadata(masteringPeakNits);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkHdrMetadataEXT.Buffer metadata = VkHdrMetadataEXT.calloc(1, stack);
@@ -81,7 +65,6 @@ public final class MinecraftHdr {
         CausticaMod.LOGGER.info(
                 "HDR: set swapchain mastering metadata: Rec.2020/D65, min={} nits, peak/MaxCLL={} nits, MaxFALL=unknown",
                 values.minLuminance(), values.maxLuminance());
-        return true;
     }
 
     static MasteringMetadata masteringMetadata(int masteringPeakNits) {
@@ -120,12 +103,13 @@ public final class MinecraftHdr {
     }
 
     /** Logs the resolved HDR configuration for the surface capability report. */
-    public static void logConfig() {
+    private static void logConfig() {
+        boolean enabled = CausticaClientComposition.current().runtime().hdrEnabled();
         CausticaMod.LOGGER.info(
                 "HDR config: enabled={} ui={}nits peak={}nits -> {}",
-                dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().runtime().hdrEnabled(),
+                enabled,
                 CausticaConfig.get(RendererOptions.Rt.Hdr.UI_NITS), CausticaConfig.get(RendererOptions.Rt.Hdr.PEAK_NITS),
-                dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition.current().runtime().hdrEnabled() ? "HDR display path active" : "SDR display path");
+                enabled ? "HDR display path active" : "SDR display path");
     }
 
     /**
@@ -152,7 +136,7 @@ public final class MinecraftHdr {
             for (int i = 0; i < formats.size(); i++) {
                 SurfaceFormat f = formats.get(i);
                 int cs = f.colorSpace();
-                boolean pq = cs == CS_HDR10_ST2084;
+                boolean pq = cs == VK_COLOR_SPACE_HDR10_ST2084_EXT;
                 supportsPq |= pq;
                 CausticaMod.LOGGER.info("  [{}] format={} ({}), colorSpace={} ({}){}",
                         i, f.format(), formatName(f.format()), cs, colorSpaceName(cs), pq ? "  <-- HDR10/PQ" : "");
@@ -182,8 +166,8 @@ public final class MinecraftHdr {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 IntBuffer count = stack.callocInt(1);
                 int result = query.query(count, null);
-                if (result != org.lwjgl.vulkan.VK10.VK_SUCCESS
-                        && result != org.lwjgl.vulkan.VK10.VK_INCOMPLETE) {
+                if (result != VK10.VK_SUCCESS
+                        && result != VK10.VK_INCOMPLETE) {
                     throw new IllegalStateException("vkGetPhysicalDeviceSurfaceFormats2KHR(count) failed: " + result);
                 }
                 if (count.get(0) == 0) return List.of();
@@ -193,8 +177,8 @@ public final class MinecraftHdr {
                     formats.get(index).sType$Default();
                 }
                 result = query.query(count, formats);
-                if (result == org.lwjgl.vulkan.VK10.VK_INCOMPLETE) continue;
-                if (result != org.lwjgl.vulkan.VK10.VK_SUCCESS) {
+                if (result == VK10.VK_INCOMPLETE) continue;
+                if (result != VK10.VK_SUCCESS) {
                     throw new IllegalStateException("vkGetPhysicalDeviceSurfaceFormats2KHR(data) failed: " + result);
                 }
 
@@ -211,21 +195,21 @@ public final class MinecraftHdr {
 
     private static String colorSpaceName(int cs) {
         return switch (cs) {
-            case CS_SRGB_NONLINEAR -> "SRGB_NONLINEAR";
-            case CS_DISPLAY_P3_NONLINEAR -> "DISPLAY_P3_NONLINEAR";
-            case CS_EXTENDED_SRGB_LINEAR -> "EXTENDED_SRGB_LINEAR (scRGB)";
-            case CS_DISPLAY_P3_LINEAR -> "DISPLAY_P3_LINEAR";
-            case CS_DCI_P3_NONLINEAR -> "DCI_P3_NONLINEAR";
-            case CS_BT709_LINEAR -> "BT709_LINEAR";
-            case CS_BT709_NONLINEAR -> "BT709_NONLINEAR";
-            case CS_BT2020_LINEAR -> "BT2020_LINEAR";
-            case CS_HDR10_ST2084 -> "HDR10_ST2084 (PQ)";
-            case CS_DOLBYVISION -> "DOLBYVISION";
-            case CS_HDR10_HLG -> "HDR10_HLG";
-            case CS_ADOBERGB_LINEAR -> "ADOBERGB_LINEAR";
-            case CS_ADOBERGB_NONLINEAR -> "ADOBERGB_NONLINEAR";
-            case CS_PASS_THROUGH -> "PASS_THROUGH";
-            case CS_EXTENDED_SRGB_NONLINEAR -> "EXTENDED_SRGB_NONLINEAR";
+            case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR -> "SRGB_NONLINEAR";
+            case VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT -> "DISPLAY_P3_NONLINEAR";
+            case VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT -> "EXTENDED_SRGB_LINEAR (scRGB)";
+            case VK_COLOR_SPACE_DISPLAY_P3_LINEAR_EXT -> "DISPLAY_P3_LINEAR";
+            case VK_COLOR_SPACE_DCI_P3_NONLINEAR_EXT -> "DCI_P3_NONLINEAR";
+            case VK_COLOR_SPACE_BT709_LINEAR_EXT -> "BT709_LINEAR";
+            case VK_COLOR_SPACE_BT709_NONLINEAR_EXT -> "BT709_NONLINEAR";
+            case VK_COLOR_SPACE_BT2020_LINEAR_EXT -> "BT2020_LINEAR";
+            case VK_COLOR_SPACE_HDR10_ST2084_EXT -> "HDR10_ST2084 (PQ)";
+            case VK_COLOR_SPACE_DOLBYVISION_EXT -> "DOLBYVISION";
+            case VK_COLOR_SPACE_HDR10_HLG_EXT -> "HDR10_HLG";
+            case VK_COLOR_SPACE_ADOBERGB_LINEAR_EXT -> "ADOBERGB_LINEAR";
+            case VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT -> "ADOBERGB_NONLINEAR";
+            case VK_COLOR_SPACE_PASS_THROUGH_EXT -> "PASS_THROUGH";
+            case VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT -> "EXTENDED_SRGB_NONLINEAR";
             default -> "unknown";
         };
     }
@@ -233,12 +217,12 @@ public final class MinecraftHdr {
     /** Names the few VkFormat values relevant to swapchain/HDR output; other formats print as the raw enum. */
     private static String formatName(int format) {
         return switch (format) {
-            case 37 -> "R8G8B8A8_UNORM";
-            case 43 -> "R8G8B8A8_SRGB";
-            case 44 -> "B8G8R8A8_UNORM";
-            case 50 -> "B8G8R8A8_SRGB";
-            case 64 -> "A2R10G10B10_UNORM_PACK32";
-            case 97 -> "R16G16B16A16_SFLOAT";
+            case VK10.VK_FORMAT_R8G8B8A8_UNORM -> "R8G8B8A8_UNORM";
+            case VK10.VK_FORMAT_R8G8B8A8_SRGB -> "R8G8B8A8_SRGB";
+            case VK10.VK_FORMAT_B8G8R8A8_UNORM -> "B8G8R8A8_UNORM";
+            case VK10.VK_FORMAT_B8G8R8A8_SRGB -> "B8G8R8A8_SRGB";
+            case VK10.VK_FORMAT_A2R10G10B10_UNORM_PACK32 -> "A2R10G10B10_UNORM_PACK32";
+            case VK10.VK_FORMAT_R16G16B16A16_SFLOAT -> "R16G16B16A16_SFLOAT";
             default -> "VkFormat#" + format;
         };
     }
