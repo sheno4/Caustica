@@ -13,6 +13,7 @@ import jdk.jfr.Recording;
 import jdk.jfr.RecordingState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
+import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -137,8 +138,22 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", dev.comfyfluffy.caustica.renderer.runtime.RtFrameRenderer.debugImageNames(),
                     "operations", List.of("schema", "status",
-                    "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
+                    "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
             case "status" -> future.complete(status());
+            case "window.resize" -> {
+                int width = request.get("width").getAsInt();
+                int height = request.get("height").getAsInt();
+                if (width < 1 || height < 1) throw new IllegalArgumentException("Window dimensions must be positive");
+                client.getWindow().setWindowed(width, height);
+                future.complete(Map.of("requestedWidth", width, "requestedHeight", height));
+            }
+            case "window.maximize", "window.restore" -> {
+                var window = client.getWindow();
+                if (window.isFullscreen()) throw new IllegalStateException("Window must be windowed");
+                if (op.equals("window.maximize")) GLFW.glfwMaximizeWindow(window.handle());
+                else GLFW.glfwRestoreWindow(window.handle());
+                future.complete(Map.of("requested", op));
+            }
             case "settings.get" -> future.complete(settings());
             case "runtime.set" -> {
                 var enabled = request.get("enabled");
@@ -333,8 +348,11 @@ public final class MinecraftDebugService implements AutoCloseable {
         result.put("paused", client.isPaused());
         var screen = client.gui.screen();
         result.put("screen", screen == null ? "" : screen.getClass().getName());
-        result.put("window", Map.of("width", client.getWindow().getWidth(),
-                "height", client.getWindow().getHeight()));
+        var window = client.getWindow();
+        result.put("window", Map.of("width", window.getWidth(), "height", window.getHeight(),
+                "screenWidth", window.getScreenWidth(), "screenHeight", window.getScreenHeight(),
+                "fullscreen", window.isFullscreen(),
+                "maximized", GLFW.glfwGetWindowAttrib(window.handle(), GLFW.GLFW_MAXIMIZED) == GLFW.GLFW_TRUE));
         result.put("frames", frames);
         result.put("ticks", ticks);
         result.put("frameActive", CausticaClientComposition.current().runtime().frameActive());
