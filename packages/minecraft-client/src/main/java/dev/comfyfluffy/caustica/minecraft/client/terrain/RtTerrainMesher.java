@@ -442,7 +442,7 @@ final class RtTerrainMesher {
         }
 
         /**
-         * Union coincident quads (same 4 corners, any winding) into groups, then within each group keep the
+         * Group quads coincident with each representative (same 4 corners, any winding), then keep the
          * first member (the opaque/untinted base if present) in place and push the rest outward along their
          * own normals by {@link #OFFSET} × rank. Same-normal layers (grass base/overlay) fan out along one
          * direction; opposite-normal pairs (cross faces) separate because each moves along its own normal.
@@ -468,20 +468,12 @@ final class RtTerrainMesher {
                     continue; // not a group representative
                 }
                 int rank = 0;
-                // Pass 1: bases (opaque + untinted) — the first stays put (rank 0), so the overlay lands in
-                // front of it. Pass 2: overlays (cutout or tinted) — always pushed outward.
-                for (int k = 0; k < n; k++) {
-                    PendingQuad q = pending.get(k);
-                    if (gid[k] == r && !(q.cutout || q.tinted)) {
-                        if (rank > 0) {
-                            offset(q, OFFSET * rank);
-                        }
-                        rank++;
-                    }
-                }
-                for (int k = 0; k < n; k++) {
-                    PendingQuad q = pending.get(k);
-                    if (gid[k] == r && (q.cutout || q.tinted)) {
+                // Rank opaque, untinted bases before overlays; the first available face stays in place.
+                for (int pass = 0; pass < 2; pass++) {
+                    for (int k = 0; k < n; k++) {
+                        PendingQuad q = pending.get(k);
+                        boolean overlay = q.cutout || q.tinted;
+                        if (gid[k] != r || overlay != (pass == 1)) continue;
                         if (rank > 0) {
                             offset(q, OFFSET * rank);
                         }

@@ -1836,3 +1836,9 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terr
 Reviewed terrain tessellation and its dispatch caller. buildCpuSection and tessellate now take WorkerTessState directly instead of receiving its random source, model parts, two captures, mesh and mutable position as separate arguments. The caller still obtains thread-local state and resets it immediately before each job. Material lookup assignment, capture initialization, fluid/block ordering, culling and packed-output ownership remain unchanged. Local aliases inside tessellate keep its block loop readable without exposing worker internals in its signature.
 
 Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terrain-worker-state-check.log. git diff --check passed. No new live streaming run or worker-reuse stress experiment was performed. Capture implementations and whole-project coverage remain incomplete.
+
+## Coplanar quad ranking shares its two-pass body (2026-09-09)
+
+Reviewed QuadCapture's state, vanilla quad capture, face culling, pooling/reset and coplanar group ranking. Combined duplicated base/overlay ranking loops into two passes over one body. Opaque untinted faces still rank first, overlays second, preserving original source order within each category and normal-directed offsets. Corrected comments to describe representative-based grouping and the first available face staying in place, including all-overlay groups.
+
+Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-coplanar-ranking-check.log. No dedicated coplanar fixture or visual grass/cross-model capture was added; existing build checks do not establish visual equivalence for those cases. Remaining capture emission/fluid paths and whole-project coverage remain incomplete.
