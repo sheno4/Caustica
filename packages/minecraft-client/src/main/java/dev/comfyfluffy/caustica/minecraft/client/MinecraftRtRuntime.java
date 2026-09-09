@@ -290,8 +290,10 @@ public final class MinecraftRtRuntime {
     }
 
     public boolean exportLatestResidualExposureExr(Path outputPath) throws IOException {
-        return frameActive && session != null && session.renderer != null
-                && session.renderer.exportLatestResidualExposureExr(outputPath);
+        if (!frameActive || session == null || session.renderer == null) return false;
+        // The paired PNG follows this encoder; submit its frame before the EXR's direct GPU readback.
+        com.mojang.blaze3d.systems.RenderSystem.getDevice().createCommandEncoder().submit();
+        return session.renderer.exportLatestResidualExposureExr(outputPath);
     }
 
     public RtFrameRenderer.DebugImageCapture exportLatestDebugImage(String name, Path outputPath) throws IOException {
