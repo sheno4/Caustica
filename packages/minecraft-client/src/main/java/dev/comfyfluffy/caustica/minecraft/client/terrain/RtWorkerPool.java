@@ -156,12 +156,16 @@ public final class RtWorkerPool {
                     job.cancel();
                 }
             }
-            try {
-                executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while stopping RT workers", e);
+            // Session teardown needs every worker joined before it can drain accepted GPU work.
+            boolean interrupted = false;
+            while (!executor.isTerminated()) {
+                try {
+                    executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                }
             }
+            if (interrupted) Thread.currentThread().interrupt();
         }
     }
 
