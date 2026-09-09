@@ -1680,3 +1680,9 @@ Raytracing checks passed in 5s (45 tasks, 9 executed). Existing tests cover clea
 Read RtPreparedMesh in full and traced its State consumers in mesh reuse/refit and TLAS address writing. Replaced the immutable three-field State class with a record and updated external field access to record accessors. Kept the ResourceOwner wrapper because each retain needs an independent claim and final native destruction is deferred through the device context. Corrected the class comment: native ownership is established during preparation, while publication waits for GPU completion.
 
 Raytracing checks passed in 6s (45 tasks, 10 executed), with no test edits required. Evidence: tmp/aesthetic-prepared-mesh-state-check.log. git diff --check passed. No new live rendering or performance measurement was performed. Whole-project review remains active.
+
+## Pipeline destruction marks ownership released before callbacks (2026-09-09)
+
+Reviewed RtShaderCode and the pipeline's hit-region, retained-record packing, alignment, destruction and descriptor-decoration validation sections. Kept those packing/validation algorithms unchanged. Pipeline destruction now sets its existing destroyed state before callbacks and uses ResourceLifetime to attempt both SBT-buffer and pipeline release. A failed SBT release no longer skips native pipeline destruction or permits a later retry of an already attempted release. Existing post-destruction checks continue to use the same flag.
+
+Raytracing checks passed in 8s (45 tasks, 9 executed), including SBT/ABI tests. Evidence: tmp/aesthetic-pipeline-destruction-check.log. git diff --check passed. No native pipeline destruction failure was injected or new client run performed. Full pipeline creation/rollback review remains open; this is not a complete pipeline or project audit.

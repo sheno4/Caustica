@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedGeometryPlan
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedGeometryPlan.HitGroup;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
@@ -206,9 +207,8 @@ public final class RtPipeline {
 
     public void destroy() {
         if (destroyed) return;
-        sbt.close();
-        VK10.vkDestroyPipeline(context.vk(), pipeline, null);
         destroyed = true;
+        new ResourceLifetime(sbt::close, () -> VK10.vkDestroyPipeline(context.vk(), pipeline, null)).close();
     }
 
     /** CPU image for a scene-specific hit table; the caller owns uploading and retiring its SBT buffer. */
