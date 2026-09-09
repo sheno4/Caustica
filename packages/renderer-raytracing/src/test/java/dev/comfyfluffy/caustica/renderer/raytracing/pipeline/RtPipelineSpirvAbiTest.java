@@ -45,7 +45,7 @@ final class RtPipelineSpirvAbiTest {
     void tlasMappingUsesTheHeapPushIndexSource() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorSetAndBindingMappingEXT mapping = VkDescriptorSetAndBindingMappingEXT.calloc(stack);
-            RtPipeline.configureTlasMapping(mapping, RtPipeline.tlasPushIndexMapping(64));
+            RtPipeline.tlasPushIndexMapping(64).write(mapping);
             assertEquals(0, mapping.descriptorSet());
             assertEquals(0, mapping.firstBinding());
             assertEquals(1, mapping.bindingCount());

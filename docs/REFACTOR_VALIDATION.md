@@ -1692,3 +1692,9 @@ Raytracing checks passed in 8s (45 tasks, 9 executed), including SBT/ABI tests. 
 Read pipeline creation in full. Extracted createBindingTable so shader module/stage/group assembly ends with native pipeline creation and delegates handle readback, aligned SBT allocation/upload and retained-hit handles to one ownership scope. Debug naming now occurs inside that scope. Rollback attempts both SBT and pipeline release and preserves the setup failure. Stage/group order, descriptor mapping, recursion depth, stride limits, handle bytes and upload layout remain unchanged. Shader-module cleanup in the outer finally remains separate.
 
 Raytracing checks passed in 5s (45 tasks, 9 executed), including existing SBT/ABI coverage. Evidence: tmp/aesthetic-pipeline-sbt-assembly-check.log. Corrected only brace/continuation indentation after checking; git diff --check passed. No fresh live pipeline creation or native failure injection was performed. Broader source and runtime coverage remain incomplete.
+
+## TLAS mapping owns its native conversion (2026-09-09)
+
+Read the pipeline's descriptor mapping, stage/region helpers and shader-module creation helper, plus all five RtPipelineSpirvAbiTest tests. Moved configureTlasMapping onto TlasPushIndexMapping.write so validated mapping values and native conversion are colocated. Kept the mapping source, acceleration-structure resource mask, push offset and equal heap index/array strides unchanged. Module code still uses a heap-native SPIR-V copy with scoped release.
+
+Raytracing checks passed in 6s (45 tasks, 10 executed). The native mapping test checks set/binding, count, resource type, source kind and every push-index field written here; the remaining ABI tests cover permitted decorations and malformed instruction ranges. Evidence: tmp/aesthetic-tlas-mapping-writer-check.log. git diff --check passed. No fresh live pipeline run or complete SPIR-V validator proof was performed. Broader review remains active.

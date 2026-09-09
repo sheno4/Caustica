@@ -84,7 +84,7 @@ public final class RtPipeline {
                         context.descriptorHeap().properties().resourceDescriptorStrideBytes());
                 VkDescriptorSetAndBindingMappingEXT.Buffer mappings = VkDescriptorSetAndBindingMappingEXT
                         .calloc(1, stack);
-                configureTlasMapping(mappings.get(0), tlasMapping);
+                tlasMapping.write(mappings.get(0));
                 VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo =
                         VkShaderDescriptorSetAndBindingMappingInfoEXT.calloc(stack).sType$Default()
                                 .pMappings(mappings);
@@ -303,18 +303,6 @@ public final class RtPipeline {
                 RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, Math.toIntExact(resourceDescriptorStride));
     }
 
-    static void configureTlasMapping(VkDescriptorSetAndBindingMappingEXT mapping,
-                                     TlasPushIndexMapping configuration) {
-        mapping.sType$Default().descriptorSet(configuration.descriptorSet())
-                .firstBinding(configuration.binding()).bindingCount(1)
-                .resourceMask(EXTDescriptorHeap.VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT)
-                .source(EXTDescriptorHeap.VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT)
-                .sourceData(data -> data.pushIndex(pushIndex -> pushIndex
-                        .heapOffset(0).pushOffset(configuration.pushOffset())
-                        .heapIndexStride(configuration.heapIndexStride())
-                        .heapArrayStride(configuration.heapIndexStride())));
-    }
-
     record TlasPushIndexMapping(int descriptorSet, int binding, int pushOffset, int heapIndexStride) {
         TlasPushIndexMapping {
             if (descriptorSet < 0 || binding < 0) throw new IllegalArgumentException("negative descriptor binding");
@@ -322,6 +310,15 @@ public final class RtPipeline {
                 throw new IllegalArgumentException("TLAS push offset must be a non-negative multiple of four");
             }
             if (heapIndexStride <= 0) throw new IllegalArgumentException("resource heap stride must be positive");
+        }
+
+        void write(VkDescriptorSetAndBindingMappingEXT mapping) {
+            mapping.sType$Default().descriptorSet(descriptorSet).firstBinding(binding).bindingCount(1)
+                    .resourceMask(EXTDescriptorHeap.VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT)
+                    .source(EXTDescriptorHeap.VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT)
+                    .sourceData(data -> data.pushIndex(pushIndex -> pushIndex
+                            .heapOffset(0).pushOffset(pushOffset)
+                            .heapIndexStride(heapIndexStride).heapArrayStride(heapIndexStride)));
         }
     }
 
