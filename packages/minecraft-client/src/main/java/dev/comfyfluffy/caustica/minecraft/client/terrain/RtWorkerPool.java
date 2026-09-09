@@ -4,6 +4,9 @@ import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
+
+import java.util.ArrayList;
 
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
@@ -140,10 +143,8 @@ public final class RtWorkerPool {
             planning = publications = coordination = exec = null;
         }
         try {
-            stop(stoppedPlanning);
-            stop(stoppedCoordination);
-            stop(stoppedPublications);
-            stop(stoppedWorkers);
+            new ResourceLifetime(() -> stop(stoppedPlanning), () -> stop(stoppedCoordination),
+                    () -> stop(stoppedPublications), () -> stop(stoppedWorkers)).close();
         } finally {
             synchronized (this) { stopping = false; }
         }
@@ -151,22 +152,28 @@ public final class RtWorkerPool {
 
     private static void stop(ThreadPoolExecutor executor) {
         if (executor != null) {
+            var cleanup = new ArrayList<Runnable>();
             for (Runnable queued : executor.shutdownNow()) {
                 if (queued instanceof CancellableJob job) {
-                    job.cancel();
+                    cleanup.add(job::cancel);
                 }
             }
-            // Session teardown needs every worker joined before it can drain accepted GPU work.
-            boolean interrupted = false;
-            while (!executor.isTerminated()) {
-                try {
-                    executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
-                } catch (InterruptedException ignored) {
-                    interrupted = true;
-                }
-            }
-            if (interrupted) Thread.currentThread().interrupt();
+            cleanup.add(() -> join(executor));
+            new ResourceLifetime(cleanup.toArray(Runnable[]::new)).close();
         }
+    }
+
+    /** Session teardown joins workers before taking a stable snapshot of accepted GPU work. */
+    private static void join(ThreadPoolExecutor executor) {
+        boolean interrupted = false;
+        while (!executor.isTerminated()) {
+            try {
+                executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException ignored) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
     }
 
     private record CancellableJob(Runnable work, Runnable cancelled) implements Runnable {

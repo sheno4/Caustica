@@ -11,6 +11,41 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtWorkerPoolTest {
     @Test
+    void cancellationFailureStillCancelsRemainingJobsAndJoinsWorkers() throws Exception {
+        var workers = new RtWorkerPool(1);
+        var running = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var cancelled = new CountDownLatch(1);
+        var stopped = new CountDownLatch(1);
+        var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var expected = new IllegalStateException("cancellation failed");
+        workers.submit(() -> { running.countDown(); awaitUninterruptibly(release); });
+        assertTrue(running.await(2, TimeUnit.SECONDS));
+        workers.submit(() -> { }, () -> { throw expected; });
+        workers.submit(() -> { }, cancelled::countDown);
+        var shutdown = new Thread(() -> {
+            try { workers.shutdown(); }
+            catch (Throwable thrown) { failure.set(thrown); }
+            finally { stopped.countDown(); }
+        });
+        shutdown.setDaemon(true);
+        shutdown.start();
+        try {
+            assertTrue(cancelled.await(2, TimeUnit.SECONDS));
+            assertFalse(stopped.await(100, TimeUnit.MILLISECONDS));
+        } finally {
+            release.countDown();
+            shutdown.join(2_000L);
+        }
+        assertFalse(shutdown.isAlive());
+        org.junit.jupiter.api.Assertions.assertSame(expected, failure.get());
+        var restarted = new CountDownLatch(1);
+        workers.submit(restarted::countDown);
+        try { assertTrue(restarted.await(2, TimeUnit.SECONDS)); }
+        finally { workers.shutdown(); }
+    }
+
+    @Test
     void interruptedShutdownStillJoinsWorkersAndPreservesInterrupt() throws Exception {
         var workers = new RtWorkerPool(1);
         var running = new CountDownLatch(1);
