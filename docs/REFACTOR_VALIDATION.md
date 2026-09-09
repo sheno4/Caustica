@@ -1132,3 +1132,9 @@ Evidence: tmp/aesthetic-integrated-5ac7afdd-check.log and tmp/aesthetic-integrat
 SceneEnvironmentContributionChannel now calls SceneDirectory.settleFrameUses directly. Removed the duplicate drain overload whose environment-channel argument was unused. Environment invalidation still removes its selection before draining published frame uses; mesh draining still waits for that channel's pending preparations. Program and pass drain methods retain their channel arguments because they inspect channel-specific work.
 
 The engine check passed in 2 seconds (13 tasks, 3 executed), with 13 suites and 91 tests reporting zero failures, errors or skips. Evidence: tmp/aesthetic-environment-drain-check.log and the engine XML reports. git diff --check passed. This removes redundant lifecycle delegation without changing the operation performed; no new GPU or computer-use validation is claimed.
+
+## Contribution presence determines teardown hooks (2026-09-09)
+
+Removed the invokeContributionHooks boolean threaded through EngineRenderSession teardown. A failed factory already leaves its accepted scope with no contribution object; stop and close now check that existing representation directly. The record documents why the contribution can be absent. All scopes still cross quiesce, invalidate, drain and close in the same global phases, with contribution stop and close callbacks between the same phase boundaries.
+
+The engine check passed in 2 seconds (13 tasks, 2 executed). All six EngineRenderSessionTest cases pass, including failed-factory scope cleanup without contribution callbacks, global teardown ordering, registration removal and failure reporting without skipping subsequent cleanup. Evidence: tmp/aesthetic-contribution-hook-presence-check.log and the engine test reports. git diff --check passed. No new tests mirroring the implementation, downstream build or live GPU repeat were needed for this private control-flow simplification.

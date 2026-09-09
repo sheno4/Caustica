@@ -51,7 +51,7 @@ public final class EngineRenderSession implements AutoCloseable {
                 removed.add(entry.getValue());
                 return true;
             });
-            teardown(removed, true);
+            teardown(removed);
 
             for (EngineRenderSessionChannel.Registration registration : desired) {
                 if (attempted.add(registration)) {
@@ -78,12 +78,12 @@ public final class EngineRenderSession implements AutoCloseable {
         channel.detach(this);
         closing = new ArrayList<>(active.values());
         active.clear();
-        quiesceAndInvalidate(closing, true);
+        quiesceAndInvalidate(closing);
     }
 
     void finishClose() {
         if (!closed) beginClose();
-        drainAndClose(closing, true);
+        drainAndClose(closing);
         closing = List.of();
     }
 
@@ -102,25 +102,24 @@ public final class EngineRenderSession implements AutoCloseable {
             contribution = java.util.Objects.requireNonNull(
                     registration.factory().open(scope.context()), "session factory returned null");
         } catch (Throwable failure) {
-            teardown(List.of(new ActiveContribution(owner, scope, null)), false);
+            teardown(List.of(new ActiveContribution(owner, scope, null)));
             report(owner, SessionFailure.Stage.OPEN_CONTRIBUTION, failure);
             return;
         }
         active.put(registration, new ActiveContribution(owner, scope, contribution));
     }
 
-    private void teardown(List<ActiveContribution> contributions, boolean invokeContributionHooks) {
-        quiesceAndInvalidate(contributions, invokeContributionHooks);
-        drainAndClose(contributions, invokeContributionHooks);
+    private void teardown(List<ActiveContribution> contributions) {
+        quiesceAndInvalidate(contributions);
+        drainAndClose(contributions);
     }
 
-    private void quiesceAndInvalidate(List<ActiveContribution> contributions,
-                                      boolean invokeContributionHooks) {
+    private void quiesceAndInvalidate(List<ActiveContribution> contributions) {
         for (ActiveContribution contribution : contributions) {
             invoke(contribution, SessionFailure.Stage.QUIESCE, contribution.scope::quiesce);
         }
-        if (invokeContributionHooks) {
-            for (ActiveContribution contribution : contributions) {
+        for (ActiveContribution contribution : contributions) {
+            if (contribution.contribution != null) {
                 invoke(contribution, SessionFailure.Stage.STOP_CONTRIBUTION, contribution.contribution::stop);
             }
         }
@@ -129,13 +128,12 @@ public final class EngineRenderSession implements AutoCloseable {
         }
     }
 
-    private void drainAndClose(List<ActiveContribution> contributions,
-                               boolean invokeContributionHooks) {
+    private void drainAndClose(List<ActiveContribution> contributions) {
         for (ActiveContribution contribution : contributions) {
             invoke(contribution, SessionFailure.Stage.DRAIN, contribution.scope::drain);
         }
-        if (invokeContributionHooks) {
-            for (ActiveContribution contribution : contributions) {
+        for (ActiveContribution contribution : contributions) {
+            if (contribution.contribution != null) {
                 invoke(contribution, SessionFailure.Stage.CLOSE_CONTRIBUTION, contribution.contribution::close);
             }
         }
@@ -160,6 +158,7 @@ public final class EngineRenderSession implements AutoCloseable {
         if (closed) throw new IllegalStateException("render session is closed");
     }
 
+    /** The contribution is absent when factory opening fails after the scope was accepted. */
     private record ActiveContribution(ContributionOwner owner, ContributionScope scope,
                                       RenderSessionContribution contribution) {
     }
