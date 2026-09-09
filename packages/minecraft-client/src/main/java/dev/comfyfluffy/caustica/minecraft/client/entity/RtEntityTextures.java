@@ -26,24 +26,19 @@ import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.resources.Identifier;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
  * Resolves Minecraft textures to stable source-local references and borrowed Vulkan image views.
  *
- * <p>The view is obtained through the <b>public</b> {@code RenderType.prepare()} → {@link
- * PreparedRenderType#textures()} API (a list of {@code Texture(name, GpuTextureView, sampler)}), keyed by
- * the material sampler named {@code "Sampler0"} ({@code "Sampler1"}/{@code "Sampler2"} are auxiliary
- * bindings). Weak render-type keys retain cached bindings while each render type remains in use.
+ * <p>Prepared render types supply image views and sampler state. Sampler0 takes precedence over
+ * other non-auxiliary bindings; Sampler1 and Sampler2 are excluded.
  */
 public final class RtEntityTextures implements EntityTextureResolver {
 
-    // RenderType identity → resolved primary image-view handle. WEAK: some render types are rebuilt
-    // every frame with a fresh identity (e.g. the charged-creeper energy-swirl layer, whose scrolling
-    // texture transform makes RenderTypes.energySwirl() allocate a new RenderType each frame). A weak map
-    // lets those dead identities be collected instead of accumulating; stable singletons (zombie.png, …)
-    // stay cached and skip the costly RenderType.prepare().
+    // Weak keys let transient render types be collected while stable types reuse their prepared bindings.
     private final Map<RenderType, CapturedBinding> bindingCache = new WeakHashMap<>();
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
     // Minecraft sampler state is immutable; snapshots do not retain the source GPU object.
@@ -53,9 +48,6 @@ public final class RtEntityTextures implements EntityTextureResolver {
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons).
     private static final Identifier WHITE_LOCATION = Identifier.fromNamespaceAndPath("caustica", "rt_white");
     private boolean whiteRegistered;
-
-    public RtEntityTextures() {
-    }
 
     /** Resolve and contribute the stable logical texture used by a render type. */
     public MinecraftEntityMesh.Texture contribute(RenderType renderType) {
@@ -149,18 +141,7 @@ public final class RtEntityTextures implements EntityTextureResolver {
         }
         CapturedBinding handle = null;
         try {
-            PreparedRenderType prepared = renderType.prepare();
-            PreparedRenderType.Texture chosen = null;
-            for (PreparedRenderType.Texture texture : prepared.textures()) {
-                String name = texture.name();
-                if ("Sampler0".equals(name)) {
-                    chosen = texture;
-                    break;
-                }
-                if (chosen == null && !"Sampler1".equals(name) && !"Sampler2".equals(name)) {
-                    chosen = texture;
-                }
-            }
+            PreparedRenderType.Texture chosen = primaryTexture(renderType.prepare().textures());
             if (chosen != null) {
                 VulkanGpuTextureView view = vkView(chosen.textureView());
                 if (view != null && chosen.sampler() != null) {
@@ -175,6 +156,16 @@ public final class RtEntityTextures implements EntityTextureResolver {
         }
         bindingCache.put(renderType, handle);
         return handle;
+    }
+
+    private static PreparedRenderType.Texture primaryTexture(List<PreparedRenderType.Texture> textures) {
+        PreparedRenderType.Texture fallback = null;
+        for (var texture : textures) {
+            String name = texture.name();
+            if ("Sampler0".equals(name)) return texture;
+            if (fallback == null && !"Sampler1".equals(name) && !"Sampler2".equals(name)) fallback = texture;
+        }
+        return fallback;
     }
 
     MinecraftTextureSampler sampler(GpuSampler sampler) {

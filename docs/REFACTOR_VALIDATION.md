@@ -1941,3 +1941,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Extracted CPU primitive-record packing, indexed tangent-basis calculation, and descriptor-value records into `MinecraftEntityPrimitives`. The Vulkan uploader passes plain descriptor maps to the packer and retains responsibility for allocations, flushing, texture leases, and shared resource ownership.
 - Preserved indexed reads, floating-point operation order, generated shader-record writes, record offsets, and destination cursor advancement. Updated existing tests to call the extracted implementation.
 - Validation: `:packages:minecraft-rendering:check :packages:minecraft-client:test` passed in 12 seconds; all 14 Vulkan entity uploader tests passed. Evidence: `tmp/aesthetic-entity-primitive-packing-check.log`. No new live entity capture or performance measurement was performed; no performance improvement is claimed.
+
+### Isolate entity primary-texture selection
+
+- Reviewed the remaining entity uploader allocation/ownership assembly and the texture resolver/sampler boundary. Kept the resource resolver interfaces because they express retained host-image and sampler contracts.
+- Extracted prepared-texture selection from `RtEntityTextures.resolveBinding`: Sampler0 wins; otherwise the first binding other than Sampler1/Sampler2 remains the fallback. Removed the redundant empty constructor and shortened cache documentation to current lifetime invariants.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-entity-texture-selection-check.log`). Existing texture tests cover material selection and sampler snapshots, not a live prepared-render-type binding capture; selection equivalence was reviewed directly.
