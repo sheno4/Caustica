@@ -148,7 +148,7 @@ public final class RtAccel {
         GpuBuffer backing = ctx.createAsyncBuffer(size, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
                 false, debugLabel + " backing");
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            return createBlasOn(ctx, stack, backing, size, debugLabel);
+            return createOn(ctx, stack, backing, size, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, debugLabel);
         } catch (Throwable failure) {
             backing.destroy();
             throw failure;
@@ -284,7 +284,8 @@ public final class RtAccel {
             long scratchSize = operation.mode() == BlasOperationMode.UPDATE
                     ? sizes.updateScratchSize() : sizes.buildScratchSize();
             scratch = createScratchBuffer(ctx, scratchSize, debugLabel + " scratch");
-            accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), debugLabel);
+            accel = createOn(ctx, stack, backing, sizes.accelerationStructureSize(),
+                    VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, debugLabel);
             return new PersistentBuild(accel, scratch, vertexAddr, indexAddr, debugLabel, operation);
         } catch (Throwable failure) {
             if (accel != null) accel.destroy();
@@ -302,11 +303,12 @@ public final class RtAccel {
                         : VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
     }
 
-    private static RtAccel createBlasOn(VulkanDeviceContext ctx, MemoryStack stack, GpuBuffer backing, long accelSize,
-                                        String label) {
+    /** Takes ownership of backing only on success; failure releases only the newly created handle. */
+    static RtAccel createOn(VulkanDeviceContext ctx, MemoryStack stack, GpuBuffer backing, long accelSize,
+                            int type, String label) {
         VkDevice vk = ctx.vk();
         VkAccelerationStructureCreateInfoKHR ci = VkAccelerationStructureCreateInfoKHR.calloc(stack).sType$Default()
-                .buffer(backing.handle()).offset(0).size(accelSize).type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
+                .buffer(backing.handle()).offset(0).size(accelSize).type(type);
         java.nio.LongBuffer pAs = stack.mallocLong(1);
         VulkanDeviceContext.check(vkCreateAccelerationStructureKHR(vk, ci, null, pAs), "vkCreateAccelerationStructureKHR");
         long handle = pAs.get(0);
@@ -318,7 +320,7 @@ public final class RtAccel {
                     vkGetAccelerationStructureDeviceAddressKHR(vk, addrInfo));
             return new RtAccel(vk, handle, deviceAddress, backing);
         } catch (Throwable t) {
-            vkDestroyAccelerationStructureKHR(vk, handle, null);
+            ResourceLifetime.closeAfterFailure(t, () -> vkDestroyAccelerationStructureKHR(vk, handle, null));
             throw t;
         }
     }

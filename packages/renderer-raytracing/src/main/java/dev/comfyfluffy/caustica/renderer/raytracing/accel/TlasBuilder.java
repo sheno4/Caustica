@@ -14,8 +14,6 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildGeometryInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildRangeInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureBuildSizesInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -33,10 +31,7 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_ST
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_OPAQUE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.vkCreateAccelerationStructureKHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.vkDestroyAccelerationStructureKHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructureDeviceAddressKHR;
 
 /** Builds top-level acceleration structures whose storage is retained through preparation and every reader. */
 public final class TlasBuilder {
@@ -168,7 +163,6 @@ public final class TlasBuilder {
         String label = "frame TLAS (" + capacity + " instances)";
         Slot slot = new Slot(capacity);
         GpuBuffer backing = null;
-        long handle = 0;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             slot.instanceBuffer = ctx.createAlignedBuffer(
                     (long) VkAccelerationStructureInstanceKHR.SIZEOF * Math.max(1, capacity),
@@ -183,28 +177,18 @@ public final class TlasBuilder {
 
             backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, label + " backing");
-            VkAccelerationStructureCreateInfoKHR createInfo = VkAccelerationStructureCreateInfoKHR.calloc(stack)
-                    .sType$Default().buffer(backing.handle()).offset(0).size(sizes.accelerationStructureSize())
-                    .type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
-            java.nio.LongBuffer accelerationStructure = stack.mallocLong(1);
-            VulkanDeviceContext.check(vkCreateAccelerationStructureKHR(vk, createInfo, null, accelerationStructure),
-                    "vkCreateAccelerationStructureKHR");
-            handle = accelerationStructure.get(0);
-            RtDebugLabels.nameAccelerationStructure(ctx, handle, label);
-            VkAccelerationStructureDeviceAddressInfoKHR addressInfo =
-                    VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack).sType$Default()
-                            .accelerationStructure(handle);
-            slot.accel = new RtAccel(vk, handle,
-                    new VulkanDeviceAddress(vkGetAccelerationStructureDeviceAddressKHR(vk, addressInfo)), backing);
+            slot.accel = RtAccel.createOn(ctx, stack, backing, sizes.accelerationStructureSize(),
+                    VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, label);
             slot.scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
         } catch (RuntimeException | Error failure) {
-            if (slot.scratch != null) slot.scratch.destroy();
-            if (slot.accel != null) slot.accel.destroy();
-            else {
-                if (handle != 0) vkDestroyAccelerationStructureKHR(vk, handle, null);
-                if (backing != null) backing.destroy();
-            }
-            if (slot.instanceBuffer != null) slot.instanceBuffer.destroy();
+            GpuBuffer allocatedBacking = backing;
+            ResourceLifetime.closeAfterFailure(failure,
+                    () -> { if (slot.scratch != null) slot.scratch.destroy(); },
+                    () -> {
+                        if (slot.accel != null) slot.accel.destroy();
+                        else if (allocatedBacking != null) allocatedBacking.destroy();
+                    },
+                    () -> { if (slot.instanceBuffer != null) slot.instanceBuffer.destroy(); });
             throw failure;
         }
         return slot;
