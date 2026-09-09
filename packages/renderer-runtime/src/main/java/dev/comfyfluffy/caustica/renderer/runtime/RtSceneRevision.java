@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend;
 import dev.comfyfluffy.caustica.support.SharedResource;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 
 import java.util.List;
 
@@ -26,25 +27,20 @@ record RtSceneRevision(SharedResource<RtProgramBackend.Published> program,
                     request.program() == null ? null : request.program().retain(), scenes, trace,
                     request.publicationCutoff()), RtSceneRevision::close);
         } catch (Throwable failure) {
-            try {
-                if (trace != null) trace.close();
-            } finally {
-                scenes.close();
-            }
+            var preparedTrace = trace;
+            ResourceLifetime.closeAfterFailure(failure, () -> {
+                if (preparedTrace != null) preparedTrace.close();
+            }, scenes::close);
             throw failure;
         }
     }
 
     @Override
     public void close() {
-        try {
+        new ResourceLifetime(() -> {
             if (traceScenes != null) traceScenes.close();
-        } finally {
-            try {
-                scenes.close();
-            } finally {
-                if (program != null) program.close();
-            }
-        }
+        }, scenes::close, () -> {
+            if (program != null) program.close();
+        }).close();
     }
 }

@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
 import dev.comfyfluffy.caustica.support.SharedResource;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -20,7 +21,7 @@ record RtSceneRequest(SharedResource<RtProgramBackend.Published> program,
             long cutoff = publicationCutoff.getAsLong();
             return new RtSceneRequest(program, scenes.get(), cutoff, origin, metersPerSceneUnit);
         } catch (Throwable failure) {
-            if (program != null) program.close();
+            if (program != null) ResourceLifetime.closeAfterFailure(failure, program::close);
             throw failure;
         }
     }
@@ -31,8 +32,9 @@ record RtSceneRequest(SharedResource<RtProgramBackend.Published> program,
     }
 
     @Override public void close() {
-        try { scenes.close(); }
-        finally { if (program != null) program.close(); }
+        new ResourceLifetime(scenes::close, () -> {
+            if (program != null) program.close();
+        }).close();
     }
 
     // Shared reference identities compare revisions without traversing their scene contents.
