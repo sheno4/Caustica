@@ -93,19 +93,18 @@ final class FrameGeneration {
         }
         int format = hdrBackbuffer
                 ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
-        if (!ensureFeature(context, swapWidth, swapHeight,
+        if (!ensureFeature(swapWidth, swapHeight,
                 frame.renderWidth(), frame.renderHeight(), format)) {
             throw new IllegalStateException("DLSSG feature not ready (ensureFeature failed)");
         }
-        ensureInterpolationImage(context, swapWidth, swapHeight, format);
+        ensureInterpolationImage(swapWidth, swapHeight, format);
         matrixScratch.set(frame.currentViewProjection()).invert();
         clipToPrevious.set(frame.previousViewProjection()).mul(matrixScratch);
         matrixScratch.set(frame.previousViewProjection()).invert();
         previousToClip.set(frame.currentViewProjection()).mul(matrixScratch);
         GpuImage hudless = hdrBackbuffer ? hdrHudlessImage : hudlessImage;
         boolean hudlessReady = hudless != null && hudless.width() == swapWidth && hudless.height() == swapHeight;
-        int hudlessFormat = hdrBackbuffer
-                ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
+        // Presentation may have consumed the populated flag; interpolation still samples that frame's UI texture.
         boolean uiReady = ui.width() == swapWidth && ui.height() == swapHeight
                 && ui.colorView() != 0L && ui.colorImage() != 0L;
 
@@ -120,7 +119,7 @@ final class FrameGeneration {
                     frame.depth().view(), frame.depth().image(), VK10.VK_FORMAT_R32_SFLOAT,
                     frame.motion().view(), frame.motion().image(), VK10.VK_FORMAT_R16G16_SFLOAT,
                     hudlessReady ? hudless.view() : 0L, hudlessReady ? hudless.image() : 0L,
-                    hudlessReady ? hudlessFormat : 0,
+                    hudlessReady ? format : 0,
                     uiReady ? ui.colorView() : 0L, uiReady ? ui.colorImage() : 0L,
                     uiReady ? VK10.VK_FORMAT_R8G8B8A8_UNORM : 0,
                     interpolationImage.view(), interpolationImage.image(), format,
@@ -137,7 +136,7 @@ final class FrameGeneration {
         return interpolationImage;
     }
 
-    private boolean ensureFeature(VulkanDeviceContext context, int width, int height,
+    private boolean ensureFeature(int width, int height,
             int renderWidth, int renderHeight, int format) {
         if (backend.featureReadyFor(width, height, renderWidth, renderHeight, format)) {
             return true;
@@ -149,7 +148,7 @@ final class FrameGeneration {
         return backend.featureReadyFor(width, height, renderWidth, renderHeight, format);
     }
 
-    private void ensureInterpolationImage(VulkanDeviceContext context, int width, int height, int format) {
+    private void ensureInterpolationImage(int width, int height, int format) {
         if (interpolationImage != null && interpolationImage.width() == width
                 && interpolationImage.height() == height && interpolationImage.format() == format) {
             return;
