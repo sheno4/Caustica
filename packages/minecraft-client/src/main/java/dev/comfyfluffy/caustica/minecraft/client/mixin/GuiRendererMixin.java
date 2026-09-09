@@ -9,14 +9,10 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 
 /**
- * Redirect the vanilla GUI/HUD into the active RT session's transparent overlay target. In SDR the
- * composite-back reproduces vanilla, and {@code WorldOverlayPass}'s world-space overlay composite runs at
- * that same seam. {@code GuiRenderer.draw} fetches the
- * destination via {@code gameRenderer.mainRenderTarget()} once and uses it for every GUI draw range (and the
- * after-blur depth clear), so redirecting that single expression routes all GUI rendering into the overlay.
- * The overlay is composited back over the world after {@code GuiRenderer.render} returns (see {@code
- * GameRendererMixin}). Blur is unaffected —
- * {@code GameRenderer.processBlurEffect} operates on the real main target.
+ * Routes GUI draw ranges and their after-blur depth clear into the shared RT overlay. The draw method
+ * fetches its destination once, so this expression also keeps all ranges on the same target.
+ * GameRendererMixin composites the overlay after GUI rendering; the world's blur still operates on
+ * the real main target through GameRenderer.processBlurEffect.
  */
 @Mixin(GuiRenderer.class)
 public abstract class GuiRendererMixin {
