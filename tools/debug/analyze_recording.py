@@ -31,7 +31,7 @@ def milliseconds(value):
     if isinstance(value, (int, float)):
         return value / 1e6
     # JDK jfr print serializes @Timespan fields as ISO-8601 durations.
-    match = re.fullmatch(r"PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?", value)
+    match = re.fullmatch(r"PT(?:(-?\d+(?:\.\d+)?)H)?(?:(-?\d+(?:\.\d+)?)M)?(?:(-?\d+(?:\.\d+)?)S)?", value)
     if not match:
         raise ValueError(f"Unsupported JFR duration: {value}")
     hours, minutes, seconds = (float(part or 0) for part in match.groups())
@@ -50,12 +50,15 @@ def analyze(events):
         if "counter" in values:
             group += "." + values["counter"]
         for key, value in values.items():
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and key not in {
+            if key in {"elapsedNanos", "totalNanos", "durationNanos", "threadCpuNanos", "cpuNanos"}:
+                duration = milliseconds(value)
+                # Unavailable CPU clocks use -1; retain the sample count without timing it.
+                fields[group + "." + key.removesuffix("Nanos") + "Ms"].append(
+                    duration if duration >= 0 else math.nan)
+            elif isinstance(value, (int, float)) and not isinstance(value, bool) and key not in {
                 "frameId", "observedFrameId", "sampleId", "extractionFrameId", "resetSequence"
             } and not key.endswith("Nanos"):
                 fields[group + "." + key].append(value)
-            elif key in {"elapsedNanos", "totalNanos", "durationNanos"}:
-                fields[group + "." + key.removesuffix("Nanos") + "Ms"].append(milliseconds(value))
         if name == "Exposure":
             exposures.append(values)
     exposures.sort(key=lambda item: item["frameId"])

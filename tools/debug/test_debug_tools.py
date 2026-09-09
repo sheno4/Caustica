@@ -57,6 +57,23 @@ class DebugToolsTest(unittest.TestCase):
         self.assertEqual(milliseconds("PT0.0125S"), 12.5)
         self.assertEqual(milliseconds(12500000), 12.5)
 
+    def test_cpu_durations_are_summarized_without_timestamps_or_unavailable_samples(self):
+        events = [{"type": "dev.comfyfluffy.caustica." + name, "values": values}
+                  for name, values in [
+                      ("Frame", {"threadCpuNanos": "PT0.002S", "startedNanos": 987654321}),
+                      ("Frame", {"threadCpuNanos": "PT-0.000000001S"}),
+                      ("TerrainPublication", {"cpuNanos": 3000000}),
+                      ("TerrainPublication", {"cpuNanos": -1}),
+                      ("EntityMeshUpload", {"cpuNanos": "PT0.004S", "queuedNanos": 123456789}),
+                  ]]
+        fields = analyze(events)["fields"]
+        self.assertEqual(set(fields), {"Frame.threadCpuMs", "TerrainPublication.cpuMs", "EntityMeshUpload.cpuMs"})
+        for field, expected in [("Frame.threadCpuMs", 2), ("TerrainPublication.cpuMs", 3)]:
+            self.assertEqual(fields[field]["samples"], 2)
+            self.assertEqual(fields[field]["finiteSamples"], 1)
+            self.assertEqual(fields[field]["mean"], expected)
+        self.assertEqual(fields["EntityMeshUpload.cpuMs"]["mean"], 4)
+
     def test_client_waits_for_job_completion(self):
         with tempfile.TemporaryDirectory() as directory:
             session = Path(directory) / "session.json"
