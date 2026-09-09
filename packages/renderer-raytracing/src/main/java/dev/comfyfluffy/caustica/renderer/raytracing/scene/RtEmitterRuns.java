@@ -45,11 +45,7 @@ final class RtEmitterRuns {
             dense[index] = value;
         }
         if (changed) {
-            int count = 0;
-            for (int value : dense) if (value >= 0) count++;
-            linked = new int[count];
-            int index = 0;
-            for (int value : dense) if (value >= 0) linked[index++] = value;
+            linked = Arrays.stream(dense).filter(value -> value >= 0).toArray();
             generation = new Object();
         }
         this.revision = revision;
