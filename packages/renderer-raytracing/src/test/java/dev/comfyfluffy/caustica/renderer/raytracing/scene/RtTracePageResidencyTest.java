@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
-import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -28,8 +27,8 @@ final class RtTracePageResidencyTest {
         var batchResidency = slot.batch(batch, batch);
         var page = slot.page(range, batchResidency);
         Object identity = new Object(), pipeline = new Object(), lights = new Object();
-        batchResidency.written(SceneOrigin.ZERO, pipeline, lights, slot.instanceAssignments);
-        page.geometryWritten(identity, 0, SceneOrigin.ZERO, 0x1000, 23);
+        batchResidency.written(pipeline, lights, slot.instanceAssignments);
+        page.geometryWritten(identity, 0, 0x1000, 23);
         page.hitsWritten(identity, 0, pipeline);
         page.emittersWritten(range, 0, lights);
         var positions = new MeshBuild.Stream(new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x1000), 36),
@@ -43,10 +42,10 @@ final class RtTracePageResidencyTest {
                 GeometryTransform.translation(0, 0, 0), 0))));
         assertSame(batchResidency, slot.batch(batch, batch));
         assertSame(page, slot.page(range, batchResidency));
-        assertFalse(batchResidency.hasGeometry(SceneOrigin.ZERO, pipeline, slot.instanceAssignments));
+        assertFalse(batchResidency.hasGeometry(pipeline, slot.instanceAssignments));
         assertTrue(batchResidency.hasEmitters(lights));
-        assertTrue(page.hasGeometry(identity, 0, SceneOrigin.ZERO, 0x1000, 23));
-        assertFalse(page.hasGeometry(identity, 0, SceneOrigin.ZERO, 0x1000, 24));
+        assertTrue(page.hasGeometry(identity, 0, 0x1000, 23));
+        assertFalse(page.hasGeometry(identity, 0, 0x1000, 24));
         assertTrue(page.hasHits(identity, 0, pipeline));
         assertTrue(page.hasEmitters(range, 0, lights));
     }
@@ -54,19 +53,17 @@ final class RtTracePageResidencyTest {
     @Test void batchValidationSeparatesGeometryAndEmitterRevisions() {
         var batch = new RtRetainedSceneBackend.TraceBatch(new RtRetainedSceneBackend.TracePagePlan[0]);
         var residency = new RtRetainedSceneBackend.TraceBatchResidency(batch);
-        var origin = new SceneOrigin(0, 0, 0);
         Object pipeline = new Object(), lights = new Object();
-        assertFalse(residency.hasGeometry(origin, pipeline, 1));
+        assertFalse(residency.hasGeometry(pipeline, 1));
         assertFalse(residency.hasEmitters(lights));
-        residency.written(origin, pipeline, lights, 1);
-        assertTrue(residency.hasGeometry(new SceneOrigin(0, 0, 0), pipeline, 1));
+        residency.written(pipeline, lights, 1);
+        assertTrue(residency.hasGeometry(pipeline, 1));
         assertTrue(residency.hasEmitters(lights));
-        assertFalse(residency.hasGeometry(new SceneOrigin(1, 0, 0), pipeline, 1));
-        assertFalse(residency.hasGeometry(origin, new Object(), 1));
-        assertFalse(residency.hasGeometry(origin, pipeline, 2));
+        assertFalse(residency.hasGeometry(new Object(), 1));
+        assertFalse(residency.hasGeometry(pipeline, 2));
         assertFalse(residency.hasEmitters(new Object()));
         var nextSlot = new RtRetainedSceneBackend.TraceBatchResidency(batch);
-        assertFalse(nextSlot.hasGeometry(origin, pipeline, 1));
+        assertFalse(nextSlot.hasGeometry(pipeline, 1));
         assertFalse(nextSlot.hasEmitters(lights));
     }
 
@@ -76,13 +73,12 @@ final class RtTracePageResidencyTest {
         Object page = new Object();
         Object pipeline = new Object();
         Object lightIndices = new Object();
-        var origin = new SceneOrigin(128, -64, 256);
 
-        residency.geometryWritten(page, 17, origin, 0x4000, 23);
+        residency.geometryWritten(page, 17, 0x4000, 23);
         residency.hitsWritten(page, 34, pipeline);
         residency.emittersWritten(page, 96, lightIndices);
 
-        assertTrue(residency.hasGeometry(page, 17, origin, 0x4000, 23));
+        assertTrue(residency.hasGeometry(page, 17, 0x4000, 23));
         assertTrue(residency.hasHits(page, 34, pipeline));
         assertTrue(residency.hasEmitters(page, 96, lightIndices));
     }
@@ -94,27 +90,24 @@ final class RtTracePageResidencyTest {
         Object pipeline = new Object();
         Object previousLightIndices = new Object();
         Object currentLightIndices = new Object();
-        var origin = SceneOrigin.ZERO;
-        residency.geometryWritten(page, 0, origin, 0x8000, 23);
+        residency.geometryWritten(page, 0, 0x8000, 23);
         residency.hitsWritten(page, 0, pipeline);
         residency.emittersWritten(page, 0, previousLightIndices);
 
-        assertTrue(residency.hasGeometry(page, 0, origin, 0x8000, 23));
+        assertTrue(residency.hasGeometry(page, 0, 0x8000, 23));
         assertTrue(residency.hasHits(page, 0, pipeline));
         assertFalse(residency.hasEmitters(page, 0, currentLightIndices));
     }
 
     @Test
-    void geometryTracksOriginAbsoluteOffsetAndEmitterAddress() {
+    void geometryTracksPageAbsoluteOffsetAndEmitterAddress() {
         var residency = new RtRetainedSceneBackend.TracePageResidency();
         Object page = new Object();
-        var origin = new SceneOrigin(128, 0, 128);
-        residency.geometryWritten(page, 12, origin, 0x1000, 23);
+        residency.geometryWritten(page, 12, 0x1000, 23);
 
-        assertFalse(residency.hasGeometry(new Object(), 12, origin, 0x1000, 23));
-        assertFalse(residency.hasGeometry(page, 13, origin, 0x1000, 23));
-        assertFalse(residency.hasGeometry(page, 12, new SceneOrigin(256, 0, 128), 0x1000, 23));
-        assertFalse(residency.hasGeometry(page, 12, origin, 0x2000, 23));
+        assertFalse(residency.hasGeometry(new Object(), 12, 0x1000, 23));
+        assertFalse(residency.hasGeometry(page, 13, 0x1000, 23));
+        assertFalse(residency.hasGeometry(page, 12, 0x2000, 23));
     }
 
     @Test

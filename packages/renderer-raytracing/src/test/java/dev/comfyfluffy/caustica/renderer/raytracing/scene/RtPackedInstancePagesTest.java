@@ -114,6 +114,31 @@ final class RtPackedInstancePagesTest {
         assertPacked(initial, ORIGIN, returned);
     }
 
+    @Test
+    void rebasingInstanceBytesPreservesResidentGeometryBindings() {
+        var table = new RtInstanceTablePlan.Builder().build(inputs(1, mesh()));
+        var packed = new RtPackedInstancePages();
+        var slot = new RtRetainedSceneBackend.TraceSlot(null, null, null, null, null);
+        slot.setInstanceTable(table);
+        var batch = new RtRetainedSceneBackend.TraceBatch(new RtRetainedSceneBackend.TracePagePlan[0]);
+        var residency = slot.batch(batch, batch);
+        Object pipeline = new Object(), lights = new Object(), identity = new Object();
+        var range = new RtStableTraceRanges().reserve(1, 0);
+        var page = slot.page(range, residency);
+        int instanceIndex = table.slot(1, 1);
+        residency.written(pipeline, lights, slot.instanceAssignments);
+        page.geometryWritten(identity, 0, 0, instanceIndex);
+        var before = packed.resolve(table, ORIGIN);
+
+        var after = packed.resolve(table, new SceneOrigin(30_000_016.25, 18, 19));
+        slot.setInstanceTable(table);
+
+        assertNotEquals(combine(before), combine(after));
+        assertTrue(residency.hasGeometry(pipeline, slot.instanceAssignments));
+        assertTrue(page.hasGeometry(identity, 0, 0, table.slot(1, 1)));
+        assertPacked(table, ORIGIN, before);
+    }
+
     private static void assertPacked(RtInstanceTablePlan table, SceneOrigin origin, List<ByteBuffer> pages) {
         ByteBuffer sequential = ByteBuffer.allocate(table.byteSize()).order(ByteOrder.LITTLE_ENDIAN);
         table.write(sequential, origin);

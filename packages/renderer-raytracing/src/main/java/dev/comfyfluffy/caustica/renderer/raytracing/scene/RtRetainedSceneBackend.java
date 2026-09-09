@@ -370,7 +370,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             activeEmitterBytes = Math.addExact(activeEmitterBytes, batch.emitterBytes);
             activeInstances = Math.addExact(activeInstances, batch.plans.length);
             var batchResidency = slot.batch(batch, pages);
-            boolean geometryResident = batchResidency.hasGeometry(origin, pipeline, slot.instanceAssignments);
+            boolean geometryResident = batchResidency.hasGeometry(pipeline, slot.instanceAssignments);
             boolean emittersResident = batch.emitterBytes == 0 || batchResidency.hasEmitters(lightIndexRevision);
             if (geometryResident && emittersResident) continue;
             checkedBatches.add(batchResidency);
@@ -382,7 +382,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 int flags = 0;
                 int instanceIndex = slot.instanceTable.slot(page.identity.current.identity(),
                         page.identity.current.placementOrdinal());
-                if (!geometryResident && !residency.hasGeometry(page.identity, page.geometryBase, origin,
+                if (!geometryResident && !residency.hasGeometry(page.identity, page.geometryBase,
                         emitterAddress, instanceIndex)) {
                     flags |= TracePageWork.GEOMETRY;
                     flushGeometry = true;
@@ -399,7 +399,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                         flags |= TracePageWork.EMITTERS;
                     }
                 }
-                if (flags != 0) writes.add(new TracePageWork(page, residency, slot, origin,
+                if (flags != 0) writes.add(new TracePageWork(page, residency, slot,
                         emitterBase, pipeline, lightIndexRevision, lightIndices, emitterPage, flags));
             }
         }
@@ -418,7 +418,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (flushEmitters) slot.emitters.flush(0L, emitterBytes);
         writes.forEach(TracePageWork::commit);
         for (var batch : checkedBatches)
-            batch.written(origin, pipeline, lightIndexRevision, slot.instanceAssignments);
+            batch.written(pipeline, lightIndexRevision, slot.instanceAssignments);
         slot.retainPages(pages);
         var emitterLayout = tracePlans.emitterLayout;
         if (cache.emitterLayout != emitterLayout) {
@@ -1046,22 +1046,19 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     static final class TraceBatchResidency {
         final TraceBatch batch;
         Object revision;
-        private SceneOrigin origin;
         private Object pipeline;
         private Object lightRevision;
         private long instanceAssignments;
 
         TraceBatchResidency(TraceBatch batch) { this.batch = batch; }
 
-        boolean hasGeometry(SceneOrigin origin, Object pipeline, long instanceAssignments) {
-            return origin.equals(this.origin) && this.pipeline == pipeline
-                    && this.instanceAssignments == instanceAssignments;
+        boolean hasGeometry(Object pipeline, long instanceAssignments) {
+            return this.pipeline == pipeline && this.instanceAssignments == instanceAssignments;
         }
 
         boolean hasEmitters(Object lightRevision) { return this.lightRevision == lightRevision; }
 
-        void written(SceneOrigin origin, Object pipeline, Object lightRevision, long instanceAssignments) {
-            this.origin = origin;
+        void written(Object pipeline, Object lightRevision, long instanceAssignments) {
             this.pipeline = pipeline;
             this.lightRevision = lightRevision;
             this.instanceAssignments = instanceAssignments;
@@ -1195,7 +1192,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final TracePagePlan page;
         final TracePageResidency residency;
         final TraceSlot slot;
-        final SceneOrigin origin;
         final int emitterBase;
         final RtPipeline pipeline;
         final LightIndexRevision lightIndexRevision;
@@ -1204,13 +1200,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final EmitterPageCache emitterPage;
         boolean emittersWritten;
 
-        TracePageWork(TracePagePlan page, TracePageResidency residency, TraceSlot slot, SceneOrigin origin,
+        TracePageWork(TracePagePlan page, TracePageResidency residency, TraceSlot slot,
                       int emitterBase, RtPipeline pipeline, LightIndexRevision lightIndexRevision,
                       Long2IntFunction lightIndices, EmitterPageCache emitterPage, int flags) {
             this.page = page;
             this.residency = residency;
             this.slot = slot;
-            this.origin = origin;
             this.emitterBase = emitterBase;
             this.pipeline = pipeline;
             this.lightIndexRevision = lightIndexRevision;
@@ -1242,7 +1237,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             long emitterAddress = page.emitterBytes == 0 ? 0L
                     : slot.emitters.deviceAddress().addBytes(emitterBase).value();
             if ((flags & GEOMETRY) != 0) {
-                residency.geometryWritten(page.identity, page.geometryBase, origin, emitterAddress,
+                residency.geometryWritten(page.identity, page.geometryBase, emitterAddress,
                         slot.instanceTable.slot(page.identity.current.identity(), page.identity.current.placementOrdinal()));
             }
             if ((flags & HITS) != 0) {
@@ -1260,12 +1255,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     }
 
-    /** Independent residency stamps keep light-index edits from invalidating geometry or the SBT. */
+    /**
+     * Independent stamps keep light-index edits from invalidating geometry or the SBT.
+     * Geometry stores instance indices; origin-relative transforms belong to the instance table.
+     */
     static final class TracePageResidency {
         private TraceBatchResidency batch;
         private Object geometryPage;
         private int geometryBase;
-        private SceneOrigin geometryOrigin;
         private long geometryEmitterAddress;
         private int geometryInstanceIndex;
         private Object hitPage;
@@ -1285,15 +1282,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             for (int index : linkedEmitters) target.set(index);
         }
 
-        boolean hasGeometry(Object page, int base, SceneOrigin origin, long emitterAddress, int instanceIndex) {
-            return geometryPage == page && geometryBase == base && origin.equals(geometryOrigin)
+        boolean hasGeometry(Object page, int base, long emitterAddress, int instanceIndex) {
+            return geometryPage == page && geometryBase == base
                     && geometryEmitterAddress == emitterAddress && geometryInstanceIndex == instanceIndex;
         }
 
-        void geometryWritten(Object page, int base, SceneOrigin origin, long emitterAddress, int instanceIndex) {
+        void geometryWritten(Object page, int base, long emitterAddress, int instanceIndex) {
             geometryPage = page;
             geometryBase = base;
-            geometryOrigin = origin;
             geometryEmitterAddress = emitterAddress;
             geometryInstanceIndex = instanceIndex;
         }
