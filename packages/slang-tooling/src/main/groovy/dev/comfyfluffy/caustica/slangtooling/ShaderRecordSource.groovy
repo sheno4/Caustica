@@ -150,11 +150,7 @@ final class ShaderRecordSource {
         def address = at(base, (binding.offset ?: 0) as int)
         switch (type.kind) {
             case "scalar":
-                def method = type.scalarType == "float32" ? "putFloat"
-                        : (type.scalarType in ["int32", "uint32"] ? "putInt"
-                        : (type.scalarType in ["int64", "uint64"] ? "putLong" : null))
-                if (method == null) throw new GradleException("unsupported scalar writer: ${type.scalarType}")
-                sb << "${indent}dst.${method}(${address}, ${expr});\n"
+                sb << "${indent}dst.put${javaType(type).capitalize()}(${address}, ${expr});\n"
                 return
             case "vector":
                 def method = type.elementType.scalarType == "float32" ? "putFloat" : "putInt"
@@ -194,11 +190,7 @@ final class ShaderRecordSource {
         if (type.kind != "scalar") {
             throw new GradleException("generated readers currently support scalar fields only: ${type}")
         }
-        def method = type.scalarType == "float32" ? "getFloat"
-                : (type.scalarType in ["int32", "uint32"] ? "getInt"
-                : (type.scalarType in ["int64", "uint64"] ? "getLong" : null))
-        if (method == null) throw new GradleException("unsupported scalar reader: ${type.scalarType}")
-        "src.${method}(${address})"
+        "src.get${javaType(type).capitalize()}(${address})"
     }
 
     static String generateJava(Map rootType, int byteSize, String packageName, String className,
