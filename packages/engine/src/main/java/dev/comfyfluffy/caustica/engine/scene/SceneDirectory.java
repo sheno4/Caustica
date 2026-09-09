@@ -506,33 +506,21 @@ public final class SceneDirectory {
     }
 
     private void validateBuild(ShaderDataType<?> type, MeshBuild<?> build) {
-        buildReferences(build).forEach(resources::validate);
+        resources.validate(build.positions().resource());
+        resources.validate(build.indices().resource());
         for (var geometry : build.geometries()) {
-            if (geometry.surface() != null) {
-                programs.validateSurface(geometry.surface().surface(),
-                        geometry.surface().bindingData(),
-                        type,
-                        !(geometry.surface().coverage() instanceof MeshBuild.CoveragePolicy.Opaque));
+            var surface = geometry.surface();
+            if (surface != null) {
+                resources.validate(surface.bindingData().resource());
+                programs.validateSurface(surface.surface(), surface.bindingData(), type,
+                        !(surface.coverage() instanceof MeshBuild.CoveragePolicy.Opaque));
             }
-            if (geometry.volume() != null) {
-                programs.validateVolume(geometry.volume().volume(), geometry.volume().bindingData(), type);
+            var volume = geometry.volume();
+            if (volume != null) {
+                resources.validate(volume.bindingData().resource());
+                programs.validateVolume(volume.volume(), volume.bindingData(), type);
             }
         }
-    }
-
-    private static List<ResourceOwner> buildReferences(MeshBuild<?> build) {
-        var references = new ArrayList<ResourceOwner>();
-        references.add(build.positions().resource());
-        references.add(build.indices().resource());
-        for (var geometry : build.geometries()) {
-            if (geometry.surface() != null) {
-                references.add(geometry.surface().bindingData().resource());
-            }
-            if (geometry.volume() != null) {
-                references.add(geometry.volume().bindingData().resource());
-            }
-        }
-        return references;
     }
 
     private SceneRef requireScene(SceneId id) {

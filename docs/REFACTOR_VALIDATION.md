@@ -1114,3 +1114,9 @@ This completes the service declaration/constructor check left indirect in the pr
 Removed the catch/rethrow around source-mesh retention that only closed a newly constructed, empty ResourceOwners collection. At that point no mesh inputs have been acquired; the collection has no external cleanup to perform. The subsequent failure handling still releases acquired inputs and the retained source claim. Preparation completion, cancellation and channel-drain behavior are unchanged.
 
 The engine check passed at exit zero, including all 25 SceneDirectoryTest cases with zero failures, errors or skips. Evidence: tmp/aesthetic-empty-mesh-cleanup-check.log. git diff --check passed. No new test mirroring the removed empty branch, full downstream build or live client was needed for this local cleanup simplification.
+
+## Single-pass mesh contract validation (2026-09-09)
+
+Removed buildReferences, which allocated a list of mesh stream and binding-resource references solely to validate them before a second geometry traversal. validateBuild now checks position/index resources directly and validates each surface/volume resource beside its shader contract in one traversal. These validators only inspect references and schemas; all validation still finishes before input ownership is captured or native preparation begins. A build with multiple independent invalid fields may report a different first error because resource and shader checks are now interleaved.
+
+The engine check passed at exit zero; git diff --check passed. Evidence: tmp/aesthetic-mesh-validation-check.log and the engine test reports. No measured preparation speedup, new GPU run or broader visual result is claimed from removing the temporary list and repeated traversal.
