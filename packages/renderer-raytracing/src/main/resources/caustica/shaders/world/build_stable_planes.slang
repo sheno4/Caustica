@@ -28,22 +28,23 @@ float3x3 branchReflection(float3 n) {
             -2.0 * n.z * n.x, -2.0 * n.z * n.y, 1.0 - 2.0 * n.z * n.z);
 }
 
+// Rotate the refracted endpoint's guide frame back into the incident image frame.
+float3x3 branchRefraction(float3 refractedDirection, float3 incidentDirection) {
+    float3 from = normalize(refractedDirection);
+    float3 v = cross(from, incidentDirection);
+    float c = dot(from, incidentDirection);
+    float3x3 skew = float3x3(0, -v.z, v.y, v.z, 0, -v.x, -v.y, v.x, 0);
+    return float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1) + skew + mul(skew, skew) / (1.0 + c);
+}
+
 StableBranch branchAdvance(StableBranch branch, WorldPayload hit, TraceLobes lobes, bool transmission) {
     float3 incidentDirection = branch.path.direction;
     float3 direction = transmission ? lobes.transmittedDirection : lobes.reflectedDirection;
     branch.path = traceAdvance(branch.path, hit, direction,
             transmission ? lobes.transmission : lobes.reflection,
             transmission && lobes.volumeTransmission);
-    float3x3 transform = branchReflection(hit.surface.shadingNormal);
-    if (transmission) {
-        // Rotate the refracted endpoint's guide frame back into the incident image frame.
-        float3 from = normalize(direction);
-        float3 to = incidentDirection;
-        float3 v = cross(from, to);
-        float c = dot(from, to);
-        float3x3 skew = float3x3(0, -v.z, v.y, v.z, 0, -v.x, -v.y, v.x, 0);
-        transform = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1) + skew + mul(skew, skew) / (1.0 + c);
-    }
+    float3x3 transform = transmission ? branchRefraction(direction, incidentDirection)
+            : branchReflection(hit.surface.shadingNormal);
     float3 movement = hit.previousPosition - hit.position;
     branch.motion += mul(branch.imageTransform, movement - mul(transform, movement));
     branch.imageTransform = mul(branch.imageTransform, transform);
@@ -112,7 +113,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             record.branchId = branch.identity;
             record.flags = (sky ? STABLE_PLANE_FLAG_SKY : STABLE_PLANE_FLAG_VALID)
                     | (branch.transmitted ? STABLE_PLANE_FLAG_TRANSMISSION : 0u)
-                    | (min(branch.path.depth, 255u) << 8u);
+                    | (min(branch.path.depth, STABLE_PLANE_DEPTH_MASK) << STABLE_PLANE_DEPTH_SHIFT);
             record.currentVirtualPosition = frame.camOffset + cameraDirection * branch.length;
             record.previousVirtualPosition = record.currentVirtualPosition + branch.motion
                     + (sky ? float3(0.0) : mul(branch.imageTransform, hit.previousPosition - hit.position));

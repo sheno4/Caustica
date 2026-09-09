@@ -6,6 +6,9 @@ public static const uint STABLE_PLANE_FLAG_VALID = 1u;
 public static const uint STABLE_PLANE_FLAG_SKY = 2u;
 public static const uint STABLE_PLANE_FLAG_DOMINANT = 4u;
 public static const uint STABLE_PLANE_FLAG_TRANSMISSION = 8u;
+// Flags bits 8 through 15 store the number of delta segments before the endpoint.
+public static const uint STABLE_PLANE_DEPTH_SHIFT = 8u;
+public static const uint STABLE_PLANE_DEPTH_MASK = 255u;
 
 // Plane-major records keep every denoiser endpoint in a directly consumable world-space form.
 public struct StablePlaneRecord {

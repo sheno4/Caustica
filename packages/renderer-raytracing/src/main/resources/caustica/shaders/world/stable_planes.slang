@@ -61,7 +61,8 @@ public void stablePlaneExportGuides(uint2 pixel, uint2 extent, WorldPush frame) 
             float4(specularEstimate, 1.0);
     worldFloat4StorageImage(worldBindings.resources.stablePlaneMetadataImage)[pixel] =
             float4(float(available) / 3.0, float(dominant) * 0.5,
-                    float((record.flags >> 8u) & 255u) / 9.0,
+                    float((record.flags >> STABLE_PLANE_DEPTH_SHIFT) & STABLE_PLANE_DEPTH_MASK)
+                            / float(STABLE_PLANE_MAX_DELTA_SEGMENTS),
                     (record.flags & STABLE_PLANE_FLAG_TRANSMISSION) != 0u ? 1.0 : 0.0);
 }
 
