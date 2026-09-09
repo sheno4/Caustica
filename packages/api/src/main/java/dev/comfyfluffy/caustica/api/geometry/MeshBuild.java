@@ -120,8 +120,9 @@ public record MeshBuild<N>(Stream positions,
         }
 
         /**
-         * Coverage is sampled as a Bernoulli event for radiance rays. Stable guide rays use
-         * {@code guideAlphaCutoff}, while shadow rays accumulate the uncovered fraction as transmittance.
+         * Coverage is sampled as a Bernoulli acceptance event for radiance and shadow rays.
+         * Guide and primary rays instead compare coverage with {@code guideAlphaCutoff}.
+         * Volume boundaries bypass coverage any-hit so their medium transitions remain ordered.
          */
         record Stochastic(float guideAlphaCutoff) implements CoveragePolicy {
             public Stochastic {

@@ -6,6 +6,7 @@ import radiance_any_hit_rahit;
 
 public void runShadowAnyHit<TComposition : IComposition>(inout WorldPayload payload,
         in BuiltInTriangleIntersectionAttributes attributes) {
+    // Coverage holes continue traversal; an accepted non-volume hit blocks in closest-hit.
     runRadianceAnyHit<TComposition>(payload, attributes);
 }
 
