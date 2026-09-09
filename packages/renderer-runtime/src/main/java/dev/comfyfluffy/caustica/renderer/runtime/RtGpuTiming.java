@@ -24,11 +24,9 @@ final class RtGpuTiming implements AutoCloseable {
     private static final EventType EVENT = EventType.getEventType(GpuStageEvent.class);
     private final VulkanDeviceContext context;
     private final ArrayDeque<Long> available = new ArrayDeque<>();
-    private boolean initialized;
+    private TimestampDomain timestamps;
     private boolean closed;
-    private int validBits;
-    private int queueFamily;
-    private float periodNanos;
+    private record TimestampDomain(int validBits, int queueFamily, float periodNanos) { }
 
     RtGpuTiming(VulkanDeviceContext context) {
         this.context = context;
@@ -41,20 +39,20 @@ final class RtGpuTiming implements AutoCloseable {
 
     private synchronized Stage beginEnabled(VkCommandBuffer command, long frameId, String label) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            if (!initialized) {
+            if (timestamps == null) {
                 var physical = context.vk().getPhysicalDevice();
                 var properties = VkPhysicalDeviceProperties.calloc(stack);
                 VK10.vkGetPhysicalDeviceProperties(physical, properties);
-                periodNanos = properties.limits().timestampPeriod();
+                float periodNanos = properties.limits().timestampPeriod();
                 var count = stack.mallocInt(1);
                 VK10.vkGetPhysicalDeviceQueueFamilyProperties(physical, count, null);
                 var queues = VkQueueFamilyProperties.calloc(count.get(0), stack);
                 VK10.vkGetPhysicalDeviceQueueFamilyProperties(physical, count, queues);
-                queueFamily = context.backend().graphicsQueue().familyIndex();
-                validBits = queues.get(queueFamily).timestampValidBits();
-                initialized = true;
+                int queueFamily = context.backend().graphicsQueue().familyIndex();
+                int validBits = queues.get(queueFamily).timestampValidBits();
+                timestamps = new TimestampDomain(validBits, queueFamily, periodNanos);
             }
-            if (validBits == 0) return null;
+            if (timestamps.validBits() == 0) return null;
             long pool;
             if (available.isEmpty()) {
                 var info = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
@@ -128,10 +126,10 @@ final class RtGpuTiming implements AutoCloseable {
                     event.stage = label;
                     event.startTicks = values.get(0);
                     event.endTicks = values.get(1);
-                    event.timestampValidBits = validBits;
-                    event.queueFamily = queueFamily;
-                    event.timestampPeriodNanos = periodNanos;
-                    event.elapsedNanos = Math.round(elapsedNanos(event.startTicks, event.endTicks, validBits, periodNanos));
+                    event.timestampValidBits = timestamps.validBits();
+                    event.queueFamily = timestamps.queueFamily();
+                    event.timestampPeriodNanos = timestamps.periodNanos();
+                    event.elapsedNanos = Math.round(elapsedNanos(event.startTicks, event.endTicks, timestamps.validBits(), timestamps.periodNanos()));
                     event.commit();
                 }
             } finally {
