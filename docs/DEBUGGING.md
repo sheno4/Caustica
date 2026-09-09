@@ -110,6 +110,8 @@ JFR timestamps describe event emission; explicit frame IDs and `System.nanoTime`
 
 PNG captures show the presented render target. Debug views are convenient visualizations; raw EXRs retain native-resolution float components without display mapping. Read each EXR's returned/embedded encoding and pre-exposure metadata before comparing values. Capture synchronizes GPU readback and perturbs frame timing.
 
+The debug service submits Minecraft's deferred encoder once before a raw-image bundle. The readback's device wait then includes the frame described by its metadata; waiting without that submit would cover only older GPU submissions.
+
 For raw inspection, run `uv run python tools/debug/inspect_buffer.py CAPTURE.exr --view normal --preview tmp/normals.png`. It reports finite ranges and normal statistics; preview scaling never changes the raw data. The normal view maps signed XYZ to RGB, and is not a color-managed beauty-image preview.
 
 Under the NRD temporal route, normal/roughness and NRD signal buffers contain the final plane 0 inputs after per-plane preparation. They do not contain every plane or original material texture values. NRD signal radiance uses the documented fixed scale in capture metadata, not the ordinary trace pre-exposure scale. Generic motion/depth/albedo remain trace guides.

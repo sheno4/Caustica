@@ -5,3 +5,5 @@
 - The SR diagnostic overlay has dark, poorly legible bars. Same-frame raw captures show the bars in reconstructed-color but not the denoised trace-color input, before Minecraft UI composition. Legibility remains unresolved after the indicator-axis and SR exposure corrections.
 
 See [refactor validation](REFACTOR_VALIDATION.md) for reproduction conditions, evidence, and the remaining interactive and visual checks.
+
+Raw captures before 65fdc6c2 could observe older submitted contents while reporting the current recorded frame serial. Their stage comparisons are nearby-image evidence, not exact current-frame proof. Current raw bundles submit the deferred host encoder before waiting and reading.
