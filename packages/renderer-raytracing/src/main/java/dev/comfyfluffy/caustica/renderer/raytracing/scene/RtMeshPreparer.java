@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.engine.scene.MeshPreparationBackend;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -105,8 +106,9 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
         }
 
         void releaseBuildResources() {
-            try { nativeBuild.scratch().destroy(); }
-            finally { if (query != null) query.close(); }
+            new ResourceLifetime(nativeBuild.scratch()::destroy, () -> {
+                if (query != null) query.close();
+            }).close();
         }
 
         void recordCompaction(org.lwjgl.vulkan.VkCommandBuffer command) {
