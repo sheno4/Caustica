@@ -47,6 +47,20 @@ CausticaSlangBlob* copy_string(const char* value)
     return value ? copy_bytes(value, std::strlen(value)) : nullptr;
 }
 
+void publish_exception(const char* message, CausticaSlangBlob** output) noexcept
+{
+    // Reporting a failure must not let another allocation failure cross the C ABI.
+    try
+    {
+        if (output)
+            *output = copy_string(message);
+    }
+    catch (...)
+    {
+        // The result code still reports failure when diagnostic allocation is unavailable.
+    }
+}
+
 CausticaSlangBlob* copy_slang_blob(slang::IBlob* blob)
 {
     return blob ? copy_bytes(blob->getBufferPointer(), blob->getBufferSize()) : nullptr;
@@ -239,14 +253,12 @@ int32_t caustica_slang_runtime_create(
     }
     catch (const std::bad_alloc&)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Out of memory while creating Slang runtime");
+        publish_exception("Out of memory while creating Slang runtime", out_diagnostics);
         return SLANG_E_OUT_OF_MEMORY;
     }
     catch (...)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Unexpected exception while creating Slang runtime");
+        publish_exception("Unexpected exception while creating Slang runtime", out_diagnostics);
         return SLANG_FAIL;
     }
 }
@@ -328,14 +340,12 @@ int32_t caustica_slang_session_create(
     }
     catch (const std::bad_alloc&)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Out of memory while creating Slang compilation session");
+        publish_exception("Out of memory while creating Slang compilation session", out_diagnostics);
         return SLANG_E_OUT_OF_MEMORY;
     }
     catch (...)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Unexpected exception while creating Slang compilation session");
+        publish_exception("Unexpected exception while creating Slang compilation session", out_diagnostics);
         return SLANG_FAIL;
     }
 }
@@ -409,14 +419,12 @@ int32_t caustica_slang_compile_entry_point(
     }
     catch (const std::bad_alloc&)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Out of memory while compiling Slang entry point");
+        publish_exception("Out of memory while compiling Slang entry point", out_diagnostics);
         return SLANG_E_OUT_OF_MEMORY;
     }
     catch (...)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Unexpected exception while compiling Slang entry point");
+        publish_exception("Unexpected exception while compiling Slang entry point", out_diagnostics);
         return SLANG_FAIL;
     }
 }
@@ -531,14 +539,12 @@ int32_t caustica_slang_compile_specialized_entry_point(
     }
     catch (const std::bad_alloc&)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Out of memory while compiling specialized Slang entry point");
+        publish_exception("Out of memory while compiling specialized Slang entry point", out_diagnostics);
         return SLANG_E_OUT_OF_MEMORY;
     }
     catch (...)
     {
-        if (out_diagnostics)
-            *out_diagnostics = copy_string("Unexpected exception while compiling specialized Slang entry point");
+        publish_exception("Unexpected exception while compiling specialized Slang entry point", out_diagnostics);
         return SLANG_FAIL;
     }
 }
