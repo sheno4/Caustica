@@ -64,27 +64,32 @@ public final class MinecraftFluidSurface {
             return 1.0F;
         }
 
-        float[] weightedHeight = new float[2];
+        WeightedHeight weightedHeight = new WeightedHeight();
         if (height1 > 0.0F || height2 > 0.0F) {
             float heightCorner = cellHeight(level, type, cornerPos);
             if (heightCorner >= 1.0F) {
                 return 1.0F;
             }
-            addWeightedHeight(weightedHeight, heightCorner);
+            weightedHeight.add(heightCorner);
         }
-        addWeightedHeight(weightedHeight, heightSelf);
-        addWeightedHeight(weightedHeight, height1);
-        addWeightedHeight(weightedHeight, height2);
-        return weightedHeight[0] / weightedHeight[1];
+        weightedHeight.add(heightSelf);
+        weightedHeight.add(height1);
+        weightedHeight.add(height2);
+        return weightedHeight.sum / weightedHeight.weight;
     }
 
-    private static void addWeightedHeight(float[] weightedHeight, float height) {
-        if (height >= 0.8F) {
-            weightedHeight[0] += height * 10.0F;
-            weightedHeight[1] += 10.0F;
-        } else if (height >= 0.0F) {
-            weightedHeight[0] += height;
-            weightedHeight[1]++;
+    private static final class WeightedHeight {
+        float sum;
+        float weight;
+
+        void add(float height) {
+            if (height >= 0.8F) {
+                sum += height * 10.0F;
+                weight += 10.0F;
+            } else if (height >= 0.0F) {
+                sum += height;
+                weight++;
+            }
         }
     }
 

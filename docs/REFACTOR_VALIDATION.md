@@ -1854,3 +1854,9 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-shar
 Read RtFluidMesher in full and began MinecraftFluidSurface through corner-height averaging. Removed redundant still/flowing sprite aliases in top-face UV generation; both branches now directly assign and use the sprite passed to material selection. Self-occlusion uses Shapes.block instead of constructing an equivalent unit box. Preserved flow-angle expressions, neighbor selection, face heights, UVs, winding and output sequencing.
 
 Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-fluid-sprite-selection-check.log. git diff --check passed. No new fluid visual capture or performance measurement was performed. Remaining shared fluid-surface helpers and whole-project coverage remain incomplete.
+
+## Fluid height accumulation uses named fields (2026-09-09)
+
+Completed reading MinecraftFluidSurface, including cell heights, weighted averaging and triangular camera containment. Replaced the anonymous float[2] accumulator with a private WeightedHeight containing sum and weight. Kept the exact corner/self/neighbor addition order, tenfold weighting for heights at least 0.8, exclusion of negative heights and full-height early returns. Surface interpolation and containment remain unchanged.
+
+Minecraft client tests and rendering checks passed. Inspected the MinecraftFluidSurfaceTest XML report. Evidence: tmp/aesthetic-fluid-weighted-height-check.log. No new live waterline test or allocation/performance measurement was performed. Whole-project source and runtime coverage remain incomplete.
