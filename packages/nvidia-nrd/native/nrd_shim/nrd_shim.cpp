@@ -124,6 +124,36 @@ void copyMatrix(float (&target)[16], const float (&source)[16]) {
     std::memcpy(target, source, sizeof(target));
 }
 
+nrd::CommonSettings commonSettings(const NrdShimCommonSettings& common, uint16_t width, uint16_t height) {
+    nrd::CommonSettings settings{};
+    copyMatrix(settings.worldToViewMatrix, common.worldToView);
+    copyMatrix(settings.worldToViewMatrixPrev, common.worldToViewPrevious);
+    copyMatrix(settings.viewToClipMatrix, common.viewToClip);
+    copyMatrix(settings.viewToClipMatrixPrev, common.viewToClipPrevious);
+    settings.cameraJitter[0] = common.jitterX;
+    settings.cameraJitter[1] = common.jitterY;
+    settings.cameraJitterPrev[0] = common.previousJitterX;
+    settings.cameraJitterPrev[1] = common.previousJitterY;
+    settings.motionVectorScale[0] = common.motionScaleX;
+    settings.motionVectorScale[1] = common.motionScaleY;
+    settings.motionVectorScale[2] = common.motionScaleZ;
+    settings.denoisingRange = common.denoisingRange;
+    settings.disocclusionThreshold = common.disocclusionThreshold;
+    settings.disocclusionThresholdAlternate = common.alternateDisocclusionThreshold;
+    settings.timeDeltaBetweenFrames = common.frameTimeMilliseconds;
+    settings.frameIndex = common.frameIndex;
+    settings.isMotionVectorInWorldSpace = (common.flags & 1u) != 0;
+    settings.isDisocclusionThresholdMixAvailable = (common.flags & 2u) != 0;
+    settings.enableValidation = (common.flags & 4u) != 0;
+    settings.accumulationMode = (common.flags & 8u) != 0
+            ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
+    // A backend owns one fixed extent, including all temporal history.
+    settings.resourceSize[0] = settings.resourceSizePrev[0] = settings.rectSize[0] = settings.rectSizePrev[0] = width;
+    settings.resourceSize[1] = settings.resourceSizePrev[1] = settings.rectSize[1] = settings.rectSizePrev[1] = height;
+
+    return settings;
+}
+
 nrd::Resource resource(const NrdShimImage& image, bool storage) {
     nrd::Resource result{};
     result.vk.image = (decltype(result.vk.image))image.image;
@@ -194,32 +224,7 @@ int32_t record(void* instance, uint64_t commandBuffer,
     }
     State& state = *static_cast<State*>(instance);
 
-    nrd::CommonSettings settings{};
-    copyMatrix(settings.worldToViewMatrix, common->worldToView);
-    copyMatrix(settings.worldToViewMatrixPrev, common->worldToViewPrevious);
-    copyMatrix(settings.viewToClipMatrix, common->viewToClip);
-    copyMatrix(settings.viewToClipMatrixPrev, common->viewToClipPrevious);
-    settings.cameraJitter[0] = common->jitterX;
-    settings.cameraJitter[1] = common->jitterY;
-    settings.cameraJitterPrev[0] = common->previousJitterX;
-    settings.cameraJitterPrev[1] = common->previousJitterY;
-    settings.motionVectorScale[0] = common->motionScaleX;
-    settings.motionVectorScale[1] = common->motionScaleY;
-    settings.motionVectorScale[2] = common->motionScaleZ;
-    settings.denoisingRange = common->denoisingRange;
-    settings.disocclusionThreshold = common->disocclusionThreshold;
-    settings.disocclusionThresholdAlternate = common->alternateDisocclusionThreshold;
-    settings.timeDeltaBetweenFrames = common->frameTimeMilliseconds;
-    settings.frameIndex = common->frameIndex;
-    settings.isMotionVectorInWorldSpace = (common->flags & 1u) != 0;
-    settings.isDisocclusionThresholdMixAvailable = (common->flags & 2u) != 0;
-    settings.enableValidation = (common->flags & 4u) != 0;
-    settings.accumulationMode = (common->flags & 8u) != 0
-            ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
-    // A backend owns one fixed extent, including all temporal history.
-    settings.resourceSize[0] = settings.resourceSizePrev[0] = settings.rectSize[0] = settings.rectSizePrev[0] = state.width;
-    settings.resourceSize[1] = settings.resourceSizePrev[1] = settings.rectSize[1] = settings.rectSizePrev[1] = state.height;
-
+    const auto settings = commonSettings(*common, state.width, state.height);
     state.integration.NewFrame();
     if (state.integration.SetCommonSettings(settings) != nrd::Result::SUCCESS) return fail("NRD common settings rejected");
 
