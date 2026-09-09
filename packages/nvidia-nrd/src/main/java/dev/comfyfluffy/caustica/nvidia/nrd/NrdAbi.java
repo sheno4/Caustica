@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserInputs;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
+/** Packs the fixed field order and byte offsets declared in nrd_shim.h. */
 final class NrdAbi {
     static final long CREATE_SIZE = 48;
     static final long COMMON_SIZE = 308;
@@ -37,7 +38,7 @@ final class NrdAbi {
         float[] scalars = {value.jitterX(), value.jitterY(), value.previousJitterX(), value.previousJitterY(),
                 value.motionScaleX(), value.motionScaleY(), value.motionScaleZ(), value.denoisingRange(),
                 value.disocclusionThreshold(), value.alternateDisocclusionThreshold(), value.frameTimeMilliseconds()};
-        for (int i = 0; i < scalars.length; i++) target.set(ValueLayout.JAVA_FLOAT, 256L + i * 4L, scalars[i]);
+        MemorySegment.copy(scalars, 0, target, ValueLayout.JAVA_FLOAT, 256, scalars.length);
         target.set(ValueLayout.JAVA_INT, 300, value.frameIndex());
         int flags = (value.motionInWorldSpace() ? 1 : 0)
                 | (frame.inputs().disocclusionThresholdMix().isPresent() ? 2 : 0)
