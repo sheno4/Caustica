@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -33,6 +34,10 @@ def main():
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--output", type=Path, default=Path("tmp/rt-lifecycle.json"))
     args = parser.parse_args()
+    if args.cycles < 1:
+        parser.error("cycles must be positive")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("timeout must be finite and positive")
     client = Client()
     initial = client.call("status")
     if not initial["ready"] or initial["paused"]:

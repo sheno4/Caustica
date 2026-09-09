@@ -1,4 +1,5 @@
 from contextlib import chdir
+from io import StringIO
 import json
 from pathlib import Path
 import tempfile
@@ -13,6 +14,19 @@ import measure
 
 
 class DebugToolsTest(unittest.TestCase):
+    def test_lifecycle_rejects_empty_runs_and_invalid_timeouts_before_client_access(self):
+        for arguments in (["--cycles", "0"], ["--cycles", "-1"],
+                          ["--timeout", "0"], ["--timeout", "-1"],
+                          ["--timeout", "nan"], ["--timeout", "inf"]):
+            with self.subTest(arguments=arguments), \
+                    patch("sys.argv", ["check_rt_lifecycle", *arguments]), \
+                    patch("sys.stderr", new_callable=StringIO), \
+                    patch.object(check_rt_lifecycle, "Client") as client:
+                with self.assertRaises(SystemExit) as caught:
+                    check_rt_lifecycle.main()
+                self.assertEqual(caught.exception.code, 2)
+                client.assert_not_called()
+
     def test_measurement_records_its_checkout_when_called_from_another_directory(self):
         checkout = Path(measure.__file__).resolve().parents[2]
         expected = subprocess.run(["git", "rev-parse", "HEAD"], cwd=checkout,
