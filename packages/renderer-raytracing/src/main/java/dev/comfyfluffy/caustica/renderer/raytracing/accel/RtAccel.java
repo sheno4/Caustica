@@ -150,7 +150,7 @@ public final class RtAccel {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             return createOn(ctx, stack, backing, size, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, debugLabel);
         } catch (Throwable failure) {
-            backing.destroy();
+            ResourceLifetime.closeAfterFailure(failure, backing::destroy);
             throw failure;
         }
     }
@@ -288,9 +288,15 @@ public final class RtAccel {
                     VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, debugLabel);
             return new PersistentBuild(accel, scratch, vertexAddr, indexAddr, debugLabel, operation);
         } catch (Throwable failure) {
-            if (accel != null) accel.destroy();
-            else if (backing != null) backing.destroy();
-            if (scratch != null) scratch.destroy();
+            RtAccel allocatedAccel = accel;
+            GpuBuffer allocatedBacking = backing;
+            GpuBuffer allocatedScratch = scratch;
+            ResourceLifetime.closeAfterFailure(failure,
+                    () -> {
+                        if (allocatedAccel != null) allocatedAccel.destroy();
+                        else if (allocatedBacking != null) allocatedBacking.destroy();
+                    },
+                    () -> { if (allocatedScratch != null) allocatedScratch.destroy(); });
             throw failure;
         }
     }
