@@ -16,6 +16,12 @@ The result entries below distinguish completed runs from remaining coverage. Kee
 
 The look package has been removed; these looks remain hardcoded. NGX RR and SR evaluation set `InIndicatorInvertYAxis = 1`; the separate SR overlay legibility issue remains recorded below.
 
+## Discrete sky horizon and pole sweep (a7a86d5a)
+
+- Launched the copied city world at default 854×480 with RR confirmed by capture metadata. Command-driven spectator views sampled yaw 0/90/180/270 at pitch 0 and pitch −90/+90 in each dimension: above the Nether roof at y150 and near the End island at y95. All twelve named debug screenshots were inspected. Visible Nether sky regions show red ash clouds; End regions show violet nebula and stars, including open void. No obvious sky discontinuity was seen in the sampled visible regions. Nether downward coverage shows the roof rather than the lower sky.
+- Chat, advancement notifications and diagnostics obscure portions of these images. Discrete views do not establish continuous dome coverage, temporal behavior during camera motion, reflection correctness or computer-use window presentation. The final restored city image shows terrain, hand and HUD. Exact player status and settings match the saved start state; normal world progression and advancements were not rolled back.
+- Evidence: `tmp/aesthetic-sky-horizons.json`, `tmp/aesthetic-sky-horizons.log` and `tmp/aesthetic-sky-horizons-runtime.log`. The runtime log ends with `BUILD SUCCESSFUL in 1m 19s`; the targeted device-loss signature search returned no matches. The independent intermittent RR fault and the default-size maximize/restore computer-use regression remain open. No renderer change was justified by this bounded inspection.
+
 ## Queued lifecycle checks
 
 - Cross dimensions in one process: Overworld → Nether → Overworld → End → Overworld, then Nether → End directly. Wait for visible terrain and active RT at each arrival; check scene/sky/light replacement, exposure and temporal-history settling, stale geometry, crashes and cleanup. Repeat with RT disabled during travel and re-enabled after arrival; include portal travel when computer-use input is verified.
