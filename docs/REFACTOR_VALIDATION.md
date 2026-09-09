@@ -1090,3 +1090,9 @@ Read both English locales and checked exposure scaling/auto-bias and bloom optio
 Replaced CausticaItems.ItemRegistrar with BiConsumer<ResourceKey<Item>, Item>. The callback carries no additional lifecycle or error contract, and both Fabric's lambda and NeoForge's method reference already match that shape. The same item key and instance are passed through accept; no registration behavior changed.
 
 Windows Fabric compileJava passed in 1 second (38 tasks, 1 executed); isolated Linux NeoForge compileJava passed in 1m 4s (39 tasks, 2 executed). Evidence: tmp/aesthetic-item-registration-fabric.log and tmp/aesthetic-item-registration-neoforge.log. git diff --check passed. These are compilation checks of both actual loader callers; no new behavioral tests, full-suite repeat or live client was needed for the callback-type simplification.
+
+## Remove obsolete English composition labels (2026-09-09)
+
+Removed seventeen English entries for the unused composition section, sky slot, provider/frame-order summary and frame stages. Current production references and LangKeys derivation use the engine/extension sections, option groups and option values instead. The English locale now has 113 entries; other locales remain unchanged under repository guidance.
+
+All three existing LangKeysTest cases pass: runtime-derived option/choice keys, screen chrome and instantiated engine-group titles. The test reads locale resources and actual generated components rather than matching source text. Evidence: tmp/aesthetic-obsolete-locale-check.log and its LangKeysTest XML report. JSON parsing and git diff --check pass. This verifies key availability for the covered current controls, not tooltip layout or a new computer-use run.
