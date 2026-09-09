@@ -141,22 +141,7 @@ final class RtReconstruction implements AutoCloseable {
                                            GpuImage output) {
         DenoiserReset frameReset = denoiser.frameReset(frame.historyContinuous());
         boolean reset = frameReset == DenoiserReset.CLEAR_AND_RESTART;
-        Matrix4f previousWorldToView = nrdPreviousWorldToView(reset, frame.viewRotation(),
-                frame.previousViewRotation(), frame.cameraDelta().x(), frame.cameraDelta().y(), frame.cameraDelta().z());
-        var previousViewToClip = reset ? frame.projection() : frame.previousProjection();
-        float previousJitterX = reset ? frame.jitterX() : frame.previousJitterX();
-        float previousJitterY = reset ? frame.jitterY() : frame.previousJitterY();
-        // The trace writes old = new + MV in render pixels; NRD consumes the same sign in screen units.
-        float inverseWidth = 1.0f / frame.extent().renderWidth();
-        float inverseHeight = 1.0f / frame.extent().renderHeight();
-        DenoiserCommonSettings common = new DenoiserCommonSettings(
-                frame.viewRotation().get(new float[16]), previousWorldToView.get(new float[16]),
-                frame.projection().get(new float[16]), previousViewToClip.get(new float[16]),
-                frame.jitterX(), frame.jitterY(), previousJitterX, previousJitterY,
-                inverseWidth, inverseHeight, 1.0f, NRD_DENOISING_RANGE,
-                0.03f, 0.2f, frame.frameTimeMilliseconds(), (int) (frame.number() & 0x7fff_ffffL),
-                false,
-                frameReset);
+        DenoiserCommonSettings common = nrdCommonSettings(frame, frameReset);
         DenoiserInputs inputs = new DenoiserInputs(
                 denoiserImage(trace.images().diffuseRadianceHitDistance()),
                 denoiserImage(trace.images().specularRadianceHitDistance()),
@@ -202,7 +187,27 @@ final class RtReconstruction implements AutoCloseable {
         return reset;
     }
 
-    private DenoiserImage denoiserImage(GpuImage image) {
+    private static DenoiserCommonSettings nrdCommonSettings(RtFrameInput frame, DenoiserReset frameReset) {
+        boolean reset = frameReset == DenoiserReset.CLEAR_AND_RESTART;
+        Matrix4f previousWorldToView = nrdPreviousWorldToView(reset, frame.viewRotation(),
+                frame.previousViewRotation(), frame.cameraDelta().x(), frame.cameraDelta().y(), frame.cameraDelta().z());
+        var previousViewToClip = reset ? frame.projection() : frame.previousProjection();
+        float previousJitterX = reset ? frame.jitterX() : frame.previousJitterX();
+        float previousJitterY = reset ? frame.jitterY() : frame.previousJitterY();
+        // The trace writes old = new + MV in render pixels; NRD consumes the same sign in screen units.
+        float inverseWidth = 1.0f / frame.extent().renderWidth();
+        float inverseHeight = 1.0f / frame.extent().renderHeight();
+        return new DenoiserCommonSettings(
+                frame.viewRotation().get(new float[16]), previousWorldToView.get(new float[16]),
+                frame.projection().get(new float[16]), previousViewToClip.get(new float[16]),
+                frame.jitterX(), frame.jitterY(), previousJitterX, previousJitterY,
+                inverseWidth, inverseHeight, 1.0f, NRD_DENOISING_RANGE,
+                0.03f, 0.2f, frame.frameTimeMilliseconds(), (int) (frame.number() & 0x7fff_ffffL),
+                false,
+                frameReset);
+    }
+
+    private static DenoiserImage denoiserImage(GpuImage image) {
         return new DenoiserImage(image.image(), image.format(), VK10.VK_IMAGE_LAYOUT_GENERAL,
                 new DenoiserExtent(image.width(), image.height()));
     }
