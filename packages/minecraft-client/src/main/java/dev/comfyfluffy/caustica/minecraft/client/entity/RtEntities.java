@@ -442,6 +442,12 @@ public final class RtEntities {
                 EntityRenderState state;
                 long extractStart = build.telemetry.startStage();
                 try {
+                    // Vanilla initializes render-position history before extracting an entity's first tick.
+                    if (entity.tickCount == 0) {
+                        entity.xOld = entity.getX();
+                        entity.yOld = entity.getY();
+                        entity.zOld = entity.getZ();
+                    }
                     state = dispatcher.extractEntity(entity, partial);
                 } finally {
                     build.telemetry.endStage("entity.capture.extract", extractStart);
