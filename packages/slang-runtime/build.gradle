@@ -42,8 +42,11 @@ def requestedSlangPlatforms = (findProperty("slangPlatforms") ?: "current").toSt
         .collect { it.trim() }
         .findAll { !it.isEmpty() }
         .collect { it == "current" ? currentSlangPlatform : it }
-def supportedSlangPlatforms = ["windows-x64", "linux-x64"]
-if (requestedSlangPlatforms.any { it == null || !supportedSlangPlatforms.contains(it) }) {
+def platformLibraries = [
+        "windows-x64": [shim: "causticaslang.dll", core: "slang.dll", compiler: "slang-compiler.dll"],
+        "linux-x64": [shim: "libcausticaslang.so", core: "libslang.so", compiler: "libslang-compiler.so"]
+]
+if (requestedSlangPlatforms.any { !platformLibraries.containsKey(it) }) {
     throw new GradleException("Unsupported Slang runtime platform(s): ${requestedSlangPlatforms}")
 }
 
@@ -78,12 +81,10 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
     doLast {
         def outputRoot = slangRuntimeGenRoot.get().asFile
         delete(outputRoot)
-        def scratchRoot = new File(temporaryDir, "runtime")
-        delete(scratchRoot)
-        scratchRoot.mkdirs()
 
         requestedSlangPlatforms.each { platform ->
-            def destination = new File(scratchRoot,
+            def libraries = platformLibraries[platform]
+            def destination = new File(outputRoot,
                     "caustica/natives/slang/${slangRuntimeVersion}/${platform}")
             destination.mkdirs()
             if (slangRuntimeInputRoot.isPresent()) {
@@ -105,7 +106,7 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
                 def sdk = file(sdkPath)
                 copy {
                     from(slangShimOutDir) {
-                        include platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
+                        include libraries.shim
                     }
                     if (platform == "windows-x64") {
                         from(new File(sdk, "bin")) {
@@ -126,10 +127,7 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
                 }
             }
 
-            def shimName = platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
-            def coreName = platform == "windows-x64" ? "slang.dll" : "libslang.so"
-            def compilerName = platform == "windows-x64" ? "slang-compiler.dll" : "libslang-compiler.so"
-            def missing = [shimName, coreName, compilerName].findAll { !new File(destination, it).isFile() }
+            def missing = libraries.values().findAll { !new File(destination, it).isFile() }
             if (!missing.empty) {
                 throw new GradleException("Incomplete Slang runtime for ${platform}; missing ${missing.join(', ')}")
             }
@@ -156,19 +154,15 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
                 bundleDigest.update(entry.sha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII))
             }
             def manifest = [format: 1, abi: 2, slangVersion: slangRuntimeVersion,
-                            platform: platform, shim: shimName,
+                            platform: platform, shim: libraries.shim,
                             bundleSha256: bundleDigest.digest().encodeHex().toString(), files: entries]
             new File(destination, "runtime.json").text =
                     JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + "\n"
         }
-        def indexFile = new File(scratchRoot, "caustica/natives/slang/runtime.json")
+        def indexFile = new File(outputRoot, "caustica/natives/slang/runtime.json")
         indexFile.parentFile.mkdirs()
         indexFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(
                 [format: 1, slangVersion: slangRuntimeVersion, platforms: requestedSlangPlatforms])) + "\n"
-        copy {
-            from(scratchRoot)
-            into(outputRoot)
-        }
     }
 }
 
@@ -194,9 +188,7 @@ def verifySlangRuntimeJar = tasks.register("verifySlangRuntimeJar") {
         requestedSlangPlatforms.each { platform ->
             def root = "caustica/natives/slang/${slangRuntimeVersion}/${platform}/".toString()
             required.add(root + "runtime.json")
-            required.add(root + (platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"))
-            required.add(root + (platform == "windows-x64" ? "slang.dll" : "libslang.so"))
-            required.add(root + (platform == "windows-x64" ? "slang-compiler.dll" : "libslang-compiler.so"))
+            required.addAll(platformLibraries[platform].values().collect { root + it })
         }
         def missing = required.findAll { !names.contains(it) }
         if (!strays.empty || !missing.empty) {
