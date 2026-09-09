@@ -1442,3 +1442,9 @@ Renderer-runtime checks passed in 2s (56 tasks, 6 executed). All nine RtFrameHis
 RtExposureReadbacks.Reservation now holds a nullable Submission record instead of a submitted flag plus independent frame ID, pre-exposure and reset-sequence fields. Completion constructs feedback only from a present submission value. Slot ownership/recycling, latest-frame ordering and reset filtering remain unchanged.
 
 Renderer-presentation checks passed in 2s. All five RtExposureReadbacksTest cases passed, covering pending slots, out-of-order completion, abandoned copies, reset epochs and shutdown with in-flight work. Evidence: tmp/aesthetic-exposure-submission-check.log and packages/renderer-presentation/build/test-results/test/. This pass reviewed the readback pool and its tests; the larger RtExposure controller was only partially read and is not claimed as newly reviewed in full. No live exposure-quality or performance claim follows.
+
+## Exposure controller review and shared EV limits (2026-09-09)
+
+Completed the RtExposure controller read-through in bounded sections: resource creation, manual/auto dispatch, readback recording/submission, capture metadata, debug summary, history reset and pre-exposure latching. Kept the once-per-frame latch and completion-based feedback contracts. Named the existing auto EV limits and used them directly in the debug summary instead of constructing a full AutoConfig solely for its bounds. Corrected the manual residual comment to distinguish enabled and disabled pre-exposure. Values and adaptation behavior are unchanged.
+
+Renderer-presentation checks passed in 2s (34 tasks, 8 executed); git diff --check passed. Evidence: tmp/aesthetic-exposure-limits-check.log. No live metering-quality, brightness or performance claim follows from this static configuration cleanup.
