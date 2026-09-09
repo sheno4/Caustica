@@ -54,3 +54,12 @@ void probeNrdPlaneFrame(uint3 id : SV_DispatchThreadID) {
                 + nrdPlaneFrameLayoutProbe[0].values[1].radianceScale;
     }
 }
+
+[[vk::push_constant]] NeeAtBakePush neeAtBakePushProbe;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeNeeAtBakePush(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        uint sink = neeAtBakePushProbe.phase + neeAtBakePushProbe.currentIdentityLookupMask;
+    }
+}

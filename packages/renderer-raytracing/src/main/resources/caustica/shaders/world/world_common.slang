@@ -90,6 +90,23 @@ public struct NeeAtState {
     public float localToGlobalRatio;
 };
 
+public struct NeeAtBakePush {
+    public uint64_t stateAddress;
+    public uint64_t powerAddress;
+    public uint64_t previousPixelFeedbackAddress;
+    public uint64_t blockSumAddress;
+    public uint64_t previousDepthAddress;
+    public uint64_t currentDepthAddress;
+    public uint phase;
+    public uint historyValid;
+    public uint currentLinearDepthIndex;
+    public uint currentMotionIndex;
+    public uint64_t previousIdentitiesAddress;
+    public uint64_t currentIdentityLookupAddress;
+    public uint currentIdentityLookupMask;
+    public uint reserved;
+};
+
 public static const uint NEE_AT_ENVIRONMENT_EMITTERS_SAMPLED = 2u;
 public static const uint NEE_AT_LOCAL_HISTORY_VALID = 1u;
 // Pixel feedback packs the winning dense light index and its screen-space coherence into .x;

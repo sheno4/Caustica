@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtStateData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtBakePushData;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryUtil;
@@ -44,7 +45,6 @@ final class RtNeeAtBackend {
     private static final int GLOBAL_ENTRY_BYTES = 2 * Integer.BYTES;
     private static final int LOCAL_ENTRY_BYTES = 2 * Integer.BYTES;
     private static final int PIXEL_FEEDBACK_BYTES = 2 * Integer.BYTES;
-    private static final int PUSH_BYTES = 88;
     private static final String SHADER = "/caustica/shaders/pipelines/nee_at/bake.comp.spv";
 
     private final VulkanDeviceContext context;
@@ -270,17 +270,16 @@ final class RtNeeAtBackend {
                           boolean continuous, int phase, int groups, int currentLinearDepthIndex,
                           int currentMotionIndex) {
         try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
-            ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
+            ByteBuffer push = stack.malloc(NeeAtBakePushData.BYTE_SIZE).order(ByteOrder.nativeOrder());
             LightRevision lights = target.lights.get();
-            push.putLong(target.state.deviceAddress().value()).putLong(lights.power.deviceAddress().value())
-                    .putLong(continuous ? previous.pixelFeedback.deviceAddress().value() : 0)
-                    .putLong(target.blockSums.deviceAddress().value())
-                    .putLong(continuous ? previous.depth.deviceAddress().value() : 0)
-                    .putLong(target.depth.deviceAddress().value())
-                    .putInt(phase).putInt(continuous ? 1 : 0)
-                    .putInt(currentLinearDepthIndex).putInt(currentMotionIndex)
-                    .putLong(continuous ? previous.lights.get().identities.deviceAddress().value() : 0)
-                    .putLong(lights.lookup.deviceAddress().value()).putInt(lights.mask).putInt(0).flip();
+            new NeeAtBakePushData(target.state.deviceAddress().value(), lights.power.deviceAddress().value(),
+                    continuous ? previous.pixelFeedback.deviceAddress().value() : 0,
+                    target.blockSums.deviceAddress().value(),
+                    continuous ? previous.depth.deviceAddress().value() : 0,
+                    target.depth.deviceAddress().value(), phase, continuous ? 1 : 0,
+                    currentLinearDepthIndex, currentMotionIndex,
+                    continuous ? previous.lights.get().identities.deviceAddress().value() : 0,
+                    lights.lookup.deviceAddress().value(), lights.mask, 0).write(push);
             bake.dispatch(commandBuffer, push, groups, 1, 1);
         }
     }

@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtStateData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtBakePushData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedInstanceRecordData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedLightRecordData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.WorldPushData;
@@ -15,6 +16,26 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtShaderRecordAbiTest {
+    @Test
+    void bakePushPreservesAddressAndControlLayout() {
+        var value = new NeeAtBakePushData(1L, 2L, 3L, 4L, 5L, 6L,
+                7, 8, 9, 10, 11L, 12L, 13, 0);
+        ByteBuffer bytes = storage(NeeAtBakePushData.BYTE_SIZE);
+        value.write(bytes);
+
+        assertEquals(88, bytes.capacity());
+        for (int field = 0; field < 6; field++) {
+            assertEquals(field + 1L, bytes.getLong(field * Long.BYTES));
+        }
+        for (int field = 0; field < 4; field++) {
+            assertEquals(field + 7, bytes.getInt(48 + field * Integer.BYTES));
+        }
+        assertEquals(11L, bytes.getLong(64));
+        assertEquals(12L, bytes.getLong(72));
+        assertEquals(13, bytes.getInt(80));
+        assertEquals(0, bytes.getInt(84));
+    }
+
     @Test
     void frameDataPacksRevisionRootsAndOriginConversionAlongsideCameraHistory() {
         var value = new WorldPushData(new Matrix4f().scaling(2), new WorldPushData.Float3(3, 4, 5), 6,

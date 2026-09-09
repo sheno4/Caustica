@@ -87,6 +87,7 @@ def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflec
 }
 
 def rayTracingRecordSpecs = [
+        "push|neeAtBakePushProbe|NeeAtBakePush|dev.comfyfluffy.caustica.renderer.raytracing.gen|NeeAtBakePushData|false",
         "buffer|worldPushLayoutProbe|WorldPush|dev.comfyfluffy.caustica.renderer.raytracing.gen|WorldPushData|false",
         "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedGeometryRecordData|false",
         "buffer|retainedInstanceRecordLayoutProbe|RetainedInstanceRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedInstanceRecordData|false",
@@ -258,7 +259,7 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
             it.startsWith(generatedRecordClassRoot) && it.endsWith("Data.class")
         } as Set
         def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData", "RetainedInstanceRecordData",
-                "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData",
+                "RetainedLightRecordData", "NeeAtStateData", "NeeAtBakePushData", "PackedPathSegmentData",
                 "StablePlaneRecordData", "NrdComposePushData", "NrdPlaneFrameData"].collect {
             "${generatedRecordClassRoot}${it}.class"
         } as Set
