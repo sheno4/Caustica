@@ -67,7 +67,7 @@ public final class SlangRuntime {
 
     public synchronized void shutdown() {
         acceptingSessions = false;
-        for (SlangSession session : List.copyOf(sessions)) {
+        for (SlangSession session : sessions) {
             session.retainUntilProcessExit();
         }
     }
@@ -83,14 +83,13 @@ public final class SlangRuntime {
         SlangPlatform platform = SlangPlatform.current();
         Path directory = locateRuntime(platform);
         SlangLibrary loaded = SlangLibrary.load(directory, platform);
-        MemorySegment loadedRuntime = loaded.createRuntime();
         String compilerVersion = loaded.compilerVersion();
         String expectedVersion = bundledVersion();
         if (!compilerVersion.startsWith(expectedVersion)) {
-            loaded.destroyRuntime(loadedRuntime);
             throw new IllegalStateException("Bundled Slang version mismatch: expected " + expectedVersion
                     + ", loaded " + compilerVersion);
         }
+        MemorySegment loadedRuntime = loaded.createRuntime();
         library = loaded;
         runtime = loadedRuntime;
         runtimeDirectory = directory;
