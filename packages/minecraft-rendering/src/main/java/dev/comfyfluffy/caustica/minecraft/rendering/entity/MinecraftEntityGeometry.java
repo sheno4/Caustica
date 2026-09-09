@@ -178,8 +178,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                             discarded.add(put.capture);
                             if (prior.live != null) edits.add(new SceneEdit.SetTransform(
                                     prior.instance, put.transform, put.mask));
-                            changed.put(key, new Resident(prior.instance, prior.revision, put.transform,
-                                    put.mask, prior.live, prior.request, prior.queued));
+                            changed.put(key, prior.withPlacement(put.transform, put.mask));
                         } else {
                             var instance = prior == null ? channel.newInstance() : prior.instance;
                             if (prior != null && prior.live != null)
@@ -196,8 +195,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                             edits.add(new SceneEdit.SetTransform(prior.instance, transform.transform, transform.mask));
                             if (transform.accepted != null) accepted.add(transform.accepted);
                         }
-                        changed.put(key, new Resident(prior.instance, prior.revision, transform.transform,
-                                transform.mask, prior.live, prior.request, prior.queued));
+                        changed.put(key, prior.withPlacement(transform.transform, transform.mask));
                     }
                     case Drop ignored -> {
                         if (prior == null) continue;
@@ -337,24 +335,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                 stopResult = new CompletableFuture<>();
                 synchronized (submissionLock) {
                     accepting = false;
-                    publicationExecutor.execute(() -> {
-                        Throwable failure = null;
-                        try {
-                            var edits = new ArrayList<SceneEdit>();
-                            for (var resident : residents.values()) {
-                                if (resident.live != null) edits.add(new SceneEdit.DropInstance(resident.instance));
-                            }
-                            if (!edits.isEmpty()) channel.edit(edits);
-                        } catch (Throwable thrown) { failure = thrown; }
-                        for (var resident : residents.values()) {
-                            if (resident.request != null) resident.request.cancelled = true;
-                            if (resident.queued != null) failure = cleanup(failure, resident.queued::close);
-                            if (resident.live != null) failure = cleanup(failure, resident.live::close);
-                        }
-                        residents.clear();
-                        if (failure == null) stopResult.complete(null);
-                        else stopResult.completeExceptionally(failure);
-                    });
+                    publicationExecutor.execute(this::retireResidents);
                 }
             }
             result = stopResult;
@@ -366,6 +347,25 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             failure = cleanup(failure, ((ExecutorService) packingExecutor)::close);
         }
         throwFailure(failure);
+    }
+
+    private void retireResidents() {
+        Throwable failure = null;
+        try {
+            var edits = new ArrayList<SceneEdit>();
+            for (var resident : residents.values()) {
+                if (resident.live != null) edits.add(new SceneEdit.DropInstance(resident.instance));
+            }
+            if (!edits.isEmpty()) channel.edit(edits);
+        } catch (Throwable thrown) { failure = thrown; }
+        for (var resident : residents.values()) {
+            if (resident.request != null) resident.request.cancelled = true;
+            if (resident.queued != null) failure = cleanup(failure, resident.queued::close);
+            if (resident.live != null) failure = cleanup(failure, resident.live::close);
+        }
+        residents.clear();
+        if (failure == null) stopResult.complete(null);
+        else stopResult.completeExceptionally(failure);
     }
 
     @Override public void close() {
@@ -465,7 +465,11 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         }
     }
     private record Resident(InstanceId instance, MeshRevision revision, GeometryTransform transform,
-                            int mask, Generation live, Preparation request, Capture queued) { }
+                            int mask, Generation live, Preparation request, Capture queued) {
+        Resident withPlacement(GeometryTransform transform, int mask) {
+            return new Resident(instance, revision, transform, mask, live, request, queued);
+        }
+    }
     private record Capture(MeshRevision revision, MinecraftEntityUploader.UploadJob upload,
                            Runnable accepted) implements AutoCloseable {
         @Override public void close() { upload.close(); }

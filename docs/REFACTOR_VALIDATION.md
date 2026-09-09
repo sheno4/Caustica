@@ -1922,3 +1922,10 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Moved the existing immutable `StateCounts` record, worker-state traversal, and 14-field event mapping into `TerrainEvents`. `RtTerrain` schedules capture and composes client-tick fields; the telemetry model owns its count collection and serialization.
 - Preserved the enabled-event gate, coordinator/preparation-lock execution, volatile snapshot handoff, counter classification, and JFR event fields. Added the active invariant that a tick may observe counters collected before that tick.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-terrain-telemetry-check.log`). Reviewed the moved field mapping and traversal directly. No new live JFR capture or telemetry concurrency experiment was performed.
+
+### Clarify entity resident placement and retirement
+
+- Reviewed `MinecraftEntityGeometry` from host capture through pending coalescing, worker preparation, publication, stop, and resource records.
+- Added `Resident.withPlacement` for the two placement-only transitions, preserving revision, live generation, running preparation, and queued capture. Extracted the publication-worker retirement body from `stop()` into `retireResidents`, preserving edit/release ordering and completion/error propagation.
+- Validation: `:packages:minecraft-rendering:check :packages:minecraft-client:test` passed in 10 seconds. All 15 entity geometry and 4 entity shutdown tests passed. Evidence: `tmp/aesthetic-entity-resident-operations-check.log`. No new live entity-motion capture was performed.
+- Further review remains for preparation rejection and upload-failure cleanup: their direct close calls can interrupt subsequent cleanup if a release also fails. This pass does not claim those compound failure paths are covered.
