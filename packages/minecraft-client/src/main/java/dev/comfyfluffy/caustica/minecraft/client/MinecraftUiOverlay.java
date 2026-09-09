@@ -84,6 +84,11 @@ public final class MinecraftUiOverlay {
                 overlay == null ? 0 : overlay.width, overlay == null ? 0 : overlay.height);
     }
 
+    /** Diagnostic readback uses the same target that receives the hand and GUI draws. */
+    RenderTarget captureTarget() {
+        return java.util.Objects.requireNonNull(overlay, "UI overlay has not been allocated");
+    }
+
     /**
      * Prepare the overlay (sized to {@code main}, cleared transparent with depth cleared to 0.0) and return
      * it so {@code GuiRenderer.draw} renders the GUI into it instead of the main target. Called from the

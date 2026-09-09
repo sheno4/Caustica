@@ -233,7 +233,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                 captures.add(() -> {
                     if (future.isDone()) return;
                     try {
-                        if (op.equals("screenshot")) screenshot(future);
+                        if (op.equals("screenshot")) screenshot(request, future);
                         else future.complete(captureImages(request));
                     } catch (Exception e) { future.completeExceptionally(e); }
                 });
@@ -396,12 +396,19 @@ public final class MinecraftDebugService implements AutoCloseable {
         return Map.of("path", output.toString(), "metadata", metadata);
     }
 
-    private void screenshot(CompletableFuture<Object> future) throws IOException {
+    private void screenshot(JsonObject request, CompletableFuture<Object> future) throws IOException {
+        String targetName = request.has("target") ? request.get("target").getAsString() : "main";
+        var target = switch (targetName) {
+            case "main" -> client.gameRenderer.mainRenderTarget();
+            case "ui" -> CausticaClientComposition.current().uiOverlay().captureTarget();
+            default -> throw new IllegalArgumentException("Screenshot target must be main or ui");
+        };
         String name = "caustica-debug-" + UUID.randomUUID() + ".png";
         Path output = client.gameDirectory.toPath().resolve("screenshots").resolve(name).toAbsolutePath();
         long frameId = CausticaClientComposition.current().runtime().telemetry().frameSerial();
-        Screenshot.grab(client.gameDirectory, name, client.gameRenderer.mainRenderTarget(), 1, message -> {
-            if (Files.isRegularFile(output)) future.complete(Map.of("path", output.toString(), "frameId", frameId));
+        Screenshot.grab(client.gameDirectory, name, target, 1, message -> {
+            if (Files.isRegularFile(output)) future.complete(Map.of("path", output.toString(), "frameId", frameId,
+                    "target", targetName));
             else future.completeExceptionally(new IOException(message.getString()));
         });
     }
