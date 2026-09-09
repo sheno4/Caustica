@@ -173,16 +173,22 @@ public struct TraceDirect {
     public float distance;
 };
 
-public TraceDirect traceDirect(PackedPathSegment path, WorldPayload hit, TraceLobes lobes,
+struct TraceLightSelection {
+    DirectLightSample light;
+    float weightSum;
+    float target;
+    uint candidateCount;
+};
+
+// The reservoir keeps one candidate; its sum and target normalize that candidate's contribution.
+TraceLightSelection traceSelectLight(WorldPayload hit, float3 outgoingDirection,
         uint2 pixel, bool coherent, inout uint seed) {
-    TraceDirect result = {};
-    if (lobes.continuousProbability == 0.0) return result;
     uint count;
     DirectLightSample selected = invalidDirectLight();
     float sum = 0.0, selectedTarget = 0.0;
     BsdfQuery query;
     query.surface = hit.surface;
-    query.outgoingDirection = -path.direction;
+    query.outgoingDirection = outgoingDirection;
     {
         NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
         count = clamp(state.candidateCount, 1u, 8u);
@@ -202,17 +208,29 @@ public TraceDirect traceDirect(PackedPathSegment path, WorldPayload hit, TraceLo
             }
         }
     }
-    if (!selected.valid || selectedTarget <= 0.0) return result;
+    return { selected, sum, selectedTarget, count };
+}
+
+public TraceDirect traceDirect(PackedPathSegment path, WorldPayload hit, TraceLobes lobes,
+        uint2 pixel, bool coherent, inout uint seed) {
+    TraceDirect result = {};
+    if (lobes.continuousProbability == 0.0) return result;
+    TraceLightSelection selection = traceSelectLight(hit, -path.direction, pixel, coherent, seed);
+    DirectLightSample selected = selection.light;
+    if (!selected.valid || selection.target <= 0.0) return result;
     float3 visibility = traceVisibility(path, hit, selected, seed);
     if (!any(visibility > 0.0)) return result;
+    BsdfQuery query;
+    query.surface = hit.surface;
+    query.outgoingDirection = -path.direction;
     query.incomingDirection = selected.direction;
     BsdfEvaluation evaluation = evaluateBsdf(query);
     float3 factor = selected.radianceOverShapePdf * abs(dot(hit.surface.shadingNormal,
-            selected.direction)) * visibility * (sum / (float(count) * selectedTarget));
+            selected.direction)) * visibility * (selection.weightSum / (float(selection.candidateCount) * selection.target));
     result.diffuse = evaluation.diffuseValue * factor;
     result.specular = evaluation.specularValue * factor;
     if (selected.linkedEmitter && selected.shapePdf > 0.0) {
-        float pdf = neeAtLightMisPdf(selected.proposalPdf, selected.shapePdf, count);
+        float pdf = neeAtLightMisPdf(selected.proposalPdf, selected.shapePdf, selection.candidateCount);
         result.diffuse *= pdf / (pdf + evaluation.diffusePdf * lobes.continuousProbability);
         result.specular *= pdf / (pdf + evaluation.specularPdf * lobes.continuousProbability);
     }
