@@ -2,7 +2,10 @@ package dev.comfyfluffy.caustica.renderer.denoising;
 
 import java.util.Objects;
 
-/** Camera and temporal state shared by the denoisers for one frame. Matrices are column-major. */
+/**
+ * Camera and temporal state shared by the denoisers for one frame. Matrices are column-major;
+ * construction and access copy them so caller mutations cannot change captured settings.
+ */
 public record DenoiserCommonSettings(
         float[] worldToView,
         float[] worldToViewPrevious,

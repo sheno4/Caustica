@@ -6,7 +6,9 @@ public interface DenoiserBackend extends AutoCloseable {
 
     /**
      * Records the selected denoiser into the frame's already recording command buffer. The frame
-     * extent must equal the backend descriptor extent.
+     * extent must equal the backend descriptor extent. The caller orders input production before
+     * this work and output consumption after it, and owns submission and image lifetime through
+     * completion. Recorded image transitions restore the layouts supplied in the frame.
      */
     void record(DenoiserFrame frame);
 

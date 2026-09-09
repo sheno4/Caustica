@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.renderer.denoising;
 import java.util.Objects;
 import java.util.Optional;
 
-/** Full-resolution diffuse/specular signals, temporal guides, and denoised outputs. */
+/** Diffuse/specular signals, temporal guides, and outputs at one common render resolution. */
 public record DenoiserInputs(
         DenoiserImage diffuseRadianceHitDistance,
         DenoiserImage specularRadianceHitDistance,

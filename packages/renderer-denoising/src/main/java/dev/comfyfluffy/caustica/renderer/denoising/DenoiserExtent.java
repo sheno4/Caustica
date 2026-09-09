@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.denoising;
 
-/** Full-resolution image extent used by a denoiser instance and all of its frame resources. */
+/** Render-resolution extent shared by a denoiser and all its images, before any display upscaling. */
 public record DenoiserExtent(int width, int height) {
     public DenoiserExtent {
         if (width <= 0) throw new IllegalArgumentException("width must be positive");
