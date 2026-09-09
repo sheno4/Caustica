@@ -6,9 +6,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.util.Objects;
 
 /**
@@ -144,23 +142,7 @@ public final class DlssRayReconstruction {
             return null;
         }
         ensureInitialized();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment outWidth = arena.allocate(ValueLayout.JAVA_INT);
-            MemorySegment outHeight = arena.allocate(ValueLayout.JAVA_INT);
-            MemorySegment outSharpness = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int rc = lib.queryOptimalDlssd(displayWidth, displayHeight, quality(),
-                    outWidth, outHeight, outSharpness);
-            if (NgxRuntime.ngxFailed(rc)) {
-                throw new IllegalStateException("ngxshim_query_optimal_dlssd failed: 0x" + Integer.toHexString(rc));
-            }
-            int renderWidth = outWidth.get(ValueLayout.JAVA_INT, 0);
-            int renderHeight = outHeight.get(ValueLayout.JAVA_INT, 0);
-            if (renderWidth <= 0 || renderHeight <= 0) {
-                throw new IllegalStateException(
-                        "ngxshim_query_optimal_dlssd returned invalid render size " + renderWidth + "x" + renderHeight);
-            }
-            return new int[] { renderWidth, renderHeight };
-        }
+        return lib.queryOptimalDlssd(displayWidth, displayHeight, quality());
     }
 
     public boolean featureReadyFor(int renderWidth, int renderHeight, int displayWidth, int displayHeight) {

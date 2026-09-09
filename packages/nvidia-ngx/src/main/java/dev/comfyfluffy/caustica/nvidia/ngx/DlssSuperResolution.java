@@ -6,9 +6,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.util.Objects;
 
 /** DLSS Super Resolution feature for a separately denoised, scene-linear input image. */
@@ -77,23 +75,7 @@ public final class DlssSuperResolution {
             LOGGER.warn("DLSS-SR is unavailable; NRD continues at display resolution", t);
             return null;
         }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment outWidth = arena.allocate(ValueLayout.JAVA_INT);
-            MemorySegment outHeight = arena.allocate(ValueLayout.JAVA_INT);
-            MemorySegment outSharpness = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int rc = lib.queryOptimal(displayWidth, displayHeight, settings.quality(),
-                    outWidth, outHeight, outSharpness);
-            if (NgxRuntime.ngxFailed(rc)) {
-                throw new IllegalStateException("ngxshim_query_optimal failed: 0x" + Integer.toHexString(rc));
-            }
-            int renderWidth = outWidth.get(ValueLayout.JAVA_INT, 0);
-            int renderHeight = outHeight.get(ValueLayout.JAVA_INT, 0);
-            if (renderWidth <= 0 || renderHeight <= 0) {
-                throw new IllegalStateException("ngxshim_query_optimal returned invalid render size "
-                        + renderWidth + "x" + renderHeight);
-            }
-            return new int[]{renderWidth, renderHeight};
-        }
+        return lib.queryOptimal(displayWidth, displayHeight, settings.quality());
     }
 
     /** Prior GPU uses must complete before a size or preset change releases the feature. */

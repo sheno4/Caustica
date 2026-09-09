@@ -149,13 +149,32 @@ final class NgxLibrary {
 		}
 	}
 
-	public int queryOptimal(int displayWidth, int displayHeight, int quality,
-	                        MemorySegment outRenderWidth, MemorySegment outRenderHeight, MemorySegment outSharpness) {
-		try {
-			return (int) this.queryOptimal.invokeExact(displayWidth, displayHeight, quality,
-					outRenderWidth, outRenderHeight, outSharpness);
-		} catch (Throwable t) {
-			throw new RuntimeException("ngxshim_query_optimal failed", t);
+	public int[] queryOptimal(int displayWidth, int displayHeight, int quality) {
+		return queryRenderSize(this.queryOptimal, "ngxshim_query_optimal", displayWidth, displayHeight, quality);
+	}
+
+	private static int[] queryRenderSize(MethodHandle query, String symbol,
+	                                    int displayWidth, int displayHeight, int quality) {
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment outWidth = arena.allocate(ValueLayout.JAVA_INT);
+			MemorySegment outHeight = arena.allocate(ValueLayout.JAVA_INT);
+			MemorySegment outSharpness = arena.allocate(ValueLayout.JAVA_FLOAT);
+			int result;
+			try {
+				result = (int) query.invokeExact(displayWidth, displayHeight, quality,
+						outWidth, outHeight, outSharpness);
+			} catch (Throwable failure) {
+				throw new RuntimeException(symbol + " failed", failure);
+			}
+			if (NgxRuntime.ngxFailed(result)) {
+				throw new IllegalStateException(symbol + " failed: 0x" + Integer.toHexString(result));
+			}
+			int width = outWidth.get(ValueLayout.JAVA_INT, 0);
+			int height = outHeight.get(ValueLayout.JAVA_INT, 0);
+			if (width <= 0 || height <= 0) {
+				throw new IllegalStateException(symbol + " returned invalid render size " + width + "x" + height);
+			}
+			return new int[]{width, height};
 		}
 	}
 
@@ -198,14 +217,8 @@ final class NgxLibrary {
 		}
 	}
 
-	public int queryOptimalDlssd(int displayWidth, int displayHeight, int quality,
-	                             MemorySegment outRenderWidth, MemorySegment outRenderHeight, MemorySegment outSharpness) {
-		try {
-			return (int) this.queryOptimalDlssd.invokeExact(displayWidth, displayHeight, quality,
-					outRenderWidth, outRenderHeight, outSharpness);
-		} catch (Throwable t) {
-			throw new RuntimeException("ngxshim_query_optimal_dlssd failed", t);
-		}
+	public int[] queryOptimalDlssd(int displayWidth, int displayHeight, int quality) {
+		return queryRenderSize(this.queryOptimalDlssd, "ngxshim_query_optimal_dlssd", displayWidth, displayHeight, quality);
 	}
 
 	public MemorySegment createDlssd(long cmd, int renderWidth, int renderHeight, int displayWidth, int displayHeight,
