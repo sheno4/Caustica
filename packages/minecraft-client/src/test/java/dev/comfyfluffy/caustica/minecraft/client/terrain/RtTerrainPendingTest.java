@@ -69,7 +69,7 @@ final class RtTerrainPendingTest {
         updates.releasePublication(accepted);
         assertTrue(updates.isReady(1));
         updates.dirty(List.of(1L));
-        assertTrue(updates.awaitingExtraction(updates.sections.get(1).request));
+        assertTrue(updates.sections.get(1).request.awaitingExtraction());
         assertTrue(updates.ready().isEmpty());
     }
 
@@ -107,7 +107,7 @@ final class RtTerrainPendingTest {
         updates.invalidate(List.of(1L));
         updates.dispatched(afterCapture);
         updates.retry(afterCapture);
-        assertFalse(updates.awaitingExtraction(afterCapture));
+        assertFalse(afterCapture.awaitingExtraction());
         assertFalse(updates.complete(afterCapture, "stale build"));
     }
 
@@ -141,17 +141,17 @@ final class RtTerrainPendingTest {
         updates.want(1);
         var request = updates.sections.get(1).request;
         assertEquals(List.of(request), List.copyOf(pending.values()));
-        assertTrue(updates.awaitingExtraction(request));
+        assertTrue(request.awaitingExtraction());
         updates.dispatched(request);
         assertTrue(pending.isEmpty());
-        assertFalse(updates.awaitingExtraction(request));
+        assertFalse(request.awaitingExtraction());
         updates.retry(request);
         assertEquals(List.of(request), List.copyOf(pending.values()));
-        assertTrue(updates.awaitingExtraction(request));
+        assertTrue(request.awaitingExtraction());
         updates.dispatched(request);
         updates.complete(request, "mesh");
         assertTrue(pending.isEmpty());
-        assertFalse(updates.awaitingExtraction(request));
+        assertFalse(request.awaitingExtraction());
     }
 
     @Test
@@ -166,7 +166,7 @@ final class RtTerrainPendingTest {
         updates.rebuild(List.of(2L));
         assertEquals(2, pending.size());
         assertFalse(pending.containsValue(old));
-        assertFalse(updates.awaitingExtraction(old));
+        assertFalse(old.awaitingExtraction());
         assertFalse(updates.complete(old, "obsolete"));
         assertSame(updates.sections.get(1).request.group, updates.sections.get(2).request.group);
         updates.remove(1);

@@ -89,7 +89,7 @@ final class TerrainWindowTest {
         assertEquals(List.of(key(0, 0)), invalidated);
         assertFalse(old.valid());
         assertNotSame(old, updates.sections.get(key(0, 0)).request);
-        assertTrue(updates.awaitingExtraction(updates.sections.get(key(0, 0)).request));
+        assertTrue(updates.sections.get(key(0, 0)).request.awaitingExtraction());
     }
 
     @Test

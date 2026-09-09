@@ -394,7 +394,7 @@ public final class RtTerrain {
             int accepted = 0;
             while (dispatchCursor < dispatchPlan.candidates().size() && accepted < slots) {
                 var candidate = dispatchPlan.candidates().get(dispatchCursor++);
-                if (!updates.awaitingExtraction(candidate.request())) continue;
+                if (!candidate.request().awaitingExtraction()) continue;
                 long key = candidate.key();
                 int x = sectionX(key), z = sectionZ(key);
                 long column = columnKey(x, z);

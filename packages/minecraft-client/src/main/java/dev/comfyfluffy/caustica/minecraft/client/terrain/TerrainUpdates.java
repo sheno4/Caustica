@@ -119,11 +119,6 @@ final class TerrainUpdates<T> {
         return true;
     }
 
-    /** Advisory plans contain independently invalidatable tokens, with no mutable-map read on render. */
-    boolean awaitingExtraction(Request<T> request) {
-        return request.awaitingExtraction();
-    }
-
     void dispatched(Request<T> request) {
         if (request.section.request != request || !request.markDispatched()) return;
         pending.accept(request.section.key, null);
@@ -232,6 +227,7 @@ final class TerrainUpdates<T> {
         }
         boolean complete() { return extraction.get() == COMPLETE; }
         boolean dispatched() { return extraction.get() == DISPATCHED; }
+        /** Render-side readiness uses only the token's atomic state, without reading coordinator maps. */
         boolean awaitingExtraction() { return group.valid() && extraction.get() == PENDING; }
         boolean reserve() { return group.valid() && extraction.compareAndSet(PENDING, CAPTURING); }
         boolean extracted() { return group.valid() && extraction.compareAndSet(CAPTURING, DISPATCHED); }

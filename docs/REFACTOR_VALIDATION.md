@@ -1866,3 +1866,9 @@ Minecraft client tests and rendering checks passed. Inspected the MinecraftFluid
 Read RtSectionSnapshots in full, including column-identity cache reuse, copied palettes, lazy worker-owned halo decoding and the Region's live biome/lighting context. Preserved those ownership boundaries. Replaced nullable temporary state in debug-world lookup with a direct height switch. Checked DebugLevelSource.getBlockStateFor in the pinned 26.2-rc-1 source JAR: it initializes to AIR and returns a registered block state or AIR, so no null fallback is required.
 
 Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-section-snapshot-review-check.log. No new live debug-world run, biome concurrency experiment or snapshot stress run was performed. Whole-project review remains incomplete.
+
+## Terrain extraction readiness is queried directly on its token (2026-09-09)
+
+Read TerrainUpdates in full. Removed its awaitingExtraction forwarding method; render scheduling and test callers now query Request.awaitingExtraction directly. Moved the atomic-state/readiness comment onto that method. This makes the coordinator-independent read explicit without changing invalidation, reservation, retry, completion or publication transitions. Updated existing pending/window/planner tests only for the call-site change.
+
+Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terrain-token-readiness-check.log. git diff --check passed. No new concurrency stress or discard-callback failure injection was performed; this pass does not establish all cleanup-failure behavior. Whole-project review remains incomplete.

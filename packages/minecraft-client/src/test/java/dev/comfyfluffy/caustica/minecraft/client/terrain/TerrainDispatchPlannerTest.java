@@ -58,16 +58,16 @@ final class TerrainDispatchPlannerTest {
         fixture.want(0);
         fixture.updates.dirty(List.of(key(0)));
         var latest = fixture.request(0);
-        assertFalse(fixture.updates.awaitingExtraction(old));
+        assertFalse(old.awaitingExtraction());
         fixture.requestPlan(0);
         fixture.run();
         var currentPlan = fixture.planner.poll();
         assertEquals(1, currentPlan.candidates().size());
         assertSame(latest, currentPlan.candidates().getFirst().request());
         fixture.updates.dispatched(latest);
-        assertFalse(fixture.updates.awaitingExtraction(latest));
+        assertFalse(latest.awaitingExtraction());
         fixture.updates.retry(latest);
-        assertTrue(fixture.updates.awaitingExtraction(latest));
+        assertTrue(latest.awaitingExtraction());
         assertEquals(List.of(0), fixture.select(0));
     }
 
@@ -95,7 +95,7 @@ final class TerrainDispatchPlannerTest {
         var first = fixture.planner.poll();
         fixture.updates.dispatched(first.candidates().getFirst().request());
         assertEquals(List.of(8, 4), fixture.select(8));
-        assertTrue(fixture.updates.awaitingExtraction(first.candidates().get(1).request()));
+        assertTrue(first.candidates().get(1).request().awaitingExtraction());
     }
 
     @Test void pollingACompletedBatchDoesNotWaitForQueuedPlanning() throws Exception {
