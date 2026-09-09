@@ -31,6 +31,8 @@ public final class RtExposure {
     private static final Logger LOGGER = LoggerFactory.getLogger(RtExposure.class);
     /** {@code log2(100 / 12.5)} maps scene luminance in cd/m² onto the EV100 metering scale. */
     private static final float EV100_OFFSET = (float) (Math.log(8.0) / Math.log(2.0));
+    private static final float AUTO_MIN_EV = -15.0f;
+    private static final float AUTO_MAX_EV = -2.0f;
     private Settings settings;
     private GpuImage image;
     private GpuBuffer histogram;
@@ -170,8 +172,8 @@ public final class RtExposure {
         }
         try (var ignored = RtDebugLabels.scope(ctx, cmd, "exposure manual write")) {
             VkClearColorValue color = VkClearColorValue.calloc(stack);
-            // Residual, not absolute: raygen already applied preExposure (which in manual mode IS
-            // manualExposureScale, making this exactly 1.0). See preExposure().
+            // Divide out raygen's latched scale. With manual pre-exposure enabled the residual is 1;
+            // with it disabled this is the full manual exposure multiplier.
             color.float32(0, manualExposureScale() / Math.max(preExposure(), 1.0e-12f));
             VkImageSubresourceRange.Buffer range = VkImageSubresourceRange.calloc(1, stack);
             range.get(0).aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
@@ -303,9 +305,8 @@ public final class RtExposure {
         float evScene = snapshot.evScene();
         float evTarget = snapshot.evTarget();
         float evApplied = snapshot.evApplied();
-        AutoConfig cfg = autoConfig();
-        String clamp = evTarget <= cfg.minEv() + 0.01f ? " (min clamp)"
-                : evTarget >= cfg.maxEv() - 0.01f ? " (max clamp)" : "";
+        String clamp = evTarget <= AUTO_MIN_EV + 0.01f ? " (min clamp)"
+                : evTarget >= AUTO_MAX_EV - 0.01f ? " (max clamp)" : "";
         return String.format(java.util.Locale.ROOT, "Exposure: EV100 %.2f, applied %.2f EV%s",
                 evScene, evApplied, clamp);
     }
@@ -362,8 +363,8 @@ public final class RtExposure {
     private AutoConfig autoConfig() {
         return new AutoConfig(
                 settings.key(),
-                -15.0f,
-                -2.0f,
+                AUTO_MIN_EV,
+                AUTO_MAX_EV,
                 settings.adaptDarken(),
                 settings.adaptBrighten(),
                 settings.manualEv(),
