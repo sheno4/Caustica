@@ -210,19 +210,22 @@ final class SlangLibrary {
                                                      MemorySegment spirvOut,
                                                      MemorySegment reflectionOut,
                                                      MemorySegment diagnosticsOut) {
-        byte[] spirv = takeBytes(spirvOut.get(ValueLayout.ADDRESS, 0));
-        String reflection = takeString(reflectionOut.get(ValueLayout.ADDRESS, 0));
-        String diagnostics = takeString(diagnosticsOut.get(ValueLayout.ADDRESS, 0));
-        if (result < 0) {
-            throw new SlangCompilationException(operation, result, diagnostics);
+        try (Blob spirv = new Blob(spirvOut.get(ValueLayout.ADDRESS, 0));
+             Blob reflection = new Blob(reflectionOut.get(ValueLayout.ADDRESS, 0));
+             Blob diagnostics = new Blob(diagnosticsOut.get(ValueLayout.ADDRESS, 0))) {
+            String diagnosticText = diagnostics.text();
+            if (result < 0) {
+                throw new SlangCompilationException(operation, result, diagnosticText);
+            }
+            byte[] code = readBytes(spirv.handle);
+            if (code.length == 0 || (code.length & 3) != 0) {
+                throw new IllegalStateException("Slang returned invalid SPIR-V byte count " + code.length);
+            }
+            return new SlangCompileResult(code, reflection.text(), diagnosticText);
         }
-        if (spirv.length == 0 || (spirv.length & 3) != 0) {
-            throw new IllegalStateException("Slang returned invalid SPIR-V byte count " + spirv.length);
-        }
-        return new SlangCompileResult(spirv, reflection, diagnostics);
     }
 
-    private byte[] takeBytes(MemorySegment blob) {
+    private byte[] readBytes(MemorySegment blob) {
         if (blob.equals(MemorySegment.NULL)) {
             return new byte[0];
         }
@@ -238,13 +241,30 @@ final class SlangLibrary {
             return data.reinterpret(size).toArray(ValueLayout.JAVA_BYTE);
         } catch (Throwable t) {
             throw new RuntimeException("Reading native Slang blob failed", t);
-        } finally {
-            destroyBlob(blob);
         }
     }
 
     private String takeString(MemorySegment blob) {
-        return new String(takeBytes(blob), StandardCharsets.UTF_8);
+        try (Blob owned = new Blob(blob)) {
+            return owned.text();
+        }
+    }
+
+    private final class Blob implements AutoCloseable {
+        private final MemorySegment handle;
+
+        private Blob(MemorySegment handle) {
+            this.handle = handle;
+        }
+
+        private String text() {
+            return new String(readBytes(handle), StandardCharsets.UTF_8);
+        }
+
+        @Override
+        public void close() {
+            destroyBlob(handle);
+        }
     }
 
     private void destroyBlob(MemorySegment blob) {
