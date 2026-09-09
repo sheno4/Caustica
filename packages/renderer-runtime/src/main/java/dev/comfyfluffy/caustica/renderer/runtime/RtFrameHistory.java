@@ -10,6 +10,12 @@ import org.joml.Matrix4fc;
 
 /** Only submitted frames become temporal predecessors. Capturing or abandoning a frame changes nothing. */
 final class RtFrameHistory {
+    private static final float MIN_FORWARD_DOT = 0.70710677f; // cos(45 degrees)
+    private static final float MAX_PROJECTION_RELATIVE_CHANGE = .1f;
+    private static final double MAX_CAMERA_DISTANCE_SQUARED_METERS = 64;
+    private static final double ANIMATION_PERIOD_SECONDS = 3600;
+    private static final float MAX_ANIMATION_GAP_SECONDS = .25f;
+
     private RtFrameInput previous;
     private long samples;
 
@@ -22,7 +28,7 @@ final class RtFrameHistory {
                 && previous.snapshot().view().entryScene() == snapshot.view().entryScene()
                 && previous.snapshot().metersPerWorldUnit() == snapshot.metersPerWorldUnit()
                 && previous.extent().equals(extent) && previous.route() == route
-                && !cameraCut(snapshot, projection, rotation);
+                && !cameraCut(previous, snapshot, projection, rotation);
         // Camera-relative projections use world motion; GPU instance history separately rebases scene origins.
         Float3 delta = continuous ? new Float3(
                 (float) (snapshot.cameraX() - previous.snapshot().cameraX()),
@@ -32,9 +38,9 @@ final class RtFrameHistory {
                 : RtJitter.sample(samples, extent.renderWidth(), extent.displayWidth());
         float jitterX = jitter.x() * jitterSignX;
         float jitterY = jitter.y() * jitterSignY;
-        float time = (float) (snapshot.timeSeconds() % 3600.0);
-        float priorTime = continuous ? (float) (previous.snapshot().timeSeconds() % 3600.0) : time;
-        if (time - priorTime < 0 || time - priorTime > .25f) priorTime = time;
+        float time = (float) (snapshot.timeSeconds() % ANIMATION_PERIOD_SECONDS);
+        float priorTime = continuous ? (float) (previous.snapshot().timeSeconds() % ANIMATION_PERIOD_SECONDS) : time;
+        if (time - priorTime < 0 || time - priorTime > MAX_ANIMATION_GAP_SECONDS) priorTime = time;
         return new RtFrameInput(snapshot, number, nanos, extent, route, jitterX, jitterY, preExposure,
                 continuous, projection, rotation, projectionView,
                 continuous ? previous.projectionView() : projectionView,
@@ -58,15 +64,16 @@ final class RtFrameHistory {
 
     void reset() { previous = null; }
 
-    private boolean cameraCut(FrameSnapshot snapshot, Matrix4fc projection, Matrix4fc rotation) {
+    private static boolean cameraCut(RtFrameInput previous, FrameSnapshot snapshot,
+                                     Matrix4fc projection, Matrix4fc rotation) {
         Matrix4fc oldRotation = previous.viewRotation();
         float forwardDot = rotation.m02() * oldRotation.m02() + rotation.m12() * oldRotation.m12()
                 + rotation.m22() * oldRotation.m22();
-        return forwardDot < 0.70710677f
-                || relativeDifference(projection.m00(), previous.projection().m00()) > .1f
-                || relativeDifference(projection.m11(), previous.projection().m11()) > .1f
+        return forwardDot < MIN_FORWARD_DOT
+                || relativeDifference(projection.m00(), previous.projection().m00()) > MAX_PROJECTION_RELATIVE_CHANGE
+                || relativeDifference(projection.m11(), previous.projection().m11()) > MAX_PROJECTION_RELATIVE_CHANGE
                 || distanceSquared(snapshot, previous.snapshot()) * snapshot.metersPerWorldUnit()
-                        * snapshot.metersPerWorldUnit() > 64;
+                        * snapshot.metersPerWorldUnit() > MAX_CAMERA_DISTANCE_SQUARED_METERS;
     }
 
     private static double distanceSquared(FrameSnapshot a, FrameSnapshot b) {
