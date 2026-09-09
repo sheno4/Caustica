@@ -19,6 +19,7 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
 import dev.comfyfluffy.caustica.support.SharedResource;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
@@ -473,8 +474,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         public float metersPerSceneUnit() { return metersPerSceneUnit; }
 
         private void close() {
-            try { closeAll(scenes.values(), null); }
-            finally { source.close(); }
+            new ResourceLifetime(() -> closeAll(scenes.values(), null), source::close).close();
         }
     }
 
@@ -835,11 +835,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     static void suppressCleanupFailure(Throwable failure, Runnable cleanup) {
-        try {
-            cleanup.run();
-        } catch (Throwable cleanupFailure) {
-            if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
-        }
+        ResourceLifetime.closeAfterFailure(failure, cleanup);
     }
 
     private static void throwFailure(Throwable failure, String message) {
@@ -873,8 +869,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 released = root;
                 root = null;
             }
-            try { released.close(); }
-            finally { if (previous != null) previous.close(); }
+            new ResourceLifetime(released::close, () -> {
+                if (previous != null) previous.close();
+            }).close();
         }
     }
 
