@@ -23,6 +23,12 @@ public abstract class LevelRendererMixin {
 	@Final
 	private LevelRenderState levelRenderState;
 
+	@Inject(method = "doEntityOutline", at = @At("HEAD"), cancellable = true)
+	private void caustica$skipUnrenderedEntityOutline(CallbackInfo ci) {
+		// Cancelling world rendering also skips the outline target's clear and population.
+		if (CausticaClientComposition.current().renderController().wasWorldSkippedThisFrame()) ci.cancel();
+	}
+
 	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
 	private void caustica$cancelVanillaWorld(
 			GraphicsResourceAllocator resourceAllocator,
