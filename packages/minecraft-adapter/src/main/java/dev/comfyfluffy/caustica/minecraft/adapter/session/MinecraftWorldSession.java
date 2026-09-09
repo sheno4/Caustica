@@ -72,7 +72,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
                 removed.add(entry.getValue());
                 return true;
             });
-            teardown(removed, true);
+            teardown(removed);
             for (MinecraftWorldSessionHost.Channel.Registration registration : desired) {
                 if (attempted.add(registration)) open(registration);
             }
@@ -113,12 +113,12 @@ public final class MinecraftWorldSession implements AutoCloseable {
         channel.detach(this);
         closing = new ArrayList<>(active.values());
         active.clear();
-        quiesceAndInvalidate(closing, true);
+        quiesceAndInvalidate(closing);
     }
 
     void finishClose() {
         if (!closed) beginClose();
-        drainAndClose(closing, true);
+        drainAndClose(closing);
         closing = List.of();
     }
 
@@ -136,7 +136,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
             environment = Objects.requireNonNull(environments.apply(scene),
                     "environment scope factory returned null");
         } catch (Throwable failure) {
-            teardown(List.of(new ActiveContribution(owner, scope, null, null)), false);
+            teardown(List.of(new ActiveContribution(owner, scope, null, null)));
             report(owner, MinecraftSessionFailure.Stage.CREATE_SCOPE, failure);
             return;
         }
@@ -146,24 +146,23 @@ public final class MinecraftWorldSession implements AutoCloseable {
                     new Context(scope.context(), scene, dimension, resourcePackEpoch, environment::select)),
                     "Minecraft world-session factory returned null");
         } catch (Throwable failure) {
-            teardown(List.of(new ActiveContribution(owner, scope, environment, null)), false);
+            teardown(List.of(new ActiveContribution(owner, scope, environment, null)));
             report(owner, MinecraftSessionFailure.Stage.OPEN_CONTRIBUTION, failure);
             return;
         }
         active.put(registration, new ActiveContribution(owner, scope, environment, contribution));
     }
 
-    private void teardown(List<ActiveContribution> contributions, boolean invokeContributionHooks) {
-        quiesceAndInvalidate(contributions, invokeContributionHooks);
-        drainAndClose(contributions, invokeContributionHooks);
+    private void teardown(List<ActiveContribution> contributions) {
+        quiesceAndInvalidate(contributions);
+        drainAndClose(contributions);
     }
 
-    private void quiesceAndInvalidate(List<ActiveContribution> contributions,
-                                      boolean invokeContributionHooks) {
+    private void quiesceAndInvalidate(List<ActiveContribution> contributions) {
         for (ActiveContribution contribution : contributions)
             invoke(contribution, MinecraftSessionFailure.Stage.QUIESCE, contribution.scope::quiesce);
-        if (invokeContributionHooks) {
-            for (ActiveContribution contribution : contributions)
+        for (ActiveContribution contribution : contributions) {
+            if (contribution.contribution != null)
                 invoke(contribution, MinecraftSessionFailure.Stage.STOP_CONTRIBUTION,
                         contribution.contribution::stop);
         }
@@ -176,16 +175,15 @@ public final class MinecraftWorldSession implements AutoCloseable {
             invoke(contribution, MinecraftSessionFailure.Stage.INVALIDATE, contribution.scope::invalidate);
     }
 
-    private void drainAndClose(List<ActiveContribution> contributions,
-                               boolean invokeContributionHooks) {
+    private void drainAndClose(List<ActiveContribution> contributions) {
         for (ActiveContribution contribution : contributions) {
             if (contribution.environment != null)
                 invoke(contribution, MinecraftSessionFailure.Stage.DRAIN, contribution.environment::drain);
         }
         for (ActiveContribution contribution : contributions)
             invoke(contribution, MinecraftSessionFailure.Stage.DRAIN, contribution.scope::drain);
-        if (invokeContributionHooks) {
-            for (ActiveContribution contribution : contributions)
+        for (ActiveContribution contribution : contributions) {
+            if (contribution.contribution != null)
                 invoke(contribution, MinecraftSessionFailure.Stage.CLOSE_CONTRIBUTION,
                         contribution.contribution::close);
         }
@@ -206,6 +204,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
         if (closed) throw new IllegalStateException("Minecraft world session is closed");
     }
 
+    /** Environment and contribution are absent until their respective factories return successfully. */
     private record ActiveContribution(ContributionOwner owner, ContributionScope scope,
                                       EnvironmentSelectionScope environment,
                                       MinecraftWorldSessionContribution contribution) { }
