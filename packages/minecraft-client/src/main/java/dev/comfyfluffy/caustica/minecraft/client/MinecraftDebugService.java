@@ -45,6 +45,7 @@ public final class MinecraftDebugService implements AutoCloseable {
     private final Map<String, CompletableFuture<Object>> jobs = new ConcurrentHashMap<>();
     private final List<FrameWait> waits = new ArrayList<>();
     private final List<Runnable> captures = new ArrayList<>();
+    private final List<Runnable> beforeUiCaptures = new ArrayList<>();
     private long frames;
     private long ticks;
     private Recording recording;
@@ -230,7 +231,13 @@ public final class MinecraftDebugService implements AutoCloseable {
             });
             case "screenshot", "image.capture" -> {
                 if (op.equals("image.capture")) requireWorld();
-                captures.add(() -> {
+                String phase = request.has("phase") ? request.get("phase").getAsString() : "frame-end";
+                var queue = switch (phase) {
+                    case "frame-end" -> captures;
+                    case "before-ui" -> beforeUiCaptures;
+                    default -> throw new IllegalArgumentException("Unknown capture phase: " + phase);
+                };
+                queue.add(() -> {
                     if (future.isDone()) return;
                     try {
                         if (op.equals("screenshot")) screenshot(request, future);
@@ -442,10 +449,19 @@ public final class MinecraftDebugService implements AutoCloseable {
     public static void frameRendered(boolean composited) {
         if (instance == null) return;
         if (composited && instance.client.level != null) instance.frames++;
-        var pending = List.copyOf(instance.captures);
-        instance.captures.clear();
-        pending.forEach(Runnable::run);
+        drainCaptures(instance.captures);
         instance.advanceWaits();
+    }
+
+    /** Observes the populated UI and destination before the final SDR blend is recorded. */
+    public static void beforeUiComposite() {
+        if (instance != null) drainCaptures(instance.beforeUiCaptures);
+    }
+
+    private static void drainCaptures(List<Runnable> queue) {
+        var pending = List.copyOf(queue);
+        queue.clear();
+        pending.forEach(Runnable::run);
     }
 
     public static void tick() {

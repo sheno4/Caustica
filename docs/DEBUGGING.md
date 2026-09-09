@@ -52,6 +52,8 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | `job` | `jobId`; returns pending/completed/failed state |
 | `client.stop` | Stop the debug client gracefully after returning acknowledgement |
 
+Both capture operations accept optional `phase`: `frame-end` (default) or `before-ui`. The latter runs immediately before the final SDR UI blend, after the overlay has been populated. It requires an active SDR UI composite; otherwise the job times out. Raw readback submits preceding host commands at either phase. Separate requests still observe separate frames; use a raw bundle to compare targets at one phase in one frame.
+
 For repeatable flight routes, use spectator mode and a level camera. Ability speed defaults to `0.05`; `0.2` is the maximum mouse-wheel speed. With sprint held, steady horizontal speeds are approximately 21.78 and 87.11 blocks per second respectively at 20 ticks per second. The ability value is an acceleration parameter, not blocks per second. Read `status.player.currentFlyingSpeed` to record the actual configuration; a previous mouse-wheel adjustment can change it.
 
 Save the `previousFlyingSpeed` returned by the initial `input.set` call. In the benchmark's `finally` block, call `input.set` with `forward:false`, `sprint:false`, and `flyingSpeed` set to that saved value while still in spectator mode. Releasing keys alone leaves the ability speed unchanged. The override uses the same client ability setter as spectator mouse-wheel input.
