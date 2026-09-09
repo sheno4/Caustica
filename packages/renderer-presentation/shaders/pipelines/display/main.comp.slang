@@ -4,6 +4,7 @@
 // scene-referred ACES look (LMT), then the shared ACES 2.0 output transform for each display.
 
 import display_common;
+import presentation_common;
 
 [[vk::push_constant]] DisplayPush pc;
 
@@ -66,40 +67,13 @@ float3 luminanceGamma(float3 linearDisplayColor, float3 lumaCoefficients) {
     return color * min(scale, gamutLimitedScale);
 }
 
-float srgbDecodeChannel(float code) {
-    return code <= 0.04045 ? code / 12.92 : pow((code + 0.055) / 1.055, 2.4);
-}
-
-float srgbEncodeChannel(float linearValue) {
-    return linearValue <= 0.0031308
-            ? 12.92 * linearValue
-            : 1.055 * pow(linearValue, 1.0 / 2.4) - 0.055;
-}
-
-float3 srgbDecode(float3 code) {
-    return float3(srgbDecodeChannel(code.r), srgbDecodeChannel(code.g), srgbDecodeChannel(code.b));
-}
-
-float3 srgbEncode(float3 linearColor) {
-    return float3(
-            srgbEncodeChannel(linearColor.r),
-            srgbEncodeChannel(linearColor.g),
-            srgbEncodeChannel(linearColor.b));
-}
-
 float3 displayGammaSdr(float3 displayColor) {
     float3 code = clamp(displayColor, 0.0, 1.0);
     if (abs(pc.gamma - 1.0) < 1.0e-6) {
         return code;
     }
-    return clamp(srgbEncode(luminanceGamma(srgbDecode(code), BT709_LUMA)), 0.0, 1.0);
+    return clamp(linearToSrgb(luminanceGamma(srgbToLinear(code), BT709_LUMA)), 0.0, 1.0);
 }
-
-static const float PQ_M1 = 0.1593017578125;
-static const float PQ_M2 = 78.84375;
-static const float PQ_C1 = 0.8359375;
-static const float PQ_C2 = 18.8515625;
-static const float PQ_C3 = 18.6875;
 
 float3 pqDecode(float3 code) {
     float3 p = pow(clamp(code, 0.0, 1.0), float3(1.0 / PQ_M2));

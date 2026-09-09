@@ -7,6 +7,7 @@
 // pass shows the actual guide inputs used by RR rather than changing the renderer being inspected.
 
 import display_common;
+import presentation_common;
 
 [[vk::push_constant]] DebugPresentPush pc;
 
@@ -17,22 +18,12 @@ static const float3 ACESCG_TO_BT709_R = float3( 1.70505095, -0.62179214, -0.0832
 static const float3 ACESCG_TO_BT709_G = float3(-0.13025641,  1.14080477, -0.01054832);
 static const float3 ACESCG_TO_BT709_B = float3(-0.02400336, -0.12896897,  1.15297234);
 
-float linearToSrgbChannel(float value) {
-    value = clamp(value, 0.0, 1.0);
-    return value <= 0.0031308
-            ? 12.92 * value
-            : 1.055 * pow(value, 1.0 / 2.4) - 0.055;
-}
-
 float3 acesCgToSrgb(float3 color) {
     float3 linearBt709 = float3(
             dot(color, ACESCG_TO_BT709_R),
             dot(color, ACESCG_TO_BT709_G),
             dot(color, ACESCG_TO_BT709_B));
-    return float3(
-            linearToSrgbChannel(linearBt709.r),
-            linearToSrgbChannel(linearBt709.g),
-            linearToSrgbChannel(linearBt709.b));
+    return linearToSrgb(clamp(linearBt709, 0.0, 1.0));
 }
 
 // Display-referred, deliberately discrete one-stop bands. `ev == 0` means the value entering ACES
