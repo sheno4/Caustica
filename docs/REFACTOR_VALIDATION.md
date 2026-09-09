@@ -1953,3 +1953,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Replaced `RtCuboidEmitter`'s high/low 32-bit packed return value with one `Counts` accumulator per direct model emission. Recursive traversal increments named specialized/generic fields, and the collector reports them directly.
 - Preserved visibility/skip-draw rules, traversal order, pose-stack cleanup, and geometry emission. The accumulator avoids a separate object at each recursive node; one object is created per top-level direct emission.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-cuboid-named-counts-check.log`). The arithmetic/traversal change was inspected directly; no dedicated cuboid traversal test, live JFR count comparison, or allocation benchmark was added. No performance improvement is claimed.
+
+### Separate cuboid validity from eight-corner specialization
+
+- Reviewed the cuboid template tree construction, identity/order matching, corner detection, and generic fallback. Extracted whole-cube support validation before specialization.
+- Eight-corner detection now returns the generic template immediately on a ninth distinct corner. Removed the overflow flag and the subsequent construction of unusable face templates. Full validation still precedes this return, so a later malformed face rejects the direct path.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 6 seconds (`tmp/aesthetic-cuboid-template-validation-check.log`). Fallback and normal-case branch equivalence was inspected directly; no dedicated live model comparison or performance benchmark was performed.

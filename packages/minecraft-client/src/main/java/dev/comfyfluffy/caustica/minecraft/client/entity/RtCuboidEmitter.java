@@ -229,40 +229,28 @@ final class RtCuboidEmitter {
         }
 
         static CubeTemplate create(ModelPart.Cube cube) {
-            if (cube.getClass() != ModelPart.Cube.class) {
-                return null;
-            }
+            if (!supported(cube)) return null;
             ModelPart.Polygon[] polygons = cube.polygons;
             float[] sourceX = new float[STANDARD_CORNERS];
             float[] sourceY = new float[STANDARD_CORNERS];
             float[] sourceZ = new float[STANDARD_CORNERS];
             FaceTemplate[] faces = new FaceTemplate[polygons.length];
             int cornerCount = 0;
-            boolean overflow = false;
             for (int faceIndex = 0; faceIndex < polygons.length; faceIndex++) {
                 ModelPart.Polygon polygon = polygons[faceIndex];
-                if (polygon == null || polygon.normal() == null || polygon.vertices().length != 4) {
-                    return null;
-                }
                 int[] corners = new int[4];
                 float[] u = new float[4];
                 float[] v = new float[4];
                 for (int i = 0; i < 4; i++) {
                     ModelPart.Vertex vertex = polygon.vertices()[i];
-                    if (vertex == null) {
-                        return null;
-                    }
                     int corner = findCorner(sourceX, sourceY, sourceZ, cornerCount,
                             vertex.x(), vertex.y(), vertex.z());
                     if (corner < 0) {
-                        if (cornerCount == STANDARD_CORNERS) {
-                            overflow = true;
-                        } else {
-                            corner = cornerCount++;
-                            sourceX[corner] = vertex.x();
-                            sourceY[corner] = vertex.y();
-                            sourceZ[corner] = vertex.z();
-                        }
+                        if (cornerCount == STANDARD_CORNERS) return new CubeTemplate(cube);
+                        corner = cornerCount++;
+                        sourceX[corner] = vertex.x();
+                        sourceY[corner] = vertex.y();
+                        sourceZ[corner] = vertex.z();
                     }
                     corners[i] = corner;
                     u[i] = vertex.u();
@@ -271,7 +259,7 @@ final class RtCuboidEmitter {
                 Vector3fc normal = polygon.normal();
                 faces[faceIndex] = new FaceTemplate(corners, u, v, normal.x(), normal.y(), normal.z());
             }
-            if (overflow || cornerCount != STANDARD_CORNERS) {
+            if (cornerCount != STANDARD_CORNERS) {
                 return new CubeTemplate(cube);
             }
             for (int i = 0; i < STANDARD_CORNERS; i++) {
@@ -280,6 +268,16 @@ final class RtCuboidEmitter {
                 sourceZ[i] /= ModelPart.Vertex.SCALE_FACTOR;
             }
             return new EightCornerCube(cube, sourceX, sourceY, sourceZ, faces);
+        }
+
+        // Validate every face before specialization can return early to the generic direct path.
+        private static boolean supported(ModelPart.Cube cube) {
+            if (cube.getClass() != ModelPart.Cube.class) return false;
+            for (var polygon : cube.polygons) {
+                if (polygon == null || polygon.normal() == null || polygon.vertices().length != 4) return false;
+                for (var vertex : polygon.vertices()) if (vertex == null) return false;
+            }
+            return true;
         }
 
         private static int findCorner(float[] x, float[] y, float[] z, int count,
