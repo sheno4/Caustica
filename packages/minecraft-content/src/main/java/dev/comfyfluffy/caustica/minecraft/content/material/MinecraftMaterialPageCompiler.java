@@ -117,29 +117,7 @@ public final class MinecraftMaterialPageCompiler {
             candidate.y = placement.y();
         }
 
-        int mipCount = Integer.numberOfTrailingZeros(pageSize) + 1;
-        MaterialPagePacker[] pixels = new MaterialPagePacker[plan.layouts().size()];
-        for (int page = 0; page < plan.layouts().size(); page++) {
-            MinecraftMaterialPagePlanner.Layout layout = plan.layouts().get(page);
-            pixels[page] = new MaterialPagePacker(pageSize, mipCount, gutter,
-                    layout.has(MinecraftMaterialPagePlanner.CHANNEL_MATERIAL),
-                    layout.has(MinecraftMaterialPagePlanner.CHANNEL_EMISSION));
-        }
-        AtomicBoolean loggedFailure = new AtomicBoolean();
-        candidates.parallelStream().filter(candidate -> candidate.page >= 0).forEach(candidate -> {
-            try {
-                var levels = MaterialTextureAnalyzer.decode(
-                        candidate.resource.analysisSource(),
-                        maxLodFor(candidate.width(), candidate.height()));
-                pixels[candidate.page].write(candidate.x, candidate.y, levels);
-            } catch (Throwable failure) {
-                if (loggedFailure.compareAndSet(false, true)) {
-                    LOGGER.warn("RT canonical material decode failed for " + candidate.resource.material(), failure);
-                }
-                candidate.page = -1;
-            }
-        });
-
+        MaterialPagePacker[] pixels = writePages(candidates, plan, gutter);
         List<PageSlots> pages = new ArrayList<>(pixels.length);
         for (MaterialPagePacker page : pixels) {
             pages.add(new PageSlots(
@@ -166,6 +144,33 @@ public final class MinecraftMaterialPageCompiler {
             compiled.put(candidate.resource.material(), material);
         }
         return new Result(compiled, fallback, textures);
+    }
+
+    private static MaterialPagePacker[] writePages(List<Candidate> candidates,
+                                                   MinecraftMaterialPagePlanner.Plan plan, int gutter) {
+        int pageSize = plan.pageSize();
+        int mipCount = Integer.numberOfTrailingZeros(pageSize) + 1;
+        MaterialPagePacker[] pixels = new MaterialPagePacker[plan.layouts().size()];
+        for (int page = 0; page < plan.layouts().size(); page++) {
+            MinecraftMaterialPagePlanner.Layout layout = plan.layouts().get(page);
+            pixels[page] = new MaterialPagePacker(pageSize, mipCount, gutter,
+                    layout.has(MinecraftMaterialPagePlanner.CHANNEL_MATERIAL),
+                    layout.has(MinecraftMaterialPagePlanner.CHANNEL_EMISSION));
+        }
+        AtomicBoolean loggedFailure = new AtomicBoolean();
+        candidates.parallelStream().filter(candidate -> candidate.page >= 0).forEach(candidate -> {
+            try {
+                var levels = MaterialTextureAnalyzer.decode(candidate.resource.analysisSource(),
+                        maxLodFor(candidate.width(), candidate.height()));
+                pixels[candidate.page].write(candidate.x, candidate.y, levels);
+            } catch (Throwable failure) {
+                if (loggedFailure.compareAndSet(false, true)) {
+                    LOGGER.warn("RT canonical material decode failed for " + candidate.resource.material(), failure);
+                }
+                candidate.page = -1;
+            }
+        });
+        return pixels;
     }
 
     static int pageChannels(int features) {
