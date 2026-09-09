@@ -26,7 +26,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
 
     @Override public CompletableFuture<ResourceOwner> prepare(RetainedSceneSnapshot.Mesh mesh, ResourceOwner source) {
         RtPreparedMesh.State previous = source == null ? null : ((RtPreparedMesh) source).value();
-        if (previous != null && RtRetainedGeometryPlan.canReuseBlas(previous.build, mesh.build())) {
+        if (previous != null && RtRetainedGeometryPlan.canReuseBlas(previous.build(), mesh.build())) {
             return CompletableFuture.completedFuture(source.retain());
         }
         Preparation preparation = new Preparation(mesh, previous);
@@ -60,8 +60,8 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
                 nativeBuild = RtAccel.preparePersistentBlasBuild(context,
                         build.positions().bytes().address(), build.positions().byteStride(), build.vertexCount(),
                         build.indices().bytes().address(), RtRetainedGeometryPlan.blasRanges(build), label);
-            } else if (source != null && RtRetainedGeometryPlan.canRefitBlas(source.build, build)) {
-                nativeBuild = RtAccel.preparePersistentBlasUpdate(context, source.operation, source.accel.handle,
+            } else if (source != null && RtRetainedGeometryPlan.canRefitBlas(source.build(), build)) {
+                nativeBuild = RtAccel.preparePersistentBlasUpdate(context, source.operation(), source.accel().handle,
                         build.positions().bytes().address(), build.indices().bytes().address(), label);
             } else {
                 nativeBuild = RtAccel.prepareUpdateablePersistentBlasBuild(context,

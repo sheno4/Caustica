@@ -198,7 +198,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     .mask(instance.current.mask())
                     .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset())
                     .flags(org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instance.mesh.blas().accel.deviceAddress.value());
+                    .accelerationStructureReference(instance.mesh.blas().accel().deviceAddress.value());
         };
     }
 

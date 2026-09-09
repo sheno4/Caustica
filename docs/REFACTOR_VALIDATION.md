@@ -1674,3 +1674,9 @@ Raytracing checks passed in 5s (45 tasks, 9 executed), including geometry-range 
 Read CompactionQuery, RtMeshPreparer and all nine RtMeshPreparerTest tests. Traced query lifetime through BUILD completion, size readback, scratch/query release and subsequent compact-copy submission. Kept the query's single-owner lifetime; no extra idempotence state was added. Replaced releaseBuildResources try/finally with ResourceLifetime actions so query release still follows scratch release but cannot mask its failure. Completion continues to publish only after temporary cleanup and to release cancelled/failed destinations.
 
 Raytracing checks passed in 5s (45 tasks, 9 executed). Existing tests cover cleanup-before-publication, cancellation retaining accepted GPU ownership, build/copy failures, both compaction generations and missing destination ownership. Evidence: tmp/aesthetic-compaction-query-check.log. git diff --check passed. No direct native query failure injection or live compaction measurement was performed; whole-project review and broader runtime gates remain incomplete.
+
+## Prepared mesh state is a record (2026-09-09)
+
+Read RtPreparedMesh in full and traced its State consumers in mesh reuse/refit and TLAS address writing. Replaced the immutable three-field State class with a record and updated external field access to record accessors. Kept the ResourceOwner wrapper because each retain needs an independent claim and final native destruction is deferred through the device context. Corrected the class comment: native ownership is established during preparation, while publication waits for GPU completion.
+
+Raytracing checks passed in 6s (45 tasks, 10 executed), with no test edits required. Evidence: tmp/aesthetic-prepared-mesh-state-check.log. git diff --check passed. No new live rendering or performance measurement was performed. Whole-project review remains active.

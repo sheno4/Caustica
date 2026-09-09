@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
 import dev.comfyfluffy.caustica.support.SharedResource;
 
-/** Strong native ownership of one completed, immutable bottom-level acceleration structure. */
+/** Owns one bottom-level acceleration structure; the preparer publishes it only after GPU completion. */
 final class RtPreparedMesh implements ResourceOwner {
     private final SharedResource<State> owner;
 
@@ -38,15 +38,5 @@ final class RtPreparedMesh implements ResourceOwner {
         owner.close();
     }
 
-    static final class State {
-        final MeshBuild<?> build;
-        final RtAccel.BlasOperation operation;
-        final RtAccel accel;
-
-        State(MeshBuild<?> build, RtAccel.BlasOperation operation, RtAccel accel) {
-            this.build = build;
-            this.operation = operation;
-            this.accel = accel;
-        }
-    }
+    record State(MeshBuild<?> build, RtAccel.BlasOperation operation, RtAccel accel) { }
 }
