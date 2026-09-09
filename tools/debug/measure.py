@@ -20,13 +20,16 @@ def main():
     args = parser.parse_args()
     if args.warmup < 0 or args.frames < 1:
         parser.error("warmup must be nonnegative and frames positive")
+    checkout = Path(__file__).resolve().parents[2]
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=checkout,
+                              check=True, capture_output=True, text=True).stdout.strip()
+    working_tree = subprocess.run(["git", "status", "--short"], cwd=checkout,
+                                  check=True, capture_output=True, text=True).stdout
     client = Client(args.session, args.timeout)
     if args.warmup:
         client.call("wait", frames=args.warmup, timeoutMs=int(args.timeout * 1000))
-    result = {"start": client.call("status"), "requestedFrames": args.frames}
-    revision = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
-    result["revision"] = revision.stdout.strip()
-    result["workingTree"] = subprocess.run(["git", "status", "--short"], capture_output=True, text=True).stdout
+    result = {"start": client.call("status"), "requestedFrames": args.frames,
+              "revision": revision, "workingTree": working_tree}
     result["events"] = args.events.split(",")
     client.call("jfr.start", events=result["events"])
     try:

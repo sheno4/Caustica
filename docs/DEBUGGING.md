@@ -74,6 +74,8 @@ Duration summaries use milliseconds, including `threadCpuMs` and `cpuMs`. Unavai
 
 If a measurement fails after recording starts, its JSON retains the available conditions even when the client cannot stop JFR. Missing `end` or `recording` fields indicate an incomplete experiment, not a completed timing sample.
 
+Before contacting the client, `measure.py` reads the revision and working-tree status of the checkout containing the helper, regardless of the caller's directory. Git failures abort the measurement. These fields describe the observed source checkout, not the build loaded by an already-running client; launch the intended build before comparing measurements.
+
 For JVM hotspot attribution, export with `jfr print --json --stack-depth 64 --events jdk.ExecutionSample,jdk.ObjectAllocationSample RECORDING.jfr`.
 The command's default stack display depth is five frames and can hide application callers even when the recording contains deeper stacks.
 

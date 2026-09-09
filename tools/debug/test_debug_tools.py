@@ -1,6 +1,8 @@
+from contextlib import chdir
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import Mock, call, patch
 
@@ -11,6 +13,29 @@ import measure
 
 
 class DebugToolsTest(unittest.TestCase):
+    def test_measurement_records_its_checkout_when_called_from_another_directory(self):
+        checkout = Path(measure.__file__).resolve().parents[2]
+        expected = subprocess.run(["git", "rev-parse", "HEAD"], cwd=checkout,
+                                  check=True, capture_output=True, text=True).stdout.strip()
+        client = Mock()
+        client.call.return_value = {}
+        with tempfile.TemporaryDirectory() as directory, chdir(directory):
+            output = Path(directory) / "measurement.json"
+            with patch("sys.argv", ["measure", "--warmup", "0", "--output", str(output)]), \
+                    patch.object(measure, "Client", return_value=client):
+                measure.main()
+            report = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(report["revision"], expected)
+
+    def test_measurement_does_not_start_when_git_metadata_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("sys.argv", ["measure", "--output", "unused.json"]), \
+                patch.object(measure, "Client") as client, \
+                patch.object(measure, "__file__", str(Path(directory) / "tools/debug/measure.py")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                measure.main()
+        client.assert_not_called()
+
     def test_measurement_preserves_conditions_when_client_disconnects(self):
         client = Mock()
         conditions = {"window": {"width": 3840, "height": 2130}, "frames": 120}
