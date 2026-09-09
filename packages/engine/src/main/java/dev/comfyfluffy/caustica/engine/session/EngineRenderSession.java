@@ -12,8 +12,10 @@ import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Session-control-thread orchestrator for the process registrations active in one render session. */
 public final class EngineRenderSession implements AutoCloseable {
@@ -22,6 +24,8 @@ public final class EngineRenderSession implements AutoCloseable {
     private final SessionFailureHandler failures;
     private final Map<EngineRenderSessionChannel.Registration, ActiveContribution> active =
             new LinkedHashMap<>();
+    // Failed factories stay attempted until unregistered, including when opening queues another reconciliation.
+    private final Set<EngineRenderSessionChannel.Registration> attempted = new HashSet<>();
     private List<ActiveContribution> closing = List.of();
     private long nextOwnerSequence;
     private volatile boolean reconcileRequested;
@@ -47,6 +51,7 @@ public final class EngineRenderSession implements AutoCloseable {
         while (reconcileRequested) {
             reconcileRequested = false;
             List<EngineRenderSessionChannel.Registration> desired = channel.snapshot();
+            attempted.retainAll(desired);
 
             List<ActiveContribution> removed = new ArrayList<>();
             active.entrySet().removeIf(entry -> {
@@ -57,7 +62,7 @@ public final class EngineRenderSession implements AutoCloseable {
             teardown(removed, true);
 
             for (EngineRenderSessionChannel.Registration registration : desired) {
-                if (!active.containsKey(registration)) {
+                if (attempted.add(registration)) {
                     open(registration);
                 }
             }

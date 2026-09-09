@@ -19,6 +19,32 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineRenderSessionTest {
     @Test
+    void failedFactoryIsNotRetriedWhenItRegistersAnotherFactory() {
+        var events = new ArrayList<String>();
+        var failures = new ArrayList<SessionFailure>();
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        try (var host = new RenderSessionHost()) {
+            host.api().sessions().add(context -> {
+                if (attempts.incrementAndGet() == 1) {
+                    host.api().sessions().add(next -> contribution("nested", events));
+                }
+                throw new IllegalStateException("broken extension");
+            });
+            try (var session = host.openSession(owner -> new TestScope("scope", events), failures::add)) {
+                session.processPendingChanges();
+                assertEquals(1, attempts.get());
+                assertEquals(1, failures.size());
+                assertEquals(1, session.contributionCount());
+                host.api().sessions().add(context -> contribution("later", events));
+                session.processPendingChanges();
+                assertEquals(1, attempts.get());
+                assertEquals(1, failures.size());
+                assertEquals(2, session.contributionCount());
+            }
+        }
+    }
+
+    @Test
     void registrationsCreatedWhileOpeningAreReconciledBeforeReturning() {
         List<String> events = new ArrayList<>();
         try (var host = new RenderSessionHost()) {
