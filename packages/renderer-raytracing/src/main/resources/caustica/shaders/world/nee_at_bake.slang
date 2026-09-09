@@ -191,6 +191,20 @@ bool reprojectLocalPixel(NeeAtState state, uint2 pixel, float depth, out uint pr
     return true;
 }
 
+// Capture this frame's depth even when feedback cannot be reused, so the next frame can reproject.
+uint2 captureLocalFeedback(NeeAtState state, uint2 pixel) {
+    if (pixel.x >= state.extentWidth || pixel.y >= state.extentHeight) return uint2(0u);
+    RWTexture2D<float> currentDepth = ResourceDescriptorHeap[neeAtBakePush.currentLinearDepthIndex];
+    DevicePtr<float> depthHistory = (DevicePtr<float>)neeAtBakePush.currentDepthAddress;
+    float depth = currentDepth[pixel];
+    depthHistory[pixel.y * state.extentWidth + pixel.x] = depth;
+    if ((state.flags & NEE_AT_LOCAL_HISTORY_VALID) == 0u || state.priorLightCount == 0u) return uint2(0u);
+    uint previousIndex;
+    if (!reprojectLocalPixel(state, pixel, depth, previousIndex)) return uint2(0u);
+    ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
+    return feedback[previousIndex];
+}
+
 void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
     uint tileCount = state.tileCountX * state.tileCountY;
     if (tileIndex >= tileCount) return;
@@ -202,23 +216,12 @@ void bakeLocal(NeeAtState state, uint tileIndex, uint lane) {
     GroupMemoryBarrierWithGroupSync();
     uint2 tile = uint2(tileIndex % state.tileCountX, tileIndex / state.tileCountX);
     uint2 jitter = neeAtTileJitter(state);
-    ConstPtr<uint2> feedback = (ConstPtr<uint2>)neeAtBakePush.previousPixelFeedbackAddress;
     if (lane < state.tileSize * state.tileSize) {
         uint2 local = uint2(lane % state.tileSize, lane / state.tileSize);
         uint2 paddedExtent = uint2(state.tileCountX, state.tileCountY) * state.tileSize;
         uint2 pixel = (tile * state.tileSize + local + paddedExtent - jitter) % paddedExtent;
-        uint2 event = uint2(0u);
-        if (pixel.x < state.extentWidth && pixel.y < state.extentHeight) {
-            RWTexture2D<float> currentDepth = ResourceDescriptorHeap[neeAtBakePush.currentLinearDepthIndex];
-            DevicePtr<float> depthHistory = (DevicePtr<float>)neeAtBakePush.currentDepthAddress;
-            float depth = currentDepth[pixel];
-            // The jittered tile mapping visits every in-extent pixel once, including reset frames.
-            depthHistory[pixel.y * state.extentWidth + pixel.x] = depth;
-            if ((state.flags & NEE_AT_LOCAL_HISTORY_VALID) != 0u && state.priorLightCount != 0u) {
-                uint previousIndex;
-                if (reprojectLocalPixel(state, pixel, depth, previousIndex)) event = feedback[previousIndex];
-            }
-        }
+        // The jittered tile mapping visits every in-extent pixel once, including reset frames.
+        uint2 event = captureLocalFeedback(state, pixel);
         uint previousLight = event.x & NEE_AT_FEEDBACK_LIGHT_MASK;
         if (asfloat(event.y) > 0.0 && (event.x & NEE_AT_FEEDBACK_COHERENT) != 0u
                 && previousLight < state.priorLightCount) {
