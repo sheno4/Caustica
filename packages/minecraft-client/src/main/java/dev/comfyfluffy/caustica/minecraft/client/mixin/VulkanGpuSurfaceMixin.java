@@ -259,10 +259,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	}
 
 	/**
-	 * Reapply the Reflex sleep-mode config for the configured swapchain. The configuration
-	 * is scoped to a specific swapchain object, so it must be re-called whenever {@code configure()} builds a
-	 * new one (e.g. resize); applying unchanged settings is an idempotent no-op.
-	 * it unconditionally here is cheap. No-op when Reflex isn't enabled + device-supported.
+	 * Apply HDR metadata and Reflex sleep mode to the new swapchain. Both configurations are scoped to
+	 * its native handle and must be applied again after recreation.
 	 */
 	@Inject(method = "configure", at = @At("TAIL"))
 	private void caustica$applySwapchainExtensionState(GpuSurface.Configuration config, CallbackInfo ci) {
@@ -284,11 +282,9 @@ public abstract class VulkanGpuSurfaceMixin {
 	}
 
 	/**
-	 * Emit PRESENT_START/END markers around the real frame's present and, when
-	 * {@code VK_KHR_present_id} is enabled) chaining a {@code VkPresentIdKHR} onto it so the marker's
-	 * {@code presentID} correlates with this exact present call. The FG-generated extra presents
-	 * (RT-generated frames) are deliberately NOT marked/present-id'd — Reflex paces/measures the real
-	 * frame only. No-op passthrough unless Reflex has successfully applied sleep mode for this swapchain.
+	 * Mark the real frame's presentation for Reflex, attaching the same ID through
+	 * {@code VK_KHR_present_id} when supported. Generated-frame presents carry no Reflex markers;
+	 * Reflex paces the real frame. Requires sleep mode applied to this swapchain.
 	 */
 	@Redirect(method = "present",
 			at = @At(value = "INVOKE",
@@ -335,7 +331,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * SDR-authored UI and blit the result directly into the swapchain instead of Minecraft's SDR main target.
 	 *
 	 * <p>Because this cancels {@code blitFromTexture} at HEAD, the normal {@code caustica$prepareGeneratedFrame}
-	 * TAIL inject below never runs on HDR frames — so DLSS-FG's extra-present step is invoked explicitly here,
+	 * TAIL inject below never runs on HDR frames, so DLSS-FG recording is invoked explicitly here,
 	 * right after the real HDR frame is recorded, using the just-composited {@code hdrDisplayImage} (already
 	 * UI-composited by {@code presentHdr}) as the interpolation source instead of the SDR main target.
 	 */
@@ -410,11 +406,10 @@ public abstract class VulkanGpuSurfaceMixin {
 	}
 
 	/**
-	 * After Minecraft blits the real frame into its acquired swapchain image, evaluate DLSS Frame Generation
-	 * (but before {@code present()} shows it), present the generated frame into an additional swapchain image
-	 * through the RT runtime, so the display order is generated-then-real. Runs only on the normal
-	 * present path — the HDR/PQ present hooks cancel {@code blitFromTexture} at HEAD, so this TAIL is
-	 * skipped there; HDR evaluates frame generation from its PQ backbuffer in the explicit HDR hook.
+	 * Record interpolation into an additional swapchain image after Minecraft records the real frame.
+	 * Presentation waits until the host submits both frames; {@code caustica$flushGeneratedPresent} then
+	 * presents the generated frame first. HDR/PQ cancels this method at HEAD and records from its PQ
+	 * backbuffer through the explicit HDR hook.
 	 */
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
 	private void caustica$prepareGeneratedFrame(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
@@ -438,11 +433,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	}
 
 	/**
-	 * DLSS-FG on the HDR present path: same extra-present mechanism as {@link #caustica$prepareGeneratedFrame},
-	 * but sourced from the presenter's PQ HDR backbuffer
-	 * since HDR frames never reach that TAIL inject (HEAD cancels {@code blitFromTexture} above). No-op if FG
-	 * isn't active or the HDR backbuffer isn't available (shouldn't happen right after a successful
-	 * {@code presentHdr} call, but mirrors the defensive {@code srcImage == 0L} check in the SDR path).
+	 * Record interpolation from the composited PQ backbuffer. HDR frames bypass the SDR TAIL hook;
+	 * both paths queue their generated image for presentation after host submission.
 	 */
 	@Unique
 	private void caustica$prepareGeneratedFrameHdr(GraphicsSubmission submission,
@@ -464,10 +456,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Unique
 	private PresentationSwapchain caustica$swapchain() {
 		PresentationSwapchain cached = this.caustica$presentationSwapchain;
-		if (cached != null && cached.swapchain() == this.swapchain
-				&& cached.format() == this.swapchainImageFormat
-				&& cached.width() == this.swapchainWidth && cached.height() == this.swapchainHeight
-				&& cached.images().size() == this.swapchainImages.size()) {
+		// configure destroys the previous swapchain first; its HEAD hook invalidates this description.
+		if (cached != null) {
 			return cached;
 		}
 		ArrayList<PresentationSwapchain.Image> images = new ArrayList<>(this.swapchainImages.size());
