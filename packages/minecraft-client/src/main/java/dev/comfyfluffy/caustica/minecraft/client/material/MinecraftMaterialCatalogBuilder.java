@@ -47,36 +47,42 @@ public final class MinecraftMaterialCatalogBuilder {
         List<MaterialTextureResource> blocks = new ArrayList<>();
         for (TextureAtlasSprite sprite : sprites) {
             if (sprite == null) continue;
-            Identifier name = sprite.contents().name();
-            ResourceId material = MinecraftResourceIds.resourceId(name);
-            Optional<Resource> spec = resource(sibling(name, "_s.png"));
-            Optional<Resource> normal = resource(sibling(name, "_n.png"));
-            NativeImage original = ((SpriteContentsAccessor) sprite.contents()).caustica$originalImage();
-            int[] alphaFrames = exhaustiveAlphaFrames(sprite.contents().getUniqueFrames().toIntArray(),
-                    original.getWidth(), original.getHeight(),
-                    sprite.contents().width(), sprite.contents().height());
-            MaterialImageSource albedo = borrowed(original, sprite.contents().width(), sprite.contents().height());
-            MaterialImageSource specular = spec.map(value -> resourceImage(value, true)).orElse(null);
-            MaterialImageSource normalMap = normal.map(value -> resourceImage(value, true)).orElse(null);
-            boolean inferEmission = spec.isEmpty() && emissions.permits(material);
-            blocks.add(new MaterialTextureResource(material, MaterialTextureKind.SHARED_ATLAS,
-                    new MaterialTextureAnalysisSource(sprite.contents().width(), sprite.contents().height(),
-                            alphaFrames.length,
-                            new MinecraftMaterialTextureSource(albedo, specular, normalMap, inferEmission,
-                                    alphaFrames,
-                                    Math.max(1, original.getWidth() / sprite.contents().width()))),
-                    new MaterialUv(sprite.getU0(), sprite.getV0(),
-                            1.0f / (sprite.getU1() - sprite.getU0()),
-                            1.0f / (sprite.getV1() - sprite.getV0())),
-                    spec.isPresent(), normal.isPresent(), spec.isPresent() || inferEmission,
-                    OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
-                    MinecraftMaterialClassifier.dielectricIor(material), uniformEmissionLuminance));
+            blocks.add(atlasResource(sprite, emissions, uniformEmissionLuminance));
         }
 
         Set<ResourceId> blockNames = new HashSet<>();
         blocks.forEach(resource -> blockNames.add(resource.material()));
         blocks.addAll(standaloneResources(blockNames, rules, uniformEmissionLuminance));
         return List.copyOf(blocks);
+    }
+
+    private static MaterialTextureResource atlasResource(TextureAtlasSprite sprite,
+                                                           MaterialEmissionIndex emissions,
+                                                           float uniformEmissionLuminance) {
+        Identifier name = sprite.contents().name();
+        ResourceId material = MinecraftResourceIds.resourceId(name);
+        Optional<Resource> spec = resource(sibling(name, "_s.png"));
+        Optional<Resource> normal = resource(sibling(name, "_n.png"));
+        NativeImage original = ((SpriteContentsAccessor) sprite.contents()).caustica$originalImage();
+        int[] alphaFrames = exhaustiveAlphaFrames(sprite.contents().getUniqueFrames().toIntArray(),
+                original.getWidth(), original.getHeight(),
+                sprite.contents().width(), sprite.contents().height());
+        MaterialImageSource albedo = borrowed(original, sprite.contents().width(), sprite.contents().height());
+        MaterialImageSource specular = spec.map(value -> resourceImage(value, true)).orElse(null);
+        MaterialImageSource normalMap = normal.map(value -> resourceImage(value, true)).orElse(null);
+        boolean inferEmission = spec.isEmpty() && emissions.permits(material);
+        return new MaterialTextureResource(material, MaterialTextureKind.SHARED_ATLAS,
+                new MaterialTextureAnalysisSource(sprite.contents().width(), sprite.contents().height(),
+                        alphaFrames.length,
+                        new MinecraftMaterialTextureSource(albedo, specular, normalMap, inferEmission,
+                                alphaFrames,
+                                Math.max(1, original.getWidth() / sprite.contents().width()))),
+                new MaterialUv(sprite.getU0(), sprite.getV0(),
+                        1.0f / (sprite.getU1() - sprite.getU0()),
+                        1.0f / (sprite.getV1() - sprite.getV0())),
+                spec.isPresent(), normal.isPresent(), spec.isPresent() || inferEmission,
+                OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
+                MinecraftMaterialClassifier.dielectricIor(material), uniformEmissionLuminance);
     }
 
     private static List<MaterialTextureResource> standaloneResources(Set<ResourceId> blockNames,
@@ -87,12 +93,12 @@ public final class MinecraftMaterialCatalogBuilder {
         for (Identifier albedoLocation : discovered) {
             Optional<Resource> albedoResource = resource(albedoLocation);
             if (albedoResource.isEmpty()) continue;
-            try (MaterialImage albedo = resourceImage(albedoResource.get(), false).open()) {
+            MaterialImageSource albedoSource = resourceImage(albedoResource.get(), false);
+            try (MaterialImage albedo = albedoSource.open()) {
                 if (albedo.width() <= 0 || albedo.height() <= 0) continue;
                 ResourceId material = MinecraftResourceIds.logicalTexture(albedoLocation);
                 Optional<Resource> spec = resource(siblingTexture(albedoLocation, "_s"));
                 Optional<Resource> normal = resource(siblingTexture(albedoLocation, "_n"));
-                MaterialImageSource albedoSource = resourceImage(albedoResource.get(), false);
                 MaterialImageSource specular = spec.map(value -> resourceImage(value, false)).orElse(null);
                 MaterialImageSource normalMap = normal.map(value -> resourceImage(value, false)).orElse(null);
                 result.add(new MaterialTextureResource(material, MaterialTextureKind.STANDALONE,
