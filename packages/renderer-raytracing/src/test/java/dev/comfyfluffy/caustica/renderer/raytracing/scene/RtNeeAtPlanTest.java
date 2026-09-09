@@ -84,6 +84,18 @@ final class RtNeeAtPlanTest {
     }
 
     @Test
+    void rejectedPlanDoesNotPublishItsCacheKey() {
+        var cache = new RtNeeAtPlan.Cache();
+        var valid = lights(10);
+        var initial = cache.prepare(valid, 1);
+        var invalid = lights(0);
+
+        assertThrows(IllegalArgumentException.class, () -> cache.prepare(invalid, 1));
+        assertThrows(IllegalArgumentException.class, () -> cache.prepare(invalid, 1));
+        assertSame(initial, cache.prepare(valid, 1));
+    }
+
+    @Test
     void convertsAreaToSquareMetersAndUsesCircularSpotSolidAngle() {
         var area = new LightDescriptor.Parallelogram(0, 0, 0, 2, 0, 0, 0, 3, 0, 4, 5, 6);
         var cache = new RtNeeAtPlan.Cache();

@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.engine.scene.SnapshotList;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 
@@ -42,34 +41,31 @@ final class RtNeeAtPlan {
             }
             if (unchanged) return prepared;
             var next = new IdentityHashMap<List<RtRetainedSceneBackend.SceneLight>, Page>();
-            List<Page> ordered = new ArrayList<>(inputs.size());
-            for (var input : inputs) {
-                Page page = sameScale ? pages.get(input) : null;
-                if (page == null) {
-                    long[] identities = new long[input.size()];
-                    float[] powers = new float[input.size()];
-                    for (int index = 0; index < input.size(); index++) {
-                        var light = input.get(index);
-                        identities[index] = light.identity();
-                        powers[index] = samplingPower(light.descriptor(), metersPerSceneUnit);
-                    }
-                    page = new Page(identities, powers);
-                }
-                next.put(input, page);
-                ordered.add(page);
-            }
             long[] identities = new long[current.size()];
             float[] powers = new float[current.size()];
             int first = 0;
-            for (Page page : ordered) {
+            for (var input : inputs) {
+                Page page = sameScale ? pages.get(input) : null;
+                if (page == null) {
+                    long[] pageIdentities = new long[input.size()];
+                    float[] pagePowers = new float[input.size()];
+                    for (int index = 0; index < input.size(); index++) {
+                        var light = input.get(index);
+                        pageIdentities[index] = light.identity();
+                        pagePowers[index] = samplingPower(light.descriptor(), metersPerSceneUnit);
+                    }
+                    page = new Page(pageIdentities, pagePowers);
+                }
+                next.put(input, page);
                 System.arraycopy(page.identities, 0, identities, first, page.identities.length);
                 System.arraycopy(page.powers, 0, powers, first, page.powers.length);
                 first += page.identities.length;
             }
+            Plan nextPlan = new Plan(identities, powers);
             pages = next;
             sourcePages = inputs;
             scale = metersPerSceneUnit;
-            return prepared = new Plan(identities, powers);
+            return prepared = nextPlan;
         }
 
         private record Page(long[] identities, float[] powers) { }
