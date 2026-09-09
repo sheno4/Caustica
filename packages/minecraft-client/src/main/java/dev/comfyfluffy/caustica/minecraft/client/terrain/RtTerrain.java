@@ -590,13 +590,20 @@ public final class RtTerrain {
                 if (event != null) event.failed = true;
                 workerFailure = failure;
             } finally {
-                drainDiscardedBuilds();
+                try {
+                    drainDiscardedBuilds();
+                } catch (RuntimeException | Error failure) {
+                    if (event != null) event.failed = true;
+                    Throwable prior = workerFailure;
+                    if (prior == null) workerFailure = failure;
+                    else if (prior != failure) prior.addSuppressed(failure);
+                }
+                publicationScheduled.set(false);
                 if (event != null) {
                     event.cpuNanos = cpuStarted < 0 ? -1 : threadCpuNanos() - cpuStarted;
                     event.allocatedBytes = allocatedStarted < 0 ? -1 : threadAllocatedBytes() - allocatedStarted;
                     event.commit();
                 }
-                publicationScheduled.set(false);
                 if (workerFailure == null) schedulePublication();
             }
         }
@@ -641,8 +648,18 @@ public final class RtTerrain {
     }
 
     private void drainDiscardedBuilds() {
+        Throwable failure = null;
         Build build;
-        while ((build = discarded.poll()) != null) build.close();
+        while ((build = discarded.poll()) != null) {
+            try {
+                build.close();
+            } catch (RuntimeException | Error closeFailure) {
+                if (failure == null) failure = closeFailure;
+                else if (failure != closeFailure) failure.addSuppressed(closeFailure);
+            }
+        }
+        if (failure instanceof RuntimeException runtime) throw runtime;
+        if (failure instanceof Error error) throw error;
     }
 
     private boolean observeNeighborsLoaded(ClientChunkCache chunks, int x, int z) {

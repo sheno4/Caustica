@@ -1884,3 +1884,9 @@ Minecraft client tests and rendering checks passed; inspected TerrainDispatchPla
 Read TerrainWindow in full. Replaced duplicated column unpacking and vertical-range loops with forEachSection, used by invalidation, removal collection and replacement requests. The helper decodes X/Z once and emits section keys in ascending Y order. Preserved availability diffing, halo extent, height-change behavior and the callback ordering of invalidation before eligibility/removal/replacement.
 
 Minecraft client tests and rendering checks passed; inspected TerrainWindowTest's XML report. Existing fixtures cover callback ordering, departure/return and height/window changes. Evidence: tmp/aesthetic-terrain-window-traversal-check.log. No new live traversal or performance measurement was performed. Whole-project coverage remains incomplete.
+
+## Terrain publication records cleanup failure and releases its scheduling flag (2026-09-09)
+
+Reviewed build completion, publication, reset/shutdown and discarded-build draining. drainDiscardedBuilds now attempts every queued release and aggregates RuntimeException/Error failures after detaching each build from the queue. Publication catches that cleanup failure, marks the event failed, preserves an existing worker failure with suppression, and clears publicationScheduled before event recording. A prepared-resource close failure therefore no longer exits the publication finally block before releasing its scheduling flag; workerFailure prevents automatic resubmission after that failure.
+
+Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terrain-publication-cleanup-check.log. No prepared-resource destructor failure injection or live shutdown experiment was performed, so the exceptional path is supported by source review rather than runtime failure evidence. Broader coordinator lifecycle and whole-project review remain incomplete.
