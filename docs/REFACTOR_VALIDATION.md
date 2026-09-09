@@ -1120,3 +1120,9 @@ The engine check passed at exit zero, including all 25 SceneDirectoryTest cases 
 Removed buildReferences, which allocated a list of mesh stream and binding-resource references solely to validate them before a second geometry traversal. validateBuild now checks position/index resources directly and validates each surface/volume resource beside its shader contract in one traversal. These validators only inspect references and schemas; all validation still finishes before input ownership is captured or native preparation begins. A build with multiple independent invalid fields may report a different first error because resource and shader checks are now interleaved.
 
 The engine check passed at exit zero; git diff --check passed. Evidence: tmp/aesthetic-mesh-validation-check.log and the engine test reports. No measured preparation speedup, new GPU run or broader visual result is claimed from removing the temporary list and repeated traversal.
+
+## Integrated Windows check at 5ac7afdd (2026-09-09)
+
+Ran the full Windows Fabric root check after the accumulated engine validation, standard item callback, viewer resource and English locale changes. It passed at exit zero in 42 seconds (187 tasks, 49 executed, 138 up-to-date), including package-boundary verification and viewer checks. The client reports contain 48 suites and 212 tests with zero failures, errors or skips; this restores full client-suite evidence after the earlier targeted LangKeysTest run.
+
+Evidence: tmp/aesthetic-integrated-5ac7afdd-check.log and tmp/aesthetic-integrated-5ac7afdd-client-tests.json. The tracked tree was clean before this documentation entry. No new runtime, visual or performance claim follows from this integrated build; the computer-use resize and intermittent RR stability gates remain open.
