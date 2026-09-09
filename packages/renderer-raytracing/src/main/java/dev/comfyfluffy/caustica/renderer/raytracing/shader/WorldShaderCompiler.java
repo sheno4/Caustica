@@ -140,9 +140,9 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 StandardCharsets.UTF_8);
         List<Path> searchPaths = List.of(worldDirectory, apiDirectory, builtinDirectory,
                 extensionDirectory, compositionDirectory);
-        SlangSession session = runtime.openSession(searchPaths, true, true);
         Composition composition = Composition.create(generated.data(),
                 COMPOSITION_MODULE, COMPOSITION_TYPE, generated.source(), sources);
+        SlangSession session = runtime.openSession(searchPaths, true, true);
         return new WorldShaderCompiler(session, worldDirectory, cleanupDirectory, composition);
     }
 
