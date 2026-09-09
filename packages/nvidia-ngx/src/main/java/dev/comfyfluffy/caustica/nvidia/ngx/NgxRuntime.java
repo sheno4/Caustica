@@ -48,11 +48,11 @@ public final class NgxRuntime {
 
     private final VulkanDeviceContext context;
     private final Settings settings;
-    private NgxLibrary lib;
-    private boolean initialized;
+    private Initialized initialized;
     private boolean failed;
     private boolean closed;
-    private VkDevice initializedDevice;
+
+    private record Initialized(NgxLibrary library, VkDevice device) { }
 
     public record Settings(Path dataDirectory, Optional<Path> shimOverride) {
         public Settings {
@@ -75,19 +75,17 @@ public final class NgxRuntime {
         if (closed) {
             throw new IllegalStateException("NGX runtime is shut down");
         }
-        if (initialized) {
-            return lib;
+        if (initialized != null) {
+            return initialized.library();
         }
         if (failed) {
             return null;
         }
         try {
-            init(context.vk());
-            initialized = true;
-            return lib;
+            initialized = init(context.vk());
+            return initialized.library();
         } catch (Throwable t) {
             failed = true;
-            lib = null;
             LOGGER.error("NGX init failed; DLSS features disabled", t);
             return null;
         }
@@ -102,17 +100,15 @@ public final class NgxRuntime {
             return;
         }
         closed = true;
-        if (lib != null && initialized) {
+        if (initialized != null) {
             try {
-                lib.shutdown(initializedDevice.address());
+                initialized.library().shutdown(initialized.device().address());
             } catch (Throwable t) {
                 LOGGER.warn("NGX shutdown failed", t);
             }
         }
-        initialized = false;
+        initialized = null;
         failed = false;
-        lib = null;
-        initializedDevice = null;
     }
 
     /** NVSDK_NGX_Result: failure when the top 12 bits == 0xBAD. Shared by all NGX feature wrappers. */
@@ -120,7 +116,7 @@ public final class NgxRuntime {
         return (result & 0xFFF00000) == 0xBAD00000;
     }
 
-    private void init(VkDevice device) {
+    private Initialized init(VkDevice device) {
         if (!PLATFORM_NATIVES.supported()) {
             throw new IllegalStateException("NGX natives are not bundled for " + PLATFORM_NATIVES.platformDir());
         }
@@ -138,7 +134,7 @@ public final class NgxRuntime {
             }
         }
 
-        lib = NgxLibrary.load(shim);
+        NgxLibrary lib = NgxLibrary.load(shim);
 
         Path dataPath = settings.dataDirectory();
         try {
@@ -161,8 +157,8 @@ public final class NgxRuntime {
                         + " last=0x" + Integer.toHexString(lib.lastResult()));
             }
         }
-        initializedDevice = device;
         LOGGER.info("NGX initialized (shim {})", shim);
+        return new Initialized(lib, device);
     }
 
     private Path locateShim() {
