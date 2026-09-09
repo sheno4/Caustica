@@ -1,6 +1,6 @@
 {
   "model": {
     "type": "minecraft:model",
-    "model": "caustica_gltf_viewer:item/procedural_surface_anchor"
+    "model": "minecraft:block/crying_obsidian"
   }
 }
