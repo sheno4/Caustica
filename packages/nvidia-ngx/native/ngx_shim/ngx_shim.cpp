@@ -468,19 +468,19 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssg(VkCommandBuffer cmd,
         return nullptr;
     }
 
-    NVSDK_NGX_DLSSG_Create_Params createParams{};
-    createParams.Width = width;
-    createParams.Height = height;
-    createParams.NativeBackbufferFormat = (unsigned int) nativeBackbufferFormat;
-    createParams.RenderWidth = renderWidth;
-    createParams.RenderHeight = renderHeight;
-    createParams.DynamicResolutionScaling = false;
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_CreationNodeMask, 1);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_VisibilityNodeMask, 1);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_Width, width);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_Height, height);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_BackbufferFormat,
+                            (unsigned int) nativeBackbufferFormat);
 
     // UI recomposition is a create-time feature. Evaluation supplies HUDless/UI resources when available.
     NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_UserInterfaceRecompositionEnabled, 1);
 
     NVSDK_NGX_Handle* handle = nullptr;
-    NVSDK_NGX_Result r = NGX_VK_CREATE_DLSSG(cmd, 1, 1, &handle, params, &createParams);
+    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_CreateFeature(
+            cmd, NVSDK_NGX_Feature_FrameGeneration, params, &handle);
     g_lastResult = (int) r;
     if (NVSDK_NGX_FAILED(r)) {
         return nullptr; // params is the shared capability block; do not destroy it
