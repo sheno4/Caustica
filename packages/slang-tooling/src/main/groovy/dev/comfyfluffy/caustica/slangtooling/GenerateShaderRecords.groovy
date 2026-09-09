@@ -49,6 +49,10 @@ abstract class GenerateShaderRecords extends DefaultTask {
     private static final String IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/
     private static final String PACKAGE_NAME = /[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*/
 
+    GenerateShaderRecords() {
+        recordSpecs.convention([])
+    }
+
     /**
      * Parses {@code kind|probe|struct|package|class|reader} task inputs. Buffer records may enable
      * scalar readers; push-constant records always use {@code false}.
