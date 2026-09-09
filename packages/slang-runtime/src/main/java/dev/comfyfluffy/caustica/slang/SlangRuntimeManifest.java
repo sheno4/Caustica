@@ -84,8 +84,8 @@ record SlangRuntimeManifest(int format, int abi, String slangVersion, String pla
             if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
                 throw new IOException("Slang runtime manifest is missing number " + name);
             }
-            return value.getAsLong();
-        } catch (NumberFormatException | UnsupportedOperationException e) {
+            return value.getAsBigDecimal().longValueExact();
+        } catch (NumberFormatException | ArithmeticException | UnsupportedOperationException e) {
             throw new IOException("Invalid Slang runtime manifest number " + name, e);
         }
     }

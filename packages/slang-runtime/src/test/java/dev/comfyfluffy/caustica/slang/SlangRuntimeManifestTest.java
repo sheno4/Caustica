@@ -42,6 +42,24 @@ final class SlangRuntimeManifestTest {
                 """.formatted(HASH, HASH)));
     }
 
+    @Test
+    void rejectsFractionalAndOverflowingFileSizes() {
+        for (String size : new String[]{"42.5", "-0.5", "9223372036854775808", "18446744073709551658"}) {
+            assertThrows(IOException.class, () -> readWithFiles("""
+                    {"path":"causticaslang.dll","size":%s,"sha256":"%s"}
+                    """.formatted(size, HASH)), size);
+        }
+    }
+
+    @Test
+    void acceptsExactIntegerScientificNotation() throws IOException {
+        SlangRuntimeManifest manifest = readWithFiles("""
+                {"path":"causticaslang.dll","size":4.2e1,"sha256":"%s"}
+                """.formatted(HASH));
+
+        assertEquals(42, manifest.files().getFirst().size());
+    }
+
     private static SlangRuntimeManifest readWithFiles(String files) throws IOException {
         return SlangRuntimeManifest.read(new StringReader("""
                 {
