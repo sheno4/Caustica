@@ -103,28 +103,21 @@ SlangResult emit_component(
     slang::IComponentType* component,
     std::string& diagnostics_text,
     CausticaSlangBlob** out_spirv,
-    CausticaSlangBlob** out_reflection_json,
-    CausticaSlangBlob** out_diagnostics)
+    CausticaSlangBlob** out_reflection_json)
 {
     Slang::ComPtr<slang::IBlob> diagnostics;
     Slang::ComPtr<slang::IComponentType> linked;
     SlangResult result = component->link(linked.writeRef(), diagnostics.writeRef());
     append_diagnostics(diagnostics_text, diagnostics);
     if (SLANG_FAILED(result))
-    {
-        publish_diagnostics(diagnostics_text, out_diagnostics);
         return result;
-    }
 
     Slang::ComPtr<slang::IBlob> code;
     diagnostics.setNull();
     result = linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef());
     append_diagnostics(diagnostics_text, diagnostics);
     if (SLANG_FAILED(result))
-    {
-        publish_diagnostics(diagnostics_text, out_diagnostics);
         return result;
-    }
     *out_spirv = copy_slang_blob(code);
 
     if (out_reflection_json)
@@ -136,7 +129,6 @@ SlangResult emit_component(
         {
             if (diagnostics_text.empty())
                 diagnostics_text = "Could not obtain Slang program reflection";
-            publish_diagnostics(diagnostics_text, out_diagnostics);
             return SLANG_FAIL;
         }
         Slang::ComPtr<slang::IBlob> reflection;
@@ -146,13 +138,11 @@ SlangResult emit_component(
             if (!diagnostics_text.empty() && diagnostics_text.back() != '\n')
                 diagnostics_text.push_back('\n');
             diagnostics_text += "Could not serialize Slang program reflection";
-            publish_diagnostics(diagnostics_text, out_diagnostics);
             return result;
         }
         *out_reflection_json = copy_slang_blob(reflection);
     }
 
-    publish_diagnostics(diagnostics_text, out_diagnostics);
     return SLANG_OK;
 }
 
@@ -413,8 +403,9 @@ int32_t caustica_slang_compile_entry_point(
             return result;
         }
 
-        return emit_component(composite, diagnostics_text, out_spirv,
-            out_reflection_json, out_diagnostics);
+        result = emit_component(composite, diagnostics_text, out_spirv, out_reflection_json);
+        publish_diagnostics(diagnostics_text, out_diagnostics);
+        return result;
     }
     catch (const std::bad_alloc&)
     {
@@ -534,8 +525,9 @@ int32_t caustica_slang_compile_specialized_entry_point(
             return result;
         }
 
-        return emit_component(composite, diagnostics_text, out_spirv,
-            out_reflection_json, out_diagnostics);
+        result = emit_component(composite, diagnostics_text, out_spirv, out_reflection_json);
+        publish_diagnostics(diagnostics_text, out_diagnostics);
+        return result;
     }
     catch (const std::bad_alloc&)
     {
