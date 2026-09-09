@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -69,14 +70,16 @@ public final class RtAccel {
     public final VulkanDeviceAddress deviceAddress;
 
     private final GpuBuffer backing;
-    private final VkDevice vk;
-    private boolean destroyed;
+    private final ResourceLifetime lifetime;
 
     RtAccel(VkDevice vk, long handle, VulkanDeviceAddress deviceAddress, GpuBuffer backing) {
-        this.vk = vk;
         this.handle = handle;
         this.deviceAddress = deviceAddress;
         this.backing = backing;
+        // The handle must be destroyed before the storage it references.
+        this.lifetime = new ResourceLifetime(() -> {
+            if (handle != 0L) vkDestroyAccelerationStructureKHR(vk, handle, null);
+        }, backing::destroy);
     }
 
     public long sizeBytes() {
@@ -84,15 +87,7 @@ public final class RtAccel {
     }
 
     public void destroy() {
-        if (destroyed) {
-            return;
-        }
-        if (handle != 0L) {
-            vkDestroyAccelerationStructureKHR(vk, handle, null);
-        }
-        // The handle must be destroyed before the storage it references.
-        backing.destroy();
-        destroyed = true;
+        lifetime.close();
     }
 
     /**

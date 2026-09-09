@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.renderer.raytracing.resource.RtCompletionSlotPool;
+import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -73,9 +74,7 @@ public final class TlasBuilder {
         private Slot(int capacity) { this.capacity = capacity; }
 
         private void destroy() {
-            accel.destroy();
-            instanceBuffer.destroy();
-            scratch.destroy();
+            new ResourceLifetime(accel::destroy, instanceBuffer::destroy, scratch::destroy).close();
         }
     }
 
