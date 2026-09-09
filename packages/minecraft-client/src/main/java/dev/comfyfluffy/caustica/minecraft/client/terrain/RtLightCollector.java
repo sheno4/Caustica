@@ -68,72 +68,16 @@ final class RtLightCollector {
                 continue;
             }
 
-            // Corner atlas UVs: triangle A carries corners 0,1,2 (6 floats at 12k), triangle B's third
-            // vertex is corner 3 (floats 12k+6+4, +5).
-            int ub = k * 12;
-            float u0 = uv[ub], v0 = uv[ub + 1];
-            float u1 = uv[ub + 2], v1 = uv[ub + 3];
-            float u2 = uv[ub + 4], v2 = uv[ub + 5];
-            float u3 = uv[ub + 10], v3 = uv[ub + 11];
-            TextureAtlasSprite sprite = sprites.get(2 * k);
-            float su0 = 0.0f, sv0 = 0.0f, invDu = 1.0f, invDv = 1.0f;
-            boolean localUv = sprite != null;
-            if (localUv) {
-                su0 = sprite.getU0();
-                sv0 = sprite.getV0();
-                float du = sprite.getU1() - su0;
-                float dv = sprite.getV1() - sv0;
-                invDu = Math.abs(du) > 1.0e-12f ? 1.0f / du : 0.0f;
-                invDv = Math.abs(dv) > 1.0e-12f ? 1.0f / dv : 0.0f;
-            }
-
-            // Scan the quad's parameter square. Quads without a sprite use those coordinates directly;
-            // sprite-backed quads localize their interpolated atlas coordinates before sampling.
-            float sumR = 0.0f, sumG = 0.0f, sumB = 0.0f;
-            int emissive = 0;
-            int aMin = scan, aMax = -1, bMin = scan, bMax = -1;
-            for (int sb = 0; sb < scan; sb++) {
-                float b = (sb + 0.5f) / scan;
-                for (int sa = 0; sa < scan; sa++) {
-                    float a = (sa + 0.5f) / scan;
-                    float lu;
-                    float lv;
-                    if (localUv) {
-                        float au = (1 - a) * (1 - b) * u0 + a * (1 - b) * u1 + a * b * u2 + (1 - a) * b * u3;
-                        float av = (1 - a) * (1 - b) * v0 + a * (1 - b) * v1 + a * b * v2 + (1 - a) * b * v3;
-                        lu = (au - su0) * invDu;
-                        lv = (av - sv0) * invDv;
-                    } else {
-                        lu = a;
-                        lv = b;
-                    }
-                    int cx = footprint.sampleIndex(lu);
-                    int cy = footprint.sampleIndex(lv);
-                    float w = footprint.weight(cx, cy);
-                    float r = footprint.r(cx, cy);
-                    float g = footprint.g(cx, cy);
-                    float bl = footprint.b(cx, cy);
-                    sumR += r;
-                    sumG += g;
-                    sumB += bl;
-                    if (w > WEIGHT_EPS) {
-                        emissive++;
-                        if (sa < aMin) aMin = sa;
-                        if (sa > aMax) aMax = sa;
-                        if (sb < bMin) bMin = sb;
-                        if (sb > bMax) bMax = sb;
-                    }
-                }
-            }
-            if (emissive == 0) {
+            FootprintScan sample = scanFootprint(footprint, uv, k * 12, sprites.get(2 * k));
+            if (sample.emissive() == 0) {
                 continue;
             }
 
             // Emissive-footprint bounding rectangle in (a,b), expanded to the scan cells' outer edges.
-            float aLo = aMin / (float) scan, aHi = (aMax + 1) / (float) scan;
-            float bLo = bMin / (float) scan, bHi = (bMax + 1) / (float) scan;
-            int rectSamples = (aMax - aMin + 1) * (bMax - bMin + 1);
-            float fill = emissive / (float) rectSamples;
+            float aLo = sample.aMin() / (float) scan, aHi = (sample.aMax() + 1) / (float) scan;
+            float bLo = sample.bMin() / (float) scan, bHi = (sample.bMax() + 1) / (float) scan;
+            int rectSamples = (sample.aMax() - sample.aMin() + 1) * (sample.bMax() - sample.bMin() + 1);
+            float fill = sample.emissive() / (float) rectSamples;
             float rectArea = quadArea * (aHi - aLo) * (bHi - bLo);
             if (rectArea <= AREA_EPS) {
                 continue;
@@ -144,7 +88,7 @@ final class RtLightCollector {
             // is the final Minecraft material luminance after its matching resource rule.
             // Footprint averages are linear BT.709; terrain extraction stores triangle tint as ACEScg.
             // Convert the footprint before combining them in the transport basis.
-            float[] footprintAcesCg = ColorSpaces.linearBt709ToAcesCg(sumR, sumG, sumB);
+            float[] footprintAcesCg = ColorSpaces.linearBt709ToAcesCg(sample.sumR(), sample.sumG(), sample.sumB());
             float scale = factor * material.luminanceCdM2() / rectSamples;
             float leR = footprintAcesCg[0] * scale * p[pb + 4];
             float leG = footprintAcesCg[1] * scale * p[pb + 5];
@@ -164,6 +108,69 @@ final class RtLightCollector {
                     0.5f * (bHi - bLo) * e03x, 0.5f * (bHi - bLo) * e03y, 0.5f * (bHi - bLo) * e03z,
                     leR, leG, leB);
         }
+    }
+
+    private record FootprintScan(float sumR, float sumG, float sumB, int emissive,
+                                 int aMin, int aMax, int bMin, int bMax) { }
+
+    private static FootprintScan scanFootprint(MinecraftEmissionFootprint footprint, float[] uv,
+                                               int ub, TextureAtlasSprite sprite) {
+        int scan = footprint.resolution();
+        // Triangle A carries corners 0,1,2; triangle B's third vertex carries corner 3 at ub+10.
+        float u0 = uv[ub], v0 = uv[ub + 1];
+        float u1 = uv[ub + 2], v1 = uv[ub + 3];
+        float u2 = uv[ub + 4], v2 = uv[ub + 5];
+        float u3 = uv[ub + 10], v3 = uv[ub + 11];
+        float su0 = 0.0f, sv0 = 0.0f, invDu = 1.0f, invDv = 1.0f;
+        boolean localUv = sprite != null;
+        if (localUv) {
+            su0 = sprite.getU0();
+            sv0 = sprite.getV0();
+            float du = sprite.getU1() - su0;
+            float dv = sprite.getV1() - sv0;
+            invDu = Math.abs(du) > 1.0e-12f ? 1.0f / du : 0.0f;
+            invDv = Math.abs(dv) > 1.0e-12f ? 1.0f / dv : 0.0f;
+        }
+
+        // Scan the quad's parameter square. Quads without a sprite use those coordinates directly;
+        // sprite-backed quads localize their interpolated atlas coordinates before sampling.
+        float sumR = 0.0f, sumG = 0.0f, sumB = 0.0f;
+        int emissive = 0;
+        int aMin = scan, aMax = -1, bMin = scan, bMax = -1;
+        for (int sb = 0; sb < scan; sb++) {
+            float b = (sb + 0.5f) / scan;
+            for (int sa = 0; sa < scan; sa++) {
+                float a = (sa + 0.5f) / scan;
+                float lu;
+                float lv;
+                if (localUv) {
+                    float au = (1 - a) * (1 - b) * u0 + a * (1 - b) * u1 + a * b * u2 + (1 - a) * b * u3;
+                    float av = (1 - a) * (1 - b) * v0 + a * (1 - b) * v1 + a * b * v2 + (1 - a) * b * v3;
+                    lu = (au - su0) * invDu;
+                    lv = (av - sv0) * invDv;
+                } else {
+                    lu = a;
+                    lv = b;
+                }
+                int cx = footprint.sampleIndex(lu);
+                int cy = footprint.sampleIndex(lv);
+                float w = footprint.weight(cx, cy);
+                float r = footprint.r(cx, cy);
+                float g = footprint.g(cx, cy);
+                float bl = footprint.b(cx, cy);
+                sumR += r;
+                sumG += g;
+                sumB += bl;
+                if (w > WEIGHT_EPS) {
+                    emissive++;
+                    if (sa < aMin) aMin = sa;
+                    if (sa > aMax) aMax = sa;
+                    if (sb < bMin) bMin = sb;
+                    if (sb > bMax) bMax = sb;
+                }
+            }
+        }
+        return new FootprintScan(sumR, sumG, sumB, emissive, aMin, aMax, bMin, bMax);
     }
 
     static void append(List<MinecraftTerrainEmitter> out,
