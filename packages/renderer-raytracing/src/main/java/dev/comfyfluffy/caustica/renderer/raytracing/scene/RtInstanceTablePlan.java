@@ -77,14 +77,7 @@ final class RtInstanceTablePlan {
         for (int slot = firstSlot; slot < firstSlot + count; slot++) {
             InstanceRecord record = records[slot];
             int base = destination.position();
-            RetainedInstanceRecordData data = EMPTY;
-            if (record != null) {
-                float[] rows = record.transform().relativeTo(origin.x(), origin.y(), origin.z());
-                data = new RetainedInstanceRecordData(record.identity(), record.placementOrdinal(),
-                        record.meshRevision(), record.topologyToken(), record.positionAddress(),
-                        record.instanceData(), record.positionStride(), 0,
-                        row(rows, 0), row(rows, 4), row(rows, 8));
-            }
+            RetainedInstanceRecordData data = record == null ? EMPTY : record.data(origin);
             data.write(destination.slice(base, RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN));
             destination.position(base + RECORD_BYTES);
         }
@@ -119,6 +112,13 @@ final class RtInstanceTablePlan {
         int positionStride() { return input.mesh().positions().byteStride(); }
         long instanceData() { return input.instanceData(); }
         GeometryTransform transform() { return input.transform(); }
+
+        private RetainedInstanceRecordData data(SceneOrigin origin) {
+            float[] rows = transform().relativeTo(origin.x(), origin.y(), origin.z());
+            return new RetainedInstanceRecordData(identity(), placementOrdinal(), meshRevision(),
+                    topologyToken(), positionAddress(), instanceData(), positionStride(), 0,
+                    row(rows, 0), row(rows, 4), row(rows, 8));
+        }
 
         private boolean matches(Input next) {
             return input.identity() == next.identity() && input.placementOrdinal() == next.placementOrdinal()
