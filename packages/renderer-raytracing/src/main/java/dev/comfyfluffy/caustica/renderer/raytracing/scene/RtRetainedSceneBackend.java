@@ -1398,12 +1398,11 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             if (roots.remaining() != RtBindings.WORLD_PUSH_CONSTANT_SIZE) {
                 throw new IllegalArgumentException("world binding root has the wrong size");
             }
-            ByteBuffer target = roots.duplicate().order(ByteOrder.nativeOrder());
-            int base = roots.position();
-            target.putLong(base + RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET,
+            ByteBuffer target = roots.slice().order(ByteOrder.nativeOrder());
+            target.putLong(RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET,
                     geometryRecordsAddress.value());
-            target.putInt(base + RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, tlasDescriptorIndex);
-            target.putLong(base + RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET, neeAtStateAddress.value());
+            target.putInt(RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, tlasDescriptorIndex);
+            target.putLong(RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET, neeAtStateAddress.value());
         }
     }
 

@@ -228,9 +228,14 @@ final class RtRetainedGeometryPlanTest {
 
     @Test
     void preparedTraceWritesOnlyItsOwnedWorldRoots() {
-        ByteBuffer roots = ByteBuffer.allocate(RtBindings.WORLD_PUSH_CONSTANT_SIZE)
+        int prefix = 9;
+        ByteBuffer storage = ByteBuffer.allocate(prefix + RtBindings.WORLD_PUSH_CONSTANT_SIZE + 7)
                 .order(ByteOrder.nativeOrder());
-        roots.putLong(RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET, 0x7777L);
+        for (int index = 0; index < storage.capacity(); index++) storage.put(index, (byte) 0x5a);
+        ByteBuffer roots = storage.duplicate().order(ByteOrder.nativeOrder());
+        roots.position(prefix).limit(prefix + RtBindings.WORLD_PUSH_CONSTANT_SIZE);
+        ByteBuffer window = roots.slice().order(ByteOrder.nativeOrder());
+        window.putLong(RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET, 0x7777L);
         var trace = new RtRetainedSceneBackend.PreparedTrace(
                 new VulkanDeviceAddress(0x1234L), new VulkanDeviceAddress(0x5678L), 19,
                 new RtPipeline.HitTable(new VulkanDeviceAddressRange(
@@ -238,10 +243,14 @@ final class RtRetainedGeometryPlanTest {
 
         trace.writeWorldRoots(roots);
 
-        assertEquals(0x1234L, roots.getLong(RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET));
-        assertEquals(19, roots.getInt(RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET));
-        assertEquals(0x5678L, roots.getLong(RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET));
-        assertEquals(0x7777L, roots.getLong(RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET));
+        assertEquals(0x1234L, window.getLong(RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET));
+        assertEquals(19, window.getInt(RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET));
+        assertEquals(0x5678L, window.getLong(RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET));
+        assertEquals(0x7777L, window.getLong(RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET));
+        assertEquals(prefix, roots.position());
+        assertEquals(prefix + RtBindings.WORLD_PUSH_CONSTANT_SIZE, roots.limit());
+        for (int index = 0; index < prefix; index++) assertEquals(0x5a, storage.get(index));
+        for (int index = roots.limit(); index < storage.capacity(); index++) assertEquals(0x5a, storage.get(index));
     }
 
     private static MeshBuild<Instance> build(MeshBuild.IndexRevision revision, long positionAddress,
