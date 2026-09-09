@@ -383,6 +383,8 @@ public final class MinecraftDebugService implements AutoCloseable {
     }
 
     private Object captureImages(JsonObject request) throws IOException {
+        // Raw readback submits directly; publish this frame's deferred host commands before it waits.
+        com.mojang.blaze3d.systems.RenderSystem.getDevice().createCommandEncoder().submit();
         if (!request.has("names")) return captureImage(request.get("name").getAsString());
         List<Object> images = new ArrayList<>();
         for (var name : request.getAsJsonArray("names")) images.add(captureImage(name.getAsString()));
