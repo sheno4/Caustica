@@ -265,8 +265,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained instance history table")), resources::add);
             GpuBuffer instanceBuffer = instanceSlot.buffer;
             var instancePages = cache.instances.resolve(instanceTable, origin);
+            var previousInstancePages = instanceSlot.pages;
+            instanceSlot.pages = List.of();
             if (TlasBuilder.copyPages(MemoryUtil.memByteBuffer(instanceBuffer.mapped(), instanceTable.byteSize()),
-                    instancePages, instanceSlot.pages) != 0) instanceBuffer.flush(0L, instanceTable.byteSize());
+                    instancePages, previousInstancePages) != 0) instanceBuffer.flush(0L, instanceTable.byteSize());
             instanceSlot.pages = instancePages;
             var reserved = RtFramePreparation.measure("tlas-reserve", inputs.instances.size(), 0,
                     () -> tlasSlots.reserve(inputs.instances.size(), resources::add));
@@ -429,20 +431,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         List<ByteBuffer> lightPages = cache.lights.resolve(sceneLights, origin, linked, framePreparation);
         List<ByteBuffer> previousLightPages = slot.lightPages;
         slot.lightPages = List.of();
-        int lightOffset = 0, previousLightOffset = 0;
-        boolean copiedLights = false;
-        for (int index = 0; index < lightPages.size(); index++) {
-            ByteBuffer source = lightPages.get(index);
-            ByteBuffer previous = index < previousLightPages.size() ? previousLightPages.get(index) : null;
-            if (source != previous || lightOffset != previousLightOffset) {
-                MemoryUtil.memByteBuffer(slot.lights.mapped() + lightOffset, source.remaining())
-                        .put(0, source, source.position(), source.remaining());
-                copiedLights = true;
-            }
-            lightOffset += source.remaining();
-            if (previous != null) previousLightOffset += previous.remaining();
-        }
-        if (copiedLights) slot.lights.flush(0L, lightBytes);
+        if (TlasBuilder.copyPages(MemoryUtil.memByteBuffer(slot.lights.mapped(), lightBytes),
+                lightPages, previousLightPages) != 0) slot.lights.flush(0L, lightBytes);
         slot.lightPages = lightPages;
         RtPipeline.HitTable hitTable = hitBytes > 0 ? new RtPipeline.HitTable(
                 new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hitBytes),
