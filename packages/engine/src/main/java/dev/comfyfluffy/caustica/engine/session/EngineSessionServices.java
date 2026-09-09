@@ -116,7 +116,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
             compute = EngineSessionServices.this.compute.openChannel();
             program = programs.openChannel();
             pass = passes.openChannel();
-            scene = scenes.openChannel(owner);
+            scene = scenes.openChannel();
             resources = EngineSessionServices.this.resources.openFactory(owner);
         }
 

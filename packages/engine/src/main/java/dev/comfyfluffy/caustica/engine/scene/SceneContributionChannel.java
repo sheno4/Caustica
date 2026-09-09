@@ -8,7 +8,6 @@ import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneEdit;
-import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -18,15 +17,13 @@ import java.util.concurrent.CompletableFuture;
 /** Owner-local scene identities and producer mesh claims. */
 public final class SceneContributionChannel implements SceneChannel, MeshPreparer {
     final SceneDirectory directory;
-    final ContributionOwner owner;
     boolean acceptingIdentities = true;
     boolean acceptingEdits = true;
     final Set<ReadyMesh<?>> meshes = new LinkedHashSet<>();
     final Set<CompletableFuture<?>> preparations = new LinkedHashSet<>();
 
-    SceneContributionChannel(SceneDirectory directory, ContributionOwner owner) {
+    SceneContributionChannel(SceneDirectory directory) {
         this.directory = directory;
-        this.owner = owner;
     }
 
     @Override

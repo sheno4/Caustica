@@ -12,7 +12,6 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
-import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import dev.comfyfluffy.caustica.support.SharedResource;
 
 import java.util.ArrayList;
@@ -75,13 +74,13 @@ public final class SceneDirectory {
         changed();
     }
 
-    public synchronized SceneContributionChannel openChannel(ContributionOwner owner) {
-        return new SceneContributionChannel(this, Objects.requireNonNull(owner));
+    public SceneContributionChannel openChannel() {
+        return new SceneContributionChannel(this);
     }
 
-    public synchronized SceneEnvironmentContributionChannel openEnvironment(ContributionOwner owner, SceneId scene) {
+    public synchronized SceneEnvironmentContributionChannel openEnvironment(SceneId scene) {
         requireScene(scene);
-        return new SceneEnvironmentContributionChannel(this, owner, scene);
+        return new SceneEnvironmentContributionChannel(this, scene);
     }
 
     synchronized InstanceId newInstance(SceneContributionChannel channel) {

@@ -137,7 +137,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
         }
         EnvironmentSelectionScope environment;
         try {
-            environment = Objects.requireNonNull(environments.create(owner, scene),
+            environment = Objects.requireNonNull(environments.create(scene),
                     "environment scope factory returned null");
         } catch (Throwable failure) {
             teardown(List.of(new ActiveContribution(owner, scope, null, null)), false);

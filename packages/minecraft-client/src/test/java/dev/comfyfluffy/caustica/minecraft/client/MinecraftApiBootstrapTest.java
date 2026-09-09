@@ -61,7 +61,7 @@ final class MinecraftApiBootstrapTest {
                 minecraftHost, List.of(new MinecraftOnly(), dual), generic);
 
         MinecraftWorldSession session = minecraftHost.openSession(
-                owner -> new EmptyScope(), (owner, scene) -> new EnvironmentSelectionScope() {
+                owner -> new EmptyScope(), scene -> new EnvironmentSelectionScope() {
                     @Override public void select(
                             dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
                     }
@@ -110,7 +110,7 @@ final class MinecraftApiBootstrapTest {
         });
         session.processPendingChanges();
         MinecraftWorldSession minecraftSession = minecraftHost.openSession(
-                owner -> new EmptyScope(), (owner, scene) -> new EnvironmentSelectionScope() {
+                owner -> new EmptyScope(), scene -> new EnvironmentSelectionScope() {
                     @Override public void select(
                             dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) {
                     }

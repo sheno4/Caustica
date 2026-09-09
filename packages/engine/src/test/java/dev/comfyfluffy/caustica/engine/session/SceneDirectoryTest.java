@@ -95,7 +95,7 @@ final class SceneDirectoryTest {
     }
     @Test void failingOperationRollsBackCompleteEdit() {
         var f=new Fixture();var ready=f.channel.prepare(INSTANCE,mesh(f.surface)).join();
-        var own=f.channel.newInstance();var other=f.directory.openChannel(new ContributionOwner(3));
+        var own=f.channel.newInstance();var other=f.directory.openChannel();
         var foreign=other.newInstance();long before=f.directory.snapshot().revision();
         assertThrows(IllegalArgumentException.class,()->f.channel.edit(List.of(set(own,f.scene,ready),new SceneEdit.DropInstance(foreign))));
         assertEquals(before,f.directory.snapshot().revision());assertTrue(f.directory.snapshot().instances().isEmpty());
@@ -103,7 +103,7 @@ final class SceneDirectoryTest {
     @Test void sharedReadyMeshSurvivesProducerAndOriginatingScope() {
         var f=new Fixture();var destroyed=new AtomicInteger();f.preparing=CompletableFuture.completedFuture(nativeOwner(destroyed));
         var ready=f.channel.prepare(INSTANCE,mesh(f.surface)).join();
-        var consumer=f.directory.openChannel(new ContributionOwner(3));var instance=consumer.newInstance();
+        var consumer=f.directory.openChannel();var instance=consumer.newInstance();
         consumer.edit(List.of(set(instance,f.scene,ready)));ready.close();f.channel.invalidate();
         assertEquals(0,destroyed.get());
         consumer.edit(List.of(new SceneEdit.SetTransform(instance,GeometryTransform.translation(0,0,0),7)));
@@ -138,8 +138,8 @@ final class SceneDirectoryTest {
     }
     @Test void environmentScopesRestoreMostRecentSurvivingSelection() {
         var f=new Fixture();var environment=f.programs.environment(new ContributionOwner(6)).exports();
-        var a=f.directory.openEnvironment(new ContributionOwner(7),f.scene);
-        var b=f.directory.openEnvironment(new ContributionOwner(8),f.scene);
+        var a=f.directory.openEnvironment(f.scene);
+        var b=f.directory.openEnvironment(f.scene);
         a.select(new EnvironmentBinding<>(environment,ENVIRONMENT_BINDING.data(1)));
         b.select(new EnvironmentBinding<>(environment,ENVIRONMENT_BINDING.data(2)));
         a.select(new EnvironmentBinding<>(environment,ENVIRONMENT_BINDING.data(3)));
@@ -532,7 +532,7 @@ final class SceneDirectoryTest {
         final SceneDirectory directory=new SceneDirectory(programs.session,programs.resources,capture -> this.capture = capture,
             (mesh,source)->preparing==null?CompletableFuture.completedFuture(nativeOwner(new AtomicInteger())):preparing);
         final SceneId scene=directory.createScene();
-        final SceneContributionChannel channel=directory.openChannel(new ContributionOwner(2));
+        final SceneContributionChannel channel=directory.openChannel();
     }
     private static MeshBuild<Instance> mesh(SurfaceId<Binding, Instance> surface) {
         return mesh(surface, null, ResourceOwner.none(), ResourceOwner.none(),

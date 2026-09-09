@@ -40,7 +40,7 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
         MinecraftWorldSession openedMinecraft = null;
         try {
             openedMinecraft = minecraftHost.openSession(openedEngine.services(),
-                    (owner, scene) -> openedEngine.openEnvironment(owner),
+                    scene -> openedEngine.openEnvironment(),
                     openedEngine.rootScene(), dimension, resourcePackEpoch,
                     failure -> failures.accept(failure.cause()));
             openedMinecraft.processPendingChanges();

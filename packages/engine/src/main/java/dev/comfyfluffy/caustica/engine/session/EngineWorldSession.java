@@ -56,9 +56,9 @@ public final class EngineWorldSession implements AutoCloseable {
     public SceneId rootScene() { return rootScene; }
 
     /** Creates one environment-selection scope borrowing this session's root scene. */
-    public EnvironmentSelectionScope openEnvironment(ContributionOwner owner) {
+    public EnvironmentSelectionScope openEnvironment() {
         requireOpen();
-        return services.scenes().openEnvironment(owner, rootScene);
+        return services.scenes().openEnvironment(rootScene);
     }
 
     /** Applies render registrations, then host-owned world changes, before backend completions. */

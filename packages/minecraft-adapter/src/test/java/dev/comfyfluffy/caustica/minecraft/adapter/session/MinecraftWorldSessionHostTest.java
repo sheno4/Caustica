@@ -10,7 +10,6 @@ import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 import dev.comfyfluffy.caustica.engine.session.ContributionScope;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
@@ -40,7 +39,7 @@ final class MinecraftWorldSessionHostTest {
                 return MinecraftWorldSessionContribution.EMPTY;
             });
             try (var session = host.openSession(owner -> new TestScope("scope", events),
-                    (owner, scene) -> environmentScope(new ArrayList<>()), new SceneId() { },
+                    scene -> environmentScope(new ArrayList<>()), new SceneId() { },
                     MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
                     failure -> { throw new AssertionError(failure); })) {
                 session.processPendingChanges();
@@ -58,7 +57,7 @@ final class MinecraftWorldSessionHostTest {
         List<TestScope> scopes = new ArrayList<>();
         List<MinecraftSessionFailure> failures = new ArrayList<>();
         List<EnvironmentBinding<?>> selected = new ArrayList<>();
-        List<ContributionOwner> environmentOwners = new ArrayList<>();
+        List<EnvironmentSelectionScope> environments = new ArrayList<>();
         SceneId scene = new SceneId() { };
         MinecraftDimensionKey dimension = MinecraftDimensionKey.of("minecraft", "overworld");
         MinecraftWorldSessionHost host = new MinecraftWorldSessionHost();
@@ -83,9 +82,11 @@ final class MinecraftWorldSessionHostTest {
             TestScope scope = new TestScope(Long.toString(owner.sequence()), events);
             scopes.add(scope);
             return scope;
-        }, (owner, borrowedScene) -> {
-            environmentOwners.add(owner);
-            return environmentScope(selected);
+        }, borrowedScene -> {
+            assertSame(scene, borrowedScene);
+            var environment = environmentScope(selected);
+            environments.add(environment);
+            return environment;
         },
                 scene, dimension, new ResourcePackEpoch(4), failures::add);
         session.processPendingChanges();
@@ -93,7 +94,8 @@ final class MinecraftWorldSessionHostTest {
         assertEquals(2, session.contributionCount());
         assertNotSame(scopes.get(0).program, scopes.get(1).program);
         assertEquals(2, selected.size());
-        assertEquals(List.of(1L, 2L), environmentOwners.stream().map(ContributionOwner::sequence).toList());
+        assertEquals(2, environments.size());
+        assertNotSame(environments.get(0), environments.get(1));
         session.resourcePackChanged(new ResourcePackEpoch(5));
         assertEquals(List.of("one:pack:5", "two:pack:5"), events);
         assertEquals(List.of(MinecraftSessionFailure.Stage.RESOURCE_PACK_CHANGED),
@@ -124,7 +126,7 @@ final class MinecraftWorldSessionHostTest {
 
         MinecraftWorldSession session = host.openSession(
                 owner -> new TestScope(Long.toString(owner.sequence()), events),
-                (owner, borrowedScene) -> environmentScope(new ArrayList<>()),
+                borrowedScene -> environmentScope(new ArrayList<>()),
                 new SceneId() { }, MinecraftDimensionKey.of("minecraft", "the_end"),
                 new ResourcePackEpoch(0), failure -> failures.add(failure.stage()));
         session.processPendingChanges();
@@ -147,7 +149,7 @@ final class MinecraftWorldSessionHostTest {
         host.api().sessions().add(context -> contribution("live", events, false));
         MinecraftWorldSession session = host.openSession(
                 owner -> new TestScope(Long.toString(owner.sequence()), events),
-                (owner, borrowedScene) -> environmentScope(new ArrayList<>()),
+                borrowedScene -> environmentScope(new ArrayList<>()),
                 new SceneId() { }, MinecraftDimensionKey.of("minecraft", "overworld"),
                 new ResourcePackEpoch(0), failure -> { throw new AssertionError(failure); });
         session.processPendingChanges();

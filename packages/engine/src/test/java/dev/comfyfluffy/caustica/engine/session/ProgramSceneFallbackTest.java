@@ -63,7 +63,7 @@ final class ProgramSceneFallbackTest {
                 programs, resources,
                 scenesBackend, (input, source) -> java.util.concurrent.CompletableFuture.completedFuture(ResourceOwner.none().retain()));
         var scene = scenes.createScene();
-        var geometry = scenes.openChannel(new ContributionOwner(2));
+        var geometry = scenes.openChannel();
         var mesh = geometry.prepare(INSTANCE,mesh(registration.exports())).join();
         geometry.edit(List.of(new SceneEdit.SetInstance<>(geometry.newInstance(),scene,mesh,GeometryTransform.translation(0,0,0),255,INSTANCE.data(0))));
 
@@ -104,7 +104,7 @@ final class ProgramSceneFallbackTest {
         var backend=new CapturingSceneBackend();
         var scenes=new SceneDirectory(programs,resources,backend,
             (input,source)->java.util.concurrent.CompletableFuture.completedFuture(ResourceOwner.none().retain()));
-        var scene=scenes.createScene();var channel=scenes.openChannel(new ContributionOwner(2));
+        var scene=scenes.createScene();var channel=scenes.openChannel();
         var ready=channel.prepare(INSTANCE,mesh(registration.exports())).join();
         channel.edit(List.of(new SceneEdit.SetInstance<>(channel.newInstance(),scene,ready,
             GeometryTransform.translation(0,0,0),255,INSTANCE.data(0))));
