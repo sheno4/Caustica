@@ -99,8 +99,7 @@ public final class DlssFrameGeneration {
             }
             if (!featureReadyFor(width, height, renderWidth, renderHeight, backbufferFormat)) {
                 releaseFeature();
-                feature = lib.createDlssg(commandBuffer.address(), width, height,
-                        renderWidth, renderHeight, backbufferFormat);
+                feature = lib.createDlssg(commandBuffer.address(), width, height, backbufferFormat);
                 if (feature.equals(MemorySegment.NULL)) {
                     throw new IllegalStateException("ngxshim_create_dlssg failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));

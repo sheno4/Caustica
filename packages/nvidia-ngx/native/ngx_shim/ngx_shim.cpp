@@ -460,7 +460,6 @@ NGX_SHIM_EXPORT int ngxshim_dlssg_available() {
 // capability parameter block (it carries the snippet callbacks), so the feature does not own it.
 NGX_SHIM_EXPORT void* ngxshim_create_dlssg(VkCommandBuffer cmd,
                                            unsigned int width, unsigned int height,
-                                           unsigned int renderWidth, unsigned int renderHeight,
                                            int nativeBackbufferFormat) {
     NVSDK_NGX_Parameter* params = g_capabilityParams;
     if (!params) {

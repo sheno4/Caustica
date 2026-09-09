@@ -93,10 +93,10 @@ final class NgxLibrary {
 		// DLSS Frame Generation (DLSSG).
 		this.dlssgAvailable = handle(lookup, "ngxshim_dlssg_available",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT));
-		// void* ngxshim_create_dlssg(cmd, u32 w, u32 h, u32 rw, u32 rh, int nativeBackbufferFormat)
+		// void* ngxshim_create_dlssg(cmd, u32 w, u32 h, int nativeBackbufferFormat)
 		this.createDlssg = handle(lookup, "ngxshim_create_dlssg",
 				FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
-						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
 		// int ngxshim_evaluate_dlssg_2x(cmd, feature, [backbuffer/depth/mvec/hudless/ui/outInterp/outReal: view,img,fmt]*7,
 		//   w,h, mvecDepthW, mvecDepthH, mvScaleX, mvScaleY, depthInv, hdr, camMotion, reset, 4 matrices)
 		this.evaluateDlssg = handle(lookup, "ngxshim_evaluate_dlssg_2x",
@@ -257,11 +257,9 @@ final class NgxLibrary {
 		}
 	}
 
-	public MemorySegment createDlssg(long cmd, int width, int height, int renderWidth, int renderHeight,
-	                                 int nativeBackbufferFormat) {
+	public MemorySegment createDlssg(long cmd, int width, int height, int nativeBackbufferFormat) {
 		try {
-			return (MemorySegment) this.createDlssg.invokeExact(cmd, width, height, renderWidth, renderHeight,
-					nativeBackbufferFormat);
+			return (MemorySegment) this.createDlssg.invokeExact(cmd, width, height, nativeBackbufferFormat);
 		} catch (Throwable t) {
 			throw new RuntimeException("ngxshim_create_dlssg failed", t);
 		}
