@@ -79,7 +79,7 @@ public final class RtTelemetryImpl implements RtTelemetry {
 
     @Override
     public void frameAssembled(long publicationCutoff) {
-        geometryProfiling.frameVisible(publicationCutoff);
+        geometryProfiling.frameAssembled(publicationCutoff);
     }
 
     @Override

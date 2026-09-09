@@ -17,7 +17,7 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
 
-/** Low-overhead CPU telemetry for retained geometry moving from extraction to frame visibility. */
+/** CPU telemetry for retained geometry moving from extraction through publication to frame assembly. */
 public final class RtGeometryProfiling {
     public static final class ExtractionStamp implements RtTelemetry.ExtractionStamp {
         private final long sampleId;
@@ -25,7 +25,6 @@ public final class RtGeometryProfiling {
         private final long frame;
         private final long nanos;
         private final int geometryCount;
-        private long publishedNanos;
 
         ExtractionStamp(GeometrySource source, long frame, long nanos, int geometryCount) {
             this.sampleId = NEXT_SAMPLE.incrementAndGet();
@@ -60,8 +59,9 @@ public final class RtGeometryProfiling {
         if (stamp == null) {
             return;
         }
-        stamp.publishedNanos = System.nanoTime();
-        publications.addLast(new Publication(++publicationSequence, null, frame -> recordVisible(stamp, frame)));
+        long publishedNanos = System.nanoTime();
+        publications.addLast(new Publication(++publicationSequence, null,
+                frame -> recordAssembled(stamp, publishedNanos, frame)));
     }
 
     /** Captured immediately before the renderer acquires its retained scene revision. */
@@ -70,7 +70,7 @@ public final class RtGeometryProfiling {
     }
 
     /** Only acknowledgments present at the capture boundary belong to this assembled frame. */
-    public synchronized void frameVisible(long cutoff) {
+    public synchronized void frameAssembled(long cutoff) {
         long frame = frameStats.frameSerial();
         if (publications.isEmpty()) return;
         var latest = new IdentityHashMap<Object, Publication>();
@@ -99,7 +99,7 @@ public final class RtGeometryProfiling {
         publications.clear();
     }
 
-    private void recordVisible(ExtractionStamp stamp, long frame) {
+    private void recordAssembled(ExtractionStamp stamp, long publishedNanos, long frame) {
         long now = System.nanoTime();
         if (VISIBILITY_EVENT.isEnabled()) {
             GeometryVisibilityEvent event = new GeometryVisibilityEvent();
@@ -116,7 +116,7 @@ public final class RtGeometryProfiling {
             event.extractionFrameId = stamp.frame;
             event.frameId = frame;
             event.extractedNanos = stamp.nanos;
-            event.publishedNanos = stamp.publishedNanos;
+            event.publishedNanos = publishedNanos;
             event.assembledNanos = now;
             event.commit();
         }
