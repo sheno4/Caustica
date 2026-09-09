@@ -46,7 +46,7 @@ public final class ResourceOwners implements FrameResources, AutoCloseable {
             var volume = geometry.volume();
             return new MeshBuild.Geometry<N>(
                     surface == null ? null : surface(surface), volume == null ? null : volume(volume),
-                    geometry.firstIndex(), geometry.indexCount());
+                    geometry.firstIndex(), geometry.indexCount(), geometry.opacityMicromap());
         }).toList();
         return new MeshBuild<>(stream(source.positions()), stream(source.indices()),
                 source.vertexCount(), source.indexRevision(), source.buildPolicy(), geometries);

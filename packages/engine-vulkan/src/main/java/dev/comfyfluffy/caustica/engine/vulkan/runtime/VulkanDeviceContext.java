@@ -74,12 +74,13 @@ public final class VulkanDeviceContext implements GpuDevice {
     private final int shaderGroupHandleAlignment;
     private final int maxShaderGroupStride;
     private final int accelerationStructureScratchAlignment;
+    private final int maxOpacityMicromapSubdivisionLevel;
     private long commandPool;
     private ConventionalDescriptorBindings conventionalBindings;
 
     private VulkanDeviceContext(VulkanRendererBackend host, long vma, VulkanDescriptorHeap descriptorHeap,
                       int handleSize, int baseAlign, int handleAlign,
-                      int maxSbtStride, int scratchAlign) {
+                      int maxSbtStride, int scratchAlign, int maxOpacitySubdivision) {
         this.host = host;
         this.vk = host.device();
         this.vma = vma;
@@ -91,6 +92,7 @@ public final class VulkanDeviceContext implements GpuDevice {
         this.shaderGroupHandleAlignment = handleAlign;
         this.maxShaderGroupStride = maxSbtStride;
         this.accelerationStructureScratchAlignment = scratchAlign;
+        this.maxOpacityMicromapSubdivisionLevel = maxOpacitySubdivision;
         this.gpuExecutor = new RtGpuExecutor(this);
         this.graphics = new GraphicsQueue(this);
     }
@@ -120,6 +122,8 @@ public final class VulkanDeviceContext implements GpuDevice {
             VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps =
                     VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();
             rtProps.pNext(asProps.address());
+            var opacityProps = org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapPropertiesEXT.calloc(stack).sType$Default();
+            if (host.capabilities().opacityMicromap()) asProps.pNext(opacityProps.address());
             VkPhysicalDeviceProperties2 props2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(rtProps.address());
             VK12.vkGetPhysicalDeviceProperties2(phys, props2);
 
@@ -138,7 +142,8 @@ public final class VulkanDeviceContext implements GpuDevice {
                 return new VulkanDeviceContext(host, allocator, descriptorHeap,
                         rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
                         rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
-                        asProps.minAccelerationStructureScratchOffsetAlignment());
+                        asProps.minAccelerationStructureScratchOffsetAlignment(),
+                        host.capabilities().opacityMicromap() ? opacityProps.maxOpacity4StateSubdivisionLevel() : -1);
             } catch (Throwable failure) {
                 if (descriptorHeap != null) descriptorHeap.close();
                 VulkanDiagnostics.registerAllocator(0L);
@@ -151,6 +156,9 @@ public final class VulkanDeviceContext implements GpuDevice {
     public VulkanRendererBackend backend() {
         return host;
     }
+
+    /** Maximum four-state subdivision level, or -1 when opacity micromaps are unavailable. */
+    public int maxOpacityMicromapSubdivisionLevel() { return maxOpacityMicromapSubdivisionLevel; }
 
     @Override
     public VkDevice vk() {

@@ -106,7 +106,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
         }
 
         void releaseBuildResources() {
-            new ResourceLifetime(nativeBuild.scratch()::destroy, () -> {
+            new ResourceLifetime(nativeBuild.scratch()::destroy, nativeBuild.accel()::releaseMicromapBuildInputs, () -> {
                 if (query != null) query.close();
             }).close();
         }
@@ -114,6 +114,7 @@ public final class RtMeshPreparer implements MeshPreparationBackend {
         void recordCompaction(org.lwjgl.vulkan.VkCommandBuffer command) {
             String label = "ready mesh " + mesh.identity() + " compact";
             RtAccel compacted = RtAccel.prepareCompactedBlas(context, compactedSize, label);
+            compacted.retainMicromapsFrom(nativeBuild.accel());
             compactedOwner = new RtPreparedMesh(context, mesh.build(), nativeBuild.operation(),
                     compacted);
             RtAccel.recordCompaction(context, command, nativeBuild.accel(), compacted, label);

@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.rendering.material;
 
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureResource;
+import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftOpacityBounds;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftEmissionFootprint;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmissionAnalyzer;
@@ -35,17 +36,20 @@ public final class MinecraftMaterialLookup {
     private final Map<ResourceId, MinecraftMaterialResolution> defaults;
     private final List<MinecraftMaterialRecord> records;
     private final List<MinecraftMaterialTexture> textures;
+    private final Map<ResourceId, MinecraftOpacityBounds> opacity;
 
     private MinecraftMaterialLookup(ResourcePackEpoch epoch,
                                     Map<MinecraftMaterialKey, MinecraftMaterialResolution> resolutions,
                                     Map<ResourceId, MinecraftMaterialResolution> defaults,
                                     List<MinecraftMaterialRecord> records,
-                                    List<MinecraftMaterialTexture> textures) {
+                                    List<MinecraftMaterialTexture> textures,
+                                    Map<ResourceId, MinecraftOpacityBounds> opacity) {
         this.epoch = epoch;
         this.resolutions = Map.copyOf(resolutions);
         this.defaults = Map.copyOf(defaults);
         this.records = List.copyOf(records);
         this.textures = List.copyOf(textures);
+        this.opacity = Map.copyOf(opacity);
     }
 
     public static MinecraftMaterialLookup compile(ResourcePackEpoch epoch, List<MinecraftMaterialRule> rules,
@@ -99,12 +103,23 @@ public final class MinecraftMaterialLookup {
                     MinecraftMaterialProfile.ROUGH_DIELECTRIC, MinecraftMaterialTopology.SURFACE), resolution);
             defaults.put(material, resolution);
         }
-        return new MinecraftMaterialLookup(epoch, resolutions, defaults, records, pages.textures());
+        Map<ResourceId, MinecraftOpacityBounds> opacity = new HashMap<>();
+        for (var resource : resources) {
+            if (resource.kind() != dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureKind.SHARED_ATLAS) continue;
+            try {
+                var bounds = MinecraftOpacityBounds.scan(resource);
+                if (bounds != null) opacity.put(resource.material(), bounds);
+            } catch (java.io.IOException failure) {
+                LOGGER.warn("Minecraft opacity scan failed for {}", resource.material(), failure);
+            }
+        }
+        return new MinecraftMaterialLookup(epoch, resolutions, defaults, records, pages.textures(), opacity);
     }
 
     public ResourcePackEpoch epoch() { return epoch; }
     public List<MinecraftMaterialRecord> records() { return records; }
     public List<MinecraftMaterialTexture> textures() { return textures; }
+    public MinecraftOpacityBounds opacity(ResourceId material) { return opacity.get(material); }
 
     public MinecraftMaterialResolution resolve(MinecraftMaterialKey key) {
         MinecraftMaterialResolution value = resolutions.get(key);

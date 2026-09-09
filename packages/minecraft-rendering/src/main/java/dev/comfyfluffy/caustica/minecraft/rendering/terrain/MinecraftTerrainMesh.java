@@ -71,7 +71,10 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
 
     /** One shader-homogeneous range in the source index stream. */
     public record Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount,
-                           float alphaCutoff) {
+                           float alphaCutoff, dev.comfyfluffy.caustica.api.geometry.OpacityMicromap opacityMicromap) {
+        public Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount, float alphaCutoff) {
+            this(program, coverage, firstIndex, indexCount, alphaCutoff, null);
+        }
         public Geometry {
             java.util.Objects.requireNonNull(program, "program");
             java.util.Objects.requireNonNull(coverage, "coverage");

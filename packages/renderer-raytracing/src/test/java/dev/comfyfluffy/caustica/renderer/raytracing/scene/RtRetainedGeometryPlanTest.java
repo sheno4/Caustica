@@ -29,6 +29,24 @@ final class RtRetainedGeometryPlanTest {
     private static final VolumeId<Binding, Instance> VOLUME = new VolumeId<>() { };
     private static final ProgramComposition PROGRAMS = new ProgramComposition(List.of(), java.util.Map.of(SURFACE, 1));
 
+    @Test void changedOpacityRequiresRebuildAndMicromapMeshesDoNotRefit() {
+        var surface = new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1), new MeshBuild.CoveragePolicy.Cutout(.5f));
+        var opaque = new dev.comfyfluffy.caustica.api.geometry.OpacityMicromap(0,1,new byte[]{1});
+        var transparent = new dev.comfyfluffy.caustica.api.geometry.OpacityMicromap(0,1,new byte[]{0});
+        var first = new MeshBuild<>(stream(0x1000,96,12), stream(0x2000,12,4),8,
+                new MeshBuild.IndexRevision(1), MeshBuild.BuildPolicy.REFITTABLE,
+                List.of(new MeshBuild.Geometry<>(surface,null,0,3,opaque)));
+        var changed = new MeshBuild<>(first.positions(),first.indices(),8,first.indexRevision(),first.buildPolicy(),
+                List.of(new MeshBuild.Geometry<>(surface,null,0,3,transparent)));
+        var moved = new MeshBuild<>(stream(0x3000,96,12),first.indices(),8,first.indexRevision(),first.buildPolicy(),first.geometries());
+        assertTrue(RtRetainedGeometryPlan.canReuseBlas(first,first));
+        assertFalse(RtRetainedGeometryPlan.canReuseBlas(first,changed));
+        assertFalse(RtRetainedGeometryPlan.canRefitBlas(first,moved));
+        assertEquals(RtRetainedGeometryPlan.hitGroups(RtRetainedGeometryPlan.records(
+                RtRetainedGeometryPlan.resolve(first,PROGRAMS),0)),
+                List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_CUTOUT, RtRetainedGeometryPlan.HitGroup.SHADOW_CUTOUT));
+    }
+
     @Test
     void blasRangesPreserveSliceOrderOffsetsAndCoverageClass() {
         MeshBuild<Instance> build = build(new MeshBuild.IndexRevision(7), 0x1000,

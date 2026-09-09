@@ -177,10 +177,25 @@ public record MeshBuild<N>(Stream positions,
      * Each slot's {@code bindingData} reaches only that slot's implementation and commonly addresses an
      * extension-owned geometry record containing primitive attributes. Both slots accept the mesh's same
      * {@code N} instance schema because one placement supplies one instance word to every geometry it can hit.
+     *
+     * <p>An optional {@code opacityMicromap} accelerates cutout surfaces without an interior volume. Its
+     * known states must agree with this surface's coverage for every placement throughout the mesh's lifetime.
+     * Its triangles follow this geometry's local index order. Changed micromap meshes rebuild their BLAS;
+     * unchanged inputs can share the existing BLAS. Devices without the required support evaluate coverage
+     * through any-hit instead.
      */
     public record Geometry<N>(SurfaceSlot<?, N> surface, VolumeSlot<?, N> volume,
-                              int firstIndex, int indexCount) {
+                              int firstIndex, int indexCount, OpacityMicromap opacityMicromap) {
+        public Geometry(SurfaceSlot<?, N> surface, VolumeSlot<?, N> volume, int firstIndex, int indexCount) {
+            this(surface, volume, firstIndex, indexCount, null);
+        }
+
         public Geometry {
+            if (opacityMicromap != null && (volume != null || surface == null
+                    || !(surface.coverage() instanceof CoveragePolicy.Cutout)
+                    || opacityMicromap.triangleCount() != indexCount / 3)) {
+                throw new IllegalArgumentException("opacity micromaps require matching cutout surface triangles without a volume");
+            }
             if (surface == null && volume == null) {
                 throw new IllegalArgumentException("geometry needs a surface or volume slot");
             }

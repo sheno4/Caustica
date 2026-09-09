@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.geometry.OpacityMicromap;
+import dev.comfyfluffy.caustica.support.SharedResource;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
@@ -71,6 +73,7 @@ public final class RtAccel {
 
     private final GpuBuffer backing;
     private final ResourceLifetime lifetime;
+    private List<SharedResource<RtOpacityMicromap>> micromaps = List.of();
 
     RtAccel(VkDevice vk, long handle, VulkanDeviceAddress deviceAddress, GpuBuffer backing) {
         this.handle = handle;
@@ -79,7 +82,8 @@ public final class RtAccel {
         // The handle must be destroyed before the storage it references.
         this.lifetime = new ResourceLifetime(() -> {
             if (handle != 0L) vkDestroyAccelerationStructureKHR(vk, handle, null);
-        }, backing::destroy);
+        }, backing::destroy, () -> new ResourceLifetime(micromaps.stream()
+                .<Runnable>map(map -> map::close).toArray(Runnable[]::new)).close());
     }
 
     public long sizeBytes() {
@@ -88,6 +92,15 @@ public final class RtAccel {
 
     public void destroy() {
         lifetime.close();
+    }
+
+    /** The compacted BLAS references the same immutable micromap storage as its source. */
+    public void retainMicromapsFrom(RtAccel source) {
+        micromaps = source.micromaps.stream().map(SharedResource::retain).toList();
+    }
+
+    public void releaseMicromapBuildInputs() {
+        for (var map : micromaps) map.get().releaseBuildInputs();
     }
 
     /**
@@ -170,7 +183,10 @@ public final class RtAccel {
     }
 
     /** One ordered indexed geometry in a multi-geometry BLAS. */
-    public record GeometryRange(int firstIndex, int indexCount, boolean opaque) {
+    public record GeometryRange(int firstIndex, int indexCount, boolean opaque, OpacityMicromap opacityMicromap) {
+        public GeometryRange(int firstIndex, int indexCount, boolean opaque) {
+            this(firstIndex, indexCount, opaque, null);
+        }
         public GeometryRange {
             if (firstIndex < 0 || firstIndex % 3 != 0) {
                 throw new IllegalArgumentException("firstIndex must be a non-negative triangle boundary");
@@ -275,9 +291,19 @@ public final class RtAccel {
         GpuBuffer backing = null;
         GpuBuffer scratch = null;
         RtAccel accel = null;
+        var micromaps = new java.util.ArrayList<SharedResource<RtOpacityMicromap>>();
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            if (ctx.maxOpacityMicromapSubdivisionLevel() >= 0) {
+                for (int i = 0; i < layout.geometryRanges().size(); i++) {
+                    var input = layout.geometryRanges().get(i).opacityMicromap();
+                    if (input != null && input.subdivisionLevel() <= ctx.maxOpacityMicromapSubdivisionLevel()) {
+                        var map = RtOpacityMicromap.create(ctx, i, input, debugLabel + " OMM " + i);
+                        micromaps.add(SharedResource.owned(map, RtOpacityMicromap::destroy));
+                    }
+                }
+            }
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryGeometryRangeBlasSizes(vk, stack,
-                    vertexAddr, indexAddr, layout, operation.updateable());
+                    vertexAddr, indexAddr, layout, operation.updateable(), micromaps);
             backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
                     debugLabel + " backing");
@@ -286,6 +312,7 @@ public final class RtAccel {
             scratch = createScratchBuffer(ctx, scratchSize, debugLabel + " scratch");
             accel = createOn(ctx, stack, backing, sizes.accelerationStructureSize(),
                     VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, debugLabel);
+            accel.micromaps = List.copyOf(micromaps);
             return new PersistentBuild(accel, scratch, vertexAddr, indexAddr, debugLabel, operation);
         } catch (Throwable failure) {
             RtAccel allocatedAccel = accel;
@@ -296,7 +323,9 @@ public final class RtAccel {
                         if (allocatedAccel != null) allocatedAccel.destroy();
                         else if (allocatedBacking != null) allocatedBacking.destroy();
                     },
-                    () -> { if (allocatedScratch != null) allocatedScratch.destroy(); });
+                    () -> { if (allocatedScratch != null) allocatedScratch.destroy(); },
+                    () -> { if (allocatedAccel == null) new ResourceLifetime(micromaps.stream()
+                            .<Runnable>map(map -> map::close).toArray(Runnable[]::new)).close(); });
             throw failure;
         }
     }
@@ -383,9 +412,11 @@ public final class RtAccel {
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryGeometryRangeBlasSizes(
             VkDevice vk, MemoryStack stack, VulkanDeviceAddress vertexAddr,
-            VulkanDeviceAddress indexAddr, BlasLayout layout, boolean updateable) {
+            VulkanDeviceAddress indexAddr, BlasLayout layout, boolean updateable,
+            List<SharedResource<RtOpacityMicromap>> micromaps) {
         try (VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
-                vertexAddr, layout.vertexStride(), indexAddr, layout.vertexCount(), layout.geometryRanges())) {
+                vertexAddr, layout.vertexStride(), indexAddr, layout.vertexCount(), layout.geometryRanges());
+             var attachments = RtOpacityMicromap.attachAll(geometries, micromaps)) {
             var maxPrimitives = MemoryUtil.memAllocInt(layout.geometryRanges().size());
             try {
                 VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
@@ -411,6 +442,10 @@ public final class RtAccel {
         String label = build.label + " " + build.operation.mode().name().toLowerCase(java.util.Locale.ROOT);
         try (MemoryStack stack = MemoryStack.stackPush();
              var ignored = RtDebugLabels.scope(ctx, cmd, label)) {
+            for (var map : build.accel.micromaps) {
+                try (var buildStack = MemoryStack.stackPush()) { map.get().record(cmd, buildStack); }
+            }
+            if (!build.accel.micromaps.isEmpty()) RtOpacityMicromap.buildToBlas(cmd, stack);
             recordGeometryRangeBlasBuild(ctx, cmd, stack, build);
         }
     }
@@ -423,6 +458,7 @@ public final class RtAccel {
         }
         try (VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
                 b.vertexAddr, layout.vertexStride(), b.indexAddr, layout.vertexCount(), layout.geometryRanges());
+             var attachments = RtOpacityMicromap.attachAll(geometries, b.accel.micromaps);
              VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
                      geometryRangeBuildRanges(layout.geometryRanges())) {
             VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =

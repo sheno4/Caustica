@@ -16,6 +16,8 @@ import dev.comfyfluffy.caustica.spi.vulkan.VulkanDeviceCapabilities;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueReservation;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTHdrMetadata;
+import org.lwjgl.vulkan.EXTOpacityMicromap;
+import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapFeaturesEXT;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VK;
@@ -89,6 +91,9 @@ public final class MinecraftDeviceBringup {
     private static final VulkanPNextStruct SER_STRUCT = new VulkanPNextStruct(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT,
             VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT.SIZEOF);
+    private static final VulkanPNextStruct OMM_STRUCT = new VulkanPNextStruct(
+            EXTOpacityMicromap.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT,
+            VkPhysicalDeviceOpacityMicromapFeaturesEXT.SIZEOF);
     private static final VulkanPNextStruct PRESENT_ID_STRUCT = new VulkanPNextStruct(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
             VkPhysicalDevicePresentIdFeaturesKHR.SIZEOF);
@@ -160,6 +165,8 @@ public final class MinecraftDeviceBringup {
             VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT.RAYTRACINGINVOCATIONREORDER);
     private static final VulkanFeature PRESENT_ID = new VulkanFeature(PRESENT_ID_STRUCT,
             "presentId", VkPhysicalDevicePresentIdFeaturesKHR.PRESENTID);
+    private static final VulkanFeature OMM = new VulkanFeature(OMM_STRUCT, "micromap",
+            VkPhysicalDeviceOpacityMicromapFeaturesEXT.MICROMAP);
     private static final VulkanFeature WIDE_LINES = new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT,
             "wideLines", VkPhysicalDeviceFeatures.WIDELINES);
     private record ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature profile,
@@ -208,7 +215,7 @@ public final class MinecraftDeviceBringup {
         boolean hdrMetadata;
     }
 
-    private record Support(VulkanProfileSupport profile, boolean ser,
+    private record Support(VulkanProfileSupport profile, boolean ser, boolean omm,
                            boolean presentId, boolean wideLines) {
     }
 
@@ -242,6 +249,7 @@ public final class MinecraftDeviceBringup {
         requireProfile(support.profile());
         REQUIRED_PROFILE.deviceExtensions().forEach(extension -> addOnce(extensions, extension));
         if (support.ser()) addOnce(extensions, VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+        if (support.omm()) addOnce(extensions, EXTOpacityMicromap.VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME);
         if (CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED)
                 && device.hasDeviceExtension(VK_NV_LOW_LATENCY_2_EXTENSION_NAME)) {
             addOnce(extensions, VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
@@ -271,6 +279,7 @@ public final class MinecraftDeviceBringup {
         Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
         PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(features::add);
         if (support.ser()) features.add(SER);
+        if (support.omm()) features.add(OMM);
         if (support.wideLines()) features.add(WIDE_LINES);
 
         boolean lowLatency = CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED)
@@ -283,11 +292,12 @@ public final class MinecraftDeviceBringup {
                 ? device.vkPhysicalDeviceProperties().limits().lineWidthRange(1) : 1.0f;
         int samples = preferredOverlaySampleCount(
                 device.vkPhysicalDeviceProperties().limits().framebufferColorSampleCounts());
-        negotiation.capabilities = new VulkanDeviceCapabilities(true, support.ser(),
+        negotiation.capabilities = new VulkanDeviceCapabilities(true, support.ser(), support.omm(),
                 lowLatency, presentIds, negotiation.hdrMetadata,
                 new GpuRasterCapabilities(support.wideLines(), maxLineWidth, samples));
         CausticaMod.LOGGER.info("Ray tracing enabled on [{}]: SER={}, Reflex={}, presentId={}, overlaySamples={}",
                 device.deviceName(), support.ser(), lowLatency, presentIds, samples);
+        CausticaMod.LOGGER.info("Opacity micromap acceleration: {}", support.omm());
     }
 
     public void reserveComputeQueue(VkDeviceCreateInfo createInfo, VulkanPhysicalDevice device,
@@ -323,6 +333,7 @@ public final class MinecraftDeviceBringup {
         }
         negotiation.capabilities = new VulkanDeviceCapabilities(rayTracing,
                 rayTracing && old.shaderExecutionReordering(),
+                rayTracing && old.opacityMicromap() && entryPoints.VK_EXT_opacity_micromap,
                 lowLatency, lowLatency && old.presentIds(), old.hdrMetadata(), old.raster());
         if (!rayTracing) CausticaMod.LOGGER.error("RT entry points are incomplete after device creation");
         if (old.lowLatency() && !lowLatency) CausticaMod.LOGGER.error("Low-latency entry points are incomplete");
@@ -406,10 +417,13 @@ public final class MinecraftDeviceBringup {
             PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(
                     feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
             boolean querySer = device.hasDeviceExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+            boolean queryOmm = Boolean.parseBoolean(System.getProperty("caustica.rt.omm", "true"))
+                    && device.hasDeviceExtension(EXTOpacityMicromap.VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME);
             boolean queryPresent = CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED)
                     && device.hasDeviceExtension(VK_NV_LOW_LATENCY_2_EXTENSION_NAME)
                     && device.hasDeviceExtension(VK_KHR_PRESENT_ID_EXTENSION_NAME);
             if (querySer) SER.struct().findOrCreateStructInPNextChain(available, stack);
+            if (queryOmm) OMM.struct().findOrCreateStructInPNextChain(available, stack);
             if (queryPresent) PRESENT_ID.struct().findOrCreateStructInPNextChain(available, stack);
             WIDE_LINES.struct().findOrCreateStructInPNextChain(available, stack);
             VK12.vkGetPhysicalDeviceFeatures2(device.vkPhysicalDevice(), available);
@@ -424,7 +438,7 @@ public final class MinecraftDeviceBringup {
                     ? requestedInstanceApiVersion : REQUIRED_PROFILE.apiVersion();
             VulkanProfileSupport profile = new VulkanProfileSupport(loaderVersion, requestedVersion,
                     device.vkPhysicalDeviceProperties().apiVersion(), extensions, supportedFeatures);
-            return new Support(profile, querySer && SER.get(available),
+            return new Support(profile, querySer && SER.get(available), queryOmm && OMM.get(available),
                     queryPresent && PRESENT_ID.get(available), WIDE_LINES.get(available));
         }
     }

@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProf
 import dev.comfyfluffy.caustica.minecraft.client.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.TerrainOpacityBaker;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh.Coverage;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
@@ -89,7 +90,7 @@ final class RtTerrainMesher {
         // Material luminance and sampled footprint determine which quads contribute retained lights.
         var lights = new ArrayList<MinecraftTerrainEmitter>();
         collectLights(lights, mesh.geometry, CausticaConfig.get(MinecraftOptions.Rt.Lights.MIN_FILL_RATIO));
-        PackedSection packed = packSection(mesh);
+        PackedSection packed = packSection(mesh, materials);
         return new CpuSection(packed.mesh(), remapLights(lights, packed.sourceToDestinationPrimitives()));
     }
 
@@ -100,7 +101,7 @@ final class RtTerrainMesher {
         }
     }
 
-    private static PackedSection packSection(SectionMesh mesh) {
+    private static PackedSection packSection(SectionMesh mesh, MinecraftMaterialLookup materials) {
         Geom geom = mesh.geometry();
         ArrayList<TriangleRouting> routing = new ArrayList<>(geom.surfaces.size());
         for (int triangle = 0; triangle < geom.surfaces.size(); triangle++) {
@@ -111,9 +112,30 @@ final class RtTerrainMesher {
             routing.add(new TriangleRouting(program, surface.coverage(), 0.5f));
         }
         var packed = bucketTriangles(geom.idx.elements(), geom.cornerUv.elements(), geom.prim.elements(), routing);
+        int[] sourceTriangles = new int[routing.size()];
+        for (int source = 0; source < routing.size(); source++) {
+            sourceTriangles[packed.sourceToDestinationPrimitives()[source]] = source;
+        }
+        var geometries = new ArrayList<MinecraftTerrainMesh.Geometry>();
+        for (var geometry : packed.geometries()) {
+            var opacity = geometry.coverage() == Coverage.CUTOUT
+                    && geometry.program() == MinecraftTerrainMesh.ProgramCategory.MATERIAL
+                    ? TerrainOpacityBaker.bake(packed.cornerUvs(), geometry.firstIndex() / 3, geometry.indexCount() / 3,
+                    (triangle, minU, minV, maxU, maxV) -> {
+                        var material = geom.surfaces.get(sourceTriangles[triangle]).material();
+                        var bounds = materials.opacity(material.material());
+                        if (bounds == null) return TerrainOpacityBaker.UNKNOWN;
+                        var uv = bounds.uv();
+                        return TerrainOpacityBaker.classifyRegion(bounds.width(), bounds.height(), 2, bounds::alpha,
+                                (minU - uv.u()) * uv.inverseDu(), (minV - uv.v()) * uv.inverseDv(),
+                                (maxU - uv.u()) * uv.inverseDu(), (maxV - uv.v()) * uv.inverseDv(), geometry.alphaCutoff());
+                    }) : null;
+            geometries.add(new MinecraftTerrainMesh.Geometry(geometry.program(), geometry.coverage(),
+                    geometry.firstIndex(), geometry.indexCount(), geometry.alphaCutoff(), opacity));
+        }
         return new PackedSection(new MinecraftTerrainMesh(
                 java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
-                packed.indices(), packed.cornerUvs(), packed.primitiveData(), packed.geometries(), 0L),
+                packed.indices(), packed.cornerUvs(), packed.primitiveData(), geometries, 0L),
                 packed.sourceToDestinationPrimitives());
     }
 

@@ -39,6 +39,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     private final MinecraftPrograms programs;
     private final SharedResource<SharedAtlas> atlas;
     private final ResourceFactory resources;
+    private final boolean opacitySamplingCompatible;
     private boolean closed;
 
     public MinecraftVulkanTerrainUploader(GpuDevice gpu, MinecraftPrograms programs,
@@ -47,6 +48,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
         this.programs = java.util.Objects.requireNonNull(programs, "programs");
         this.resources = java.util.Objects.requireNonNull(resources, "resources");
+        opacitySamplingCompatible = blockAtlas.baseMipLevel() == 0 && blockAtlas.sampler().maxAnisotropy() == 1;
         atlas = SharedAtlas.create(gpu, java.util.Objects.requireNonNull(blockAtlas, "blockAtlas"));
     }
 
@@ -101,6 +103,12 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     static List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries(
             MinecraftTerrainMesh source, MinecraftPrograms programs, VulkanDeviceAddress primitiveAddress,
             ResourceOwner resource) {
+        return geometries(source, programs, primitiveAddress, resource, true);
+    }
+
+    private static List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries(
+            MinecraftTerrainMesh source, MinecraftPrograms programs, VulkanDeviceAddress primitiveAddress,
+            ResourceOwner resource, boolean opacitySamplingCompatible) {
         List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
         var claims = new ArrayList<Runnable>();
         try {
@@ -117,7 +125,8 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                 };
                 var volume = geometry.program() == MinecraftTerrainMesh.ProgramCategory.WATER
                         ? new MeshBuild.VolumeSlot<>(programs.waterVolume(), binding) : null;
-                geometries.add(new MeshBuild.Geometry<>(surface, volume, geometry.firstIndex(), geometry.indexCount()));
+                geometries.add(new MeshBuild.Geometry<>(surface, volume, geometry.firstIndex(), geometry.indexCount(),
+                        opacitySamplingCompatible ? geometry.opacityMicromap() : null));
             }
             return List.copyOf(geometries);
         } catch (RuntimeException | Error failure) {
@@ -154,7 +163,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             var instanceGeneration = resources.create(releaseInstance);
             releaseInstance = instanceGeneration::close;
             List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = geometries(
-                    source, programs, primitive.deviceRange().address(), bindingGeneration);
+                    source, programs, primitive.deviceRange().address(), bindingGeneration, opacitySamplingCompatible);
             // Surface and volume slots borrow the same binding claim for each geometry.
             for (var geometry : geometries) shaderClaims.add(geometry.surface().bindingData()::close);
             MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(

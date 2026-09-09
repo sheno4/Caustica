@@ -39,7 +39,7 @@ public final class RtRetainedGeometryPlan {
 
     public static List<RtAccel.GeometryRange> blasRanges(MeshBuild<?> build) {
         return build.geometries().stream().map(geometry -> new RtAccel.GeometryRange(
-                geometry.firstIndex(), geometry.indexCount(), isOpaque(geometry))).toList();
+                geometry.firstIndex(), geometry.indexCount(), isOpaque(geometry), geometry.opacityMicromap())).toList();
     }
 
     /** A BLAS can be shared only when every acceleration-structure-visible input is identical. */
@@ -56,6 +56,8 @@ public final class RtRetainedGeometryPlan {
     /** Refit requires both revisions to permit updates and preserve the UPDATE layout. */
     public static boolean canRefitBlas(MeshBuild<?> previous, MeshBuild<?> next) {
         return previous.buildPolicy() == MeshBuild.BuildPolicy.REFITTABLE
+                && previous.geometries().stream().noneMatch(geometry -> geometry.opacityMicromap() != null)
+                && next.geometries().stream().noneMatch(geometry -> geometry.opacityMicromap() != null)
                 && next.buildPolicy() == MeshBuild.BuildPolicy.REFITTABLE
                 && !previous.positions().equals(next.positions())
                 && previous.positions().byteStride() == next.positions().byteStride()

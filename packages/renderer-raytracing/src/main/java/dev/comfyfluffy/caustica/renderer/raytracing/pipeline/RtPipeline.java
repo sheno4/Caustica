@@ -115,6 +115,9 @@ public final class RtPipeline {
                 }
 
                 long flags = EXTDescriptorHeap.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+                if (context.backend().capabilities().opacityMicromap()) {
+                    flags |= EXTOpacityMicromap.VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
+                }
                 VkPipelineCreateFlags2CreateInfo flags2 = VkPipelineCreateFlags2CreateInfo.calloc(stack)
                         .sType$Default().flags(flags);
                 VkRayTracingPipelineCreateInfoKHR.Buffer info = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);

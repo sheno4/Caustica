@@ -93,6 +93,6 @@ and the [debugging guide](docs/DEBUGGING.md) for runtime diagnostics.
 
 - [ ] Weather and volumetric fog/clouds
 - [ ] FSR upscaling for non-NVIDIA GPUs
-- [ ] Opacity micromap acceleration
+- [x] [Opacity micromap acceleration](docs/OPACITY_MICROMAPS.md)
 - [ ] LOD
 - [ ] ReSTIR
