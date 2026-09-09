@@ -55,6 +55,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
         this.failures = Objects.requireNonNull(failures, "failures");
     }
 
+    /** Flag-only notification, safe while the registration channel holds its lock. */
     void requestReconcile() { reconcileRequested = true; }
 
     /** Applies process registration changes at the host's world-session control boundary. */

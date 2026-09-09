@@ -46,49 +46,37 @@ public final class MinecraftWorldSessionHost implements AutoCloseable {
         private boolean accepting = true;
 
         @Override
-        public MinecraftWorldSessionRegistration add(MinecraftWorldSessionFactory factory) {
+        public synchronized MinecraftWorldSessionRegistration add(MinecraftWorldSessionFactory factory) {
             Objects.requireNonNull(factory, "factory");
-            Registration registration;
-            List<MinecraftWorldSession> live;
-            synchronized (this) {
-                if (!accepting) throw new IllegalStateException("Minecraft session host is closed");
-                registration = new Registration(this, factory);
-                registrations.add(registration);
-                live = List.copyOf(sessions);
-            }
-            live.forEach(MinecraftWorldSession::requestReconcile);
+            if (!accepting) throw new IllegalStateException("Minecraft session host is closed");
+            Registration registration = new Registration(this, factory);
+            registrations.add(registration);
+            sessions.forEach(MinecraftWorldSession::requestReconcile);
             return registration;
         }
 
         synchronized List<Registration> snapshot() { return List.copyOf(registrations); }
 
-        MinecraftWorldSession open(
+        synchronized MinecraftWorldSession open(
                 ContributionScopeFactory scopes,
                 Function<SceneId, EnvironmentSelectionScope> environments,
                 SceneId scene,
                 MinecraftDimensionKey dimension,
                 ResourcePackEpoch resourcePackEpoch,
                 MinecraftSessionFailureHandler failures) {
-            MinecraftWorldSession session;
-            synchronized (this) {
-                if (!accepting) throw new IllegalStateException("Minecraft session host is closed");
-                session = new MinecraftWorldSession(this, scopes, environments, scene, dimension,
-                        resourcePackEpoch, failures);
-                sessions.add(session);
-            }
+            if (!accepting) throw new IllegalStateException("Minecraft session host is closed");
+            MinecraftWorldSession session = new MinecraftWorldSession(this, scopes, environments, scene, dimension,
+                    resourcePackEpoch, failures);
+            sessions.add(session);
             session.requestReconcile();
             return session;
         }
 
         synchronized void detach(MinecraftWorldSession session) { sessions.remove(session); }
 
-        void remove(Registration registration) {
-            List<MinecraftWorldSession> live;
-            synchronized (this) {
-                if (!registrations.remove(registration)) return;
-                live = List.copyOf(sessions);
-            }
-            live.forEach(MinecraftWorldSession::requestReconcile);
+        synchronized void remove(Registration registration) {
+            if (!registrations.remove(registration)) return;
+            sessions.forEach(MinecraftWorldSession::requestReconcile);
         }
 
         synchronized void close() {

@@ -1060,3 +1060,9 @@ Ran the isolated WSL ArchLinux NeoForge root check at 0b3165a8, including the re
 Inspected the resulting caustica-0.1.0-neoforge.jar: 154,334,678 bytes, SHA-256 c2eb0e9fa6085e46cb454d0f2c842fee91eba4d0223fec9ee23a871e16d575fb. NeoForge metadata resolves version 0.1.0; both expected mixin descriptors occur once and parse; Fabric metadata and Windows DLLs are absent. All nine entries ending in .so have ELF headers. The client reports contain 48 suites and 212 tests with zero failures, errors or skips.
 
 Evidence: tmp/aesthetic-linux-neoforge-current-check.log, tmp/aesthetic-linux-neoforge-current-inspect.py and tmp/aesthetic-linux-neoforge-current-artifact.json. This verifies the current Linux NeoForge build and packaged artifact, not Linux GPU execution, a case-sensitive checkout, hosted CI or desktop visual validation. The computer-use resize and intermittent RR stability gates remain open.
+
+## Direct host reconciliation notification (2026-09-09)
+
+Simplified MinecraftWorldSessionHost registration addition, removal and session opening to use synchronized methods. Notifications only set a volatile flag on the final session class, so copying live-session lists and leaving the lock before notifying added no callback isolation. Documented that flag-only contract; contribution creation and teardown remain in processPendingChanges. Registration snapshots for actual reconciliation remain immutable copies.
+
+The full Windows Fabric root check passed in 43 seconds (187 tasks, 48 executed, 139 up-to-date). All five MinecraftWorldSessionHostTest cases pass, including nested registration during opening, registration removal and deferred host shutdown. Evidence: tmp/aesthetic-world-host-notification-check.log. git diff --check passed. No throughput improvement or live GPU behavior is claimed from this source simplification; Linux and gameplay were not rerun for this change.
