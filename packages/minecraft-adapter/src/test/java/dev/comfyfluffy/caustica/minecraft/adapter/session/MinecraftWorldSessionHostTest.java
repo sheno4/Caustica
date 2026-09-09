@@ -27,6 +27,42 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftWorldSessionHostTest {
     @Test
+    void failedEnvironmentCreationClosesAcceptedScopeAndContinuesOpening() {
+        var events = new ArrayList<String>();
+        var failures = new ArrayList<MinecraftSessionFailure>();
+        var environmentAttempts = new java.util.concurrent.atomic.AtomicInteger();
+        var failure = new IllegalStateException("environment unavailable");
+        try (var host = new MinecraftWorldSessionHost()) {
+            host.api().sessions().add(context -> {
+                throw new AssertionError("contribution must not open without its environment scope");
+            });
+            host.api().sessions().add(context -> {
+                events.add("live:open");
+                return contribution("live", events, false);
+            });
+            try (var session = host.openSession(
+                    owner -> new TestScope(Long.toString(owner.sequence()), events),
+                    scene -> {
+                        if (environmentAttempts.incrementAndGet() == 1) throw failure;
+                        return environmentScope(new ArrayList<>());
+                    }, new SceneId() { }, MinecraftDimensionKey.of("minecraft", "overworld"),
+                    new ResourcePackEpoch(0), failures::add)) {
+                session.processPendingChanges();
+                assertEquals(1, session.contributionCount());
+                assertEquals(2, environmentAttempts.get());
+                assertEquals(1, failures.size());
+                assertEquals(MinecraftSessionFailure.Stage.CREATE_SCOPE, failures.getFirst().stage());
+                assertSame(failure, failures.getFirst().cause());
+                assertEquals(List.of("1:quiesce", "1:invalidate", "1:drain", "1:scope-close",
+                        "live:open"), events);
+                events.clear();
+            }
+            assertEquals(List.of("2:quiesce", "live:stop", "2:invalidate", "2:drain",
+                    "live:close", "2:scope-close"), events);
+        }
+    }
+
+    @Test
     void hostCloseQueuesRemovalAtTheSessionControlBoundary() {
         var events = new ArrayList<String>();
         try (var host = new MinecraftWorldSessionHost()) {
