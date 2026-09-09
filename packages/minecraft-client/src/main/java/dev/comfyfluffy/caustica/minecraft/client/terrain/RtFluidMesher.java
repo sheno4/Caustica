@@ -47,8 +47,7 @@ final class RtFluidMesher {
         } else if (occluder == Shapes.block()) {
             return true;
         } else {
-            VoxelShape shape = Shapes.box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
-            return Shapes.blockOccludes(shape, occluder, direction.getOpposite());
+            return Shapes.blockOccludes(Shapes.block(), occluder, direction.getOpposite());
         }
     }
 
@@ -109,13 +108,12 @@ final class RtFluidMesher {
             float v11;
             TextureAtlasSprite sprite;
             if (flow.x == 0.0 && flow.z == 0.0) {
-                TextureAtlasSprite stillSprite = model.stillMaterial().sprite();
-                sprite = stillSprite;
-                u00 = stillSprite.getU0();
-                v00 = stillSprite.getV0();
+                sprite = model.stillMaterial().sprite();
+                u00 = sprite.getU0();
+                v00 = sprite.getV0();
                 u01 = u00;
-                v01 = stillSprite.getV1();
-                u10 = stillSprite.getU1();
+                v01 = sprite.getV1();
+                u10 = sprite.getU1();
                 v10 = v01;
                 u11 = u10;
                 v11 = v00;
@@ -123,16 +121,15 @@ final class RtFluidMesher {
                 float angle = (float) Mth.atan2(flow.z, flow.x) - (float) (Math.PI / 2);
                 float s = Mth.sin(angle) * 0.25F;
                 float c = Mth.cos(angle) * 0.25F;
-                TextureAtlasSprite flowingSprite = model.flowingMaterial().sprite();
-                sprite = flowingSprite;
-                u00 = flowingSprite.getU(0.5F + (-c - s));
-                v00 = flowingSprite.getV(0.5F + (-c + s));
-                u01 = flowingSprite.getU(0.5F + (-c + s));
-                v01 = flowingSprite.getV(0.5F + (c + s));
-                u10 = flowingSprite.getU(0.5F + (c + s));
-                v10 = flowingSprite.getV(0.5F + (c - s));
-                u11 = flowingSprite.getU(0.5F + (c - s));
-                v11 = flowingSprite.getV(0.5F + (-c - s));
+                sprite = model.flowingMaterial().sprite();
+                u00 = sprite.getU(0.5F + (-c - s));
+                v00 = sprite.getV(0.5F + (-c + s));
+                u01 = sprite.getU(0.5F + (-c + s));
+                v01 = sprite.getV(0.5F + (c + s));
+                u10 = sprite.getU(0.5F + (c + s));
+                v10 = sprite.getV(0.5F + (c - s));
+                u11 = sprite.getU(0.5F + (c - s));
+                v11 = sprite.getV(0.5F + (-c - s));
             }
 
             addFace(output, MinecraftResourceIds.material(sprite),

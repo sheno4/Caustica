@@ -1848,3 +1848,9 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-copl
 Read remaining QuadCapture emission, PendingQuad, UV helpers and FluidCapture in full. Moved identical four-position/six-index append code into Geom.addQuad, used by both block and fluid capture. It keeps source corner order and triangles 0,1,2 then 0,2,3. UV handling, normal/tint calculation, primitive records, material metadata and light associations remain in their respective paths. The helper adds no intermediate buffers or copies beyond the existing accumulator writes.
 
 Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-shared-quad-append-check.log. git diff --check passed. No new live block/fluid visual comparison was performed. This completes the bounded RtTerrainMesher source reading across the recent passes, not runtime capture coverage or whole-project review.
+
+## Fluid top-face UVs use the selected sprite directly (2026-09-09)
+
+Read RtFluidMesher in full and began MinecraftFluidSurface through corner-height averaging. Removed redundant still/flowing sprite aliases in top-face UV generation; both branches now directly assign and use the sprite passed to material selection. Self-occlusion uses Shapes.block instead of constructing an equivalent unit box. Preserved flow-angle expressions, neighbor selection, face heights, UVs, winding and output sequencing.
+
+Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-fluid-sprite-selection-check.log. git diff --check passed. No new fluid visual capture or performance measurement was performed. Remaining shared fluid-surface helpers and whole-project coverage remain incomplete.
