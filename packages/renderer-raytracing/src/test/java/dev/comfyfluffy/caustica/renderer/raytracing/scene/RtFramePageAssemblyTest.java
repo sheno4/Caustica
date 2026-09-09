@@ -508,6 +508,44 @@ class RtFramePageAssemblyTest {
         }
     }
 
+    @Test void emitterLayoutIgnoresGroupBoundariesButTracksOrderAndRangeGenerations() {
+        var mesh = mesh(1, 0x1000);
+        var values = new ArrayList<RetainedSceneSnapshot.Instance>();
+        for (int index = 1; index <= 4; index++) {
+            values.add(new RetainedSceneSnapshot.Instance(index, index, scene, mesh.identity(),
+                    GeometryTransform.translation(0, 0, 0), 255, DATA.data(0),
+                    List.of(new RetainedSceneSnapshot.PrimitiveEmitter(0, 1, 40 + index))));
+        }
+        var frames = resolve(snapshot(List.of(mesh), List.of(List.copyOf(values))))
+                .get(scene).getFirst().instances;
+        var cache = new RtRetainedSceneBackend.TracePlanCache();
+        try (var preparation = new RtFramePreparation()) {
+            cache.resolveBatches(List.of(frames.subList(0, 2), frames.subList(2, 4)), preparation);
+            var layout = cache.emitterLayout();
+            cache.resolveBatches(List.of(frames.subList(0, 1), frames.subList(1, 4)), preparation);
+            assertSame(layout, cache.emitterLayout());
+            cache.resolveBatches(List.of(frames.subList(0, 3), frames.subList(3, 4)), preparation);
+            assertSame(layout, cache.emitterLayout());
+            cache.resolveBatches(List.of(frames), preparation);
+            assertSame(layout, cache.emitterLayout());
+
+            cache.resolveBatches(List.of(List.of(frames.get(1), frames.get(0), frames.get(2), frames.get(3))), preparation);
+            assertNotSame(layout, cache.emitterLayout());
+            cache.resolveBatches(List.of(frames), preparation);
+            var restored = cache.emitterLayout();
+            var previous = frames.get(1);
+            var oldRange = previous.range();
+            var newRange = new RtStableTraceRanges.PageRange(oldRange.geometryBase(), oldRange.geometryCount(),
+                    oldRange.emitterBase(), oldRange.emitterBytes());
+            assertEquals(oldRange, newRange);
+            var replaced = new ArrayList<>(frames);
+            replaced.set(1, new RtRetainedSceneBackend.FrameInstanceSnapshot(previous.current(), previous.mesh(),
+                    newRange, previous.geometryRecords()));
+            cache.resolveBatches(List.of(List.copyOf(replaced)), preparation);
+            assertNotSame(restored, cache.emitterLayout());
+        }
+    }
+
     @Test void movedEmitterPublishesANewLayoutAndReusesItsCurrentPlan() {
         var mesh = mesh(1, 0x1000);
         var originalEmitter = new RetainedSceneSnapshot.Instance(1, 1, scene, mesh.identity(),

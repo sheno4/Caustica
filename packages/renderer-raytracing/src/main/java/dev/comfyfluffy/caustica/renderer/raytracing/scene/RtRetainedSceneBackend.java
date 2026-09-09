@@ -994,6 +994,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
 
         private boolean matches(List<RtStableTraceRanges.PageRange[]> next) {
+            // Compare flattened range identities; storage-page boundaries do not change the light layout.
             int groupIndex = 0, rangeIndex = 0;
             for (var group : next) {
                 if (groupIndex == groups.size()) return false;
