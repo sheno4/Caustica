@@ -115,12 +115,7 @@ public final class SceneDirectory {
                 }
             }
             inputs = new ResourceOwners();
-            try {
-                sourceClaim = source == null ? null : source.retain();
-            } catch (Throwable error) {
-                inputs.close();
-                throw error;
-            }
+            sourceClaim = source == null ? null : source.retain();
             try { mesh = new RetainedSceneSnapshot.Mesh(++identity, inputs.mesh(build), null); }
             catch (Throwable failure) {
                 inputs.close();

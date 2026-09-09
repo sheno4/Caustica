@@ -1108,3 +1108,9 @@ Both JARs contain the current direct vanilla item-model references and omit the 
 Ran Java 25 ServiceLoader against the inspected NeoForge viewer JAR using an isolated URLClassLoader and the public Minecraft/API JARs. It discovered and instantiated exactly one GltfViewerExtension; its defining loader was the artifact loader rather than the parent classpath. The probe exited zero. Evidence: tmp/ViewerServiceProbe.java and tmp/aesthetic-viewer-service-loader.log.
 
 This completes the service declaration/constructor check left indirect in the preceding artifact inspection. The probe does not invoke registerMinecraft or open a world contribution, and it is not a NeoForge gameplay launch or Linux GPU run. No source change or full build repeat was required.
+
+## Remove empty mesh-preparation cleanup (2026-09-09)
+
+Removed the catch/rethrow around source-mesh retention that only closed a newly constructed, empty ResourceOwners collection. At that point no mesh inputs have been acquired; the collection has no external cleanup to perform. The subsequent failure handling still releases acquired inputs and the retained source claim. Preparation completion, cancellation and channel-drain behavior are unchanged.
+
+The engine check passed at exit zero, including all 25 SceneDirectoryTest cases with zero failures, errors or skips. Evidence: tmp/aesthetic-empty-mesh-cleanup-check.log. git diff --check passed. No new test mirroring the removed empty branch, full downstream build or live client was needed for this local cleanup simplification.
