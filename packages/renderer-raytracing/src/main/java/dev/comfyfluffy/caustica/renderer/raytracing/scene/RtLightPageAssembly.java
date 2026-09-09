@@ -29,15 +29,7 @@ final class RtLightPageAssembly {
         Map<List<RetainedSceneSnapshot.Light>, Map<SceneId, List<SceneLight>>> next = new IdentityHashMap<>();
         for (var page : SnapshotList.pagesOf(lights)) {
             var translated = pages.get(page);
-            if (translated == null) {
-                Map<SceneId, List<SceneLight>> values = new IdentityHashMap<>();
-                for (var light : page) {
-                    values.computeIfAbsent(light.scene(), ignored -> new ArrayList<>())
-                            .add(new SceneLight(light.identity(), light.descriptor()));
-                }
-                values.replaceAll((scene, value) -> List.copyOf(value));
-                translated = values;
-            }
+            if (translated == null) translated = translate(page);
             next.put(page, translated);
             translated.forEach((scene, value) -> {
                 var target = scenePages.get(scene);
@@ -59,6 +51,16 @@ final class RtLightPageAssembly {
         pages = next;
         content = result;
         return result;
+    }
+
+    private static Map<SceneId, List<SceneLight>> translate(List<RetainedSceneSnapshot.Light> page) {
+        Map<SceneId, List<SceneLight>> values = new IdentityHashMap<>();
+        for (var light : page) {
+            values.computeIfAbsent(light.scene(), ignored -> new ArrayList<>())
+                    .add(new SceneLight(light.identity(), light.descriptor()));
+        }
+        values.replaceAll((scene, lights) -> List.copyOf(lights));
+        return values;
     }
 
     private static boolean samePages(List<?> previous, List<?> current) {
