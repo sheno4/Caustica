@@ -188,6 +188,8 @@ public final class MinecraftUiOverlay {
             overlay = new TextureTarget("caustica UI overlay", main.width, main.height, true, GpuFormat.RGBA8_UNORM);
         } else if (overlay.width != main.width || overlay.height != main.height) {
             overlay.resize(main.width, main.height);
+            // The replacement textures have not received this frame's transparent/depth clear.
+            overlayClearedThisFrame = false;
         }
         return overlay;
     }
