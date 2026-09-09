@@ -221,15 +221,8 @@ float neeAtProposalPdf(NeeAtState state, uint2 pixel, uint lightIndex,
             + localFraction * neeAtLocalPdf(state, pixel, lightIndex);
 }
 
-public float neeAtReverseParallelogramPdf(WorldBindingRoots roots, uint2 pixel, uint lightIndex,
-                                      float3 previousPosition, float3 hitPosition,
-                                      uint proposalMode, uint candidateCount) {
-    NeeAtState state = neeAtState(roots.neeAtStateAddress)[0];
-    if (lightIndex >= state.lightCount) return 0.0;
-    ConstPtr<RetainedLightRecord> records = (ConstPtr<RetainedLightRecord>)state.lightTableAddress;
-    RetainedLightRecord light = records[lightIndex];
-    if (light.type != RETAINED_LIGHT_PARALLELOGRAM
-            || (light.flags & RETAINED_LIGHT_LINKED_EMITTER) == 0u) return 0.0;
+// Solid-angle density is zero outside the emitting parallelogram's support.
+float neeAtParallelogramShapePdf(RetainedLightRecord light, float3 previousPosition, float3 hitPosition) {
     float3 fromCenter = hitPosition - light.positionOrDirection.xyz;
     float uu = dot(light.axisU.xyz, light.axisU.xyz);
     float uv = dot(light.axisU.xyz, light.axisV.xyz);
@@ -251,10 +244,23 @@ public float neeAtReverseParallelogramPdf(WorldBindingRoots roots, uint2 pixel, 
     float area = 4.0 * length(crossAxes);
     float emitterCosine = dot(normalize(crossAxes), -direction);
     if (emitterCosine <= 0.0) return 0.0;
+    return distanceSquared / max(emitterCosine * area, 1.0e-20);
+}
+
+public float neeAtReverseParallelogramPdf(WorldBindingRoots roots, uint2 pixel, uint lightIndex,
+                                      float3 previousPosition, float3 hitPosition,
+                                      uint proposalMode, uint candidateCount) {
+    NeeAtState state = neeAtState(roots.neeAtStateAddress)[0];
+    if (lightIndex >= state.lightCount) return 0.0;
+    ConstPtr<RetainedLightRecord> records = (ConstPtr<RetainedLightRecord>)state.lightTableAddress;
+    RetainedLightRecord light = records[lightIndex];
+    if (light.type != RETAINED_LIGHT_PARALLELOGRAM
+            || (light.flags & RETAINED_LIGHT_LINKED_EMITTER) == 0u) return 0.0;
+    float shapePdf = neeAtParallelogramShapePdf(light, previousPosition, hitPosition);
+    if (shapePdf <= 0.0) return 0.0;
     uint candidates = max(candidateCount, 1u);
     float proposalPdf = neeAtProposalPdf(state, pixel, lightIndex, candidates,
             proposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE);
-    float shapePdf = distanceSquared / max(emitterCosine * area, 1.0e-20);
     return neeAtLightMisPdf(proposalPdf, shapePdf, candidates);
 }
 
