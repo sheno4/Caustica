@@ -7,6 +7,8 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.equipment.ArmorMaterials;
 import net.minecraft.world.item.equipment.ArmorType;
 
+import java.util.function.BiConsumer;
+
 /** Minecraft items that exercise renderer extension inputs. */
 public final class CausticaItems {
     public static final Identifier SPOTLIGHT_HELMET_ID =
@@ -22,12 +24,7 @@ public final class CausticaItems {
     private CausticaItems() {
     }
 
-    public static void register(ItemRegistrar registrar) {
-        registrar.register(SPOTLIGHT_HELMET_KEY, SPOTLIGHT_HELMET);
-    }
-
-    @FunctionalInterface
-    public interface ItemRegistrar {
-        void register(ResourceKey<Item> key, Item item);
+    public static void register(BiConsumer<ResourceKey<Item>, Item> registrar) {
+        registrar.accept(SPOTLIGHT_HELMET_KEY, SPOTLIGHT_HELMET);
     }
 }

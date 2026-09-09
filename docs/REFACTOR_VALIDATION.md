@@ -1084,3 +1084,9 @@ Resolved parent inheritance from the committed before-state and edited after-sta
 ## English exposure and bloom descriptions (2026-09-09)
 
 Read both English locales and checked exposure scaling/auto-bias and bloom option definitions. Clarified that positive EV brightens and negative EV darkens; replaced the bloom strength/radius descriptions of internal pyramid operations with descriptions of visible glow. Levels still explains the adjustable blur-level count and its effect on spread. Only four English tooltip values changed; translation keys are unchanged and the edited JSON parses. git diff --check passed. No other locale or executable source changed, and no Gradle or live UI repeat was needed for this text edit. Tooltip wrapping and interaction remain part of the pending computer-use checks.
+
+## Standard item registration callback (2026-09-09)
+
+Replaced CausticaItems.ItemRegistrar with BiConsumer<ResourceKey<Item>, Item>. The callback carries no additional lifecycle or error contract, and both Fabric's lambda and NeoForge's method reference already match that shape. The same item key and instance are passed through accept; no registration behavior changed.
+
+Windows Fabric compileJava passed in 1 second (38 tasks, 1 executed); isolated Linux NeoForge compileJava passed in 1m 4s (39 tasks, 2 executed). Evidence: tmp/aesthetic-item-registration-fabric.log and tmp/aesthetic-item-registration-neoforge.log. git diff --check passed. These are compilation checks of both actual loader callers; no new behavioral tests, full-suite repeat or live client was needed for the callback-type simplification.
