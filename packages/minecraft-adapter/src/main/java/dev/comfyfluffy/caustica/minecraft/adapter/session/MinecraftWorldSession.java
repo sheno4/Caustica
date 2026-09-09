@@ -1,11 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.adapter.session;
 
-import dev.comfyfluffy.caustica.api.geometry.MeshPreparer;
-import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
-import dev.comfyfluffy.caustica.api.scene.SceneChannel;
-import dev.comfyfluffy.caustica.api.pass.PassChannel;
-import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
@@ -148,7 +142,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
         MinecraftWorldSessionContribution contribution;
         try {
             contribution = Objects.requireNonNull(registration.factory().open(
-                    new Context(new CoreContext(scope), scene, dimension, resourcePackEpoch, environment::select)),
+                    new Context(scope.context(), scene, dimension, resourcePackEpoch, environment::select)),
                     "Minecraft world-session factory returned null");
         } catch (Throwable failure) {
             teardown(List.of(new ActiveContribution(owner, scope, environment, null)), false);
@@ -220,15 +214,4 @@ public final class MinecraftWorldSession implements AutoCloseable {
                            MinecraftEnvironmentSelector environment)
             implements MinecraftWorldSessionContext { }
 
-    private record CoreContext(ContributionScope scope) implements RenderSessionContext {
-        @Override public GpuDevice gpu() { return scope.gpu(); }
-        @Override public GpuComputeQueue compute() { return scope.compute(); }
-        @Override public ProgramChannel program() { return scope.program(); }
-        @Override public PassChannel passes() { return scope.passes(); }
-        @Override public MeshPreparer meshes() { return scope.meshes(); }
-        @Override public SceneChannel scene() { return scope.scene(); }
-        @Override public dev.comfyfluffy.caustica.api.resource.ResourceFactory resources() {
-            return scope.resources();
-        }
-    }
 }
