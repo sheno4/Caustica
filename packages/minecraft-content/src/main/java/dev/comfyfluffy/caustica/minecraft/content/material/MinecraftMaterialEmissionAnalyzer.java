@@ -23,19 +23,17 @@ public final class MinecraftMaterialEmissionAnalyzer {
                 for (int x = 0; x < source.width(); x++) {
                     int pixel = image.albedoArgb(x, y);
                     float alpha = (pixel >>> 24) / 255.0f;
-                    float baseR = linear(pixel >>> 16 & 255);
-                    float baseG = linear(pixel >>> 8 & 255);
-                    float baseB = linear(pixel & 255);
-                    uniform.add(x, y, (usesBaseColor ? baseR : 1.0f) * alpha,
-                            (usesBaseColor ? baseG : 1.0f) * alpha,
-                            (usesBaseColor ? baseB : 1.0f) * alpha, alpha);
+                    float baseR = usesBaseColor ? linear(pixel >>> 16 & 255) : 1.0f;
+                    float baseG = usesBaseColor ? linear(pixel >>> 8 & 255) : 1.0f;
+                    float baseB = usesBaseColor ? linear(pixel & 255) : 1.0f;
+                    uniform.add(x, y, baseR * alpha, baseG * alpha, baseB * alpha, alpha);
 
                     texel.reset();
                     image.readOpenPbr(x, y, texel);
                     float weight = Math.clamp(texel.emissionWeight, 0.0f, 1.0f) * alpha;
-                    float emissionR = texel.emissionColorR * (usesBaseColor ? baseR : 1.0f);
-                    float emissionG = texel.emissionColorG * (usesBaseColor ? baseG : 1.0f);
-                    float emissionB = texel.emissionColorB * (usesBaseColor ? baseB : 1.0f);
+                    float emissionR = texel.emissionColorR * baseR;
+                    float emissionG = texel.emissionColorG * baseG;
+                    float emissionB = texel.emissionColorB * baseB;
                     masked.add(x, y, emissionR * weight, emissionG * weight,
                             emissionB * weight, weight);
                 }

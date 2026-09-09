@@ -1806,3 +1806,9 @@ Minecraft-content and minecraft-rendering checks passed; MinecraftMaterialPageCo
 Read MinecraftMaterialCatalogBuilder in full. Extracted atlasResource so build handles catalog ordering and atlas/standalone deduplication while one function owns sprite metadata, companion resources, animation frames and UV construction. Standalone resources now reuse one MaterialImageSource for dimension inspection and deferred analysis instead of constructing two equivalent suppliers. Preserved borrowed atlas image ownership, owned resource image closing, companion first-frame behavior, emission inference and resource discovery ordering.
 
 Minecraft client tests and Minecraft content/rendering checks passed in 13s (84 tasks, 17 executed). Evidence: tmp/aesthetic-material-catalog-check.log. git diff --check passed. No live resource-pack reload or visual catalog comparison was performed; this pass establishes build/test compatibility, not runtime atlas ownership under reload. Whole-project review remains incomplete.
+
+## Emission scanning selects base color once per pixel (2026-09-09)
+
+Read MinecraftMaterialTextureSource, MinecraftMaterialImage, MaterialTextureAnalyzer, MaterialImage and MinecraftMaterialEmissionAnalyzer in full. Preserved image open rollback and close-all exception aggregation. Simplified emission scanning by selecting decoded base color or white once, then sharing that value between uniform and masked footprints. This removes duplicated binding conditionals and skips sRGB decoding for parameter-default color binding. Alpha weighting, emission weights and footprint construction remain unchanged.
+
+Minecraft-content and minecraft-rendering checks passed. Evidence: tmp/aesthetic-emission-base-color-check.log. git diff --check passed. No new explicit binding-mode equivalence fixture, runtime resource-pack test or performance measurement was performed. Whole-project source and visual coverage remain incomplete.
