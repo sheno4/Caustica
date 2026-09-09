@@ -23,6 +23,59 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class MinecraftEntityShutdownTest {
     @Test
+    void rejectedPackingReleasesRefitSourceEvenWhenCaptureCloseFails() {
+        var scene = new PreparedScene();
+        var rejected = new java.util.concurrent.RejectedExecutionException("packing rejected");
+        var closeFailure = new IllegalStateException("capture release failed");
+        var captures = new AtomicInteger();
+        var submissions = new AtomicInteger();
+        var uploader = new MinecraftEntityUploader() {
+            @Override public UploadJob prepareUpload(MinecraftEntityMesh source) {
+                int capture = captures.incrementAndGet();
+                return new UploadJob() {
+                    @Override public UploadedEntity finish() { return new Uploaded(); }
+                    @Override public void close() { if (capture == 2) throw closeFailure; }
+                };
+            }
+        };
+        var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {}, uploader, action -> {
+            if (submissions.incrementAndGet() == 2) throw rejected;
+            action.run();
+        });
+        try {
+            var key = new MinecraftEntityGeometry.Key(1, 1);
+            geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+            scene.jobs.getFirst().complete();
+            geometry.put(key, revision(2), mesh(), GeometryTransform.translation(0, 0, 0), 255);
+            assertSame(rejected, assertThrows(IllegalStateException.class, geometry::beginUpdateGroup).getCause());
+            assertArrayEquals(new Throwable[]{closeFailure}, rejected.getSuppressed());
+        } finally {
+            geometry.close();
+        }
+        assertEquals(1, scene.jobs.getFirst().releases);
+    }
+
+    @Test
+    void preparationFailurePreservesCauseWhenUploadReleaseAlsoFails() {
+        var scene = new PreparedScene();
+        var uploaded = new Uploaded();
+        var rejected = new IllegalStateException("build description failed");
+        var closeFailure = new IllegalStateException("upload release failed");
+        uploaded.buildFailure = rejected;
+        uploaded.closeFailure = closeFailure;
+        try (var geometry = new MinecraftEntityGeometry(scene, scene, new SceneId() {},
+                (TestEntityUploader) source -> uploaded, Runnable::run)) {
+            geometry.put(new MinecraftEntityGeometry.Key(1, 1), revision(1), mesh(),
+                    GeometryTransform.translation(0, 0, 0), 255);
+            var failure = assertThrows(IllegalStateException.class, geometry::beginUpdateGroup);
+            assertSame(rejected, failure.getCause().getCause());
+            assertArrayEquals(new Throwable[]{closeFailure}, rejected.getSuppressed());
+            assertEquals(1, uploaded.closed);
+            assertTrue(scene.jobs.isEmpty());
+        }
+    }
+
+    @Test
     void supersededCapturesAllRetireAndWorkerFailureReachesTheCaller() {
         var scene = new PreparedScene();
         var packing = new java.util.ArrayDeque<Runnable>();
@@ -197,7 +250,9 @@ final class MinecraftEntityShutdownTest {
     private static final class Uploaded implements MinecraftEntityUploader.UploadedEntity {
         int closed;
         RuntimeException closeFailure;
+        RuntimeException buildFailure;
         @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
+            if (buildFailure != null) throw buildFailure;
             var positions = new MeshBuild.Stream(new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x1000), 36),
                     12, ResourceOwner.none());
             var indices = new MeshBuild.Stream(new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x2000), 12),

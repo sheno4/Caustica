@@ -239,8 +239,8 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         try {
             executePacking(() -> prepareOnWorker(key, request, capture.upload, source, queuedNanos));
         } catch (RuntimeException | Error thrown) {
-            capture.close();
-            if (source != null) source.close();
+            cleanup(thrown, capture::close);
+            if (source != null) cleanup(thrown, source::close);
             throw thrown;
         }
     }
@@ -267,7 +267,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             uploaded = null;
             future.whenComplete((ready, thrown) -> complete(key, request, new Generation(ready, retainedUpload), thrown));
         } catch (Throwable thrown) {
-            if (uploaded != null) uploaded.close();
+            if (uploaded != null) cleanup(thrown, uploaded::close);
             complete(key, request, new Generation(null, null), thrown);
         } finally {
             if (event != null) {
