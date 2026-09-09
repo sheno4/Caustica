@@ -354,7 +354,9 @@ public final class MinecraftRtRuntime {
 
     public boolean presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
             dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage source) {
-        return session != null && session.presenter.presentSdrToPq(submission, target, source);
+        if (session == null) return false;
+        session.presenter.presentSdrToPq(submission, target, source);
+        return true;
     }
 
     public boolean frameGenerationActive(boolean sceneAvailable) {

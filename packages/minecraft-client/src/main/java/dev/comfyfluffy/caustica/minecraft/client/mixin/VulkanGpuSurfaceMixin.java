@@ -362,8 +362,8 @@ public abstract class VulkanGpuSurfaceMixin {
 				return;
 			}
 			// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
-			// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
-			// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
+			// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white using the
+			// active Vulkan context and RGBA8 source; conversion resources are created on demand.
 			if (CausticaClientComposition.current().runtime().isPqSdrPresentActive()) {
 				VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
 				if (gpu != null && textureView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView view

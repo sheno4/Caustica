@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.renderer.presentation;
 
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
@@ -120,9 +121,10 @@ public final class RtFramePresenter {
         return current.pqSwapchainActive() && !isHdrPresentActive(current);
     }
 
-    public boolean presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
-            dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage source) {
-        return sdrPqPresentation.present(submission, target, source, settings.get().uiNits());
+    /** Records conversion and presentation, retaining the source through GPU completion. */
+    public void presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
+            OwnedGpuImage source) {
+        sdrPqPresentation.present(submission, target, source, settings.get().uiNits());
     }
 
     public void captureHudless(BorrowedImage source, UiPresentationResources ui) {

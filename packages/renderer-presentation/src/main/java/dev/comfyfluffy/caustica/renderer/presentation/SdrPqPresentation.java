@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.presentation;
 
+import dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
@@ -22,11 +23,8 @@ final class SdrPqPresentation {
         this.context = context;
     }
 
-    boolean present(GraphicsSubmission submission, AcquiredSwapchainTarget target,
-            dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage source, float uiNits) {
-        if (source == null) {
-            return false;
-        }
+    void present(GraphicsSubmission submission, AcquiredSwapchainTarget target,
+            OwnedGpuImage source, float uiNits) {
         if (pipeline == null) {
             pipeline = RtSdrPresentPipeline.create(context);
         }
@@ -55,7 +53,6 @@ final class SdrPqPresentation {
         } finally {
             context.graphics().resolveGraphicsUse(submission, use);
         }
-        return true;
     }
 
     void destroy() {
