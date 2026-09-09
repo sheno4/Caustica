@@ -1842,3 +1842,9 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terr
 Reviewed QuadCapture's state, vanilla quad capture, face culling, pooling/reset and coplanar group ranking. Combined duplicated base/overlay ranking loops into two passes over one body. Opaque untinted faces still rank first, overlays second, preserving original source order within each category and normal-directed offsets. Corrected comments to describe representative-based grouping and the first available face staying in place, including all-overlay groups.
 
 Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-coplanar-ranking-check.log. No dedicated coplanar fixture or visual grass/cross-model capture was added; existing build checks do not establish visual equivalence for those cases. Remaining capture emission/fluid paths and whole-project coverage remain incomplete.
+
+## Block and fluid capture share quad geometry emission (2026-09-09)
+
+Read remaining QuadCapture emission, PendingQuad, UV helpers and FluidCapture in full. Moved identical four-position/six-index append code into Geom.addQuad, used by both block and fluid capture. It keeps source corner order and triangles 0,1,2 then 0,2,3. UV handling, normal/tint calculation, primitive records, material metadata and light associations remain in their respective paths. The helper adds no intermediate buffers or copies beyond the existing accumulator writes.
+
+Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-shared-quad-append-check.log. git diff --check passed. No new live block/fluid visual comparison was performed. This completes the bounded RtTerrainMesher source reading across the recent passes, not runtime capture coverage or whole-project review.

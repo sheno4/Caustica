@@ -300,6 +300,22 @@ final class RtTerrainMesher {
             materialEmissions = new ArrayList<>(cap);
         }
 
+        /** Append four vertices with triangles 0,1,2 and 0,2,3. */
+        void addQuad(float[] x, float[] y, float[] z) {
+            int base = verts.size() / 3;
+            for (int corner = 0; corner < 4; corner++) {
+                verts.add(x[corner]);
+                verts.add(y[corner]);
+                verts.add(z[corner]);
+            }
+            idx.add(base);
+            idx.add(base + 1);
+            idx.add(base + 2);
+            idx.add(base);
+            idx.add(base + 2);
+            idx.add(base + 3);
+        }
+
         void reset() {
             verts.clear();       // fastutil clear() keeps the backing array
             idx.clear();
@@ -521,19 +537,7 @@ final class RtTerrainMesher {
                 offset(q, -TRANSLUCENT_INSET);
             }
             Geom g = cur.geometry();
-            int base = g.verts.size() / 3;
-            for (int k = 0; k < 4; k++) {
-                g.verts.add(q.x[k]);
-                g.verts.add(q.y[k]);
-                g.verts.add(q.z[k]);
-            }
-            IntArrayList idx = g.idx;
-            idx.add(base);
-            idx.add(base + 1);
-            idx.add(base + 2);
-            idx.add(base);
-            idx.add(base + 2);
-            idx.add(base + 3);
+            g.addQuad(q.x, q.y, q.z);
             // Per-triangle corner UVs (primitive order matching the two triangles: 0,1,2 then 0,2,3).
             addTriUv(g, q.uv[0], q.uv[1], q.uv[2]);
             addTriUv(g, q.uv[0], q.uv[2], q.uv[3]);
@@ -638,20 +642,7 @@ final class RtTerrainMesher {
             TerrainMaterial material = new TerrainMaterial(faceMaterial.materialIndex(),
                     faceMaterial.material(), !water);
             MinecraftMaterialEmission materialEmission = faceMaterial.emission();
-            FloatArrayList verts = g.verts;
-            IntArrayList idx = g.idx;
-            int base = verts.size() / 3;
-            for (int i = 0; i < 4; i++) {
-                verts.add(qx[i]);
-                verts.add(qy[i]);
-                verts.add(qz[i]);
-            }
-            idx.add(base);
-            idx.add(base + 1);
-            idx.add(base + 2);
-            idx.add(base);
-            idx.add(base + 2);
-            idx.add(base + 3);
+            g.addQuad(qx, qy, qz);
             // Per-triangle corner UVs (primitive order: 0,1,2 then 0,2,3), matching the two triangles above.
             addTriUv(g, qu[0], qv[0], qu[1], qv[1], qu[2], qv[2]);
             addTriUv(g, qu[0], qv[0], qu[2], qv[2], qu[3], qv[3]);
