@@ -1710,3 +1710,9 @@ Read RtPipelineRetainedHitPackingTest and RtPipelineHitRegionTest in full. They 
 Read Composition in full and WorldShaderCompiler through setup, compilation entry points and cache lookup. Replaced formatted string cache keys with StageKey(module, entryPoint, specialized). Each cache belongs to one immutable compiler composition, so repeating its content hash in every specialized key was unnecessary. The hash remains in compilation diagnostics and composition identity. Plain and specialized stages remain distinct, and ConcurrentHashMap.computeIfAbsent still owns compile-on-miss behavior.
 
 Raytracing checks passed in 5s (45 tasks, 9 executed). Evidence: tmp/aesthetic-compiler-stage-key-check.log. git diff --check passed. No fresh native runtime compile/cache-hit experiment or performance measurement was performed. Compiler module resolution, generated dispatch assembly and lifecycle cleanup remain to review; this is not a complete compiler audit.
+
+## Resolved modules use their existing map identity (2026-09-09)
+
+Read module-definition selection, recursive resolution, source reading/extraction, aliases, provided-module names and compiler cleanup helpers. Removed ResolvedModule, whose name duplicated its map key; resolution now returns LinkedHashMap-backed name-to-byte entries consumed directly during extension source writing. Source-provider identity deduplication, conflict checks, provided-module skipping, register-before-import traversal and source hashing inputs remain unchanged. Generated composition dispatch is not included in this completed section review.
+
+Raytracing checks passed in 5s (45 tasks, 10 executed). Evidence: tmp/aesthetic-resolved-module-map-check.log. git diff --check passed. No new native compile run, import-cycle/conflict experiment or performance measurement was performed. Broader compiler/project review remains active.
