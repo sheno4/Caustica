@@ -8,6 +8,36 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 final class MinecraftEmissionFootprintTest {
     @Test
+    void unevenTwoDimensionalResamplingPreservesAverageEmissionAndPublishedSamples() {
+        var builder = new MinecraftEmissionFootprint.Builder(3, 7, 5);
+        float expected = 0;
+        for (int y = 0; y < 5; y++) {
+            for (int x = 0; x < 7; x++) {
+                float weight = (x + 2 * y) / 14.0f;
+                expected += weight / 35.0f;
+                builder.add(x, y, weight, weight * 0.5f, weight * 0.25f, weight);
+            }
+        }
+        var footprint = builder.build();
+        assertNotNull(footprint);
+        float average = 0;
+        for (int y = 0; y < 3; y++) {
+            for (int x = 0; x < 3; x++) {
+                average += footprint.weight(x, y) / 9.0f;
+                assertEquals(footprint.weight(x, y), footprint.r(x, y), 1e-6f);
+                assertEquals(footprint.r(x, y) * 0.5f, footprint.g(x, y), 1e-6f);
+                assertEquals(footprint.r(x, y) * 0.25f, footprint.b(x, y), 1e-6f);
+            }
+        }
+        assertEquals(expected, average, 1e-6f);
+
+        float published = footprint.r(0, 0);
+        builder.add(0, 0, 1, 1, 1, 1);
+        builder.build();
+        assertEquals(published, footprint.r(0, 0));
+    }
+
+    @Test
     void builderOmitsFootprintsWithoutCoverage() {
         var builder = new MinecraftEmissionFootprint.Builder(4, 2, 2);
         builder.add(0, 0, 1, 1, 1, 0);

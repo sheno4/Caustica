@@ -1812,3 +1812,9 @@ Minecraft client tests and Minecraft content/rendering checks passed in 13s (84 
 Read MinecraftMaterialTextureSource, MinecraftMaterialImage, MaterialTextureAnalyzer, MaterialImage and MinecraftMaterialEmissionAnalyzer in full. Preserved image open rollback and close-all exception aggregation. Simplified emission scanning by selecting decoded base color or white once, then sharing that value between uniform and masked footprints. This removes duplicated binding conditionals and skips sRGB decoding for parameter-default color binding. Alpha weighting, emission weights and footprint construction remain unchanged.
 
 Minecraft-content and minecraft-rendering checks passed. Evidence: tmp/aesthetic-emission-base-color-check.log. git diff --check passed. No new explicit binding-mode equivalence fixture, runtime resource-pack test or performance measurement was performed. Whole-project source and visual coverage remain incomplete.
+
+## Emission footprint review validates two-dimensional area conservation (2026-09-09)
+
+Read MinecraftEmissionFootprint, MinecraftEmissionHeuristic, MinecraftEmissionSemantics, MinecraftTerrainLightBatch and MinecraftTerrainLightAdapter in full. Kept their direct area accumulation, emission gating, deterministic variant sampling, immutable batch copying and section-to-world translation. Added a behavioral test for a varying 7-by-5 source resampled to a 3-by-3 footprint: mean coverage is conserved, RGB channel ratios remain consistent, and an already built footprint stays unchanged after builder mutation and another build. Existing fractional-boundary coverage was limited to a 3-by-1 source.
+
+Minecraft-content and minecraft-rendering checks passed. Evidence: tmp/aesthetic-emission-footprint-review-check.log and MinecraftEmissionFootprintTest reports. No production change was needed. Baked-model variant completeness, world-space light visual validation and whole-project coverage remain incomplete.
