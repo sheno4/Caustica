@@ -188,6 +188,7 @@ public abstract class GameRendererMixin {
 			// Completion follows the world and owned UI command buffers in the host submission.
 			CausticaClientComposition.current().runtime().finishGraphicsUse();
 		}
+		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.afterWorldComposite();
 	}
 
 	// Composite the redirected UI overlay back over the world once the GUI has fully rendered into it.

@@ -46,6 +46,7 @@ public final class MinecraftDebugService implements AutoCloseable {
     private final List<FrameWait> waits = new ArrayList<>();
     private final List<Runnable> captures = new ArrayList<>();
     private final List<Runnable> beforeUiCaptures = new ArrayList<>();
+    private final List<Runnable> afterWorldCaptures = new ArrayList<>();
     private long frames;
     private long ticks;
     private Recording recording;
@@ -235,6 +236,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                 var queue = switch (phase) {
                     case "frame-end" -> captures;
                     case "before-ui" -> beforeUiCaptures;
+                    case "after-world" -> afterWorldCaptures;
                     default -> throw new IllegalArgumentException("Unknown capture phase: " + phase);
                 };
                 queue.add(() -> {
@@ -456,6 +458,11 @@ public final class MinecraftDebugService implements AutoCloseable {
     /** Observes the populated UI and destination before the final SDR blend is recorded. */
     public static void beforeUiComposite() {
         if (instance != null) drainCaptures(instance.beforeUiCaptures);
+    }
+
+    /** Observes the world copy before Minecraft records hand, screen-effect and GUI draws. */
+    public static void afterWorldComposite() {
+        if (instance != null) drainCaptures(instance.afterWorldCaptures);
     }
 
     private static void drainCaptures(List<Runnable> queue) {
