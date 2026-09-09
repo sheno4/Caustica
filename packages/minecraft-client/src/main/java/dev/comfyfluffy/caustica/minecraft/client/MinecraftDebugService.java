@@ -7,6 +7,8 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
+import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
+import dev.comfyfluffy.caustica.renderer.runtime.RtFrameCapture;
 import dev.comfyfluffy.caustica.settings.Option;
 import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
@@ -432,12 +434,12 @@ public final class MinecraftDebugService implements AutoCloseable {
             var gpu = composition.runtime().vulkanContextOrNull();
             long frame = composition.runtime().telemetry().frameSerial();
             String encoding = "RGBA: normalized UNORM8 host target, before file-format conversion";
-            try (var image = MinecraftVulkanImage.sampled(gpu, view, target.width, target.height,
-                    org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM)) {
-                dev.comfyfluffy.caustica.renderer.runtime.RtFrameCapture.exportRaw(gpu, image, output,
-                        Map.of("causticaBuffer", name, "causticaFrame", Long.toString(frame),
-                                "causticaEncoding", encoding));
-            }
+            // The render-thread target remains owned for this synchronous readback; no sampled descriptor is needed.
+            var image = new BorrowedImage(view.texture().vkImage(), view.vkImageView(),
+                    org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM, target.width, target.height);
+            RtFrameCapture.exportRaw(gpu, image, output,
+                    Map.of("causticaBuffer", name, "causticaFrame", Long.toString(frame),
+                            "causticaEncoding", encoding));
             return Map.of("path", output.toString(), "metadata", Map.of("name", name,
                     "frameSerial", frame, "width", target.width, "height", target.height,
                     "vulkanFormat", org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM, "encoding", encoding));

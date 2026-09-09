@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
+import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
 import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -83,8 +84,11 @@ public final class RtFrameCapture {
         return result;
     }
 
-    /** The render-thread caller must submit all commands that write the image before readback. */
-    public static void exportRaw(VulkanDeviceContext context, GpuImage image, Path output,
+    /**
+     * The render-thread caller must submit image writes and keep the GENERAL-layout image alive until return.
+     * Readback completes synchronously and neither samples the image nor retains it beyond this call.
+     */
+    public static void exportRaw(VulkanDeviceContext context, BorrowedImage image, Path output,
                           java.util.Map<String, String> metadata) throws IOException {
         int channels = switch (image.format()) {
             case VK10.VK_FORMAT_R8G8B8A8_UNORM, VK10.VK_FORMAT_R16G16B16A16_SFLOAT -> 4;

@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.renderer.denoising.DenoiserBackendFactory;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserRoute;
 import dev.comfyfluffy.caustica.renderer.denoising.DenoiserSignalEncoding;
 import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
+import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
@@ -242,7 +243,7 @@ public final class RtFrameRenderer {
         DebugImageCapture result = new DebugImageCapture(name, debugCaptureFrameSerial,
                 image.width(), image.height(), image.format(), encoding, debugCapturePreExposure,
                 debugCaptureDenoising.route().name(), debugCaptureDenoising.signalEncoding().name());
-        RtFrameCapture.exportRaw(context, image, output, java.util.Map.of(
+        RtFrameCapture.exportRaw(context, BorrowedImage.of(image), output, java.util.Map.of(
                 "causticaBuffer", name, "causticaFrame", Long.toString(result.frameSerial()),
                 "causticaEncoding", encoding, "causticaVulkanFormat", Integer.toString(image.format()),
                 "causticaPreExposure", Float.toString(result.preExposure()),
