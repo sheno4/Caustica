@@ -84,10 +84,50 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
     float4 normalRough = gNormal[guidePix];
     float3 dbg;
-    if (pc.debugView == 10u) {
+    switch (pc.debugView) {
+    case 1u: { // Normals
+        dbg = normalRough.xyz * 0.5 + 0.5;
+        break;
+    }
+    case 2u: { // Diffuse albedo
+        dbg = acesCgToSrgb(gAlbedo[guidePix].rgb);
+        break;
+    }
+    case 3u: { // Depth
+        float depth = gDepth[guidePix];
+        dbg = float3(depth, depth, depth);
+        break;
+    }
+    case 4u: { // Roughness
+        dbg = float3(normalRough.w, normalRough.w, normalRough.w);
+        break;
+    }
+    case 6u: { // Specular albedo
+        dbg = acesCgToSrgb(gSpecAlbedo[guidePix].rgb);
+        break;
+    }
+    case 7u: { // Specular motion
+        dbg = float3(clamp(0.5 + gSpecMotion[guidePix] * motionToDisplay * 0.05, 0.0, 1.0), 0.5);
+        break;
+    }
+    case 8u: { // Exposure false color
+        float luminance = dot(max(sceneImage[pix].rgb, float3(0.0)), ACESCG_LUMA);
+        float exposedLuminance = luminance * max(exposureImage[int2(0, 0)], 0.0);
+        float evFromMidGrey = log2(max(exposedLuminance, 1.0e-6) / 0.18);
+        dbg = exposureFalseColor(evFromMidGrey);
+        break;
+    }
+    case 9u: { // Metering weight
+        float weight = meteringWeight(uv, gDepth[guidePix], gAlbedo[guidePix].a > 0.5);
+        dbg = float3(weight, weight, weight);
+        break;
+    }
+    case 10u: { // Stable-plane validity
         float validity = stablePlaneMetadata[guidePix].x;
         dbg = validity > 0.5 ? float3(0.1, 0.9, 0.2) : float3(0.9, 0.05, 0.05);
-    } else if (pc.debugView == 11u) {
+        break;
+    }
+    case 11u: { // Stable-plane path type
         float4 metadata = stablePlaneMetadata[guidePix];
         bool reflection = metadata.z > 0.0;
         bool transmission = metadata.w > 0.5;
@@ -95,43 +135,32 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                 : reflection && transmission ? float3(0.8, 0.2, 0.95)
                 : transmission ? float3(0.1, 0.8, 0.9)
                 : reflection ? float3(0.15, 0.35, 1.0) : float3(0.7);
-    } else if (pc.debugView == 12u) {
+        break;
+    }
+    case 12u: { // Mapped primary depth
         float primaryDepth = max(gDepth[guidePix], 0.0);
         float mapped = 1.0 - exp(-primaryDepth * 0.05);
         dbg = float3(mapped, mapped, mapped);
-    } else if (pc.debugView == 13u) {
-        dbg = float3(clamp(0.5 + gMotion[guidePix] * motionToDisplay * 0.05, 0.0, 1.0), 0.5);
-    } else if (pc.debugView == 14u) {
+        break;
+    }
+    case 14u: { // Trace radiance
         float3 radiance = traceRadiance[guidePix].rgb;
         float luminance = dot(max(radiance, float3(0.0)), ACESCG_LUMA);
         dbg = acesCgToSrgb(radiance / (1.0 + luminance));
-    } else if (pc.debugView == 15u) {
+        break;
+    }
+    case 15u: { // Stable-plane metadata
         float4 metadata = stablePlaneMetadata[guidePix];
         dbg = metadata.x > 0.5 ? float3(metadata.z, metadata.w * metadata.y, metadata.y)
                 : float3(0.0);
-    } else if (pc.debugView == 8u) {
-        float luminance = dot(max(sceneImage[pix].rgb, float3(0.0)), ACESCG_LUMA);
-        float exposedLuminance = luminance * max(exposureImage[int2(0, 0)], 0.0);
-        float evFromMidGrey = log2(max(exposedLuminance, 1.0e-6) / 0.18);
-        dbg = exposureFalseColor(evFromMidGrey);
-    } else if (pc.debugView == 9u) {
-        float weight = meteringWeight(uv, gDepth[guidePix], gAlbedo[guidePix].a > 0.5);
-        dbg = float3(weight, weight, weight);
-    } else if (pc.debugView == 1u) {
-        dbg = normalRough.xyz * 0.5 + 0.5;
-    } else if (pc.debugView == 2u) {
-        dbg = acesCgToSrgb(gAlbedo[guidePix].rgb);
-    } else if (pc.debugView == 3u) {
-        float depth = gDepth[guidePix];
-        dbg = float3(depth, depth, depth);
-    } else if (pc.debugView == 4u) {
-        dbg = float3(normalRough.w, normalRough.w, normalRough.w);
-    } else if (pc.debugView == 6u) {
-        dbg = acesCgToSrgb(gSpecAlbedo[guidePix].rgb);
-    } else if (pc.debugView == 7u) {
-        dbg = float3(clamp(0.5 + gSpecMotion[guidePix] * motionToDisplay * 0.05, 0.0, 1.0), 0.5);
-    } else {
+        break;
+    }
+    case 5u: // Motion
+    case 13u: // Primary motion uses the same guide
+    default: {
         dbg = float3(clamp(0.5 + gMotion[guidePix] * motionToDisplay * 0.05, 0.0, 1.0), 0.5);
+        break;
+    }
     }
     outputImage[pix] = float4(clamp(dbg, 0.0, 1.0), 1.0);
 }
