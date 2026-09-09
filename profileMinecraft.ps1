@@ -111,12 +111,7 @@ try {
 } finally {
 	if ($started) {
 		Write-Host "Stopping JFR recording..."
-		try {
-			Invoke-Jcmd $targetPidText "JFR.stop" "name=$RecordingName" "filename=$jfrPath"
-			Write-Host "Saved JFR recording to $jfrPath"
-		} catch {
-			Write-Warning $_.Exception.Message
-			Write-Warning "The target JVM may have exited before the recording was stopped."
-		}
+		Invoke-Jcmd $targetPidText "JFR.stop" "name=$RecordingName" "filename=$jfrPath"
+		Write-Host "Saved JFR recording to $jfrPath"
 	}
 }
