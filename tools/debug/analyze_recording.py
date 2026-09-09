@@ -10,8 +10,8 @@ import shutil
 import subprocess
 
 
-def percentile(values, fraction):
-    ordered = sorted(values)
+def percentile(ordered, fraction):
+    """Linearly interpolate a quantile of nonempty, sorted samples."""
     position = (len(ordered) - 1) * fraction
     lo = math.floor(position)
     hi = math.ceil(position)
@@ -19,12 +19,12 @@ def percentile(values, fraction):
 
 
 def summarize(values):
-    finite = [value for value in values if isinstance(value, (float, int)) and math.isfinite(value)]
+    finite = sorted(value for value in values if isinstance(value, (float, int)) and math.isfinite(value))
     if not finite:
         return {"samples": len(values), "finiteSamples": 0}
-    return {"samples": len(values), "finiteSamples": len(finite), "min": min(finite),
+    return {"samples": len(values), "finiteSamples": len(finite), "min": finite[0],
             "mean": sum(finite) / len(finite), "p50": percentile(finite, .5),
-            "p95": percentile(finite, .95), "p99": percentile(finite, .99), "max": max(finite)}
+            "p95": percentile(finite, .95), "p99": percentile(finite, .99), "max": finite[-1]}
 
 
 def milliseconds(value):
