@@ -86,13 +86,14 @@ final class RtFrameCapture {
     static void exportRaw(VulkanDeviceContext context, GpuImage image, Path output,
                           java.util.Map<String, String> metadata) throws IOException {
         int channels = switch (image.format()) {
-            case VK10.VK_FORMAT_R16G16B16A16_SFLOAT -> 4;
+            case VK10.VK_FORMAT_R8G8B8A8_UNORM, VK10.VK_FORMAT_R16G16B16A16_SFLOAT -> 4;
             case VK10.VK_FORMAT_R16G16_SFLOAT -> 2;
             case VK10.VK_FORMAT_R16_SFLOAT, VK10.VK_FORMAT_R32_SFLOAT -> 1;
             default -> throw new IllegalArgumentException("Unsupported diagnostic image format: " + image.format());
         };
         boolean fullFloat = image.format() == VK10.VK_FORMAT_R32_SFLOAT;
-        int sampleBytes = fullFloat ? Float.BYTES : Short.BYTES;
+        boolean unorm8 = image.format() == VK10.VK_FORMAT_R8G8B8A8_UNORM;
+        int sampleBytes = unorm8 ? Byte.BYTES : fullFloat ? Float.BYTES : Short.BYTES;
         int pixels = Math.multiplyExact(image.width(), image.height());
         context.waitIdle();
         GpuBuffer readback = context.createReadbackBuffer((long) pixels * channels * sampleBytes,
@@ -129,7 +130,8 @@ final class RtFrameCapture {
                 rgba[pixel * 4 + 3] = 1;
                 for (int channel = 0; channel < channels; channel++) {
                     long address = readback.mapped() + ((long) pixel * channels + channel) * sampleBytes;
-                    rgba[pixel * 4 + channel] = fullFloat ? MemoryUtil.memGetFloat(address)
+                    rgba[pixel * 4 + channel] = unorm8 ? Byte.toUnsignedInt(MemoryUtil.memGetByte(address)) / 255.0f
+                            : fullFloat ? MemoryUtil.memGetFloat(address)
                             : Float.float16ToFloat(MemoryUtil.memGetShort(address));
                 }
             }

@@ -118,6 +118,8 @@ With NRD followed by DLSS-SR, `trace-color` is reused for the composed denoised 
 it no longer contains the original noisy trace output when captured at frame end.
 `reconstructed-color` contains the SR result, including any NGX debug indicator.
 
+`display-color` captures the SDR display-mapped RGBA8 image before copying to Minecraft's target and adding UI. Its EXR stores normalized byte values, not scene radiance. Compare it with `screenshot` targets `main` and `ui` to investigate presentation corruption.
+
 - **NRD guides:** capture normal/roughness, NRD view Z and diffuse/specular signals together. Inspect finite values, edges and packing before blaming denoising. Named views help inspect spatial errors quickly.
 - **Periodic darkness:** record stationary-camera exposure; find jumps in Python, then compare trace/reconstructed radiance. Stable controller exposure alone does not prove stable lighting. Use short capture bursts only for visual diagnosis.
 - **Streaming:** issue repeated teleports with tick waits, inspect screenshots and geometry queue/resident counters, then stop and let work drain. Counts can suggest leaks or stalls but do not prove exact chunk coverage.

@@ -193,7 +193,7 @@ public final class RtFrameRenderer {
                                     String denoiserRoute, String signalEncoding) { }
 
     public static List<String> debugImageNames() {
-        return List.of("reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
+        return List.of("display-color", "reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
                 "specular-albedo", "depth", "motion", "specular-motion", "nrd-view-z",
                 "nrd-diffuse", "nrd-specular", "nrd-stable-radiance");
     }
@@ -205,6 +205,7 @@ public final class RtFrameRenderer {
         if (debugCaptureFrameSerial < 0 || execution != null) return null;
         TraceImages images = traceImages();
         GpuImage image = switch (name) {
+            case "display-color" -> presentationResources().displayImage();
             case "reconstructed-color" -> images.reconstructedColor();
             case "trace-color" -> images.traceColor();
             case "normal-roughness" -> images.normalRoughness();
@@ -220,6 +221,7 @@ public final class RtFrameRenderer {
             default -> throw new IllegalArgumentException(name);
         };
         String encoding = switch (name) {
+            case "display-color" -> "RGBA: SDR display output, normalized UNORM8, before Minecraft UI composition";
             case "reconstructed-color", "trace-color" -> "RGB: ACEScg scene radiance * preExposure";
             case "nrd-stable-radiance" -> "RGB: ACEScg scene-linear radiance (unexposed)";
             case "normal-roughness" -> "RGB: world-space unit normal; A: roughness";
