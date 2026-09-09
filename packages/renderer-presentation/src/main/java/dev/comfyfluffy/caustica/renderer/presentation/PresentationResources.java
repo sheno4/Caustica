@@ -23,8 +23,6 @@ public final class PresentationResources {
     private GpuImage hdrDisplayImage;
     private GpuImage postColorA;
     private GpuImage postColorB;
-    private int width = -1;
-    private int height = -1;
 
     public PresentationResources(RtExposure.Settings exposureSettings) {
         this.exposure = new RtExposure(exposureSettings);
@@ -69,7 +67,7 @@ public final class PresentationResources {
     }
 
     public boolean matches(int wantedWidth, int wantedHeight) {
-        return width == wantedWidth && height == wantedHeight && displayImage != null
+        return displayImage != null && displayImage.width() == wantedWidth && displayImage.height() == wantedHeight
                 && hdrDisplayImage != null && postColorA != null && postColorB != null && exposure.ready();
     }
 
@@ -85,8 +83,6 @@ public final class PresentationResources {
         postColorB = context.createStorageImage(wantedWidth, wantedHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "post chain B " + wantedWidth + "x" + wantedHeight);
         exposure.ensureResources(context);
-        width = wantedWidth;
-        height = wantedHeight;
     }
 
     public void destroy() {
@@ -116,8 +112,6 @@ public final class PresentationResources {
         hdrDisplayImage = null;
         postColorA = null;
         postColorB = null;
-        width = -1;
-        height = -1;
         new ResourceLifetime(releases.toArray(Runnable[]::new)).close();
     }
 }
