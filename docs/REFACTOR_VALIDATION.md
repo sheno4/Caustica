@@ -1448,3 +1448,9 @@ Renderer-presentation checks passed in 2s. All five RtExposureReadbacksTest case
 Completed the RtExposure controller read-through in bounded sections: resource creation, manual/auto dispatch, readback recording/submission, capture metadata, debug summary, history reset and pre-exposure latching. Kept the once-per-frame latch and completion-based feedback contracts. Named the existing auto EV limits and used them directly in the debug summary instead of constructing a full AutoConfig solely for its bounds. Corrected the manual residual comment to distinguish enabled and disabled pre-exposure. Values and adaptation behavior are unchanged.
 
 Renderer-presentation checks passed in 2s (34 tasks, 8 executed); git diff --check passed. Evidence: tmp/aesthetic-exposure-limits-check.log. No live metering-quality, brightness or performance claim follows from this static configuration cleanup.
+
+## Exposure dispatch arithmetic and response knots (2026-09-09)
+
+RtExposurePipeline uses Math.ceilDiv for sampled image extents and histogram workgroup counts. The histogram shader uses 16 by 16 workgroups. Grouped the unchanged exposure-response constants into scene/compensation pairs matching ExposureResolvePush field order. This is equivalent dispatch arithmetic for positive image extents and stride; no exposure curve or shader behavior was changed.
+
+Renderer-presentation checks passed in 2s (34 tasks, 8 executed); git diff --check passed. Evidence: tmp/aesthetic-exposure-dispatch-check.log. Source checkpoint: d245a3ab. This bounded cleanup does not establish live metering quality or a performance improvement. Remote-session validation continues to use direct debug controls and captures; actual framebuffer extents, rather than maximize state, determine tested resolution.
