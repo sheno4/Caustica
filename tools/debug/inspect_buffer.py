@@ -10,7 +10,8 @@ import OpenEXR
 
 def inspect(path):
     with OpenEXR.File(str(path)) as image:
-        pixels = image.channels()["RGBA"].pixels.copy()
+        # The decoded NumPy array owns its storage beyond the file context.
+        pixels = image.channels()["RGBA"].pixels
         metadata = {key: value for key, value in image.header().items() if key.startswith("caustica")}
     channels = {}
     for index, name in enumerate("RGBA"):
