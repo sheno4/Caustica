@@ -136,7 +136,7 @@ final class TerrainDispatchPlanner<T> {
         }
     }
 
-    private Plan<T> prepare(Input<T> input) {
+    private static <T> Plan<T> prepare(Input<T> input) {
         Context context = input.context;
         Retained<T> state = input.retained;
         boolean rerank = state.context == null || context.x != state.context.x
@@ -189,15 +189,15 @@ final class TerrainDispatchPlanner<T> {
         return new Plan<>(context.epoch, List.copyOf(selected));
     }
 
-    private Ranked<T> rank(Candidate<T> candidate, Context context) {
+    private static <T> Ranked<T> rank(Candidate<T> candidate, Context context) {
         return new Ranked<>(candidate, RtTerrain.distance(candidate.key, context.x, context.y, context.z));
     }
 
-    private boolean available(Retained<T> state, long key) {
+    private static boolean available(Retained<?> state, long key) {
         return neighborsLoaded(state, RtTerrain.sectionX(key), RtTerrain.sectionZ(key));
     }
 
-    private boolean neighborsLoaded(Retained<T> state, int x, int z) {
+    private static boolean neighborsLoaded(Retained<?> state, int x, int z) {
         for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) {
             if (!state.loaded.contains(RtTerrain.columnKey(x + dx, z + dz))) return false;
         }

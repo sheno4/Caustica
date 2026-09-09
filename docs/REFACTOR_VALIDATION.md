@@ -1872,3 +1872,9 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-sect
 Read TerrainUpdates in full. Removed its awaitingExtraction forwarding method; render scheduling and test callers now query Request.awaitingExtraction directly. Moved the atomic-state/readiness comment onto that method. This makes the coordinator-independent read explicit without changing invalidation, reservation, retry, completion or publication transitions. Updated existing pending/window/planner tests only for the call-site change.
 
 Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-terrain-token-readiness-check.log. git diff --check passed. No new concurrency stress or discard-callback failure injection was performed; this pass does not establish all cleanup-failure behavior. Whole-project review remains incomplete.
+
+## Dispatch plan computation depends only on its explicit input (2026-09-09)
+
+Read TerrainDispatchPlanner in full. Made prepare(Input), rank, available and neighborsLoaded static; they consume explicit context/retained state and do not need coordinator mailbox, callbacks or publication fields. Availability helpers use Retained<?> because they only inspect loaded columns. The computation still mutates its worker-owned retained state; it is not a pure function. Preserved delta coalescing, reranking conditions, replacement priority, generation checks and scheduling behavior.
+
+Minecraft client tests and rendering checks passed; inspected TerrainDispatchPlannerTest's current XML report. Evidence: tmp/aesthetic-dispatch-planner-inputs-check.log. No new reset/cancellation race experiment or dispatch performance measurement was performed. Whole-project coverage remains incomplete.
