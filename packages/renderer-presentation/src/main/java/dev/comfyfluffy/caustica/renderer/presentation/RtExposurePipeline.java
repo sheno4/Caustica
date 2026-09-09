@@ -48,10 +48,10 @@ final class RtExposurePipeline {
             new ExposureHistPushData(storage(color), storage(depth), storage(albedo),
                     histogram.deviceAddress().value(), config.stride(), config.centerWeightSigma(),
                     config.centerWeightFloor()).write(push);
-            int sampleWidth = (color.width() + config.stride() - 1) / config.stride();
-            int sampleHeight = (color.height() + config.stride() - 1) / config.stride();
-            histogramShader.dispatch(command, push, (sampleWidth + 15) / 16,
-                    (sampleHeight + 15) / 16, 1);
+            int sampleWidth = Math.ceilDiv(color.width(), config.stride());
+            int sampleHeight = Math.ceilDiv(color.height(), config.stride());
+            histogramShader.dispatch(command, push, Math.ceilDiv(sampleWidth, 16),
+                    Math.ceilDiv(sampleHeight, 16), 1);
         }
     }
 
@@ -64,8 +64,12 @@ final class RtExposurePipeline {
             new ExposureResolvePushData(histogram.deviceAddress().value(), state.deviceAddress().value(), storage(exposure),
                     config.key(), config.minEv(), config.maxEv(), config.adaptDarken(), config.adaptBrighten(),
                     frameTimeSeconds, config.evBias(), config.lowPercentile(), config.highPercentile(),
-                    config.skyWeightCap(), -2.0f, -3.0f, 2.0f, -2.0f, 8.0f, 0.0f, 15.0f,
-                    1.0f, config.emissiveWeightCap(), config.evOffset(), config.preExposure(),
+                    config.skyWeightCap(),
+                    -2.0f, -3.0f,
+                    2.0f, -2.0f,
+                    8.0f, 0.0f,
+                    15.0f, 1.0f,
+                    config.emissiveWeightCap(), config.evOffset(), config.preExposure(),
                     config.resetSequence()).write(push);
             resolveShader.dispatch(command, push, 1, 1, 1);
         }
