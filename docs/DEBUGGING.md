@@ -79,6 +79,8 @@ Before contacting the client, `measure.py` reads the revision and working-tree s
 For JVM hotspot attribution, export with `jfr print --json --stack-depth 64 --events jdk.ExecutionSample,jdk.ObjectAllocationSample RECORDING.jfr`.
 The command's default stack display depth is five frames and can hide application callers even when the recording contains deeper stacks.
 
+If `jfr.stop` fails while saving its file, the service retains the stopped recording. Correct the storage problem and retry `jfr.stop` to save and close it before starting another recording. It collects no further events while stopped; shutting down the client discards an unsaved recording.
+
 `measure.py` selects frame, CPU/GPU stage, counter and exposure events by default. Terrain state snapshots traverse section state and can substantially perturb a large-world CPU profile; enable them for streaming diagnosis with `--events` or a full `jfr.start`. All enabled events are retained. Query pools warm up when GPU recording first starts; account for initial samples in comparisons.
 
 - `Frame`: CPU envelope, including RT tick preparation when present; not display cadence or generated-frame FPS.

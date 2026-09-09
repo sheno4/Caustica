@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 import dev.comfyfluffy.caustica.settings.Option;
 import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
+import jdk.jfr.RecordingState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 
@@ -243,9 +244,10 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "jfr.dump", "jfr.stop" -> {
                 if (recording == null) throw new IllegalStateException("No debug recording running");
                 Path output = directory.resolve("recording-" + UUID.randomUUID() + ".jfr");
-                if (op.equals("jfr.stop")) recording.stop();
-                recording.dump(output);
-                if (op.equals("jfr.stop")) { recording.close(); recording = null; }
+                if (op.equals("jfr.stop")) {
+                    stopRecording(recording, output);
+                    recording = null;
+                } else recording.dump(output);
                 future.complete(Map.of("path", output.toString()));
             }
             case "client.stop" -> {
@@ -254,6 +256,13 @@ public final class MinecraftDebugService implements AutoCloseable {
             }
             default -> throw new IllegalArgumentException("Unknown operation " + op);
         }
+    }
+
+    static void stopRecording(Recording recording, Path output) throws IOException {
+        // A failed dump keeps the stopped recording available for another save attempt.
+        if (recording.getState() == RecordingState.RUNNING) recording.stop();
+        recording.dump(output);
+        recording.close();
     }
 
     /** Validate every requested value before applying any setting in the batch. */
