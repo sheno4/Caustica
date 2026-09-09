@@ -93,11 +93,12 @@ public final class RtRetainedGeometryPlan {
                     | (geometry.volume() == null ? 0 : HAS_VOLUME)
                     | (cutout ? CUTOUT : 0)
                     | (stochastic ? STOCHASTIC : 0);
-            float alphaCutoff = cutout
-                    ? ((MeshBuild.CoveragePolicy.Cutout) coveragePolicy).alphaCutoff()
-                    : stochastic
-                    ? ((MeshBuild.CoveragePolicy.Stochastic) coveragePolicy).guideAlphaCutoff()
-                    : 0.0f;
+            float alphaCutoff = switch (coveragePolicy) {
+                case MeshBuild.CoveragePolicy.Cutout policy -> policy.alphaCutoff();
+                case MeshBuild.CoveragePolicy.Stochastic policy -> policy.guideAlphaCutoff();
+                case MeshBuild.CoveragePolicy.Opaque ignored -> 0.0f;
+                case null -> 0.0f;
+            };
             records.add(new GeometryRecord(surface, coverage, volume, flags,
                     resolved.surfaceBinding(), resolved.volumeBinding(), alphaCutoff, instanceIndex,
                     mesh.build().indices().bytes().address(), geometry.firstIndex(),
@@ -160,9 +161,9 @@ public final class RtRetainedGeometryPlan {
     public static List<HitGroup> hitGroups(List<GeometryRecord> records) {
         List<HitGroup> groups = new ArrayList<>(Math.multiplyExact(records.size(), HIT_RECORDS_PER_GEOMETRY));
         for (GeometryRecord record : records) {
-            boolean anyHit = (record.flags() & (CUTOUT | STOCHASTIC)) != 0
-                    && (record.flags() & HAS_VOLUME) == 0;
             boolean volume = (record.flags() & HAS_VOLUME) != 0;
+            // Volume boundaries must reach closest-hit for ordered medium and transmission updates.
+            boolean anyHit = !volume && (record.flags() & (CUTOUT | STOCHASTIC)) != 0;
             groups.add(anyHit ? HitGroup.RADIANCE_CUTOUT : HitGroup.RADIANCE_OPAQUE);
             groups.add(volume ? HitGroup.SHADOW_TRANSMISSIVE
                     : anyHit ? HitGroup.SHADOW_CUTOUT : HitGroup.SHADOW_OPAQUE);
