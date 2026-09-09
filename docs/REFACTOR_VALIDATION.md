@@ -1965,3 +1965,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Replaced duplicated blend/cutout ternaries in model, glyph, and custom-quad capture with one `coverage(RenderType)` helper. It reads the pipeline once, preserves blend precedence over ALPHA_CUTOUT, and keeps unresolved types masked.
 - Kept portal and line opaque overrides explicit at their submission sites. Block-model layer classification remains separate because it uses captured material-layer semantics rather than a render pipeline.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed after the final edit (`tmp/aesthetic-entity-coverage-classification-check.log`). Reviewed the old/new classification branches directly; no new live blended-entity or glyph comparison was performed.
+
+### Give line capture an explicit target and source file
+
+- Reviewed leash-ribbon emission, moving/block-model submission, and the complete line vertex consumer. Kept the leash and line math distinct because they describe different shapes and width rules.
+- Moved `RtLineVertexConsumer` out of the collector's nested implementation. Its reusable instance now receives the target `RtEntityCapture` in `begin`, while retaining endpoint pairing, width/color selection, cardinal-axis perpendiculars, two-ribbon emission, and unmatched-vertex rejection.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds (`tmp/aesthetic-line-capture-extraction-check.log`). Inspected the moved arithmetic and call site. No new live line-rendering comparison was performed.
