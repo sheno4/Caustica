@@ -1910,3 +1910,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Added two behavioral regressions with a prepared mesh whose release throws, one blocked worker, and one queued cancellation callback. Both tests fail on the original implementation at the uncancelled queued-work assertion. With the fix, both confirm cancellation, joined running work, the original reset failure, and one mesh/upload release each.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds; all 10 worker-preparation tests passed. Logs: `tmp/aesthetic-terrain-stop-failure-before.log` and `tmp/aesthetic-terrain-stop-failure-check.log`.
 - These tests inject a CPU-side resource release failure; they do not establish real GPU destruction-failure recovery or exhaustive concurrent failure handling.
+
+### Separate retained terrain reset from captured-state cleanup
+
+- Split reset into the coordinator-owned retained-state operation and a shared render-side captured-state cleanup. Reset now clears snapshots, the dispatch plan/cursor, and dirty observations in `finally`; shutdown uses the same cleanup after its worker barrier.
+- Extended the existing release-failure regressions with a retained dispatch plan. The unbind regression failed before the change because that plan survived reset failure; both shutdown entry points now release it.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 7 seconds; all 10 worker-preparation tests passed. Evidence: `tmp/aesthetic-terrain-reset-before.log`, `tmp/aesthetic-terrain-reset-check.log`. No new live GPU or world-transition run was performed for this cleanup change.

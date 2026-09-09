@@ -612,23 +612,32 @@ public final class RtTerrain {
     private void reset() {
         epoch++;
         pendingWindows.clear();
-        workers.coordinateAndWait(() -> {
-            synchronized (publicationLock) {
-                synchronized (preparationLock) {
-                    updates.clear();
-                    dispatchPlanner.reset();
-                    window.clear();
-                    workerFailure = null;
-                    stateCounts = StateCounts.EMPTY;
-                }
-                drainDiscardedBuilds();
-                if (geometry != null) {
-                    var drops = geometry.sectionKeys().stream()
-                            .map(key -> (MinecraftTerrainGeometry.ReadyChange) new MinecraftTerrainGeometry.Drop(key)).toList();
-                    if (!drops.isEmpty()) geometry.edit(drops);
-                }
+        try {
+            workers.coordinateAndWait(this::clearRetainedState);
+        } finally {
+            clearCapturedState();
+        }
+    }
+
+    private void clearRetainedState() {
+        synchronized (publicationLock) {
+            synchronized (preparationLock) {
+                updates.clear();
+                dispatchPlanner.reset();
+                window.clear();
+                workerFailure = null;
+                stateCounts = StateCounts.EMPTY;
             }
-        });
+            drainDiscardedBuilds();
+            if (geometry != null) {
+                var drops = geometry.sectionKeys().stream()
+                        .map(key -> (MinecraftTerrainGeometry.ReadyChange) new MinecraftTerrainGeometry.Drop(key)).toList();
+                if (!drops.isEmpty()) geometry.edit(drops);
+            }
+        }
+    }
+
+    private void clearCapturedState() {
         snapshots.clear();
         dispatchPlan = null;
         dispatchCursor = 0;
@@ -640,10 +649,7 @@ public final class RtTerrain {
         try {
             new ResourceLifetime(this::reset, workers::shutdown, this::drainDiscardedBuilds).close();
         } finally {
-            dirty.clear();
-            snapshots.clear();
-            dispatchPlan = null;
-            dispatchCursor = 0;
+            clearCapturedState();
             world = null;
         }
     }

@@ -39,6 +39,10 @@ final class RtTerrainWorkerPreparationTest {
                     MinecraftTerrainLightAdapter.describe(0, 1, 0, 0, 0, List.of())));
             fixture.ready.complete(fixture.mesh);
             assertTrue(fixture.updates().complete(build.request(), build.result(null, prepared.join(), null)));
+            var dispatchPlan = RtTerrain.class.getDeclaredField("dispatchPlan");
+            dispatchPlan.setAccessible(true);
+            dispatchPlan.set(fixture.terrain, new TerrainDispatchPlanner.Plan<>(0,
+                    List.of(new TerrainDispatchPlanner.Candidate<>(0, build.request(), false))));
 
             var entered = new CountDownLatch(1);
             var finished = new CountDownLatch(1);
@@ -61,6 +65,7 @@ final class RtTerrainWorkerPreparationTest {
                 assertEquals(0, finished.getCount());
                 assertEquals(1, fixture.meshClosed.get());
                 assertEquals(1, fixture.uploadClosed.get());
+                assertNull(dispatchPlan.get(fixture.terrain));
             } finally {
                 fixture.workers.shutdown();
             }
