@@ -1959,3 +1959,9 @@ Added a regression that forces the first queued cancellation to throw, verifies 
 - Reviewed the cuboid template tree construction, identity/order matching, corner detection, and generic fallback. Extracted whole-cube support validation before specialization.
 - Eight-corner detection now returns the generic template immediately on a ninth distinct corner. Removed the overflow flag and the subsequent construction of unusable face templates. Full validation still precedes this return, so a later malformed face rejects the direct path.
 - Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed in 6 seconds (`tmp/aesthetic-cuboid-template-validation-check.log`). Fallback and normal-case branch equivalence was inspected directly; no dedicated live model comparison or performance benchmark was performed.
+
+### Consolidate entity render-type coverage classification
+
+- Replaced duplicated blend/cutout ternaries in model, glyph, and custom-quad capture with one `coverage(RenderType)` helper. It reads the pipeline once, preserves blend precedence over ALPHA_CUTOUT, and keeps unresolved types masked.
+- Kept portal and line opaque overrides explicit at their submission sites. Block-model layer classification remains separate because it uses captured material-layer semantics rather than a render pipeline.
+- Validation: `:packages:minecraft-client:test :packages:minecraft-rendering:check` passed after the final edit (`tmp/aesthetic-entity-coverage-classification-check.log`). Reviewed the old/new classification branches directly; no new live blended-entity or glyph comparison was performed.

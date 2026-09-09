@@ -139,11 +139,9 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
             instrumentation.count("entityModelSubmissions", 1);
         }
         long materialStart = profileDynamicEntity ? instrumentation.startStage() : 0L;
-        boolean stochasticAlpha = isTranslucent(renderType);
         // Block-entity models texture from an atlas sprite; mobs use a standalone texture.
         try {
-            capture.currentCoverage = stochasticAlpha ? MinecraftEntityMesh.Coverage.STOCHASTIC
-                    : hasCutoutDefine(renderType) ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
+            capture.currentCoverage = coverage(renderType);
             if (sprite != null) {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
                 capture.currentMaterial = spriteMaterial(sprite,
@@ -303,26 +301,15 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
                 MinecraftEntityMesh.Program.MATERIAL);
     }
 
-    /** Blended submissions use stochastic surface coverage. */
-    private static boolean isTranslucent(RenderType renderType) {
-        if (renderType == null) {
-            return false;
-        }
-        ColorTargetState cts = pipeline(renderType).getColorTargetState();
-        return cts != null && cts.blendFunction().isPresent();
-    }
-
-    /**
-     * The pipeline's ALPHA_CUTOUT define selects masked coverage, including for mod-provided pipelines.
-     * Unknown render types retain alpha testing so transparent texels do not become solid geometry.
-     */
-    private static boolean hasCutoutDefine(RenderType renderType) {
-        if (renderType == null) {
-            return true;
-        }
+    /** Blending takes precedence over ALPHA_CUTOUT; unresolved render types retain masked coverage. */
+    private static MinecraftEntityMesh.Coverage coverage(RenderType renderType) {
+        if (renderType == null) return MinecraftEntityMesh.Coverage.CUTOUT;
         RenderPipeline pipeline = pipeline(renderType);
-        return pipeline.getShaderDefines().values().containsKey("ALPHA_CUTOUT")
-                || pipeline.getShaderDefines().flags().contains("ALPHA_CUTOUT");
+        ColorTargetState target = pipeline.getColorTargetState();
+        if (target != null && target.blendFunction().isPresent()) return MinecraftEntityMesh.Coverage.STOCHASTIC;
+        var defines = pipeline.getShaderDefines();
+        return defines.values().containsKey("ALPHA_CUTOUT") || defines.flags().contains("ALPHA_CUTOUT")
+                ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
     }
 
     /** Read the draw topology so custom triangle effects are never mis-grouped as RT quads. */
@@ -420,10 +407,8 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
         @Override
         public void acceptRenderable(TextRenderable renderable) {
             RenderType renderType = renderable.renderType(displayMode);
-            boolean stochasticAlpha = isTranslucent(renderType);
             capture.currentMaterial = standaloneMaterial(renderType);
-            capture.currentCoverage = stochasticAlpha ? MinecraftEntityMesh.Coverage.STOCHASTIC
-                    : hasCutoutDefine(renderType) ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
+            capture.currentCoverage = coverage(renderType);
             capture.currentOrder = 0;
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
@@ -658,7 +643,6 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
         capture.currentOrder = pendingOrder;
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
-        boolean stochasticAlpha = isTranslucent(renderType);
         // A white texture preserves the vertex color of untextured line ribbons.
         if (lines) {
             capture.currentMaterial = new MinecraftEntityMesh.Material(
@@ -667,10 +651,8 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
         } else {
             capture.currentMaterial = standaloneMaterial(renderType);
         }
-        capture.currentCoverage = lines ? MinecraftEntityMesh.Coverage.OPAQUE
-                : isEndPortal(renderType) ? MinecraftEntityMesh.Coverage.OPAQUE
-                : stochasticAlpha ? MinecraftEntityMesh.Coverage.STOCHASTIC
-                : hasCutoutDefine(renderType) ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
+        capture.currentCoverage = lines || isEndPortal(renderType)
+                ? MinecraftEntityMesh.Coverage.OPAQUE : coverage(renderType);
 
         if (lines) {
             lineVertexConsumer.begin();
