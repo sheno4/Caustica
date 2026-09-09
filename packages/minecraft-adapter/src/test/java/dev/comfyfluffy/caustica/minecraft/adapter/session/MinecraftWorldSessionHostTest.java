@@ -27,6 +27,37 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftWorldSessionHostTest {
     @Test
+    void hostCloseQueuesRemovalAtTheSessionControlBoundary() {
+        var events = new ArrayList<String>();
+        try (var host = new MinecraftWorldSessionHost()) {
+            host.api().sessions().add(context -> contribution("live", events, false));
+            try (var session = host.openSession(owner -> new TestScope("scope", events),
+                    scene -> new EnvironmentSelectionScope() {
+                        @Override public void select(EnvironmentBinding<?> binding) { }
+                        @Override public void invalidate() { events.add("environment:invalidate"); }
+                        @Override public void drain() { events.add("environment:drain"); }
+                    }, new SceneId() { }, MinecraftDimensionKey.of("minecraft", "overworld"),
+                    new ResourcePackEpoch(0), failure -> { throw new AssertionError(failure); })) {
+                session.processPendingChanges();
+                host.close();
+                assertEquals(1, session.contributionCount());
+                assertEquals(List.of(), events);
+                session.processPendingChanges();
+                assertEquals(0, session.contributionCount());
+                var expected = List.of("scope:quiesce", "live:stop", "environment:invalidate",
+                        "scope:invalidate", "environment:drain", "scope:drain", "live:close", "scope:scope-close");
+                assertEquals(expected, events);
+                host.close();
+                session.processPendingChanges();
+                session.close();
+                assertEquals(expected, events);
+                assertThrows(IllegalStateException.class,
+                        () -> host.api().sessions().add(context -> MinecraftWorldSessionContribution.EMPTY));
+            }
+        }
+    }
+
+    @Test
     void factoriesRegisteredDuringOpenSettleInTheSameControlPass() {
         var events = new ArrayList<String>();
         try (var host = new MinecraftWorldSessionHost()) {

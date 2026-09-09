@@ -37,6 +37,7 @@ public final class MinecraftWorldSessionHost implements AutoCloseable {
         return channel.open(scopes, environments, scene, dimension, resourcePackEpoch, failures);
     }
 
+    /** Rejects new registrations and sessions; live sessions retire contributions at their next control pass. */
     @Override public void close() { channel.close(); }
 
     static final class Channel implements MinecraftWorldSessionChannel {
@@ -94,6 +95,7 @@ public final class MinecraftWorldSessionHost implements AutoCloseable {
             if (!accepting) return;
             accepting = false;
             registrations.clear();
+            sessions.forEach(MinecraftWorldSession::requestReconcile);
         }
 
         static final class Registration implements MinecraftWorldSessionRegistration {
