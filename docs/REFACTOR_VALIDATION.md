@@ -1126,3 +1126,9 @@ The engine check passed at exit zero; git diff --check passed. Evidence: tmp/aes
 Ran the full Windows Fabric root check after the accumulated engine validation, standard item callback, viewer resource and English locale changes. It passed at exit zero in 42 seconds (187 tasks, 49 executed, 138 up-to-date), including package-boundary verification and viewer checks. The client reports contain 48 suites and 212 tests with zero failures, errors or skips; this restores full client-suite evidence after the earlier targeted LangKeysTest run.
 
 Evidence: tmp/aesthetic-integrated-5ac7afdd-check.log and tmp/aesthetic-integrated-5ac7afdd-client-tests.json. The tracked tree was clean before this documentation entry. No new runtime, visual or performance claim follows from this integrated build; the computer-use resize and intermittent RR stability gates remain open.
+
+## Direct environment frame drain (2026-09-09)
+
+SceneEnvironmentContributionChannel now calls SceneDirectory.settleFrameUses directly. Removed the duplicate drain overload whose environment-channel argument was unused. Environment invalidation still removes its selection before draining published frame uses; mesh draining still waits for that channel's pending preparations. Program and pass drain methods retain their channel arguments because they inspect channel-specific work.
+
+The engine check passed in 2 seconds (13 tasks, 3 executed), with 13 suites and 91 tests reporting zero failures, errors or skips. Evidence: tmp/aesthetic-environment-drain-check.log and the engine XML reports. git diff --check passed. This removes redundant lifecycle delegation without changing the operation performed; no new GPU or computer-use validation is claimed.

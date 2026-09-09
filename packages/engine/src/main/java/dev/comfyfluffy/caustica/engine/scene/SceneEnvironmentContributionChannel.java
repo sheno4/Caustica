@@ -20,5 +20,5 @@ public final class SceneEnvironmentContributionChannel implements EnvironmentSel
         directory.selectEnvironment(this, binding);
     }
     public void invalidate() { directory.invalidate(this); }
-    public void drain() { directory.drain(this); }
+    public void drain() { directory.settleFrameUses(); }
 }

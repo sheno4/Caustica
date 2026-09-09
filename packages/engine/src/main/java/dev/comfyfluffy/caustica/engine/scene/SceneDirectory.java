@@ -391,10 +391,6 @@ public final class SceneDirectory {
         CompletableFuture.allOf(pending).join();
     }
 
-    public void drain(SceneEnvironmentContributionChannel channel) {
-        backend.settleFrameUses();
-    }
-
     public void settleFrameUses() { backend.settleFrameUses(); }
 
     public void prepareForSessionClose() { backend.prepareForSessionClose(); }
