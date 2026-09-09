@@ -52,22 +52,9 @@ float curveEffectiveSlope(float sceneEv) {
     return 1.0 - compensationSlope;
 }
 
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void main() {
-    DevicePtr<uint> histBins = DevicePtr<uint>(pc.histogramAddress);
-    DevicePtr<ExposureState> stateBuf = DevicePtr<ExposureState>(pc.stateAddress);
-    [format("r32f")] RWTexture2D<float> exposureImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
-    float surfacePopulation = 0.0;
-    float skyPopulation = 0.0;
-    float emissivePopulation = 0.0;
-    for (uint i = 0u; i < 256u; ++i) {
-        surfacePopulation += float(histBins[i]);
-        skyPopulation += float(histBins[256u + i]);
-        emissivePopulation += float(histBins[512u + i]);
-    }
-    float skyCap = clamp(pc.skyWeightCap, 0.0, 1.0);
-    float emissiveCap = clamp(pc.emissiveWeightCap, 0.0, 1.0);
+float2 populationScales(float surfacePopulation, float skyPopulation, float emissivePopulation, float2 caps) {
+    float skyCap = clamp(caps.x, 0.0, 1.0);
+    float emissiveCap = clamp(caps.y, 0.0, 1.0);
     float skyScale = 1.0;
     float emissiveScale = 1.0;
     // A cap is fully active only once ordinary surfaces fill the share left by that cap. Before then,
@@ -100,6 +87,27 @@ void main() {
         emissiveScale = emissivePopulation > 0.0
                 ? min(1.0, weightedEmissive / emissivePopulation) : 1.0;
     }
+    return float2(skyScale, emissiveScale);
+}
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void main() {
+    DevicePtr<uint> histBins = DevicePtr<uint>(pc.histogramAddress);
+    DevicePtr<ExposureState> stateBuf = DevicePtr<ExposureState>(pc.stateAddress);
+    [format("r32f")] RWTexture2D<float> exposureImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
+    float surfacePopulation = 0.0;
+    float skyPopulation = 0.0;
+    float emissivePopulation = 0.0;
+    for (uint i = 0u; i < 256u; ++i) {
+        surfacePopulation += float(histBins[i]);
+        skyPopulation += float(histBins[256u + i]);
+        emissivePopulation += float(histBins[512u + i]);
+    }
+    float2 scales = populationScales(surfacePopulation, skyPopulation, emissivePopulation,
+            float2(pc.skyWeightCap, pc.emissiveWeightCap));
+    float skyScale = scales.x;
+    float emissiveScale = scales.y;
     float population = surfacePopulation + skyPopulation * skyScale
             + emissivePopulation * emissiveScale;
     float total = max(population, 1.0);
