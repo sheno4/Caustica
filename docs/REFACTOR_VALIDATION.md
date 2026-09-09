@@ -1860,3 +1860,9 @@ Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-flui
 Completed reading MinecraftFluidSurface, including cell heights, weighted averaging and triangular camera containment. Replaced the anonymous float[2] accumulator with a private WeightedHeight containing sum and weight. Kept the exact corner/self/neighbor addition order, tenfold weighting for heights at least 0.8, exclusion of negative heights and full-height early returns. Surface interpolation and containment remain unchanged.
 
 Minecraft client tests and rendering checks passed. Inspected the MinecraftFluidSurfaceTest XML report. Evidence: tmp/aesthetic-fluid-weighted-height-check.log. No new live waterline test or allocation/performance measurement was performed. Whole-project source and runtime coverage remain incomplete.
+
+## Section snapshot review simplifies debug-world state selection (2026-09-09)
+
+Read RtSectionSnapshots in full, including column-identity cache reuse, copied palettes, lazy worker-owned halo decoding and the Region's live biome/lighting context. Preserved those ownership boundaries. Replaced nullable temporary state in debug-world lookup with a direct height switch. Checked DebugLevelSource.getBlockStateFor in the pinned 26.2-rc-1 source JAR: it initializes to AIR and returns a registered block state or AIR, so no null fallback is required.
+
+Minecraft client tests and rendering checks passed. Evidence: tmp/aesthetic-section-snapshot-review-check.log. No new live debug-world run, biome concurrency experiment or snapshot stress run was performed. Whole-project review remains incomplete.

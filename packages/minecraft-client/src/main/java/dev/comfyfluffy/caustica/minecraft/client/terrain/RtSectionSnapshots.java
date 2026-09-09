@@ -188,14 +188,11 @@ final class RtSectionSnapshots {
             int y = pos.getY();
             int z = pos.getZ();
             if (debug) {
-                BlockState state = null;
-                if (y == 60) {
-                    state = Blocks.BARRIER.defaultBlockState();
-                }
-                if (y == 70) {
-                    state = DebugLevelSource.getBlockStateFor(x, z);
-                }
-                return state == null ? Blocks.AIR.defaultBlockState() : state;
+                return switch (y) {
+                    case 60 -> Blocks.BARRIER.defaultBlockState();
+                    case 70 -> DebugLevelSource.getBlockStateFor(x, z);
+                    default -> Blocks.AIR.defaultBlockState();
+                };
             }
             return blocks.get(x, y, z);
         }
