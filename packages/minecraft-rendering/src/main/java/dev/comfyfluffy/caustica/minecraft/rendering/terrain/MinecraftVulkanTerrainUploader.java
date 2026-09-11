@@ -35,6 +35,7 @@ import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure
 /** Host-mapped VMA upload owner for retained Minecraft terrain buffers. */
 public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUploader {
     private static final int TEXTURE_PRESENT = 1;
+    private static final int TRANSMISSION_ALPHA = 8;
     private final GpuDevice gpu;
     private final MinecraftPrograms programs;
     private final SharedResource<SharedAtlas> atlas;
@@ -197,6 +198,10 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     new MinecraftPrimitiveData.Float2(uvs[uv + 4], uvs[uv + 5])};
             var white = new MinecraftPrimitiveData.Float4(1f, 1f, 1f, 1f);
             boolean textured = primitive[data + MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] != 0.0f;
+            int textureFlags = textured ? TEXTURE_PRESENT : 0;
+            if (primitive[data + MinecraftTerrainMesh.PRIMITIVE_TRANSMISSION_ALPHA_OFFSET] != 0.0f) {
+                textureFlags |= TRANSMISSION_ALPHA;
+            }
             TangentBasis basis = tangentBasis(positions, indices, uvs, triangle,
                     primitive[data], primitive[data + 1], primitive[data + 2]);
             var record = new MinecraftPrimitiveData(uvValues, new MinecraftPrimitiveData.Float4[]{white, white, white},
@@ -204,7 +209,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     (int) primitive[data + 8],
                     new MinecraftPrimitiveData.SampledTexture2DIndex(textured ? atlasDescriptor : 0),
                     new MinecraftPrimitiveData.SamplerIndex(textured ? atlasSamplerDescriptor : 0),
-                    textured ? TEXTURE_PRESENT : 0,
+                    textureFlags,
                     primitive[data + 3],
                     basis.tangent(), basis.bitangent());
             record.write(bytes.slice(triangle * MinecraftPrimitiveData.BYTE_SIZE,

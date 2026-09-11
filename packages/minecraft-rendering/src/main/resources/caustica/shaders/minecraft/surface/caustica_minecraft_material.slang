@@ -7,6 +7,7 @@ import caustica_types;
 public static const uint MINECRAFT_TEXTURE_PRESENT = 1u;
 public static const uint MINECRAFT_TEXTURE_LINEAR = 2u;
 public static const uint MINECRAFT_DAMAGE_PRESENT = 4u;
+public static const uint MINECRAFT_TRANSMISSION_ALPHA = 8u;
 public static const uint MINECRAFT_MATERIAL_SPEC = 1u;
 public static const uint MINECRAFT_MATERIAL_NORMAL = 2u;
 public static const uint MINECRAFT_MATERIAL_EMISSION_MASK = 4u;
@@ -127,6 +128,10 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
         material.base_color *= geometryTint;
     } else {
         float4 texel = minecraftSampleBase(hit, hit.textureCoordinate, 0.0);
+        // Translucent terrain has full coverage; base alpha weights its optical transmission.
+        if ((hit.primitive.textureFlags & MINECRAFT_TRANSMISSION_ALPHA) != 0u) {
+            material.transmission_weight *= 1.0 - clamp(texel.a, 0.0, 1.0);
+        }
         float3 sampled = (hit.primitive.textureFlags & MINECRAFT_TEXTURE_LINEAR) != 0u
                 ? texel.rgb : srgbToLinear(texel.rgb);
         sampled = bt709ToAcesCg(sampled);
@@ -147,7 +152,7 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
             material.specular_roughness *= surface0.r;
             material.base_metalness *= surface0.g;
             material.subsurface_weight *= surface0.a;
-            if (material.transmission_weight == 0.0) material.specular_ior = minecraftIor(surface1.a);
+            if (data.transmissionWeight == 0.0) material.specular_ior = minecraftIor(surface1.a);
             float3 authored = clamp(bt709ToAcesCg(surface1.rgb), float3(0.0), float3(1.0));
             material.base_color = lerp(material.base_color, authored * data.baseColor,
                     material.base_metalness);

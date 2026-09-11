@@ -419,6 +419,21 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
+    void translucentTerrainCarriesAlphaTransmissionAlongsideItsAtlasBinding() {
+        ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        float[] primitive = new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS];
+        primitive[MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] = 1f;
+        primitive[MinecraftTerrainMesh.PRIMITIVE_TRANSMISSION_ALPHA_OFFSET] = 1f;
+        MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                new float[]{0, 0, 1, 0, 0, 1}, primitive, 37, 41);
+
+        assertEquals(37, bytes.getInt(96));
+        assertEquals(41, bytes.getInt(100));
+        assertEquals(9, bytes.getInt(104));
+    }
+
+    @Test
     void untexturedTerrainPrimitiveDoesNotReadTheAtlasDescriptor() {
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
         MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,

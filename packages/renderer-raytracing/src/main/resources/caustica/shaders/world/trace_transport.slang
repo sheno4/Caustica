@@ -150,6 +150,7 @@ public float3 traceVisibility(PackedPathSegment path, WorldPayload hit,
         retainedLightRandom(seed);
         shadow.seed = seed;
         shadow.volumeIor = path.ior;
+        shadow.volumeAbsorption = path.absorption;
         shadow.pathFlags = WORLD_PATH_SHADOW;
         // Any-hit only rejects coverage holes; closest-hit resolves one ordered boundary.
         TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE,

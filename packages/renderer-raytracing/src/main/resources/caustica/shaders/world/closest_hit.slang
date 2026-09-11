@@ -57,21 +57,25 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
         in BuiltInTriangleIntersectionAttributes attributes) {
     RetainedGeometryRecord record = worldGeometryRecord();
     bool volume = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u;
-    // Coverage has already accepted this hit. An opaque shadow blocker needs no material evaluation.
-    if ((payload.pathFlags & WORLD_PATH_SHADOW) != 0u && !volume) {
-        payload.hitDistance = RayTCurrent();
-        payload.pathFlags &= ~WORLD_PATH_MISS;
-        payload.radiance = float3(0.0);
-        return;
-    }
     WorldInstanceHistory history = worldInstanceHistory(record);
     SurfaceInput input = worldSurfaceInput(attributes, record, history);
     TComposition.Surfaces surfaces = {};
     OpenPbrSurface material = surfaces.evaluateSurface(record.surfaceImplementation, input);
     material.geometry_thin_walled = !volume;
+    // Authored normals follow mesh winding; both sides must use the hit's oriented hemisphere.
+    if (dot(material.geometry_normal, input.geometricNormal) < 0.0) {
+        material.geometry_normal = -material.geometry_normal;
+        material.previous_geometry_normal = -material.previous_geometry_normal;
+    }
     payload.surface = surfaceClosure(material, input.geometricNormal);
     if ((payload.pathFlags & WORLD_PATH_SHADOW) != 0u) {
-        resolveShadowBoundary<TComposition>(payload, record, input);
+        if (volume) {
+            resolveShadowBoundary<TComposition>(payload, record, input);
+        } else {
+            payload.hitDistance = RayTCurrent();
+            payload.pathFlags &= ~WORLD_PATH_MISS;
+            payload.radiance = surfaceShadowTransmission(payload.surface, input.outgoingDirection);
+        }
         return;
     }
     payload.position = input.position;

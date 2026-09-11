@@ -146,6 +146,15 @@ public SurfaceClosure surfaceClosure(OpenPbrSurface material, float3 geometryNor
     return surface;
 }
 
+/** Straight shadow connections use sheet attenuation; rough angular scattering is sampled by paths. */
+public float3 surfaceShadowTransmission(SurfaceClosure surface, float3 outgoingDirection) {
+    float cosine = clamp(dot(surface.shadingNormal, outgoingDirection), 0.0, 1.0);
+    float3 reflection, transmission;
+    thinSheetFactors(surfaceFresnelSchlick(cosine, surface.specularF0),
+            surface.thinTransmissionColor, reflection, transmission);
+    return transmission * surface.thinTransmissionWeight;
+}
+
 // Integrated surface weights exclude the thick glass boundary owned by volume transport.
 public void surfaceDeltaLobes(SurfaceClosure surface, float3 outgoingDirection,
         out float3 reflection, out float3 transmission) {

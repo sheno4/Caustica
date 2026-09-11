@@ -431,7 +431,7 @@ final class RtTerrainMesher {
             MinecraftMaterialResolution terrainMaterial = materials.resolve(key);
             q.material = new TerrainMaterial(terrainMaterial.materialIndex(), terrainMaterial.material(),
                     true);
-            q.coverage = q.translucent ? Coverage.STOCHASTIC
+            q.coverage = q.translucent ? Coverage.OPAQUE
                     : q.cutout ? Coverage.CUTOUT : Coverage.OPAQUE;
             q.materialEmission = terrainMaterial.emission();
         }
@@ -576,7 +576,7 @@ final class RtTerrainMesher {
                 prim.add(0f);
                 prim.add(q.material.materialIndex());
                 prim.add(q.material.textured() ? 1f : 0f);
-                prim.add(0f); // aux0
+                prim.add(q.translucent ? 1f : 0f); // base alpha controls transmission
                 prim.add(0f); // aux1
                 g.lightSprites.add(q.sprite);
                 g.materialEmissions.add(q.materialEmission);
