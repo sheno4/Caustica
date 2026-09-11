@@ -8,7 +8,7 @@ import caustica_volume;
 import caustica_environment;
 import caustica_error_surface;
 import caustica_error_coverage;
-import caustica_builtin_sky;
+import caustica_builtin_environment;
 
 public struct FixedSurfaces : ISurfaceDispatch {
     public OpenPbrSurface evaluateSurface(uint implementation, SurfaceInput input) {

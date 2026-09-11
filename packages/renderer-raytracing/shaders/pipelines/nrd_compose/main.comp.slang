@@ -24,7 +24,7 @@ uint recordIndex(uint2 pixel, uint2 extent, uint plane) {
 bool validSurface(StablePlaneRecord r) {
     return r.branchId != STABLE_PLANE_INVALID_BRANCH
             && (r.flags & STABLE_PLANE_FLAG_VALID) != 0u
-            && (r.flags & STABLE_PLANE_FLAG_SKY) == 0u;
+            && (r.flags & STABLE_PLANE_FLAG_ENVIRONMENT) == 0u;
 }
 
 float neighborRelaxation(ConstPtr<StablePlaneRecord> records, int2 pixel, int2 extent,
@@ -136,8 +136,8 @@ void merge(uint2 pixel, uint2 extent, ConstPtr<StablePlaneRecord> records, NrdPl
         accumulated += max(diffuse + specular, float3(0.0))
                 * (frame.preExposure / frame.radianceScale);
     } else if (r.branchId != STABLE_PLANE_INVALID_BRANCH
-            && (r.flags & STABLE_PLANE_FLAG_SKY) != 0u) {
-        // Reflected and transmitted sky contributions have no surface to denoise.
+            && (r.flags & STABLE_PLANE_FLAG_ENVIRONMENT) != 0u) {
+        // Reflected and transmitted environment contributions have no surface to denoise.
         // Their plane records already contain scene-linear radiance with the BSDF applied.
         accumulated += max(r.noisyDiffuseRadiance + r.noisySpecularRadiance, float3(0.0))
                 * frame.preExposure;

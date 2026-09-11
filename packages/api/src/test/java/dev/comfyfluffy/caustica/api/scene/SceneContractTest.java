@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class SceneContractTest {
-    private interface Sky { }
+    private interface Environment { }
 
     @Test
     void sceneReferenceCarriesNoAdministrationAuthority() {
@@ -24,10 +24,10 @@ final class SceneContractTest {
     void environmentBindingUsesTheSharedDataVocabulary() throws NoSuchMethodException {
         assertSame(ShaderData.class,
                 EnvironmentBinding.class.getMethod("bindingData").getReturnType());
-        ShaderDataType<Sky> sky = ShaderDataType.create("sky");
-        EnvironmentBinding<Sky> binding = new EnvironmentBinding<>(
-                new EnvironmentId<>() { }, sky.data(3L));
-        assertSame(sky, binding.bindingData().type());
+        ShaderDataType<Environment> environment = ShaderDataType.create("environment");
+        EnvironmentBinding<Environment> binding = new EnvironmentBinding<>(
+                new EnvironmentId<>() { }, environment.data(3L));
+        assertSame(environment, binding.bindingData().type());
     }
 
     @Test

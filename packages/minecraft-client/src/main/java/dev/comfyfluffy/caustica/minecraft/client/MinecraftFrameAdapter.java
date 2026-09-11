@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelectionInsta
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;

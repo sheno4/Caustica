@@ -36,15 +36,15 @@ final class ShaderSourceTest {
     void acceptsQualifiedTypesAndRejectsTraversalShapedNames() {
         ShaderSource source = ShaderSource.classpath(ShaderSourceTest.class, "/caustica/shaders/api");
 
-        new ShaderDefinition(source, "caustica_api", "Sky");
-        new ShaderDefinition(source, "caustica_api", "comfyfluffy.example.Sky");
+        new ShaderDefinition(source, "caustica_api", "Environment");
+        new ShaderDefinition(source, "caustica_api", "comfyfluffy.example.Environment");
         assertThrows(IllegalArgumentException.class, () -> source.openModule("example..foreign"));
         assertThrows(IllegalArgumentException.class,
-                () -> new ShaderDefinition(source, "../foreign", "example.Sky"));
+                () -> new ShaderDefinition(source, "../foreign", "example.Environment"));
         assertThrows(IllegalArgumentException.class,
-                () -> new ShaderDefinition(source, "example", "example..Sky"));
+                () -> new ShaderDefinition(source, "example", "example..Environment"));
         assertThrows(IllegalArgumentException.class,
-                () -> new ShaderDefinition(source, "example", "example::Sky"));
+                () -> new ShaderDefinition(source, "example", "example::Environment"));
     }
 
     @Test

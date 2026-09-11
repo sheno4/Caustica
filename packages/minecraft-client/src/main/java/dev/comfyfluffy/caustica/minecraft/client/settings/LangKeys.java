@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.settings;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.Option;
 import net.minecraft.network.chat.Component;
 import dev.comfyfluffy.caustica.settings.ResourceId;

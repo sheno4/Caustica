@@ -7,13 +7,10 @@ plugins {
 
 def embeddedPackages = [
 	"api",
-	"api-support",
-	"config",
+	"core-support",
 	"engine",
 	"engine-vulkan",
-	"features-builtin",
 	"minecraft-api",
-	"minecraft-adapter",
 	"minecraft-content",
 	"minecraft-rendering",
 	"nvidia-ngx",
@@ -168,7 +165,6 @@ dependencies {
 	}
 	apiRuntime project(path: ":packages:nvidia-nrd", configuration: "nrdNatives")
 	slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
-	slangShaderModules project(path: ":packages:features-builtin", configuration: "runtimeElements")
 	slangShaderModules project(path: ":packages:renderer-raytracing", configuration: "runtimeElements")
 	slangShaderModules project(path: ":packages:minecraft-rendering", configuration: "runtimeElements")
 	if (loader == "fabric") {
@@ -287,7 +283,6 @@ tasks.named("sourcesJar", Jar).configure {
 		from(dependency.name == "slang-runtime"
 				? dependency.sourceSets.main.allJava : dependency.sourceSets.main.allSource)
 	}
-	from(project(":packages:features-builtin").file("shaders")) { into "shaders" }
 	from(project(":packages:minecraft-rendering").file("src/shaderReflection")) { into "shaders/minecraft-rendering" }
 	from(project(":packages:nvidia-ngx").file("native")) { into "native/nvidia-ngx" }
 	from(project(":packages:nvidia-nrd").file("native")) { into "native/nvidia-nrd" }
@@ -299,11 +294,10 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	group = "verification"
 	description = "Verifies that the full mod embeds the Java and Slang API artifacts exactly once."
 	def resourcePrefixes = [
-		"features-builtin": ["caustica/shaders/builtin/", "caustica/shaders/pipelines/bloom/"],
 		"minecraft-rendering": ["caustica/shaders/minecraft/"],
 		"nvidia-ngx": ["caustica/natives/"],
 		"renderer-presentation": ["caustica/shaders/pipelines/", "caustica/color/"],
-		"renderer-raytracing": ["caustica/shaders/world/", "caustica/shaders/pipelines/nee_at/"],
+		"renderer-raytracing": ["caustica/shaders/world/", "caustica/shaders/fallback/", "caustica/shaders/pipelines/nee_at/"],
 		"shader-api": ["caustica/shaders/api/"],
 		"slang-runtime": ["caustica/natives/slang/"]
 	]

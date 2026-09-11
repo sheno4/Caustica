@@ -8,7 +8,7 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuSurface;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftHdr;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;

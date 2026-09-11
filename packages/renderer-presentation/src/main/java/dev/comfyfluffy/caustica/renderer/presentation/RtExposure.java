@@ -56,7 +56,7 @@ public final class RtExposure {
     public record Settings(String mode, float manualEv, float key,
             float adaptDarken, float adaptBrighten, float lowPercentile, float highPercentile,
             int stride, float centerWeightSigma, float centerWeightFloor,
-            float skyWeightCap, float emissiveWeightCap,
+            float environmentWeightCap, float emissiveWeightCap,
             boolean preExposure, float gamma) {
     }
 
@@ -148,7 +148,7 @@ public final class RtExposure {
                 }, buffer -> ctx.deferDestroy(buffer::destroy));
             }
             if (histogram == null) {
-                // Separate ordinary-surface/sky/emissive histograms let resolve enforce both
+                // Separate ordinary-surface/environment/emissive histograms let resolve enforce both
                 // population caps exactly without a second full-image dispatch.
                 histogram = ctx.createBuffer(768L * Integer.BYTES,
                         VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false,
@@ -347,7 +347,7 @@ public final class RtExposure {
                 + ", evBias=" + autoConfig.evBias + ", percentiles=" + autoConfig.lowPercentile
                 + ".." + autoConfig.highPercentile + ", stride=" + autoConfig.stride
                 + ", centerWeight=" + autoConfig.centerWeightSigma + "/" + autoConfig.centerWeightFloor
-                + ", skyCap=" + autoConfig.skyWeightCap
+                + ", environmentCap=" + autoConfig.environmentWeightCap
                 + ", emissiveCap=" + autoConfig.emissiveWeightCap
                 + ")"
                 : Float.toString(manualExposureScale());
@@ -373,7 +373,7 @@ public final class RtExposure {
                 settings.stride(),
                 settings.centerWeightSigma(),
                 settings.centerWeightFloor(),
-                settings.skyWeightCap(),
+                settings.environmentWeightCap(),
                 settings.emissiveWeightCap(),
                 preExposure(),
                 resetSequence);
@@ -469,7 +469,7 @@ public final class RtExposure {
     record AutoConfig(float key, float minEv, float maxEv, float adaptDarken, float adaptBrighten,
                       float evBias,
                       float lowPercentile, float highPercentile, int stride,
-                      float centerWeightSigma, float centerWeightFloor, float skyWeightCap,
+                      float centerWeightSigma, float centerWeightFloor, float environmentWeightCap,
                       float emissiveWeightCap,
                       float preExposure, int resetSequence) {
         /**

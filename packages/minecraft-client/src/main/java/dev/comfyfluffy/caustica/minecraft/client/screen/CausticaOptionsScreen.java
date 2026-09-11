@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.screen;
 
-import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaOptions;
 import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaGroupHeader;
 import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaDropdown;
 import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaNavItem;

@@ -64,7 +64,7 @@ final class RtExposurePipeline {
             new ExposureResolvePushData(histogram.deviceAddress().value(), state.deviceAddress().value(), storage(exposure),
                     config.key(), config.minEv(), config.maxEv(), config.adaptDarken(), config.adaptBrighten(),
                     frameTimeSeconds, config.evBias(), config.lowPercentile(), config.highPercentile(),
-                    config.skyWeightCap(),
+                    config.environmentWeightCap(),
                     -2.0f, -3.0f,
                     2.0f, -2.0f,
                     8.0f, 0.0f,

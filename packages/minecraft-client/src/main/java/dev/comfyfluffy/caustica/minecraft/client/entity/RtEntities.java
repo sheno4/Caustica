@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityGeomet
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityGeometry.MeshRevision;
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import com.mojang.blaze3d.vertex.PoseStack;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.minecraft.client.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;

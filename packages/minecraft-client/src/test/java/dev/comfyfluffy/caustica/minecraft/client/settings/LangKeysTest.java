@@ -2,9 +2,9 @@ package dev.comfyfluffy.caustica.minecraft.client.settings;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
-import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaOptions;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -60,7 +60,7 @@ final class LangKeysTest {
     void everyDerivedKeyHasAnEnglishEntry() throws IOException {
         JsonObject lang = lang();
         SettingsRegistry registry = new SettingsRegistry();
-        registry.feature(ResourceId.of("caustica", "builtin"))
+        registry.feature(ResourceId.of("caustica", "bloom"))
                 .group("bloom")
                 .option(Option.bool("bloom.enabled", true).inGroupAsHeader("bloom"))
                 .option(Option.range("bloom.strength", 0.0f, 2.0f, 0.35f).inGroup("bloom"))
@@ -91,7 +91,7 @@ final class LangKeysTest {
         // Guards against the loops above silently iterating nothing and passing vacuously.
         assertTrue(checked.size() > 20, "only checked " + checked.size() + " keys");
         assertTrue(checked.contains("caustica.setting.composite.max-bounces"), checked.toString());
-        assertTrue(checked.contains("caustica.option.caustica.builtin.bloom.strength"), checked.toString());
+        assertTrue(checked.contains("caustica.option.caustica.bloom.bloom.strength"), checked.toString());
     }
 
     /** The shell's own strings, which no derivation reaches. */

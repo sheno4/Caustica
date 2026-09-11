@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class WorldShaderCompilerTest {
     private static final ShaderSource BUILTINS = ShaderSource.classpath(WorldShaderCompilerTest.class,
-            "/caustica/shaders/builtin", "surface", "sky");
+            "/caustica/shaders/fallback", "surface", "environment");
     private static final byte[] SPIRV_DEBUG_INFO_IMPORT =
             "NonSemantic.Shader.DebugInfo.100\0".getBytes(StandardCharsets.US_ASCII);
     private static final ShaderDataType<Object> DATA = ShaderDataType.create("test-data");
@@ -61,7 +61,7 @@ final class WorldShaderCompilerTest {
                         new ProgramComposition.Volume(volumeKey, new VolumeDefinition<>(
                                 shader("caustica_water_surface", "WaterVolume"), DATA.data(42), BINDING, INSTANCE)),
                         new ProgramComposition.Environment(environmentKey, new EnvironmentDefinition<>(
-                                shader("caustica_builtin_sky", "BuiltinEnvironment"), BINDING))));
+                                shader("caustica_builtin_environment", "BuiltinEnvironment"), BINDING))));
 
         // Use the builtin surface as a stand-in volume only for source-generation assertions; the
         // generated volume type is not specialized in this test.
@@ -79,7 +79,7 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileClosestHit());
             assertSpirv(compiler.compileRadianceAnyHit());
             assertSpirv(compiler.compileShadowAnyHit());
-            assertSpirv(compiler.compileSkyMiss());
+            assertSpirv(compiler.compileEnvironmentMiss());
             assertSpirv(compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
             assertSpirv(compiler.compileBuildStablePlanes());
             byte[] ordinary = compiler.compileFillStablePlanes(false);

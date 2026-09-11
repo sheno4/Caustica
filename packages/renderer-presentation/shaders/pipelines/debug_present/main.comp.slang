@@ -50,7 +50,7 @@ float3 exposureFalseColor(float ev) {
 float meteringWeight(float2 uv, float depth, bool emissive) {
     float centerWeight = exposureCenterWeight(uv, pc.centerWeightSigma, pc.centerWeightFloor);
     DevicePtr<ExposureState> exposureState = DevicePtr<ExposureState>(pc.exposureStateAddress);
-    float populationWeight = depth <= 1.0e-6 ? exposureState[0].meteringSkyScale
+    float populationWeight = depth <= 1.0e-6 ? exposureState[0].meteringEnvironmentScale
             : (emissive ? exposureState[0].meteringEmissiveScale : 1.0);
     return centerWeight * populationWeight;
 }

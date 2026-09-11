@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.settings;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaOptions;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;

@@ -65,7 +65,7 @@ class RtDenoiserStateTest {
     }
 
     @Test
-    void denoisingRangeIncludesPrimaryHitsButExcludesTheSkySentinel() {
+    void denoisingRangeIncludesPrimaryHitsButExcludesTheEnvironmentSentinel() {
         assertTrue(RtReconstruction.NRD_DENOISING_RANGE > 10_000.0f);
         assertTrue(RtReconstruction.NRD_DENOISING_RANGE < 65_504.0f);
     }

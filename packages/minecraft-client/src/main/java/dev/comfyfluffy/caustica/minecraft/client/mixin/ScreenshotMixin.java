@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.client.mixin;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.RtScreenshotExporter;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import net.minecraft.client.Screenshot;

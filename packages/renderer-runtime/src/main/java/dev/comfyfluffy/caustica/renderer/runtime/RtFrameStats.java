@@ -38,7 +38,7 @@ public final class RtFrameStats {
             "frame.recordTlas",
             "frame.prepareLighting",
             "frame.finishTrace",
-            "frame.skyLut",
+            "frame.environmentLut",
             "frame.buildStablePlanes",
             "frame.fillStablePlanes",
             "frame.bakeLocal",

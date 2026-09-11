@@ -3,12 +3,12 @@ package dev.comfyfluffy.caustica.minecraft.client;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaOptions;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
-import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
+import dev.comfyfluffy.caustica.renderer.presentation.bloom.BloomExtension;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
-import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
+import dev.comfyfluffy.caustica.minecraft.client.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.minecraft.client.material.MinecraftClientMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
@@ -37,7 +37,7 @@ public final class MinecraftApiBootstrap {
                                          MinecraftFrameAdapter frameAdapter, RtTerrain terrain,
                                          SettingsRegistry settingsRegistry, CausticaOptions options) {
         List<CausticaExtension> extensions = new ArrayList<>();
-        extensions.add(new BuiltinExtension());
+        extensions.add(new BloomExtension());
         extensions.addAll(platform.extensions());
         var calibration = new MinecraftLightingCalibration(128_000.0f, 5.0f, 2_000.0f, 0.002f, 10.0f, 0.1f);
         MinecraftProvidersExtension minecraftProviders = new MinecraftProvidersExtension(

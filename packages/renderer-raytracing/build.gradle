@@ -40,14 +40,12 @@ dependencies {
     api project(":packages:engine-vulkan")
     api project(":packages:slang-runtime")
     implementation project(":packages:vulkan-support")
-    implementation project(":packages:api-support")
+    implementation project(":packages:core-support")
     implementation "org.slf4j:slf4j-api:2.0.17"
     implementation "it.unimi.dsi:fastutil:8.5.18"
 
     runtimeOnly project(":packages:shader-api")
-    runtimeOnly project(":packages:features-builtin")
     slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
-    slangShaderModules project(path: ":packages:features-builtin", configuration: "runtimeElements")
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
@@ -63,11 +61,14 @@ def worldShaderNames = [
         "build_stable_planes.slang", "radiance_any_hit.rahit.slang",
         "path_tracer.slang", "retained_lights.slang", "trace_transport.slang",
         "retained_trace_ordinary.slang", "retained_trace_policy.slang",
-        "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "sky_miss.slang",
+        "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "environment_miss.slang",
         "stable_planes.slang", "stable_plane_types.slang", "nrd_compose_types.slang", "surface_bsdf.slang", "nrd_signals.slang",
         "world_common.slang", "world_minimal.slang"
 ] as Set
 
+def fallbackShaderNames = ["surface/caustica_error_surface.slang", "surface/caustica_error_coverage.slang",
+                           "environment/caustica_builtin_environment.slang", "environment/caustica_error_environment.slang"] as Set
+def fallbackShaderModules = file("src/main/resources/caustica/shaders/fallback")
 def worldShaderModules = file("src/main/resources/caustica/shaders/world")
 def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
 def compileRayTracingShaders = tasks.register("compileRayTracingShaders", CompileSlangShaders) {
@@ -75,7 +76,7 @@ def compileRayTracingShaders = tasks.register("compileRayTracingShaders", Compil
     description = "Compiles and validates the ray renderer's compute shaders."
     descriptorHeapNative = true
     sourceDirectory = file("shaders")
-    includeDirectories.from(worldShaderModules, configurations.slangShaderModules)
+    includeDirectories.from(worldShaderModules, fallbackShaderModules, configurations.slangShaderModules)
     aliasSourceDirectory = worldShaderModules
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
 }
@@ -105,7 +106,7 @@ def generateRayTracingRecords = tasks.register("generateRayTracingRecords", Gene
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
     probeSource = reflectionRoot.map { it.file("layout/raytracing_probe.slang") }
-    includeDirectories.from(configurations.slangShaderModules)
+    includeDirectories.from(fallbackShaderModules, configurations.slangShaderModules)
     recordSpecs = rayTracingRecordSpecs
     outDir = generatedRecordRoot
 }
@@ -116,7 +117,7 @@ def generateRayTracingBindings = tasks.register("generateRayTracingBindings", Ge
     description = "Generates the descriptor-heap world roots from world root reflection."
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
-    includeDirectories.from(configurations.slangShaderModules)
+    includeDirectories.from(fallbackShaderModules, configurations.slangShaderModules)
     javaPackage = "dev.comfyfluffy.caustica.renderer.raytracing.layout"
     outDir = generatedBindingsRoot
 }
@@ -143,7 +144,7 @@ def reproduceRayTracingRecords = tasks.register("reproduceRayTracingRecords", Ge
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
     probeSource = reflectionRoot.map { it.file("layout/raytracing_probe.slang") }
-    includeDirectories.from(configurations.slangShaderModules)
+    includeDirectories.from(fallbackShaderModules, configurations.slangShaderModules)
     recordSpecs = rayTracingRecordSpecs
     outDir = reproducibleRecordRoot
 }
@@ -151,7 +152,7 @@ def reproducibleBindingsRoot = layout.buildDirectory.dir("generated/reproducibil
 def reproduceRayTracingBindings = tasks.register("reproduceRayTracingBindings", GenerateRtBindings) {
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
-    includeDirectories.from(configurations.slangShaderModules)
+    includeDirectories.from(fallbackShaderModules, configurations.slangShaderModules)
     javaPackage = "dev.comfyfluffy.caustica.renderer.raytracing.layout"
     outDir = reproducibleBindingsRoot
 }
@@ -198,8 +199,8 @@ def verifyRendererRayTracingDependencies = tasks.register("verifyRendererRayTrac
     group = "verification"
     description = "Verifies the ray-tracing shader compiler's physical package dependencies."
     def allowedProjects = [project.path, ":packages:engine", ":packages:engine-vulkan",
-                           ":packages:slang-runtime", ":packages:vulkan-support", ":packages:api-support",
-                           ":packages:shader-api", ":packages:features-builtin"] as Set
+                           ":packages:slang-runtime", ":packages:vulkan-support", ":packages:core-support",
+                           ":packages:shader-api"] as Set
     def checkedConfigurations = configurations.matching { it.canBeResolved }
     doLast {
         def violations = []
@@ -226,7 +227,8 @@ def verifyRendererRayTracingResources = tasks.register("verifyRendererRayTracing
             include "**/*"
         }.files.collect { it.name } as Set
         def foreign = fileTree(resourceRoot).files.findAll { file ->
-            !file.toPath().toString().replace('\\', '/').contains("/caustica/shaders/world/")
+            def path = resourceRoot.toPath().relativize(file.toPath()).toString().replace('\\', '/')
+            !path.startsWith("caustica/shaders/world/") && !path.startsWith("caustica/shaders/fallback/")
         }
         if (actual != worldShaderNames || !foreign.empty) {
             throw new GradleException("renderer-raytracing resource mismatch; missing="
@@ -268,21 +270,27 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
         }.collect { it.substring("caustica/shaders/world/".length()) } as Set
         def expectedPipelineShaders = ["caustica/shaders/pipelines/nee_at/bake.comp.spv",
                 "caustica/shaders/pipelines/nrd_compose/main.comp.spv"] as Set
+        def packagedFallbackShaders = names.findAll {
+            it.startsWith("caustica/shaders/fallback/") && it.endsWith(".slang")
+        }.collect { it.substring("caustica/shaders/fallback/".length()) } as Set
         def packagedPipelineShaders = names.findAll {
             it.startsWith("caustica/shaders/pipelines/") && it.endsWith(".spv")
         } as Set
         def foreignResources = names.findAll {
             it.startsWith("caustica/") && !it.endsWith("/")
                     && !it.startsWith("caustica/shaders/world/") && !expectedPipelineShaders.contains(it)
+                    && !it.startsWith("caustica/shaders/fallback/")
         }
         if (!foreignClasses.empty || generatedTopLevelClasses != expectedGeneratedTopLevelClasses
                 || !names.contains(generatedBindingsClass) || !names.containsAll(ownedResourceClasses)
                 || packagedShaders != worldShaderNames || packagedPipelineShaders != expectedPipelineShaders
+                || packagedFallbackShaders != fallbackShaderNames
                 || !foreignResources.empty) {
             throw new GradleException("renderer-raytracing JAR mismatch; foreignClasses=${foreignClasses}, "
                     + "generatedClasses=${generatedTopLevelClasses}, ownedResources=${ownedResourceClasses - names}, "
                     + "missingShaders=${worldShaderNames - packagedShaders}, "
                     + "unexpectedShaders=${packagedShaders - worldShaderNames}, "
+                    + "fallbackShaders=${packagedFallbackShaders}, "
                     + "pipelineShaders=${packagedPipelineShaders}, foreignResources=${foreignResources}")
         }
     }

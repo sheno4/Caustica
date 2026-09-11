@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.client.settings;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
-import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaOptions;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftDisplayText;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
@@ -30,7 +30,7 @@ public final class CausticaSections {
             List.of("general", "quality", "upscaling", "exposure", "look", "output", "entities", "debug");
 
     private static final int ACCENT_ENGINE = 0xFF4FC3F7;
-    private static final int ACCENT_BUILTIN = 0xFFFFB74D;
+    private static final int ACCENT_BLOOM = 0xFFFFB74D;
     /**
      * Accents for third-party features, picked by a stable hash so a given extension keeps its colour across
      * launches. Hues from Minecraft's own material vocabulary rather than arbitrary saturated colour.
@@ -126,8 +126,8 @@ public final class CausticaSections {
     }
 
     static int accentFor(ResourceId featureId) {
-        if (featureId.equals(ResourceId.of("caustica", "builtin"))) {
-            return ACCENT_BUILTIN;
+        if (featureId.equals(ResourceId.of("caustica", "bloom"))) {
+            return ACCENT_BLOOM;
         }
         return ACCENT_WHEEL[Math.floorMod(featureId.hashCode(), ACCENT_WHEEL.length)];
     }

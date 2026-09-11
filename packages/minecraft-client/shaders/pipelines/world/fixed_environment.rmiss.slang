@@ -1,5 +1,5 @@
 import fixed_composition;
-import sky_miss;
+import environment_miss;
 import world_minimal;
 
 [shader("miss")]

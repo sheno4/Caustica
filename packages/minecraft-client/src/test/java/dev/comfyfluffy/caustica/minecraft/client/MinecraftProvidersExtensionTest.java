@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
+import dev.comfyfluffy.caustica.renderer.presentation.bloom.BloomExtension;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
@@ -14,8 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.io.TempDir;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaOptions;
 import java.nio.file.Path;
 
 import java.util.ArrayList;
@@ -40,12 +40,12 @@ final class MinecraftProvidersExtensionTest {
     void restoreSettings() { CausticaConfig.install(previousStore); }
 
     @Test
-    void builtinAndMinecraftSettingsUseTheIndependentSettingsRegistry() {
+    void bloomAndMinecraftSettingsUseTheIndependentSettingsRegistry() {
         SettingsRegistry settings = new SettingsRegistry();
-        new BuiltinExtension().registerSettings(settings);
+        new BloomExtension().registerSettings(settings);
         extension().registerSettings(settings);
 
-        assertTrue(settings.declared(BuiltinExtension.ID));
+        assertTrue(settings.declared(BloomExtension.ID));
         assertTrue(settings.declared(MinecraftProvidersExtension.ID));
         assertEquals(SkyLutPass.OPTIONS, settings.settings(MinecraftProvidersExtension.ID).options());
     }

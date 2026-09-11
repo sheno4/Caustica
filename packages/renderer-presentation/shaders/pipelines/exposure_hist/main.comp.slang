@@ -48,9 +48,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupInde
             uint depthW, depthH;
             depthImage.GetDimensions(depthW, depthH);
             int2 guidePix = min(int2(uv * float2(depthW, depthH)), int2(depthW, depthH) - 1);
-            bool sky = depthImage[guidePix] <= 1.0e-6;
-            bool emissive = !sky && albedoImage[guidePix].a > 0.5;
-            uint populationOffset = sky ? 256u : (emissive ? 512u : 0u);
+            bool environment = depthImage[guidePix] <= 1.0e-6;
+            bool emissive = !environment && albedoImage[guidePix].a > 0.5;
+            uint populationOffset = environment ? 256u : (emissive ? 512u : 0u);
             uint weightedBin = bin + populationOffset;
             if (fixedWeight > 0u) {
                 uint unused;

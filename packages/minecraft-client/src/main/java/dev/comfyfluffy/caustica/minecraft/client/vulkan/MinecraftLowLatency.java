@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.client.vulkan;
 
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanDeviceCapabilities;

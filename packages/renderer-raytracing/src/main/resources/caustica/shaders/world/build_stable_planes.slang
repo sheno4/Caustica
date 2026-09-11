@@ -80,22 +80,22 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             RayDesc ray = traceRay(branch.path);
             uint mask = branch.path.depth == 0u ? WORLD_RAY_MASK_PRIMARY : WORLD_RAY_MASK_SECONDARY;
             TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, hit);
-            bool sky = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
-            float distance = sky ? TRACE_MAX_DISTANCE : hit.hitDistance;
+            bool environment = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
+            float distance = environment ? TRACE_MAX_DISTANCE : hit.hitDistance;
             float3 transmission = exp(-branch.path.absorption * distance);
             // Restart stores incoming throughput; fill applies the endpoint segment's attenuation once.
             PackedPathSegment restart = branch.path;
             branch.path.throughput *= transmission;
             branch.length += distance;
-            stableRadiance += branch.path.throughput * (sky ? hit.radiance : hit.surface.emissionRadiance);
+            stableRadiance += branch.path.throughput * (environment ? hit.radiance : hit.surface.emissionRadiance);
             TraceLobes lobes = {};
-            if (!sky) lobes = traceLobes(branch.path, hit, false);
+            if (!environment) lobes = traceLobes(branch.path, hit, false);
             bool reflectDelta = lobes.reflectionProbability > 0.0;
             bool transmitDelta = lobes.transmissionProbability > 0.0;
             bool continuous = lobes.continuousProbability > 0.0;
             uint deltaCount = uint(reflectDelta) + uint(transmitDelta);
             uint extra = deltaCount + uint(continuous) - (deltaCount > 0u || continuous ? 1u : 0u);
-            bool split = !sky && deltaCount > 0u && count + extra <= STABLE_PLANE_COUNT
+            bool split = !environment && deltaCount > 0u && count + extra <= STABLE_PLANE_COUNT
                     && branch.path.depth < STABLE_PLANE_MAX_DELTA_SEGMENTS && branch.path.depth <= frame.maxBounces;
             if (split) {
                 // The capacity check reserves every extra endpoint before any branch is queued.
@@ -111,16 +111,16 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             }
             StablePlaneRecord record = {};
             record.branchId = branch.identity;
-            record.flags = (sky ? STABLE_PLANE_FLAG_SKY : STABLE_PLANE_FLAG_VALID)
+            record.flags = (environment ? STABLE_PLANE_FLAG_ENVIRONMENT : STABLE_PLANE_FLAG_VALID)
                     | (branch.transmitted ? STABLE_PLANE_FLAG_TRANSMISSION : 0u)
                     | (min(branch.path.depth, STABLE_PLANE_DEPTH_MASK) << STABLE_PLANE_DEPTH_SHIFT);
             record.currentVirtualPosition = frame.camOffset + cameraDirection * branch.length;
             record.previousVirtualPosition = record.currentVirtualPosition + branch.motion
-                    + (sky ? float3(0.0) : mul(branch.imageTransform, hit.previousPosition - hit.position));
+                    + (environment ? float3(0.0) : mul(branch.imageTransform, hit.previousPosition - hit.position));
             record.throughputLuminance = traceLuminance(branch.path.throughput);
-            record.normal = sky ? -cameraDirection : normalize(mul(branch.imageTransform, hit.surface.shadingNormal));
-            record.roughness = sky ? 1.0 : sqrt(hit.surface.alphaRoughness);
-            if (!sky) {
+            record.normal = environment ? -cameraDirection : normalize(mul(branch.imageTransform, hit.surface.shadingNormal));
+            record.roughness = environment ? 1.0 : sqrt(hit.surface.alphaRoughness);
+            if (!environment) {
                 float3 diffuse, specular;
                 surfaceDenoiserEstimates(hit.surface, -branch.path.direction, diffuse, specular);
                 record.diffuseBsdfEstimate = diffuse * branch.path.throughput;

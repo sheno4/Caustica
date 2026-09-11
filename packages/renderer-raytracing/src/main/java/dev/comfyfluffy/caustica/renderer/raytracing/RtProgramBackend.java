@@ -148,7 +148,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             boolean reordered = context.backend().capabilities().shaderExecutionReordering();
             RtShaderCode build = new RtShaderCode("build-stable-planes", shaderCompiler.compileBuildStablePlanes());
             RtShaderCode fill = new RtShaderCode("fill-stable-planes", shaderCompiler.compileFillStablePlanes(reordered));
-            RtShaderCode environment = new RtShaderCode("environment", shaderCompiler.compileSkyMiss());
+            RtShaderCode environment = new RtShaderCode("environment", shaderCompiler.compileEnvironmentMiss());
             RtShaderCode guide = new RtShaderCode("guide", shaderCompiler.compilePlain(
                     "guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
             RtShaderCode closest = new RtShaderCode("closest-hit", shaderCompiler.compileClosestHit());

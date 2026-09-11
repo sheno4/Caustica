@@ -366,17 +366,17 @@ final class SceneDirectoryTest {
         var instanceDestroyed = new AtomicInteger();
         var environmentDestroyed = new AtomicInteger();
         var data = factory.create(instanceDestroyed::incrementAndGet);
-        var skyData = factory.create(environmentDestroyed::incrementAndGet);
+        var environmentOwner = factory.create(environmentDestroyed::incrementAndGet);
         var environment = f.programs.environment(new ContributionOwner(6)).exports();
         var ready = f.channel.prepare(INSTANCE, mesh(f.surface)).join();
-        try (var instanceData = INSTANCE.data(17, data); var environmentData = ENVIRONMENT_BINDING.data(23, skyData)) {
+        try (var instanceData = INSTANCE.data(17, data); var environmentData = ENVIRONMENT_BINDING.data(23, environmentOwner)) {
             f.channel.edit(List.of(new SceneEdit.SetInstance<>(f.channel.newInstance(), f.scene, ready,
                             GeometryTransform.translation(0, 0, 0), 255, instanceData),
                     new SceneEdit.SetEnvironment(f.scene, new EnvironmentBinding<>(environment, environmentData))));
         }
         var captured = f.capture.get();
         data.close();
-        skyData.close();
+        environmentOwner.close();
         ready.close();
         f.directory.dropScene(f.scene);
         f.programs.resources.awaitRetirements();

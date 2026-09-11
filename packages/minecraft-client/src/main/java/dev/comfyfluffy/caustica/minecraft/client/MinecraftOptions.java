@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 import dev.comfyfluffy.caustica.settings.DisplayText;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;

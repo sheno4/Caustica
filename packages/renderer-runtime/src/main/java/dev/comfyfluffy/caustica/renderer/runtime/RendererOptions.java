@@ -18,7 +18,7 @@ public final class RendererOptions {
                 Rt.Exposure.ADAPT_DARKEN, Rt.Exposure.ADAPT_BRIGHTEN,
                 Rt.Exposure.LOW_PERCENTILE, Rt.Exposure.HIGH_PERCENTILE, Rt.Exposure.STRIDE,
                 Rt.Exposure.CENTER_WEIGHT_SIGMA, Rt.Exposure.CENTER_WEIGHT_FLOOR,
-                Rt.Exposure.SKY_WEIGHT_CAP, Rt.Exposure.EMISSIVE_WEIGHT_CAP, Rt.Exposure.PRE_EXPOSURE,
+                Rt.Exposure.ENVIRONMENT_WEIGHT_CAP, Rt.Exposure.EMISSIVE_WEIGHT_CAP, Rt.Exposure.PRE_EXPOSURE,
                 Rt.Tonemap.GAMMA, Rt.Screenshots.EXR_ENABLED,
                 Rt.Hdr.ENABLED, Rt.Hdr.UI_NITS, Rt.Hdr.PEAK_NITS);
     }
@@ -79,7 +79,7 @@ public final class RendererOptions {
             public static final Option<Integer> STRIDE = clampedInt("caustica.rt.exposure.stride", "exposure.stride", 2, 1, 8);
             public static final Option<Float> CENTER_WEIGHT_SIGMA = clampedFloat("caustica.rt.exposure.centerWeightSigma", "exposure.center-weight-sigma", 0.35f, 0.01f, 2.0f);
             public static final Option<Float> CENTER_WEIGHT_FLOOR = clampedFloat("caustica.rt.exposure.centerWeightFloor", "exposure.center-weight-floor", 0.15f, 0.0f, 1.0f);
-            public static final Option<Float> SKY_WEIGHT_CAP = clampedFloat("caustica.rt.exposure.skyWeightCap", "exposure.sky-weight-cap", 0.25f, 0.0f, 1.0f);
+            public static final Option<Float> ENVIRONMENT_WEIGHT_CAP = clampedFloat("caustica.rt.exposure.environmentWeightCap", "exposure.environment-weight-cap", 0.25f, 0.0f, 1.0f);
             public static final Option<Float> EMISSIVE_WEIGHT_CAP = clampedFloat("caustica.rt.exposure.emissiveWeightCap", "exposure.emissive-weight-cap", 0.10f, 0.0f, 1.0f);
             public static final Option<Boolean> PRE_EXPOSURE = bool("caustica.rt.exposure.preExposure", "exposure.pre-exposure", true);
         }

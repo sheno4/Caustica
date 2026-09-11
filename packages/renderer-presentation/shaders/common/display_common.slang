@@ -38,7 +38,7 @@ public struct ExposureResolvePush {
     public float evBias;
     public float lowPercentile;
     public float highPercentile;
-    public float skyWeightCap;
+    public float environmentWeightCap;
     public float curveScene0;
     public float curveCompensation0;
     public float curveScene1;
@@ -67,8 +67,8 @@ public struct ExposureState {
     public float clipLowFrac;
     public float clipHighFrac;
     public uint resetSeq;
-    public float meteringSkyScale;
-    public float meteringSkyFrac;
+    public float meteringEnvironmentScale;
+    public float meteringEnvironmentFrac;
     public float curveCompensation;
     public float effectiveSlope;
     public float meteringEmissiveScale;

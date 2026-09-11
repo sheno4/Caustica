@@ -5,7 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
 import dev.comfyfluffy.caustica.renderer.runtime.RtFrameCapture;

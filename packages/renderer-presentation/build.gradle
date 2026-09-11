@@ -1,5 +1,6 @@
 import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
 import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
+import dev.comfyfluffy.caustica.slangtooling.ReflectSlang
 
 plugins {
     id "java-library"
@@ -13,7 +14,17 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 base { archivesName = "caustica-renderer-presentation" }
 repositories { mavenCentral() }
 
+configurations {
+    slangShaderModules {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
 dependencies {
+    api project(":packages:settings-api")
+    slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
     api project(":packages:api")
     implementation project(":packages:engine")
     implementation project(":packages:engine-vulkan")
@@ -31,7 +42,7 @@ def compilePresentationShaders = tasks.register("compilePresentationShaders", Co
     group = "build"
     description = "Compiles and validates the presentation shader-object pipelines."
     sourceDirectory = shaderSources
-    includeDirectories.from(file("shaders/common"))
+    includeDirectories.from(file("shaders/common"), configurations.slangShaderModules)
     aliasSourceDirectory = shaderSources
     descriptorHeapNative = true
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
@@ -45,6 +56,7 @@ def preparePresentationReflectionSources = tasks.register("preparePresentationRe
     into(reflectionRoot)
 }
 def presentationRecordSpecs = [
+        "push|bloomPushProbe|BloomPush|dev.comfyfluffy.caustica.renderer.presentation.gen|BloomPushData|false",
         "buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureStateData|true",
         "push|exposureHistPushProbe|ExposureHistPush|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureHistPushData|false",
         "push|exposureResolvePushProbe|ExposureResolvePush|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureResolvePushData|false",
@@ -105,7 +117,7 @@ def verifyPresentationSpirvTarget = tasks.register("verifyPresentationSpirvTarge
 }
 
 def expectedPipelines = ["debug_present", "display", "exposure_hist", "exposure_resolve",
-                         "hdr_composite", "sdr_present"] as Set
+                         "hdr_composite", "sdr_present", "bloom"] as Set
 def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJar") {
     group = "verification"
     dependsOn(tasks.named("jar"))
@@ -116,7 +128,7 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
             while (entries.hasMoreElements()) names.add(entries.nextElement().name)
         }
         def generated = ["ExposureStateData", "ExposureHistPushData", "ExposureResolvePushData",
-                         "DisplayPushData", "DebugPresentPushData", "PresentPushData"].collect {
+                         "DisplayPushData", "DebugPresentPushData", "PresentPushData", "BloomPushData"].collect {
             "dev/comfyfluffy/caustica/renderer/presentation/gen/" + it + ".class"
         } as Set
         def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/renderer/presentation/gen/")
@@ -127,7 +139,7 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
                 && it.endsWith("/main.comp.spv") }.collect { it.split('/')[3] } as Set
         def colors = names.findAll { it.startsWith("caustica/color/") && !it.endsWith('/') }
         def presentationClasses = ["PresentationResources", "RtFramePresenter", "FrameGeneration",
-                "GeneratedFrameQueue", "HdrPresentation", "SdrPqPresentation"].collect {
+                "GeneratedFrameQueue", "HdrPresentation", "SdrPqPresentation", "bloom/BloomPass", "bloom/BloomExtension"].collect {
             "dev/comfyfluffy/caustica/renderer/presentation/" + it + ".class"
         }
         if (!foreignClasses.empty || actualGenerated != generated || !names.containsAll(presentationClasses)
@@ -141,7 +153,7 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
 
 def verifyRendererPresentationDependencies = tasks.register("verifyRendererPresentationDependencies") {
     group = "verification"
-    def allowed = [project.path, ":packages:api", ":packages:engine",
+    def allowed = [project.path, ":packages:api", ":packages:settings-api", ":packages:shader-api", ":packages:engine",
                    ":packages:engine-vulkan", ":packages:nvidia-ngx",
                    ":packages:vulkan-support"] as Set
     def checkedConfigurations = configurations.matching { it.canBeResolved }
@@ -170,7 +182,7 @@ def verifyRendererPresentationResources = tasks.register("verifyRendererPresenta
             rootProject.file("shaders/common/${it}").exists()
         }
         if (actualPipelines != expectedPipelines
-                || actualCommon != ["display_common.slang", "presentation_common.slang"] as Set
+                || actualCommon != ["display_common.slang", "presentation_common.slang", "caustica_bloom.slang", "caustica_bloom_types.slang"] as Set
                 || !rootDuplicates.empty || !rootCommonDuplicates.empty) {
             throw new GradleException("presentation resource ownership mismatch: pipelines=${actualPipelines}, "
                     + "common=${actualCommon}, rootPipelines=${rootDuplicates}, rootCommon=${rootCommonDuplicates}")
@@ -178,9 +190,44 @@ def verifyRendererPresentationResources = tasks.register("verifyRendererPresenta
     }
 }
 
+def reflectBloomShader = tasks.register("reflectBloomShader", ReflectSlang) {
+    group = "verification"
+    description = "Reflects and validates the descriptor-heap-native Bloom compute ABI."
+    sourceFile = file("shaders/pipelines/bloom/main.comp.slang")
+    includeDirectories.from(file("shaders/common"), configurations.slangShaderModules)
+    descriptorHeapNative = true
+    reflectionJson = layout.buildDirectory.file("generated/shader-reflection/bloom.json")
+    spirv = layout.buildDirectory.file("generated/shader-reflection/bloom.spv")
+}
+
+def verifyBloomShaderAbi = tasks.register("verifyBloomShaderAbi") {
+    group = "verification"
+    dependsOn(reflectBloomShader)
+    def reflection = reflectBloomShader.flatMap { it.reflectionJson }
+    inputs.file(reflection)
+    doLast {
+        def json = new groovy.json.JsonSlurper().parse(reflection.get().asFile)
+        if (json.parameters*.name != ["pc"] || json.parameters[0].binding.kind != "pushConstantBuffer") {
+            throw new GradleException("Bloom reflection must expose only the push-data parameter")
+        }
+        def fields = json.parameters[0].type.elementType.fields
+        def expected = [destinationImageIndex: 0, sourceImageIndex: 4, samplerIndex: 8,
+                exposureImageIndex: 12, sceneImageIndex: 16, mode: 20, threshold: 24,
+                softKnee: 28, radius: 32, compositeStrength: 36]
+        def actual = fields.collectEntries { [(it.name): it.binding.offset] }
+        if (actual != expected || json.parameters[0].type.elementType.sizes[0].value != 40) {
+            throw new GradleException("Bloom push-data ABI mismatch: ${actual}")
+        }
+        if (json.entryPoints.size() != 1 || json.entryPoints[0].name != "main"
+                || json.entryPoints[0].threadGroupSize != [8, 8, 1]) {
+            throw new GradleException("Bloom compute entry-point ABI mismatch")
+        }
+    }
+}
+
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
-    dependsOn(verifyPresentationGenerationReproducible,
+    dependsOn(verifyBloomShaderAbi, verifyPresentationGenerationReproducible,
             verifyPresentationSpirvTarget, verifyRendererPresentationJar,
             verifyRendererPresentationDependencies,
             verifyRendererPresentationResources)
@@ -193,6 +240,10 @@ java {
 }
 tasks.named("jar", Jar).configure {
     from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) { into "META-INF" }
+}
+tasks.named("sourcesJar", Jar).configure {
+    from("shaders") { into "shaders" }
+    from("src/shaderReflection") { into "shaderReflection" }
 }
 publishing {
     publications {

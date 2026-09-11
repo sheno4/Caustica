@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
 
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import dev.comfyfluffy.caustica.api.resource.FrameResources;

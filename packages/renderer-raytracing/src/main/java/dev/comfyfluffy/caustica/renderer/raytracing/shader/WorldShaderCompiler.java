@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
 /** Compiles one immutable engine {@link ProgramComposition} into specialized world shader stages. */
 public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram, AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(WorldShaderCompiler.class);
-    public static final String SKY_MISS_MODULE = "sky_miss";
+    public static final String ENVIRONMENT_MISS_MODULE = "environment_miss";
     public static final String CLOSEST_HIT_MODULE = "closest_hit";
     public static final String BUILD_STABLE_PLANES_MODULE = "build_stable_planes";
     public static final String FILL_STABLE_PLANES_MODULE = "fill_stable_planes";
@@ -45,7 +45,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
 
     private static final String WORLD_SHADER_ROOT = "/caustica/shaders/world/";
     private static final String API_ROOT = "/caustica/shaders/api/";
-    private static final String BUILTIN_ROOT = "/caustica/shaders/builtin/";
+    private static final String FALLBACK_ROOT = "/caustica/shaders/fallback/";
     private static final String COMPOSITION_MODULE = "caustica_composition";
     private static final String COMPOSITION_TYPE = "Composition";
     private static final Pattern IMPORT = Pattern.compile(
@@ -53,7 +53,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
 
     private static final List<String> WORLD_MODULES = List.of(
             "bindings.slang", "world_common.slang", "world_minimal.slang", "build_stable_planes.slang",
-            "fill_stable_planes.slang", "fill_stable_planes_ser.slang", "closest_hit.slang", "sky_miss.slang",
+            "fill_stable_planes.slang", "fill_stable_planes_ser.slang", "closest_hit.slang", "environment_miss.slang",
             "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang", "guide.rmiss.slang",
             "retained_lights.slang", "surface_bsdf.slang", "path_queue_types.slang",
             "trace_transport.slang", "path_tracer.slang", "retained_trace_policy.slang",
@@ -63,10 +63,10 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "caustica_api.slang", "caustica_color.slang", "caustica_coverage.slang",
             "caustica_environment.slang", "caustica_resources.slang", "caustica_surface.slang",
             "caustica_types.slang", "caustica_volume.slang");
-    private static final List<String> BUILTIN_MODULES = List.of(
+    private static final List<String> FALLBACK_MODULES = List.of(
             "surface/caustica_error_surface.slang", "surface/caustica_error_coverage.slang",
-            "sky/caustica_builtin_sky.slang", "sky/caustica_error_environment.slang");
-    private static final Set<String> PROVIDED_MODULES = moduleNames(WORLD_MODULES, API_MODULES, BUILTIN_MODULES);
+            "environment/caustica_builtin_environment.slang", "environment/caustica_error_environment.slang");
+    private static final Set<String> PROVIDED_MODULES = moduleNames(WORLD_MODULES, API_MODULES, FALLBACK_MODULES);
 
     private final SlangSession session;
     private final Path worldDirectory;
@@ -113,7 +113,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         Objects.requireNonNull(program, "program");
         Path worldDirectory = cacheDirectory.resolve("world");
         Path apiDirectory = cacheDirectory.resolve("api");
-        Path builtinDirectory = cacheDirectory.resolve("builtin");
+        Path fallbackDirectory = cacheDirectory.resolve("fallback");
         Path extensionDirectory = cacheDirectory.resolve("extensions");
         Path compositionDirectory = cacheDirectory.resolve("composition");
 
@@ -122,7 +122,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         writeSpecializedModuleAlias(worldDirectory, "radiance_any_hit.rahit.slang", RADIANCE_ANY_HIT_MODULE);
         writeSpecializedModuleAlias(worldDirectory, "shadow_any_hit.rahit.slang", SHADOW_ANY_HIT_MODULE);
         extractClasspath(API_ROOT, API_MODULES, apiDirectory, "api", sources);
-        extractClasspath(BUILTIN_ROOT, BUILTIN_MODULES, builtinDirectory, "builtin", sources);
+        extractClasspath(FALLBACK_ROOT, FALLBACK_MODULES, fallbackDirectory, "fallback", sources);
 
         List<ProgramComposition.Declaration> declarations = program.declarations();
         Map<String, byte[]> modules = resolveModules(declarations);
@@ -138,7 +138,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         Files.createDirectories(compositionDirectory);
         Files.writeString(compositionDirectory.resolve(COMPOSITION_MODULE + ".slang"), generated.source(),
                 StandardCharsets.UTF_8);
-        List<Path> searchPaths = List.of(worldDirectory, apiDirectory, builtinDirectory,
+        List<Path> searchPaths = List.of(worldDirectory, apiDirectory, fallbackDirectory,
                 extensionDirectory, compositionDirectory);
         Composition composition = Composition.create(generated.data(),
                 COMPOSITION_MODULE, COMPOSITION_TYPE, generated.source(), sources);
@@ -162,7 +162,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 engineModule + ':' + entryPoint + " for " + composition.contentHash().substring(0, 12));
     }
 
-    public byte[] compileSkyMiss() { return compileSpecialized(SKY_MISS_MODULE, ENTRY_POINT); }
+    public byte[] compileEnvironmentMiss() { return compileSpecialized(ENVIRONMENT_MISS_MODULE, ENTRY_POINT); }
     public byte[] compileClosestHit() { return compileSpecialized(CLOSEST_HIT_MODULE, ENTRY_POINT); }
     public byte[] compileRadianceAnyHit() { return compileSpecialized(RADIANCE_ANY_HIT_MODULE, ENTRY_POINT); }
     public byte[] compileShadowAnyHit() { return compileSpecialized(SHADOW_ANY_HIT_MODULE, ENTRY_POINT); }
@@ -223,7 +223,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n")
                 .append("import caustica_coverage;\nimport caustica_volume;\nimport caustica_environment;\n")
                 .append("import caustica_error_surface;\nimport caustica_error_coverage;\n")
-                .append("import caustica_builtin_sky;\nimport caustica_error_environment;\n");
+                .append("import caustica_builtin_environment;\nimport caustica_error_environment;\n");
         program.declarations().stream().flatMap(WorldShaderCompiler::definitions).map(ShaderDefinition::module)
                 .distinct().sorted().forEach(module -> source.append("import ").append(module).append(";\n"));
 

@@ -341,6 +341,8 @@ The main artifact is Vulkan-native while remaining independent of Minecraft and 
 
 Minecraft dimension identifiers, level lifetime, camera capture, origin selection, resource reloads, and
 dimension-to-scene directories belong to Minecraft integration packages. Presentation policy, DLSS,
-screenshots, telemetry, and native queue orchestration belong to engine or integration packages. Optional
-pure-Java helpers that do not appear in an engine signature belong in the separate `packages/api-support`
-artifact, not in the main contract.
+screenshots, telemetry, and native queue orchestration belong to engine or integration packages. Shared
+ownership and CPU-side color conversion helpers belong in `packages/core-support`, separate from the
+public contract. Configuration persistence and Minecraft session integration live in
+`packages/minecraft-client`. Bloom belongs to `packages/renderer-presentation`; fallback surface and
+environment shaders belong to `packages/renderer-raytracing`.

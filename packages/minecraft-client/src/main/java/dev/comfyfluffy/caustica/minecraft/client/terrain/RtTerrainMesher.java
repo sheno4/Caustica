@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialClassification;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialKey;

@@ -17,7 +17,7 @@ dependencies {
     api project(":packages:nvidia-ngx")
     api project(":packages:renderer-denoising")
     api project(":packages:slang-runtime")
-    implementation project(":packages:config")
+    api project(":packages:settings-api")
     implementation project(":packages:renderer-presentation")
     implementation project(":packages:renderer-raytracing")
     implementation project(":packages:vulkan-support")
@@ -30,7 +30,7 @@ dependencies {
 
 def verifyRendererRuntimeDependencies = tasks.register("verifyRendererRuntimeDependencies") {
     group = "verification"
-    def allowed = [project.path, ":packages:api", ":packages:config", ":packages:engine",
+    def allowed = [project.path, ":packages:api", ":packages:settings-api", ":packages:engine",
                    ":packages:engine-vulkan", ":packages:nvidia-ngx", ":packages:renderer-denoising",
                    ":packages:renderer-presentation", ":packages:renderer-raytracing",
                    ":packages:slang-runtime", ":packages:vulkan-support"] as Set

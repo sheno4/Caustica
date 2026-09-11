@@ -2,9 +2,8 @@
   "slang.additionalSearchPaths": [
     "packages/shader-api/src/main/resources/caustica/shaders/api",
     "packages/renderer-raytracing/src/main/resources/caustica/shaders/world",
-    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/sky",
-    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/surface",
-    "packages/features-builtin/src/main/resources/caustica/shaders/builtin/bloom",
+    "packages/renderer-raytracing/src/main/resources/caustica/shaders/fallback/environment",
+    "packages/renderer-raytracing/src/main/resources/caustica/shaders/fallback/surface",
     "packages/minecraft-rendering/src/main/resources/caustica/shaders/minecraft/sky",
     "packages/minecraft-rendering/src/main/resources/caustica/shaders/minecraft/surface",
     "packages/minecraft-client/shaders/common",

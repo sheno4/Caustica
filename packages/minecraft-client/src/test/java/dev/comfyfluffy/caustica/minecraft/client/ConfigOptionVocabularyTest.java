@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client;
 
-import dev.comfyfluffy.caustica.builtin.BloomPass;
+import dev.comfyfluffy.caustica.renderer.presentation.bloom.BloomPass;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 import dev.comfyfluffy.caustica.settings.Option;
 import org.junit.jupiter.api.Test;

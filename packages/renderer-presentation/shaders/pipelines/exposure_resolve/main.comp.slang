@@ -52,42 +52,42 @@ float curveEffectiveSlope(float sceneEv) {
     return 1.0 - compensationSlope;
 }
 
-float2 populationScales(float surfacePopulation, float skyPopulation, float emissivePopulation, float2 caps) {
-    float skyCap = clamp(caps.x, 0.0, 1.0);
+float2 populationScales(float surfacePopulation, float environmentPopulation, float emissivePopulation, float2 caps) {
+    float environmentCap = clamp(caps.x, 0.0, 1.0);
     float emissiveCap = clamp(caps.y, 0.0, 1.0);
-    float skyScale = 1.0;
+    float environmentScale = 1.0;
     float emissiveScale = 1.0;
     // A cap is fully active only once ordinary surfaces fill the share left by that cap. Before then,
-    // blend continuously from uncapped metering. This keeps a sky-dominant view exposed for the sky and
-    // avoids a discontinuity when the first ordinary pixel enters an all-sky or all-emissive view.
+    // blend continuously from uncapped metering. Views dominated by the environment stay exposed for it,
+    // without a discontinuity when the first ordinary pixel enters a view of only environment or emission.
     if (surfacePopulation > 0.0) {
-        float rawTotal = surfacePopulation + skyPopulation + emissivePopulation;
+        float rawTotal = surfacePopulation + environmentPopulation + emissivePopulation;
         float surfaceShare = surfacePopulation / max(rawTotal, 1.0);
-        bool capSky = skyPopulation > skyCap * rawTotal;
+        bool capEnvironment = environmentPopulation > environmentCap * rawTotal;
         bool capEmissive = emissivePopulation > emissiveCap * rawTotal;
-        float weightedSky = skyPopulation;
+        float weightedEnvironment = environmentPopulation;
         float weightedEmissive = emissivePopulation;
-        if (capSky && capEmissive) {
-            float ordinaryShare = max(1.0 - skyCap - emissiveCap, 1.0e-6);
+        if (capEnvironment && capEmissive) {
+            float ordinaryShare = max(1.0 - environmentCap - emissiveCap, 1.0e-6);
             float cappedTotal = surfacePopulation / ordinaryShare;
-            weightedSky = skyCap * cappedTotal;
+            weightedEnvironment = environmentCap * cappedTotal;
             weightedEmissive = emissiveCap * cappedTotal;
-        } else if (capSky) {
-            weightedSky = skyCap <= 0.0 ? 0.0
-                    : skyCap * (surfacePopulation + emissivePopulation) / max(1.0 - skyCap, 1.0e-6);
+        } else if (capEnvironment) {
+            weightedEnvironment = environmentCap <= 0.0 ? 0.0
+                    : environmentCap * (surfacePopulation + emissivePopulation) / max(1.0 - environmentCap, 1.0e-6);
         } else if (capEmissive) {
             weightedEmissive = emissiveCap <= 0.0 ? 0.0
-                    : emissiveCap * (surfacePopulation + skyPopulation) / max(1.0 - emissiveCap, 1.0e-6);
+                    : emissiveCap * (surfacePopulation + environmentPopulation) / max(1.0 - emissiveCap, 1.0e-6);
         }
-        float skyCapStrength = smoothstep(0.0, max(1.0 - skyCap, 1.0e-6), surfaceShare);
+        float environmentCapStrength = smoothstep(0.0, max(1.0 - environmentCap, 1.0e-6), surfaceShare);
         float emissiveCapStrength = smoothstep(0.0, max(1.0 - emissiveCap, 1.0e-6), surfaceShare);
-        weightedSky = lerp(skyPopulation, weightedSky, skyCapStrength);
+        weightedEnvironment = lerp(environmentPopulation, weightedEnvironment, environmentCapStrength);
         weightedEmissive = lerp(emissivePopulation, weightedEmissive, emissiveCapStrength);
-        skyScale = skyPopulation > 0.0 ? min(1.0, weightedSky / skyPopulation) : 1.0;
+        environmentScale = environmentPopulation > 0.0 ? min(1.0, weightedEnvironment / environmentPopulation) : 1.0;
         emissiveScale = emissivePopulation > 0.0
                 ? min(1.0, weightedEmissive / emissivePopulation) : 1.0;
     }
-    return float2(skyScale, emissiveScale);
+    return float2(environmentScale, emissiveScale);
 }
 
 [shader("compute")]
@@ -97,18 +97,18 @@ void main() {
     DevicePtr<ExposureState> stateBuf = DevicePtr<ExposureState>(pc.stateAddress);
     [format("r32f")] RWTexture2D<float> exposureImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
     float surfacePopulation = 0.0;
-    float skyPopulation = 0.0;
+    float environmentPopulation = 0.0;
     float emissivePopulation = 0.0;
     for (uint i = 0u; i < 256u; ++i) {
         surfacePopulation += float(histBins[i]);
-        skyPopulation += float(histBins[256u + i]);
+        environmentPopulation += float(histBins[256u + i]);
         emissivePopulation += float(histBins[512u + i]);
     }
-    float2 scales = populationScales(surfacePopulation, skyPopulation, emissivePopulation,
-            float2(pc.skyWeightCap, pc.emissiveWeightCap));
-    float skyScale = scales.x;
+    float2 scales = populationScales(surfacePopulation, environmentPopulation, emissivePopulation,
+            float2(pc.environmentWeightCap, pc.emissiveWeightCap));
+    float environmentScale = scales.x;
     float emissiveScale = scales.y;
-    float population = surfacePopulation + skyPopulation * skyScale
+    float population = surfacePopulation + environmentPopulation * environmentScale
             + emissivePopulation * emissiveScale;
     float total = max(population, 1.0);
     float lowPercentile = clamp(min(pc.lowPercentile, pc.highPercentile), 0.0, 1.0);
@@ -120,7 +120,7 @@ void main() {
     float weightedLogLum = 0.0;
     float weightedCount = 0.0;
     for (uint i = 0u; i < 256u; ++i) {
-        float count = float(histBins[i]) + float(histBins[256u + i]) * skyScale
+        float count = float(histBins[i]) + float(histBins[256u + i]) * environmentScale
                 + float(histBins[512u + i]) * emissiveScale;
         float start = cumulative;
         float end = cumulative + count;
@@ -170,12 +170,12 @@ void main() {
     stateBuf[0].evScene = evScene;
     stateBuf[0].evTarget = targetEv;
     stateBuf[0].evApplied = exposureEv;
-    stateBuf[0].clipLowFrac = (float(histBins[0]) + float(histBins[256]) * skyScale
+    stateBuf[0].clipLowFrac = (float(histBins[0]) + float(histBins[256]) * environmentScale
             + float(histBins[512]) * emissiveScale) / total;
-    stateBuf[0].clipHighFrac = (float(histBins[255]) + float(histBins[511]) * skyScale
+    stateBuf[0].clipHighFrac = (float(histBins[255]) + float(histBins[511]) * environmentScale
             + float(histBins[767]) * emissiveScale) / total;
-    stateBuf[0].meteringSkyScale = skyScale;
-    stateBuf[0].meteringSkyFrac = skyPopulation * skyScale / total;
+    stateBuf[0].meteringEnvironmentScale = environmentScale;
+    stateBuf[0].meteringEnvironmentFrac = environmentPopulation * environmentScale / total;
     stateBuf[0].curveCompensation = compensation;
     stateBuf[0].effectiveSlope = effectiveSlope;
     stateBuf[0].meteringEmissiveScale = emissiveScale;

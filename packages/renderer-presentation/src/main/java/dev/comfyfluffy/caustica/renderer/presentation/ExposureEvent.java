@@ -30,8 +30,8 @@ final class ExposureEvent extends Event {
     @Label("Applied log2 absolute exposure") float evApplied;
     float clipLowFraction;
     float clipHighFraction;
-    float skyScale;
-    float skyFraction;
+    float environmentScale;
+    float environmentFraction;
     float emissiveScale;
     float emissiveFraction;
     float curveCompensation;
@@ -53,8 +53,8 @@ final class ExposureEvent extends Event {
         event.evApplied = state.evApplied();
         event.clipLowFraction = state.clipLowFrac();
         event.clipHighFraction = state.clipHighFrac();
-        event.skyScale = state.meteringSkyScale();
-        event.skyFraction = state.meteringSkyFrac();
+        event.environmentScale = state.meteringEnvironmentScale();
+        event.environmentFraction = state.meteringEnvironmentFrac();
         event.emissiveScale = state.meteringEmissiveScale();
         event.emissiveFraction = state.meteringEmissiveFrac();
         event.curveCompensation = state.curveCompensation();

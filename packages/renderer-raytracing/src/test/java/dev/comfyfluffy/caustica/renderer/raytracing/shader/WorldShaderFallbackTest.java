@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class WorldShaderFallbackTest {
     private static final ShaderSource BUILTINS = ShaderSource.classpath(
-            WorldShaderFallbackTest.class, "/caustica/shaders/builtin", "surface", "sky");
+            WorldShaderFallbackTest.class, "/caustica/shaders/fallback", "surface", "environment");
     private static final ShaderDataType<Object> ROOT = ShaderDataType.create("root");
     private static final ShaderDataType<Object> BINDING = ShaderDataType.create("binding");
     private static final ShaderDataType<Object> INSTANCE = ShaderDataType.create("instance");

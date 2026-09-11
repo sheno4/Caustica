@@ -3,7 +3,7 @@ module stable_plane_types;
 public static const uint STABLE_PLANE_COUNT = 3u;
 public static const uint STABLE_PLANE_INVALID_BRANCH = 0xffffffffu;
 public static const uint STABLE_PLANE_FLAG_VALID = 1u;
-public static const uint STABLE_PLANE_FLAG_SKY = 2u;
+public static const uint STABLE_PLANE_FLAG_ENVIRONMENT = 2u;
 public static const uint STABLE_PLANE_FLAG_DOMINANT = 4u;
 public static const uint STABLE_PLANE_FLAG_TRANSMISSION = 8u;
 // Flags bits 8 through 15 store the number of delta segments before the endpoint.

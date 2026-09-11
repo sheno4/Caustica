@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.vulkan;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;

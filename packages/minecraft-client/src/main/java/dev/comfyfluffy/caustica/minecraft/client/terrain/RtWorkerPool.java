@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 

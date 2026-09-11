@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.settings;
 
-import dev.comfyfluffy.caustica.config.CausticaOptions;
+import dev.comfyfluffy.caustica.minecraft.client.config.CausticaOptions;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftOptions;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class CausticaSectionsTest {
-    private static final ResourceId BUILTIN = ResourceId.of("caustica", "builtin");
+    private static final ResourceId BLOOM = ResourceId.of("caustica", "bloom");
     private static final ResourceId PROVIDER_ONLY = ResourceId.of("test", "provider_only");
     private static final Option<Boolean> ENABLED = Option.bool("effect.enabled", true).inGroupAsHeader("effect");
     private static final Option<Float> STRENGTH = Option.range("effect.strength", 0.0f, 2.0f, 0.5f)
@@ -35,7 +35,7 @@ final class CausticaSectionsTest {
 
     private static SettingsRegistry registry() {
         SettingsRegistry registry = new SettingsRegistry();
-        registry.feature(BUILTIN).group("effect").options(List.of(ENABLED, STRENGTH)).register();
+        registry.feature(BLOOM).group("effect").options(List.of(ENABLED, STRENGTH)).register();
         registry.feature(PROVIDER_ONLY).register();
         return registry;
     }
@@ -54,7 +54,7 @@ final class CausticaSectionsTest {
         List<SettingsSection> sections = CausticaSections.build(registry, options(registry));
 
         assertEquals("engine", sections.getFirst().id());
-        assertNotNull(sectionOf(sections, BUILTIN.toString()));
+        assertNotNull(sectionOf(sections, BLOOM.toString()));
     }
 
     @Test
@@ -75,8 +75,8 @@ final class CausticaSectionsTest {
     @Test
     void theHeaderBoolIsSeparatedFromTheRowsItCollapses() {
         SettingsRegistry registry = registry();
-        FeatureSettings builtin = registry.settings(BUILTIN);
-        SettingGroup effect = groupOf(CausticaSections.feature(builtin, options(registry)), "effect");
+        FeatureSettings bloom = registry.settings(BLOOM);
+        SettingGroup effect = groupOf(CausticaSections.feature(bloom, options(registry)), "effect");
 
         assertNotNull(effect.header());
         assertEquals("effect.enabled", effect.header().id());
@@ -86,7 +86,7 @@ final class CausticaSectionsTest {
     @Test
     void aGroupWithNoHeaderCollapsesOnlyByCaret() {
         SettingsRegistry registry = new SettingsRegistry();
-        FeatureSettings feature = registry.feature(BUILTIN).group("effect").option(STRENGTH).register();
+        FeatureSettings feature = registry.feature(BLOOM).group("effect").option(STRENGTH).register();
         SettingGroup effect = groupOf(CausticaSections.feature(feature, options(registry)), "effect");
 
         assertNull(effect.header());
@@ -98,7 +98,7 @@ final class CausticaSectionsTest {
     void aHeaderBoolDecidesVisibilityRegardlessOfTheCaret() {
         SettingsRegistry registry = registry();
         SettingGroup effect = groupOf(
-                CausticaSections.feature(registry.settings(BUILTIN), options(registry)), "effect");
+                CausticaSections.feature(registry.settings(BLOOM), options(registry)), "effect");
 
         effect.header().set(false);
         assertFalse(effect.rowsVisible(true));
@@ -121,7 +121,7 @@ final class CausticaSectionsTest {
     @Test
     void resettingASectionRestoresEveryDeclaredDefault() {
         SettingsRegistry registry = registry();
-        SettingsSection section = CausticaSections.feature(registry.settings(BUILTIN), options(registry));
+        SettingsSection section = CausticaSections.feature(registry.settings(BLOOM), options(registry));
         SettingControl.RangeControl strength = (SettingControl.RangeControl) section.allControls().stream()
                 .filter(row -> row.id().equals(STRENGTH.id())).findFirst().orElseThrow();
 
@@ -138,7 +138,7 @@ final class CausticaSectionsTest {
         ResourceId thirdParty = ResourceId.of("someone", "else");
 
         assertEquals(CausticaSections.accentFor(thirdParty), CausticaSections.accentFor(thirdParty));
-        assertEquals(0xFFFFB74D, CausticaSections.accentFor(BUILTIN));
+        assertEquals(0xFFFFB74D, CausticaSections.accentFor(BLOOM));
     }
 
     @Test
