@@ -128,6 +128,51 @@ final class RtInstanceTablePlanTest {
     }
 
     @Test
+    void repeatedUnchangedBuildsDoNotExposeReusableSlotsToPublishedTables() {
+        var builder = new RtInstanceTablePlan.Builder();
+        var mesh = mesh(0x1000, 12, 8, null, 0, 6);
+        var inputs = List.of(input(1, 0, mesh), input(2, 0, mesh));
+        var original = builder.build(inputs);
+        for (int i = 0; i < 4; i++) assertSame(original, builder.build(inputs, original));
+
+        var movedInputs = List.of(new RtInstanceTablePlan.Input(1, 0, mesh,
+                GeometryTransform.translation(3, 0, 0), 7), input(2, 0, mesh));
+        var moved = builder.build(movedInputs, original);
+        for (int i = 0; i < 4; i++) assertSame(moved, builder.build(movedInputs, moved));
+        var replacement = builder.build(List.of(input(3, 0, mesh), input(4, 0, mesh)), moved);
+
+        assertEquals(0, record(original, 1, 0).instanceData());
+        assertEquals(IDENTITY, record(original, 1, 0).transform());
+        assertEquals(7, record(moved, 1, 0).instanceData());
+        assertEquals(3, record(moved, 1, 0).transform().translationX());
+        assertEquals(-1, original.slot(3, 0));
+        assertEquals(-1, moved.slot(3, 0));
+        assertEquals(-1, replacement.slot(1, 0));
+        assertEquals(3, record(replacement, 3, 0).identity());
+    }
+
+    @Test
+    void abandonedAssemblyDoesNotContaminateLaterBuildsOrPublishedTables() {
+        var builder = new RtInstanceTablePlan.Builder();
+        var mesh = mesh(0x1000, 12, 8, null, 0, 6);
+        var inputs = List.of(input(1, 0, mesh), input(2, 0, mesh));
+        var original = builder.build(inputs);
+        assertSame(original, builder.build(inputs, original));
+        var abandoned = builder.begin(2, original);
+        abandoned.add(3, 0, mesh, IDENTITY, 0);
+        assertThrows(IllegalArgumentException.class, () -> abandoned.add(3, 0, mesh, IDENTITY, 0));
+
+        assertSame(original, builder.build(inputs, original));
+        assertEquals(-1, original.slot(3, 0));
+        assertEquals(1, record(original, 1, 0).identity());
+        var empty = builder.build(List.of(), original);
+        assertEquals(1, empty.capacity());
+        assertEquals(-1, empty.slot(1, 0));
+        assertSame(empty, builder.build(List.of(), empty));
+        assertSame(original, builder.build(inputs, original));
+    }
+
+    @Test
     void slotAssignmentsCompareEveryKeyAndEmptySlotRatherThanOnlyHashes() {
         var builder = new RtInstanceTablePlan.Builder();
         var mesh = mesh(0x1000, 12, 8, null, 0, 6);

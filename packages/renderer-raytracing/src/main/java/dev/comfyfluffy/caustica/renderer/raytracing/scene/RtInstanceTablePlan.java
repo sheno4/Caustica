@@ -137,6 +137,7 @@ final class RtInstanceTablePlan {
         private final Map<TopologySignature, WeakReference<TopologyToken>> topologies = new WeakHashMap<>();
         private long nextMeshRevision;
         private long nextTopologyToken;
+        private InstanceRecord[] reusableSlots;
 
         RtInstanceTablePlan build(List<Input> inputs) {
             return build(inputs, null);
@@ -157,10 +158,13 @@ final class RtInstanceTablePlan {
             int capacity = 1;
             int minimum = Math.multiplyExact(instanceCount, 2);
             while (capacity < minimum) capacity = Math.multiplyExact(capacity, 2);
-            return new Assembly(new InstanceRecord[capacity], previous);
+            InstanceRecord[] slots = reusableSlots;
+            reusableSlots = null;
+            if (slots == null || slots.length != capacity) slots = new InstanceRecord[capacity];
+            return new Assembly(slots, previous);
         }
 
-        /** Owns unpublished slots; finishing transfers their immutable contents to the table. */
+        /** Single-use assembly; finish publishes changed slots or returns cleared scratch to the builder. */
         final class Assembly {
             private final InstanceRecord[] records;
             private final RtInstanceTablePlan previous;
@@ -190,8 +194,13 @@ final class RtInstanceTablePlan {
             }
 
             RtInstanceTablePlan finish() {
-                return previous != null && Arrays.equals(previous.records, records) ? previous
-                        : new RtInstanceTablePlan(records);
+                if (previous != null && Arrays.equals(previous.records, records)) {
+                    // Only unpublished storage is reusable; clearing releases its borrowed mesh references.
+                    Arrays.fill(records, null);
+                    reusableSlots = records;
+                    return previous;
+                }
+                return new RtInstanceTablePlan(records);
             }
         }
 
