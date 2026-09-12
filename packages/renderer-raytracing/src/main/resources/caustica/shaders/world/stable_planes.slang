@@ -6,14 +6,14 @@ import stable_plane_types;
 import nrd_signals;
 
 public static const uint STABLE_PLANE_MAX_DELTA_SEGMENTS = 9u;
-public DevicePtr<StablePlaneRecord> stablePlaneRecords() {
-    return (DevicePtr<StablePlaneRecord>)worldBindings.stablePlaneBufferAddress;
+public StablePlaneStorage stablePlaneRecords(uint2 extent) {
+    return stablePlaneStorage(worldBindings.stablePlaneBufferAddress, STABLE_PLANE_COUNT * extent.x * extent.y);
 }
 public uint stablePlaneRecordIndex(uint2 pixel, uint2 extent, uint plane) {
     return plane * extent.x * extent.y + pixel.y * extent.x + pixel.x;
 }
 public void stablePlaneStoreRecord(uint2 pixel, uint2 extent, uint plane, StablePlaneRecord record) {
-    stablePlaneRecords()[stablePlaneRecordIndex(pixel, extent, plane)] = record;
+    stablePlaneRecords(extent).store(stablePlaneRecordIndex(pixel, extent, plane), record);
 }
 
 // The dominant endpoint owns screen depth/motion; NRD consumes each plane's own endpoint separately.
@@ -24,8 +24,8 @@ public void stablePlaneExportGuides(uint2 pixel, uint2 extent, WorldPush frame) 
     float3 diffuseEstimate = float3(0.0), specularEstimate = float3(0.0);
     for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
         uint address = stablePlaneRecordIndex(pixel, extent, i);
-        if (stablePlaneRecords()[address].branchId == STABLE_PLANE_INVALID_BRANCH) continue;
-        StablePlaneRecord record = stablePlaneRecords()[address];
+        if (stablePlaneRecords(extent).loadBranchId(address) == STABLE_PLANE_INVALID_BRANCH) continue;
+        StablePlaneRecord record = stablePlaneRecords(extent).load(address);
         available++;
         if (record.throughputLuminance > largest) {
             largest = record.throughputLuminance;
@@ -36,11 +36,11 @@ public void stablePlaneExportGuides(uint2 pixel, uint2 extent, WorldPush frame) 
     }
     for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
         uint address = stablePlaneRecordIndex(pixel, extent, i);
-        uint flags = stablePlaneRecords()[address].flags & ~STABLE_PLANE_FLAG_DOMINANT;
+        uint flags = stablePlaneRecords(extent).loadFlags(address) & ~STABLE_PLANE_FLAG_DOMINANT;
         if (i == dominant) flags |= STABLE_PLANE_FLAG_DOMINANT;
-        stablePlaneRecords()[address].flags = flags;
+        stablePlaneRecords(extent).storeFlags(address, flags);
     }
-    StablePlaneRecord record = stablePlaneRecords()[stablePlaneRecordIndex(pixel, extent, dominant)];
+    StablePlaneRecord record = stablePlaneRecords(extent).load(stablePlaneRecordIndex(pixel, extent, dominant));
     bool valid = (record.flags & STABLE_PLANE_FLAG_VALID) != 0u;
     float4 current = mul(frame.curViewProj, float4(record.currentVirtualPosition - frame.camOffset, 1.0));
     float4 previous = mul(frame.prevViewProj,
@@ -73,15 +73,15 @@ public void stablePlaneExportSignals(uint2 pixel, uint2 extent, WorldPush frame)
     float3 diffuseEstimate = float3(0.0), specularEstimate = float3(0.0);
     for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
         uint address = stablePlaneRecordIndex(pixel, extent, i);
-        if (stablePlaneRecords()[address].branchId == STABLE_PLANE_INVALID_BRANCH) continue;
-        StablePlaneRecord record = stablePlaneRecords()[address];
+        if (stablePlaneRecords(extent).loadBranchId(address) == STABLE_PLANE_INVALID_BRANCH) continue;
+        StablePlaneRecord record = stablePlaneRecords(extent).load(address);
         if ((record.flags & STABLE_PLANE_FLAG_DOMINANT) != 0u) dominant = i;
         diffuse += record.noisyDiffuseRadiance;
         specular += record.noisySpecularRadiance;
         diffuseEstimate += record.diffuseBsdfEstimate;
         specularEstimate += record.specularBsdfEstimate;
     }
-    StablePlaneRecord record = stablePlaneRecords()[stablePlaneRecordIndex(pixel, extent, dominant)];
+    StablePlaneRecord record = stablePlaneRecords(extent).load(stablePlaneRecordIndex(pixel, extent, dominant));
     bool valid = (record.flags & STABLE_PLANE_FLAG_VALID) != 0u;
     float4 current = mul(frame.curViewProj, float4(record.currentVirtualPosition - frame.camOffset, 1.0));
     float3 stable = worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel].xyz;

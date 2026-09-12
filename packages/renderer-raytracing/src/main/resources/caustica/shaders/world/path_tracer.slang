@@ -18,12 +18,12 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 extent = DispatchRaysDimensions().xy;
     WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
-    ConstPtr<PackedPathSegment> endpoints = (ConstPtr<PackedPathSegment>)worldBindings.pathQueueAddress;
+    PathSegmentStorage endpoints = pathSegmentStorage(worldBindings.pathQueueAddress, STABLE_PLANE_COUNT * extent.x * extent.y);
     TTrace tracer = {};
     for (uint plane = 0u; plane < STABLE_PLANE_COUNT; plane++) {
         uint address = stablePlaneRecordIndex(pixel, extent, plane);
-        if ((endpoints[address].flags & PATH_ENDPOINT_VALID) == 0u) continue;
-        PackedPathSegment path = endpoints[address];
+        if ((endpoints.loadFlags(address) & PATH_ENDPOINT_VALID) == 0u) continue;
+        PackedPathSegment path = endpoints.load(address);
         float3 noisyDiffuseRadiance = float3(0.0), noisySpecularRadiance = float3(0.0);
         float specularHitDistance = 0.0;
         bool first = true, diffusePath = false, coherent = true;
@@ -110,10 +110,10 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
             }
         }
         float diffuseHitDistance = diffuseWeight > 0.0 ? diffuseDistanceSum / diffuseWeight : 0.0;
-        stablePlaneRecords()[address].noisyDiffuseRadiance = noisyDiffuseRadiance;
-        stablePlaneRecords()[address].noisySpecularRadiance = noisySpecularRadiance;
-        stablePlaneRecords()[address].diffuseHitDistance = diffuseHitDistance;
-        stablePlaneRecords()[address].specularHitDistance = specularHitDistance;
+        stablePlaneRecords(extent).storeNoisyDiffuseRadiance(address, noisyDiffuseRadiance);
+        stablePlaneRecords(extent).storeNoisySpecularRadiance(address, noisySpecularRadiance);
+        stablePlaneRecords(extent).storeDiffuseHitDistance(address, diffuseHitDistance);
+        stablePlaneRecords(extent).storeSpecularHitDistance(address, specularHitDistance);
     }
     stablePlaneExportSignals(pixel, extent, frame);
 }

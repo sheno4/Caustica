@@ -58,31 +58,31 @@ StableBranch branchAdvance(StableBranch branch, WorldHit hit, TraceLobes lobes, 
 // The queued path occupies its endpoint; auxiliary fields occupy the future guide.
 void branchEnqueue(uint2 pixel, uint2 extent, uint plane, StableBranch branch) {
     uint address = stablePlaneRecordIndex(pixel, extent, plane);
-    ((DevicePtr<PackedPathSegment>)worldBindings.pathQueueAddress)[address] = branch.path;
-    DevicePtr<StablePlaneRecord> records = stablePlaneRecords();
-    records[address].currentVirtualPosition = branch.imageTransform[0];
-    records[address].previousVirtualPosition = branch.imageTransform[1];
-    records[address].normal = branch.imageTransform[2];
-    records[address].diffuseBsdfEstimate = branch.motion;
-    records[address].roughness = branch.length;
-    records[address].branchId = branch.identity;
-    records[address].flags = branch.transmitted ? 1u : 0u;
+    pathSegmentStorage(worldBindings.pathQueueAddress, STABLE_PLANE_COUNT * extent.x * extent.y).store(address, branch.path);
+    StablePlaneStorage records = stablePlaneRecords(extent);
+    records.storeCurrentVirtualPosition(address, branch.imageTransform[0]);
+    records.storePreviousVirtualPosition(address, branch.imageTransform[1]);
+    records.storeNormal(address, branch.imageTransform[2]);
+    records.storeDiffuseBsdfEstimate(address, branch.motion);
+    records.storeRoughness(address, branch.length);
+    records.storeBranchId(address, branch.identity);
+    records.storeFlags(address, branch.transmitted ? 1u : 0u);
 }
 
 StableBranch branchDequeue(uint2 pixel, uint2 extent, uint plane) {
     uint address = stablePlaneRecordIndex(pixel, extent, plane);
-    DevicePtr<PackedPathSegment> endpoints = (DevicePtr<PackedPathSegment>)worldBindings.pathQueueAddress;
-    DevicePtr<StablePlaneRecord> records = stablePlaneRecords();
+    PathSegmentStorage endpoints = pathSegmentStorage(worldBindings.pathQueueAddress, STABLE_PLANE_COUNT * extent.x * extent.y);
+    StablePlaneStorage records = stablePlaneRecords(extent);
     StableBranch branch;
-    branch.path = endpoints[address];
-    branch.imageTransform = float3x3(records[address].currentVirtualPosition,
-            records[address].previousVirtualPosition, records[address].normal);
-    branch.motion = records[address].diffuseBsdfEstimate;
-    branch.length = records[address].roughness;
-    branch.identity = records[address].branchId;
-    branch.transmitted = records[address].flags != 0u;
+    branch.path = endpoints.load(address);
+    branch.imageTransform = float3x3(records.loadCurrentVirtualPosition(address),
+            records.loadPreviousVirtualPosition(address), records.loadNormal(address));
+    branch.motion = records.loadDiffuseBsdfEstimate(address);
+    branch.length = records.loadRoughness(address);
+    branch.identity = records.loadBranchId(address);
+    branch.transmitted = records.loadFlags(address) != 0u;
     // A terminal environment or over-budget branch must leave no valid fill endpoint.
-    endpoints[address].flags = 0u;
+    endpoints.storeFlags(address, 0u);
     return branch;
 }
 
@@ -90,9 +90,9 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 extent = DispatchRaysDimensions().xy;
     WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
-    DevicePtr<PackedPathSegment> endpoints = (DevicePtr<PackedPathSegment>)worldBindings.pathQueueAddress;
+    PathSegmentStorage endpoints = pathSegmentStorage(worldBindings.pathQueueAddress, STABLE_PLANE_COUNT * extent.x * extent.y);
     for (uint i = 0u; i < STABLE_PLANE_COUNT; i++) {
-        endpoints[stablePlaneRecordIndex(pixel, extent, i)].flags = 0u;
+        endpoints.storeFlags(stablePlaneRecordIndex(pixel, extent, i), 0u);
     }
     StableBranch branch = {};
     branch.path = traceCamera<TComposition>(pixel, extent, frame);
@@ -173,7 +173,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
                 restart.hitDistance = hit.hitDistance;
                 if (branch.path.depth <= frame.maxBounces) {
                     uint address = stablePlaneRecordIndex(pixel, extent, plane);
-                    endpoints[address] = restart;
+                    endpoints.store(address, restart);
                 }
             }
             stablePlaneStoreRecord(pixel, extent, plane, record);
@@ -182,8 +182,8 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
     }
     for (uint i = count; i < STABLE_PLANE_COUNT; i++) {
         uint address = stablePlaneRecordIndex(pixel, extent, i);
-        stablePlaneRecords()[address].branchId = STABLE_PLANE_INVALID_BRANCH;
-        stablePlaneRecords()[address].flags = 0u;
+        stablePlaneRecords(extent).storeBranchId(address, STABLE_PLANE_INVALID_BRANCH);
+        stablePlaneRecords(extent).storeFlags(address, 0u);
     }
     worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel] = float4(stableRadiance, 1.0);
     stablePlaneExportGuides(pixel, extent, frame);

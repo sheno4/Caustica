@@ -10,11 +10,11 @@ static const float NRD_INVALID_VIEW_Z = 65504.0;
 static const float4 REBLUR_HIT_DISTANCE_PARAMETERS = float4(3.0, 0.1, 20.0, -25.0);
 
 // Inactive records only initialize branchId and flags; do not read their remaining fields.
-StablePlaneRecord loadPlane(ConstPtr<StablePlaneRecord> records, uint index) {
+StablePlaneRecord loadPlane(StablePlaneStorage records, uint index) {
     StablePlaneRecord record = {};
-    record.branchId = records[index].branchId;
+    record.branchId = records.loadBranchId(index);
     if (record.branchId == STABLE_PLANE_INVALID_BRANCH) return record;
-    return records[index];
+    return records.load(index);
 }
 
 uint recordIndex(uint2 pixel, uint2 extent, uint plane) {
@@ -27,7 +27,7 @@ bool validSurface(StablePlaneRecord r) {
             && (r.flags & STABLE_PLANE_FLAG_ENVIRONMENT) == 0u;
 }
 
-float neighborRelaxation(ConstPtr<StablePlaneRecord> records, int2 pixel, int2 extent,
+float neighborRelaxation(StablePlaneStorage records, int2 pixel, int2 extent,
         uint plane, float3 centerNormal, int2 offset) {
     uint2 neighbor = uint2(clamp(pixel + offset, int2(0), extent - 1));
     StablePlaneRecord r = loadPlane(records, recordIndex(neighbor, uint2(extent), plane));
@@ -35,7 +35,7 @@ float neighborRelaxation(ConstPtr<StablePlaneRecord> records, int2 pixel, int2 e
             ? 0.02 : 1.0 - dot(centerNormal, normalize(r.normal));
 }
 
-float disocclusionRelaxation(ConstPtr<StablePlaneRecord> records, uint2 pixel, uint2 extent,
+float disocclusionRelaxation(StablePlaneStorage records, uint2 pixel, uint2 extent,
         uint plane, StablePlaneRecord r) {
     if (((r.flags >> 8u) & 0xffu) == 0u) return 0.0;
     float3 n = normalize(r.normal);
@@ -83,7 +83,7 @@ float3 unpackRadiance(float3 encoded) {
     return max(pc.signalEncoding == 0u ? encoded : ycocgToLinear(encoded), float3(0.0));
 }
 
-void prepare(uint2 pixel, uint2 extent, ConstPtr<StablePlaneRecord> records, NrdPlaneFrame frame,
+void prepare(uint2 pixel, uint2 extent, StablePlaneStorage records, NrdPlaneFrame frame,
         RWTexture2D<float4> diffuseSignal, RWTexture2D<float4> specularSignal,
         RWTexture2D<float4> normalRoughness, RWTexture2D<float> viewZImage,
         RWTexture2D<float4> motionImage, RWTexture2D<float> disocclusionMix) {
@@ -123,7 +123,7 @@ void prepare(uint2 pixel, uint2 extent, ConstPtr<StablePlaneRecord> records, Nrd
     disocclusionMix[pixel] = relaxation;
 }
 
-void merge(uint2 pixel, uint2 extent, ConstPtr<StablePlaneRecord> records, NrdPlaneFrame frame,
+void merge(uint2 pixel, uint2 extent, StablePlaneStorage records, NrdPlaneFrame frame,
         RWTexture2D<float4> outputImage, RWTexture2D<float4> denoisedDiffuse,
         RWTexture2D<float4> denoisedSpecular, RWTexture2D<float4> stableRadiance) {
     float3 accumulated = pc.planeIndex == STABLE_PLANE_COUNT - 1u
@@ -160,7 +160,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     [format("rgba16f")] RWTexture2D<float4> stableRadiance = ResourceDescriptorHeap[NonUniformResourceIndex(pc.stableRadianceImageIndex)];
 
     NrdPlaneFrame frame = ((DevicePtr<NrdPlaneFrame>)pc.frameAddress)[0];
-    ConstPtr<StablePlaneRecord> records = (ConstPtr<StablePlaneRecord>)pc.stablePlaneAddress;
+    StablePlaneStorage records = stablePlaneStorage(pc.stablePlaneAddress, STABLE_PLANE_COUNT * frame.width * frame.height);
     uint2 extent = uint2(frame.width, frame.height); uint2 pixel = tid.xy;
     if (any(pixel >= extent)) return;
     if (pc.mode == NRD_MODE_PREPARE) prepare(pixel, extent, records, frame, diffuseSignal,
