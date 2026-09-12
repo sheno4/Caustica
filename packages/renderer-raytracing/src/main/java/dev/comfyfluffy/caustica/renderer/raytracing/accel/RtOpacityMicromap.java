@@ -58,7 +58,7 @@ final class RtOpacityMicromap {
             context.checkDeviceResult(vkCreateMicromapEXT(context.vk(), create, null, out), "vkCreateMicromapEXT");
             long handle = out.get(0);
             allocated.add(() -> vkDestroyMicromapEXT(context.vk(), handle, null));
-            // EXT micromap input and scratch addresses require 256-byte alignment.
+            // EXT micromap data and triangle-array addresses require 256-byte alignment.
             var data = context.createAlignedBuffer(input.byteSize(), VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT,
                     true, label + " data", 256);
             allocated.add(data::destroy);
@@ -70,8 +70,9 @@ final class RtOpacityMicromap {
             allocated.add(triangles::destroy);
             writeTriangles(input, MemoryUtil.memByteBuffer(triangles.mapped(), triangleBytes).order(ByteOrder.LITTLE_ENDIAN));
             triangles.flush();
-            var scratch = context.createAlignedBuffer(Math.max(256, sizes.buildScratchSize()),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, label + " scratch", 256);
+            long scratchAlignment = context.accelerationStructureScratchAlignment();
+            var scratch = context.createAlignedBuffer(Math.max(scratchAlignment, sizes.buildScratchSize()),
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, label + " scratch", scratchAlignment);
             allocated.add(scratch::destroy);
             return new RtOpacityMicromap(context, geometryIndex, handle, input, backing, data, triangles, scratch);
         } catch (Throwable failure) {

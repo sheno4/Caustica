@@ -416,7 +416,8 @@ public final class MinecraftDeviceBringup {
             VkPhysicalDeviceFeatures2 available = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default();
             PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(
                     feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
-            boolean querySer = device.hasDeviceExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+            boolean querySer = Boolean.parseBoolean(System.getProperty("caustica.rt.ser", "true"))
+                    && device.hasDeviceExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
             boolean queryOmm = Boolean.parseBoolean(System.getProperty("caustica.rt.omm", "true"))
                     && device.hasDeviceExtension(EXTOpacityMicromap.VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME);
             boolean queryPresent = CausticaConfig.get(RendererOptions.Rt.Reflex.ENABLED)

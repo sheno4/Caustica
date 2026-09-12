@@ -143,12 +143,33 @@ public record MeshBuild<N>(Stream positions,
      * instance schema shared by the whole mesh. A volume-only boundary has no surface slot.
      */
     public record SurfaceSlot<B, N>(SurfaceId<B, N> surface, ShaderData<B> bindingData,
-                                    CoveragePolicy coverage) {
+                                    CoveragePolicy coverage, ShadowPolicy shadow) {
+        public SurfaceSlot(SurfaceId<B, N> surface, ShaderData<B> bindingData, CoveragePolicy coverage) {
+            this(surface, bindingData, coverage, ShadowPolicy.EVALUATE_SURFACE);
+        }
+
         public SurfaceSlot {
             Objects.requireNonNull(surface, "surface");
             Objects.requireNonNull(bindingData, "bindingData");
             Objects.requireNonNull(coverage, "coverage");
+            Objects.requireNonNull(shadow, "shadow");
+            if (shadow == ShadowPolicy.GUARANTEED_BLOCKER && !(coverage instanceof CoveragePolicy.Opaque)) {
+                throw new IllegalArgumentException("guaranteed shadow blockers require full coverage");
+            }
         }
+    }
+
+    /** Optical visibility contract, independent of coverage and asserted by the producer. */
+    public enum ShadowPolicy {
+        /** Evaluate the surface and any ordered volume boundary to determine transmission. */
+        EVALUATE_SURFACE,
+        /**
+         * Every point on both sides has full coverage and exactly zero shadow transmission for every
+         * direction, instance, texture sample, and animation state throughout this revision's lifetime.
+         * The geometry has no volume slot. Traversal may terminate at any such hit in a visibility
+         * segment without evaluating this surface or any nearer transmissive surfaces.
+         */
+        GUARANTEED_BLOCKER
     }
 
     /**
@@ -191,6 +212,9 @@ public record MeshBuild<N>(Stream positions,
         }
 
         public Geometry {
+            if (volume != null && surface != null && surface.shadow() == ShadowPolicy.GUARANTEED_BLOCKER) {
+                throw new IllegalArgumentException("guaranteed shadow blockers cannot bound a volume");
+            }
             if (opacityMicromap != null && (volume != null || surface == null
                     || !(surface.coverage() instanceof CoveragePolicy.Cutout)
                     || opacityMicromap.triangleCount() != indexCount / 3)) {

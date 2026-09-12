@@ -236,8 +236,13 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.add(base);
         idx.add(base + 2);
         idx.add(base + 3);
-        MinecraftEntityMesh.Triangle surface = new MinecraftEntityMesh.Triangle(
-                currentMaterial, currentCoverage, emission);
+        // Consecutive faces can share immutable shading data; vertex attributes remain per face.
+        // Keeping the surface identity also lets the fingerprint scan reuse its material hash.
+        MinecraftEntityMesh.Triangle surface = surfaces.isEmpty() ? null : surfaces.getLast();
+        if (surface == null || surface.material() != currentMaterial || surface.coverage() != currentCoverage
+                || Float.floatToRawIntBits(surface.emission()) != Float.floatToRawIntBits(emission)) {
+            surface = new MinecraftEntityMesh.Triangle(currentMaterial, currentCoverage, emission);
+        }
         surfaces.add(surface);
         surfaces.add(surface);
     }

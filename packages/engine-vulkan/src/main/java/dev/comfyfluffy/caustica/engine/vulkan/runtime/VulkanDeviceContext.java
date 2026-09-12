@@ -9,6 +9,8 @@ import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuDiagnosticCheckpoints;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.Vma;
@@ -93,6 +95,10 @@ public final class VulkanDeviceContext implements GpuDevice {
         this.maxShaderGroupStride = maxSbtStride;
         this.accelerationStructureScratchAlignment = scratchAlign;
         this.maxOpacityMicromapSubdivisionLevel = maxOpacitySubdivision;
+        if (GpuDiagnosticCheckpoints.ENABLED) {
+            LOGGER.info("NVIDIA GPU diagnostic checkpoints requested: supported={}",
+                    vk.getCapabilities().vkCmdSetCheckpointNV != 0L);
+        }
         this.gpuExecutor = new RtGpuExecutor(this);
         this.graphics = new GraphicsQueue(this);
     }
@@ -542,15 +548,21 @@ public final class VulkanDeviceContext implements GpuDevice {
     public void waitIdle() {
         // vkDeviceWaitIdle is externally synchronized against every queue owned by the device.
         synchronized (deviceQueueHostLock) {
-            checkDeviceResult(VK10.vkDeviceWaitIdle(vk), "vkDeviceWaitIdle");
+            GpuCrashHistory.record(GpuCrashHistory.Event.DEVICE_IDLE_BEGIN, vk.address(), 0, 0, 0);
+            int result = VK10.vkDeviceWaitIdle(vk);
+            GpuCrashHistory.record(GpuCrashHistory.Event.DEVICE_IDLE, vk.address(), 0, 0, result);
+            checkDeviceResult(result, "vkDeviceWaitIdle");
         }
     }
 
     public void destroy() {
         gpuExecutor.stop();
         waitIdle();
-        graphics.shutdownAfterDeviceIdle();
-        gpuExecutor.destroyAfterDeviceIdle();
+        try {
+            graphics.shutdownAfterDeviceIdle();
+        } finally {
+            gpuExecutor.destroyAfterDeviceIdle();
+        }
         if (commandPool != 0L) {
             VK10.vkDestroyCommandPool(vk, commandPool, null);
             commandPool = 0L;

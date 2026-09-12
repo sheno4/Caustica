@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry.Callback;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
@@ -44,37 +46,44 @@ public class LevelExtractorMixin {
     @Inject(method = "extract", at = @At("HEAD"))
     private void caustica$resumeVanillaTerrain(DeltaTracker deltaTracker, Camera camera,
                                               float deltaPartialTick, CallbackInfo ci) {
-        CausticaClientComposition.current().renderController().resumeVanillaTerrain(() -> {
-            try (var ignored = CausticaClientComposition.current().runtime().profileStage("host.worldMaintenance")) {
-                caustica$rebuildingVanillaTerrain = true;
-                try { ((LevelExtractor) (Object) this).allChanged(); }
-                finally { caustica$rebuildingVanillaTerrain = false; }
-            }
-        });
+        try (var hostWork = MinecraftHostTelemetry.work("world.resumeGate")) {
+            CausticaClientComposition.current().renderController().resumeVanillaTerrain(() -> {
+                try (var ignored = CausticaClientComposition.current().runtime().profileStage("host.worldMaintenance")) {
+                    caustica$rebuildingVanillaTerrain = true;
+                    try { ((LevelExtractor) (Object) this).allChanged(); }
+                    finally { caustica$rebuildingVanillaTerrain = false; }
+                }
+            });
+        }
     }
 
     @Inject(method = "allChanged", at = @At("HEAD"))
     private void caustica$invalidateRenderState(CallbackInfo ci) {
-        if (caustica$rebuildingVanillaTerrain) return;
-        try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
-            CausticaClientComposition.current().renderController().resetFailureLatch();
-            CausticaClientComposition.current().terrain().requestFullClear();
+        try (var hostWork = MinecraftHostTelemetry.work("terrain.invalidate")) {
+            if (caustica$rebuildingVanillaTerrain) return;
+            try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
+                CausticaClientComposition.current().renderController().resetFailureLatch();
+                CausticaClientComposition.current().terrain().requestFullClear();
+            }
         }
     }
 
     @Inject(method = "blockChanged(Lnet/minecraft/core/BlockPos;I)V", at = @At("HEAD"))
     private void caustica$rtBlockChanged(BlockPos pos, int updateFlags, CallbackInfo ci) {
-        try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
-            if (CausticaClientComposition.current().runtime().hasSession()) {
-                CausticaClientComposition.current().terrain().markBlocksDirty(
-                        pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+        try (var hostWork = MinecraftHostTelemetry.work("terrain.blockChanged")) {
+            try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
+                if (CausticaClientComposition.current().runtime().hasSession()) {
+                    CausticaClientComposition.current().terrain().markBlocksDirty(
+                            pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+                }
             }
         }
     }
 
     @Inject(method = "setBlocksDirty(IIIIII)V", at = @At("HEAD"))
     private void caustica$rtBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ, CallbackInfo ci) {
-        try (var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
+        try (var hostWork = MinecraftHostTelemetry.work("terrain.blocksDirty");
+             var ignored = CausticaClientComposition.current().runtime().profileStage("terrain.markDirty")) {
             if (CausticaClientComposition.current().runtime().hasSession()) {
                 CausticaClientComposition.current().terrain().markBlocksDirty(minX, minY, minZ, maxX, maxY, maxZ);
             }
@@ -86,22 +95,27 @@ public class LevelExtractorMixin {
             target = "Lnet/minecraft/client/SectionUpdateTracker;repositionCamera(Lnet/minecraft/core/SectionPos;)V"))
     private void caustica$skipSuspendedTrackerRotation(SectionUpdateTracker tracker, SectionPos position,
                                                       Operation<Void> original) {
-        if (!CausticaClientComposition.current().renderController().vanillaTerrainSuspended()) {
-            original.call(tracker, position);
+        try (var observation = MinecraftHostTelemetry.callback(Callback.TRACKER_ROTATION)) {
+            if (CausticaClientComposition.current().renderController().vanillaTerrainSuspended()) return;
         }
+        original.call(tracker, position);
     }
 
     @Inject(method = "applyFrustum", at = @At("HEAD"), cancellable = true)
     private void caustica$skipSuspendedFrustum(Frustum frustum, CallbackInfo ci) {
-        if (CausticaClientComposition.current().renderController().vanillaTerrainSuspended()) ci.cancel();
+        try (var hostWork = MinecraftHostTelemetry.work("world.frustumGate")) {
+            if (CausticaClientComposition.current().renderController().vanillaTerrainSuspended()) ci.cancel();
+        }
     }
 
     @WrapOperation(method = "extract", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/renderer/LevelRenderer;expectedChunks()Lit/unimi/dsi/fastutil/longs/LongCollection;"))
     private LongCollection caustica$skipSuspendedExpectedChunks(LevelRenderer renderer,
                                                                Operation<LongCollection> original) {
-        return CausticaClientComposition.current().renderController().vanillaTerrainSuspended()
-                ? LongSets.EMPTY_SET : original.call(renderer);
+        try (var observation = MinecraftHostTelemetry.callback(Callback.EXPECTED_CHUNKS)) {
+            if (CausticaClientComposition.current().renderController().vanillaTerrainSuspended()) return LongSets.EMPTY_SET;
+        }
+        return original.call(renderer);
     }
 
     /** No vanilla terrain extraction is submitted while RT owns rendering. */
@@ -111,8 +125,10 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/SectionUpdateTracker$SectionDirtyState;"))
     private SectionUpdateTracker.SectionDirtyState caustica$hideDirtySectionsFromVanilla(
             SectionUpdateTracker tracker, long sectionNode, Operation<SectionUpdateTracker.SectionDirtyState> original) {
-        return CausticaClientComposition.current().renderController().rtOwnsWorldRendering()
-                ? null : original.call(tracker, sectionNode);
+        try (var observation = MinecraftHostTelemetry.callback(Callback.DIRTY_SECTION)) {
+            if (CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) return null;
+        }
+        return original.call(tracker, sectionNode);
     }
 
     /**
@@ -125,8 +141,10 @@ public class LevelExtractorMixin {
     @Inject(method = "extractVisibleEntities", at = @At("HEAD"), cancellable = true)
     private void caustica$skipVanillaEntityExtraction(Camera camera, Frustum frustum, DeltaTracker deltaTracker,
             LevelRenderState output, CallbackInfo ci) {
-        if (CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) {
-            ci.cancel();
+        try (var hostWork = MinecraftHostTelemetry.work("world.entityGate")) {
+            if (CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) {
+                ci.cancel();
+            }
         }
     }
 
@@ -148,9 +166,10 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/Camera;F)V"))
     private void caustica$skipVanillaParticleExtraction(ParticleEngine engine, ParticlesRenderState particles,
             Frustum frustum, Camera camera, float partialTick, Operation<Void> original) {
-        if (!CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) {
-            original.call(engine, particles, frustum, camera, partialTick);
+        try (var observation = MinecraftHostTelemetry.callback(Callback.PARTICLES)) {
+            if (CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) return;
         }
+        original.call(engine, particles, frustum, camera, partialTick);
     }
 
     /**
@@ -167,9 +186,10 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/renderer/state/level/WeatherRenderState;)V"))
     private void caustica$skipVanillaWeatherExtraction(WeatherEffectRenderer renderer, ClientLevel level,
             float partialTicks, Vec3 cameraPos, WeatherRenderState state, Operation<Void> original) {
-        if (!CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) {
-            original.call(renderer, level, partialTicks, cameraPos, state);
+        try (var observation = MinecraftHostTelemetry.callback(Callback.WEATHER)) {
+            if (CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) return;
         }
+        original.call(renderer, level, partialTicks, cameraPos, state);
     }
 
 }

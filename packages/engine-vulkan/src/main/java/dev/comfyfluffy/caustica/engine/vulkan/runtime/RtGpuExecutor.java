@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeCompletion;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeJob;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory;
+import static dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory.Event.*;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
@@ -18,6 +20,7 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 public final class RtGpuExecutor implements GpuComputeQueue {
     private final VulkanDeviceContext ctx;
     private final long jobTimeline;
+    private final CommandPoolCache<VkCommandBuffer> commandPools;
     private final ExecutorService compute = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().daemon().name("Caustica GPU compute").factory());
     private final ConcurrentLinkedQueue<Job> jobs = new ConcurrentLinkedQueue<>();
@@ -27,6 +30,8 @@ public final class RtGpuExecutor implements GpuComputeQueue {
 
     RtGpuExecutor(VulkanDeviceContext ctx) {
         this.ctx = ctx;
+        commandPools = new CommandPoolCache<>(new VulkanCommandPoolBackend(ctx,
+                ctx.computeQueue().familyIndex(), "compute"), "compute", 128);
         jobTimeline = createTimeline("GPU compute completion");
     }
 
@@ -92,6 +97,8 @@ public final class RtGpuExecutor implements GpuComputeQueue {
     }
 
     void destroyAfterDeviceIdle() {
+        commandPools.destroyAfterDeviceIdle();
+        GpuCrashHistory.record(SEMAPHORE_DESTROY, jobTimeline, nextJobValue, ctx.completedComputeValue(), 2);
         VK10.vkDestroySemaphore(ctx.vk(), jobTimeline, null);
         checkExecutorFailure();
     }
@@ -124,26 +131,14 @@ public final class RtGpuExecutor implements GpuComputeQueue {
     }
 
     private void execute(long value, List<Job> batch) {
-        long pool = 0L;
+        var lease = commandPools.acquire(batch.size());
+        GpuCrashHistory.record(COMPUTE_POOL_RECORD, lease.poolHandle(), value, 0, batch.size());
         boolean submitted = false;
         boolean complete = false;
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            var poolInfo = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
-                    .flags(VK10.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
-                    .queueFamilyIndex(ctx.computeQueue().familyIndex());
-            var handle = stack.mallocLong(1);
-            ctx.checkDeviceResult(VK10.vkCreateCommandPool(ctx.vk(), poolInfo, null, handle), "vkCreateCommandPool(compute)");
-            pool = handle.get(0);
-            var allocate = VkCommandBufferAllocateInfo.calloc(stack).sType$Default()
-                    .commandPool(pool).level(VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(batch.size());
-            var pointers = stack.mallocPointer(batch.size());
-            ctx.checkDeviceResult(VK10.vkAllocateCommandBuffers(ctx.vk(), allocate, pointers), "vkAllocateCommandBuffers(compute)");
             var commands = VkCommandBufferSubmitInfo.calloc(batch.size(), stack);
             for (int index = 0; index < batch.size(); index++) {
-                VkCommandBuffer command = new VkCommandBuffer(pointers.get(index), ctx.vk());
-                var begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default()
-                        .flags(VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-                ctx.checkDeviceResult(VK10.vkBeginCommandBuffer(command, begin), "vkBeginCommandBuffer(compute)");
+                VkCommandBuffer command = lease.begin(index);
                 batch.get(index).recorder.accept(command);
                 ctx.checkDeviceResult(VK10.vkEndCommandBuffer(command), "vkEndCommandBuffer(compute)");
                 commands.get(index).sType$Default().commandBuffer(command);
@@ -159,15 +154,19 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                 submission.pWaitSemaphoreInfos(wait);
             }
             synchronized (ctx.deviceQueueHostLock()) {
-                ctx.checkDeviceResult(VK13.vkQueueSubmit2(ctx.computeQueue().queue(), submission, 0L), "vkQueueSubmit2(compute)");
+                GpuCrashHistory.record(COMPUTE_SUBMIT_BEGIN, jobTimeline, value, prior, ctx.computeQueue().queue().address());
+                int result = VK13.vkQueueSubmit2(ctx.computeQueue().queue(), submission, 0L);
+                GpuCrashHistory.record(COMPUTE_SUBMIT, jobTimeline, value, prior, result);
+                ctx.checkDeviceResult(result, "vkQueueSubmit2(compute)");
             }
             submitted = true;
             waitTimeline(jobTimeline, value);
             complete = true;
         } finally {
+            if (complete) lease.close();
+            else lease.fail();
             // Failed waits cannot permit completion callbacks to destroy resources still in execution.
             if (submitted && !complete) ctx.waitIdle();
-            if (pool != 0L) VK10.vkDestroyCommandPool(ctx.vk(), pool, null);
         }
     }
 
@@ -178,6 +177,7 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             var info = VkSemaphoreCreateInfo.calloc(stack).sType$Default().pNext(type);
             var out = stack.mallocLong(1);
             ctx.checkDeviceResult(VK10.vkCreateSemaphore(ctx.vk(), info, null, out), "vkCreateSemaphore(" + label + ")");
+            GpuCrashHistory.record(SEMAPHORE_CREATE, out.get(0), 0, 0, 2);
             return out.get(0);
         }
     }
@@ -186,7 +186,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var wait = VkSemaphoreWaitInfo.calloc(stack).sType$Default().semaphoreCount(1)
                     .pSemaphores(stack.longs(semaphore)).pValues(stack.longs(value));
-            ctx.checkDeviceResult(VK12.vkWaitSemaphores(ctx.vk(), wait, Long.MAX_VALUE), "vkWaitSemaphores");
+            int result = VK12.vkWaitSemaphores(ctx.vk(), wait, Long.MAX_VALUE);
+            GpuCrashHistory.record(COMPUTE_COMPLETED, semaphore, value,
+                    result == VK10.VK_SUCCESS ? value : -1, result);
+            ctx.checkDeviceResult(result, "vkWaitSemaphores");
         }
     }
 

@@ -12,6 +12,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class RtFrameStatsBoundaryTest {
     @Test
+    void unsupportedOrResetThreadCountersAreNotReportedAsZero() {
+        assertEquals(-1, RtFrameStats.counterDelta(-1, -1));
+        assertEquals(-1, RtFrameStats.counterDelta(-1, 4));
+        assertEquals(-1, RtFrameStats.counterDelta(4, -1));
+        assertEquals(-1, RtFrameStats.counterDelta(5, 4));
+        assertEquals(0, RtFrameStats.counterDelta(4, 4));
+        assertEquals(3, RtFrameStats.counterDelta(4, 7));
+    }
+
+    @Test
     void geometrySourcesKeepTheirRecordedNamesAndPublicationTimes(@TempDir Path temporary) throws Exception {
         Path file = temporary.resolve("geometry.jfr");
         try (Recording recording = new Recording()) {

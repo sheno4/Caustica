@@ -99,11 +99,19 @@ final class RtReconstruction implements AutoCloseable {
                 try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.upscale")) {
                     VkCommandBuffer command = commands.external("DLSS super resolution");
                     TraceExtent extent = frame.extent();
-                    boolean success = upscaler.ensureFeature(command, extent.renderWidth(), extent.renderHeight(),
-                            extent.displayWidth(), extent.displayHeight())
-                            && upscaler.evaluate(command, denoised, trace.images().depth(), trace.images().motion(), output,
+                    boolean ready;
+                    try (var checkpoint = commands.checkpoint(command, "NGX DLSS-SR ensure feature")) {
+                        ready = upscaler.ensureFeature(command, extent.renderWidth(), extent.renderHeight(),
+                                extent.displayWidth(), extent.displayHeight());
+                    }
+                    boolean success = false;
+                    if (ready) {
+                        try (var checkpoint = commands.checkpoint(command, "NGX DLSS-SR evaluate")) {
+                            success = upscaler.evaluate(command, denoised, trace.images().depth(), trace.images().motion(), output,
                                     extent.renderWidth(), extent.renderHeight(), extent.displayWidth(), extent.displayHeight(),
                                     -frame.jitterX(), -frame.jitterY(), reset, frame.preExposure());
+                        }
+                    }
                     if (!success) upscaler.resetHistory();
                     yield success;
                 }
@@ -123,9 +131,12 @@ final class RtReconstruction implements AutoCloseable {
         if (!rayReconstruction.featureReadyFor(extent.renderWidth(), extent.renderHeight(),
                 extent.displayWidth(), extent.displayHeight())) context.waitIdle();
         VkCommandBuffer command = commands.external("DLSS ray reconstruction");
-        if (!rayReconstruction.ensureFeature(command, extent.renderWidth(), extent.renderHeight(),
-                extent.displayWidth(), extent.displayHeight())) return false;
-        try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.dlssRr")) {
+        try (var checkpoint = commands.checkpoint(command, "NGX DLSS-RR ensure feature")) {
+            if (!rayReconstruction.ensureFeature(command, extent.renderWidth(), extent.renderHeight(),
+                    extent.displayWidth(), extent.displayHeight())) return false;
+        }
+        try (var checkpoint = commands.checkpoint(command, "NGX DLSS-RR evaluate");
+             RtTelemetry.Scope ignored = telemetry.frame().stage("frame.dlssRr")) {
             boolean success = rayReconstruction.evaluate(command, images.traceColor(), images.depth(), images.motion(),
                     images.diffuseAlbedo(), images.specularAlbedo(), images.normalRoughness(), images.specularMotion(),
                     images.reconstructedColor(), extent.renderWidth(), extent.renderHeight(),

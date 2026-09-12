@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory;
+import static dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory.Event.*;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 import java.util.ArrayList;
@@ -12,6 +14,7 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 public final class GraphicsQueue {
     private final VulkanDeviceContext ctx;
     private final long graphicsTimeline;
+    private final CommandPoolCache<VkCommandBuffer> commandPools;
     private final ScheduledExecutorService retirement = Executors.newSingleThreadScheduledExecutor(
             Thread.ofPlatform().daemon().name("Caustica graphics retirement").factory());
     private final ArrayList<DestroyJob> destroyJobs = new ArrayList<>();
@@ -20,6 +23,8 @@ public final class GraphicsQueue {
 
     GraphicsQueue(VulkanDeviceContext ctx) {
         this.ctx = ctx;
+        commandPools = new CommandPoolCache<>(new VulkanCommandPoolBackend(ctx,
+                ctx.backend().graphicsQueue().familyIndex(), "graphics"), "graphics", 1);
         graphicsTimeline = createTimeline("Graphics completion");
         retirement.scheduleWithFixedDelay(this::pollRetirement, 1, 2, TimeUnit.MILLISECONDS);
     }
@@ -28,6 +33,8 @@ public final class GraphicsQueue {
         drainAfterDeviceIdle();
         retirement.shutdown();
         awaitTermination(retirement);
+        commandPools.destroyAfterDeviceIdle();
+        GpuCrashHistory.record(SEMAPHORE_DESTROY, graphicsTimeline, nextGraphicsValue, 0, 1);
         VK10.vkDestroySemaphore(ctx.vk(), graphicsTimeline, null);
         checkExecutorFailure();
     }
@@ -35,7 +42,15 @@ public final class GraphicsQueue {
     public GraphicsUse beginGraphicsUse() {
         assertRenderThread();
         checkExecutorFailure();
-        return new GraphicsUse(this, ++nextGraphicsValue);
+        long value = ++nextGraphicsValue;
+        GpuCrashHistory.record(GRAPHICS_RESERVED, graphicsTimeline, value, 0, 0);
+        return new GraphicsUse(this, value);
+    }
+
+    CommandPoolCache<VkCommandBuffer>.Lease acquireCommands() {
+        assertRenderThread();
+        checkExecutorFailure();
+        return commandPools.acquire(1);
     }
 
     public void resolveGraphicsUse(GraphicsSubmission submission, GraphicsUse use) {
@@ -46,6 +61,7 @@ public final class GraphicsQueue {
 
     static void enqueueGraphicsSignal(GraphicsSubmission submission, long semaphore, long value) {
         submission.signalSemaphore(semaphore, value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        GpuCrashHistory.record(GRAPHICS_SIGNAL, semaphore, value, 0, 0);
     }
 
     public GraphicsUseWaiter graphicsUseWaiter() {
@@ -81,6 +97,7 @@ public final class GraphicsQueue {
             while (iterator.hasNext()) {
                 DestroyJob job = iterator.next();
                 if (job.value <= completed) {
+                    GpuCrashHistory.record(GRAPHICS_RETIRE, graphicsTimeline, job.value, completed, 0);
                     iterator.remove();
                     ready.add(job.release);
                 }
@@ -93,6 +110,7 @@ public final class GraphicsQueue {
     }
 
     void drainAfterDeviceIdle() {
+        GpuCrashHistory.record(GRAPHICS_DRAIN, graphicsTimeline, nextGraphicsValue, 0, 0);
         await(retirement.submit(() -> {
             while (true) {
                 processRetirement(Long.MAX_VALUE);
@@ -135,6 +153,7 @@ public final class GraphicsQueue {
             var info = VkSemaphoreCreateInfo.calloc(stack).sType$Default().pNext(type);
             var out = stack.mallocLong(1);
             ctx.checkDeviceResult(VK10.vkCreateSemaphore(ctx.vk(), info, null, out), "vkCreateSemaphore(" + label + ")");
+            GpuCrashHistory.record(SEMAPHORE_CREATE, out.get(0), 0, 0, 1);
             return out.get(0);
         }
     }
@@ -142,7 +161,10 @@ public final class GraphicsQueue {
     private long queryTimeline(long semaphore) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var out = stack.mallocLong(1);
-            ctx.checkDeviceResult(VK12.vkGetSemaphoreCounterValue(ctx.vk(), semaphore, out), "vkGetSemaphoreCounterValue");
+            int result = VK12.vkGetSemaphoreCounterValue(ctx.vk(), semaphore, out);
+            GpuCrashHistory.record(GRAPHICS_OBSERVED, semaphore, 0,
+                    result == VK10.VK_SUCCESS ? out.get(0) : -1, result);
+            ctx.checkDeviceResult(result, "vkGetSemaphoreCounterValue");
             return out.get(0);
         }
     }
@@ -154,7 +176,10 @@ public final class GraphicsQueue {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var wait = VkSemaphoreWaitInfo.calloc(stack).sType$Default().semaphoreCount(1)
                     .pSemaphores(stack.longs(semaphore)).pValues(stack.longs(value));
-            ctx.checkDeviceResult(VK12.vkWaitSemaphores(ctx.vk(), wait, Long.MAX_VALUE), "vkWaitSemaphores");
+            int result = VK12.vkWaitSemaphores(ctx.vk(), wait, Long.MAX_VALUE);
+            GpuCrashHistory.record(GRAPHICS_WAIT, semaphore, value,
+                    result == VK10.VK_SUCCESS ? value : -1, result);
+            ctx.checkDeviceResult(result, "vkWaitSemaphores");
         } finally {
             if (measured) {
                 event.elapsedNanos = System.nanoTime() - event.startedNanos;

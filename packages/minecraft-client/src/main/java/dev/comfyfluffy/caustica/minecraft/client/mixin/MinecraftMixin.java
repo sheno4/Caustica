@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
@@ -37,48 +38,65 @@ public abstract class MinecraftMixin {
 	// Session and resize work uses client-tick cadence, after the per-frame Reflex sleep.
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void caustica$tickRuntime(CallbackInfo ci) {
-		CausticaClientComposition.current().tickRuntime((Minecraft) (Object) this);
+		try (var hostWork = MinecraftHostTelemetry.work("runtime.tick")) {
+			CausticaClientComposition.current().tickRuntime((Minecraft) (Object) this);
+		}
 	}
 
 	@Inject(method = "tick", at = @At("TAIL"))
 	private void caustica$debugTick(CallbackInfo ci) {
-		dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.tick();
+		try (var hostWork = MinecraftHostTelemetry.work("debug.tick")) {
+			dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.tick();
+		}
 	}
 
 	@Inject(method = "runTick", at = @At("HEAD"))
 	private void caustica$reflexSleepAndSimStart(boolean advanceGameTime, CallbackInfo ci) {
-		VulkanLowLatency lowLatency = caustica$lowLatency();
-		VulkanDevice device = caustica$reflexDevice();
-		long swapchain = lowLatency == null ? 0L : lowLatency.appliedSwapchain();
-		if (lowLatency == null || device == null || swapchain == 0L) {
-			return;
+		MinecraftHostTelemetry.beginLoop(CausticaClientComposition.current().runtime().telemetry().frameSerial());
+		try (var hostWork = MinecraftHostTelemetry.work("reflex.sleepAndSimStart")) {
+			VulkanLowLatency lowLatency = caustica$lowLatency();
+			VulkanDevice device = caustica$reflexDevice();
+			long swapchain = lowLatency == null ? 0L : lowLatency.appliedSwapchain();
+			if (lowLatency == null || device == null || swapchain == 0L) {
+				return;
+			}
+			lowLatency.sleep(device.vkDevice(), swapchain);
+			lowLatency.marker(device.vkDevice(), swapchain, VulkanLowLatency.SIMULATION_START,
+					lowLatency.currentSimulationId());
 		}
-		lowLatency.sleep(device.vkDevice(), swapchain);
-		lowLatency.marker(device.vkDevice(), swapchain, VulkanLowLatency.SIMULATION_START,
-				lowLatency.currentSimulationId());
 	}
 
 	@Inject(method = "runTick", at = @At("TAIL"))
 	private void caustica$releaseRetiredTextures(boolean advanceGameTime, CallbackInfo ci) {
-		var runtime = CausticaClientComposition.current().runtime();
-		try (var ignored = runtime.profileStage("host.textureRetire")) {
+		dev.comfyfluffy.caustica.minecraft.client.MinecraftRtRuntime runtime;
+		try (var hostWork = MinecraftHostTelemetry.work("frame.tailLookup")) {
+			runtime = CausticaClientComposition.current().runtime();
+		}
+		try (var hostWork = MinecraftHostTelemetry.work("texture.retire");
+			 var ignored = runtime.profileStage("host.textureRetire")) {
 			MinecraftTextureLifetime.drain();
 		} finally {
-			runtime.endFrame();
+			try (var hostWork = MinecraftHostTelemetry.work("telemetry.finalize")) {
+				runtime.endFrame();
+			} finally {
+				MinecraftHostTelemetry.endLoop(runtime.telemetry().frameSerial(), runtime.frameActive());
+			}
 		}
 	}
 
 	@Inject(method = "runTick",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;renderFrame(Z)V"))
 	private void caustica$reflexSimEnd(boolean advanceGameTime, CallbackInfo ci) {
-		VulkanLowLatency lowLatency = caustica$lowLatency();
-		VulkanDevice device = caustica$reflexDevice();
-		long swapchain = lowLatency == null ? 0L : lowLatency.appliedSwapchain();
-		if (lowLatency == null || device == null || swapchain == 0L) {
-			return;
+		try (var hostWork = MinecraftHostTelemetry.work("reflex.simEnd")) {
+			VulkanLowLatency lowLatency = caustica$lowLatency();
+			VulkanDevice device = caustica$reflexDevice();
+			long swapchain = lowLatency == null ? 0L : lowLatency.appliedSwapchain();
+			if (lowLatency == null || device == null || swapchain == 0L) {
+				return;
+			}
+			lowLatency.marker(device.vkDevice(), swapchain, VulkanLowLatency.SIMULATION_END,
+					lowLatency.currentSimulationId());
 		}
-		lowLatency.marker(device.vkDevice(), swapchain, VulkanLowLatency.SIMULATION_END,
-				lowLatency.currentSimulationId());
 	}
 
 	private static VulkanLowLatency caustica$lowLatency() {

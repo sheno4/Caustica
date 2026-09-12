@@ -1,68 +1,74 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
-import org.lwjgl.system.MemoryStack;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory;
 import org.lwjgl.vulkan.*;
 
-/** A primary command buffer whose pool follows its accepted graphics use. */
+/** A primary command-buffer lease that follows its accepted graphics use through completion. */
 public final class OwnedCommandBuffer implements AutoCloseable {
     private final VulkanDeviceContext ctx;
     private final VkCommandBuffer commandBuffer;
-    private long pool;
+    private CommandPoolCache<VkCommandBuffer>.Lease lease;
     private boolean ended;
 
     OwnedCommandBuffer(VulkanDeviceContext ctx, String label, boolean descriptorHeaps) {
-        this.ctx = ctx;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            var poolInfo = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
-                    .flags(VK10.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
-                    .queueFamilyIndex(ctx.backend().graphicsQueue().familyIndex());
-            var handle = stack.mallocLong(1);
-            ctx.checkDeviceResult(VK10.vkCreateCommandPool(ctx.vk(), poolInfo, null, handle), "vkCreateCommandPool(" + label + ")");
-            pool = handle.get(0);
-            try {
-                var allocate = VkCommandBufferAllocateInfo.calloc(stack).sType$Default()
-                        .commandPool(pool).level(VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);
-                var pointer = stack.mallocPointer(1);
-                ctx.checkDeviceResult(VK10.vkAllocateCommandBuffers(ctx.vk(), allocate, pointer), "vkAllocateCommandBuffers(" + label + ")");
-                commandBuffer = new VkCommandBuffer(pointer.get(0), ctx.vk());
-                var begin = VkCommandBufferBeginInfo.calloc(stack).sType$Default()
-                        .flags(VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-                ctx.checkDeviceResult(VK10.vkBeginCommandBuffer(commandBuffer, begin), "vkBeginCommandBuffer(" + label + ")");
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, commandBuffer.address(), label);
-                if (descriptorHeaps) ctx.bindDescriptorHeaps(commandBuffer);
-                else ctx.bindConventionalDescriptors(commandBuffer);
-            } catch (Throwable failure) {
-                close();
-                throw failure;
-            }
+        this(ctx, ctx.graphics().acquireCommands());
+        try {
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, commandBuffer.address(), label);
+            if (descriptorHeaps) ctx.bindDescriptorHeaps(commandBuffer);
+            else ctx.bindConventionalDescriptors(commandBuffer);
+        } catch (Throwable failure) {
+            lease.fail();
+            throw failure;
         }
     }
 
-    public VkCommandBuffer commandBuffer() { return commandBuffer; }
+    OwnedCommandBuffer(VulkanDeviceContext ctx, CommandPoolCache<VkCommandBuffer>.Lease lease) {
+        this.ctx = ctx;
+        this.lease = lease;
+        commandBuffer = lease.begin(0);
+    }
+
+    public VkCommandBuffer commandBuffer() {
+        if (lease == null) throw new IllegalStateException("command buffer lease is closed or submitted");
+        return commandBuffer;
+    }
 
     public void end() {
+        if (lease == null) throw new IllegalStateException("command buffer lease is closed or submitted");
         if (ended) return;
-        ctx.checkDeviceResult(VK10.vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(owned graphics)");
+        try {
+            ctx.checkDeviceResult(VK10.vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(owned graphics)");
+        } catch (Throwable failure) {
+            lease.fail();
+            throw failure;
+        }
         ended = true;
     }
 
-    /** Transfer pool ownership only after the host accepts this command buffer. */
+    /** Return the captured lease only after the host's accepted use completes. */
     public void submit(GraphicsSubmission submission, GraphicsUse use) {
         end();
-        ctx.importCompletedComputeWrites(submission);
-        submission.execute(commandBuffer);
-        long submittedPool = pool;
-        pool = 0L;
-        use.commandsAccepted();
-        use.keepAlive(() -> VK10.vkDestroyCommandPool(ctx.vk(), submittedPool, null));
+        var submittedLease = lease;
+        lease = null;
+        try {
+            ctx.importCompletedComputeWrites(submission);
+            submission.execute(commandBuffer);
+            use.commandsAccepted();
+            use.keepAlive(submittedLease);
+            GpuCrashHistory.record(GpuCrashHistory.Event.GRAPHICS_POOL_ACCEPTED,
+                    submittedLease.poolHandle(), use.value(), 0, commandBuffer.address());
+        } catch (Throwable failure) {
+            submittedLease.fail();
+            throw failure;
+        }
     }
 
     @Override
     public void close() {
-        if (pool != 0L) {
-            VK10.vkDestroyCommandPool(ctx.vk(), pool, null);
-            pool = 0L;
+        if (lease != null) {
+            lease.close();
+            lease = null;
         }
     }
 }

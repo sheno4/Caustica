@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.client.mixin;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
 import net.minecraft.client.renderer.extract.LevelExtractor;
@@ -37,8 +38,9 @@ public class FabricLevelExtractorBlockEntityMixin {
             BlockEntityRenderDispatcher dispatcher, BlockEntity blockEntity, float partialTicks,
             ModelFeatureRenderer.CrumblingOverlay breakProgress, boolean isGloballyRendered,
             Operation<BlockEntityRenderState> original) {
-        return CausticaClientComposition.current().renderController().rtOwnsWorldRendering()
-                ? null
-                : original.call(dispatcher, blockEntity, partialTicks, breakProgress, isGloballyRendered);
+        try (var observation = MinecraftHostTelemetry.callback(MinecraftHostTelemetry.Callback.BLOCK_ENTITY)) {
+            if (CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) return null;
+        }
+        return original.call(dispatcher, blockEntity, partialTicks, breakProgress, isGloballyRendered);
     }
 }

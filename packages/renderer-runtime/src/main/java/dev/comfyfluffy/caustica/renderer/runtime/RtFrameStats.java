@@ -75,6 +75,10 @@ public final class RtFrameStats {
         return FRAME_EVENT.isEnabled() || STAGE_EVENT.isEnabled() || COUNTER_EVENT.isEnabled();
     }
 
+    static long counterDelta(long before, long after) {
+        return before < 0 || after < before ? -1L : after - before;
+    }
+
     /** Frame counters are accumulated on the host render thread; stages retain every invocation. */
     public static final class Profile implements Frame {
         private final String name;
@@ -164,8 +168,8 @@ public final class RtFrameStats {
             event.profile = name;
             event.startedNanos = frameStart;
             event.elapsedNanos = System.nanoTime() - frameStart;
-            event.threadCpuNanos = THREADS.getCurrentThreadCpuTime() - frameCpuStart;
-            event.allocatedBytes = THREADS.getCurrentThreadAllocatedBytes() - frameAllocationStart;
+            event.threadCpuNanos = counterDelta(frameCpuStart, THREADS.getCurrentThreadCpuTime());
+            event.allocatedBytes = counterDelta(frameAllocationStart, THREADS.getCurrentThreadAllocatedBytes());
             event.commit();
             Map<String, Long> values = new HashMap<>();
             for (int i = 0; i < counterNames.length; i++) values.put(counterNames[i], counters[i]);

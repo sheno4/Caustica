@@ -34,6 +34,7 @@ public final class RtRetainedGeometryPlan {
     public static final int HAS_VOLUME = 2;
     public static final int CUTOUT = 4;
     public static final int STOCHASTIC = 8;
+    public static final int GUARANTEED_SHADOW_BLOCKER = 16;
 
     private RtRetainedGeometryPlan() { }
 
@@ -94,7 +95,10 @@ public final class RtRetainedGeometryPlan {
             int flags = (geometry.surface() == null ? 0 : HAS_SURFACE)
                     | (geometry.volume() == null ? 0 : HAS_VOLUME)
                     | (cutout ? CUTOUT : 0)
-                    | (stochastic ? STOCHASTIC : 0);
+                    | (stochastic ? STOCHASTIC : 0)
+                    | (geometry.surface() != null
+                    && geometry.surface().shadow() == MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER
+                    ? GUARANTEED_SHADOW_BLOCKER : 0);
             float alphaCutoff = switch (coveragePolicy) {
                 case MeshBuild.CoveragePolicy.Cutout policy -> policy.alphaCutoff();
                 case MeshBuild.CoveragePolicy.Stochastic policy -> policy.guideAlphaCutoff();
@@ -168,6 +172,7 @@ public final class RtRetainedGeometryPlan {
             boolean anyHit = !volume && (record.flags() & (CUTOUT | STOCHASTIC)) != 0;
             groups.add(anyHit ? HitGroup.RADIANCE_CUTOUT : HitGroup.RADIANCE_OPAQUE);
             groups.add(volume ? HitGroup.SHADOW_TRANSMISSIVE
+                    : (record.flags() & GUARANTEED_SHADOW_BLOCKER) != 0 ? HitGroup.SHADOW_BLOCKER
                     : anyHit ? HitGroup.SHADOW_CUTOUT : HitGroup.SHADOW_OPAQUE);
         }
         return List.copyOf(groups);
@@ -195,6 +200,7 @@ public final class RtRetainedGeometryPlan {
         RADIANCE_CUTOUT,
         SHADOW_OPAQUE,
         SHADOW_CUTOUT,
-        SHADOW_TRANSMISSIVE
+        SHADOW_TRANSMISSIVE,
+        SHADOW_BLOCKER
     }
 }

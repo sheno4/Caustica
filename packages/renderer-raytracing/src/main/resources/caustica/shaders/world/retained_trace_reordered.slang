@@ -10,6 +10,16 @@ public struct RetainedReorderedTrace : IRetainedRadianceTrace {
                 WORLD_RAY_MASK_SECONDARY, 0u, 2u, 0u, ray, payload);
         uint coherenceHint = (pathPhaseHint << 1u) | (hit.GetShaderTableIndex() & 1u);
         ReorderThread(hit, coherenceHint, 4u);
-        HitObject::Invoke(worldAccelerationStructure(), hit, payload);
+        if (hit.IsMiss()) {
+            payload.hitDistance = -1.0;
+            payload.pathFlags |= WORLD_PATH_MISS;
+        } else {
+            payload.geometryRecordIndex = hit.GetInstanceID() + hit.GetGeometryIndex();
+            payload.primitiveIndex = hit.GetPrimitiveIndex();
+            payload.barycentrics = hit.GetAttributes<BuiltInTriangleIntersectionAttributes>().barycentrics;
+            // A hit object's ray limit is the accepted hit parameter.
+            payload.hitDistance = hit.GetRayDesc().TMax;
+            payload.pathFlags &= ~WORLD_PATH_MISS;
+        }
     }
 };

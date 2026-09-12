@@ -1,10 +1,12 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuDiagnosticCheckpoints;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.OwnedCommandBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -22,6 +24,7 @@ final class RtFrameCommands implements AutoCloseable {
     private static final class Stage {
         final OwnedCommandBuffer commands;
         RtGpuTiming.Stage timing;
+        DebugMarkers.Scope checkpoint = DebugMarkers.Scope.NOOP;
 
         Stage(OwnedCommandBuffer commands) { this.commands = commands; }
     }
@@ -41,6 +44,11 @@ final class RtFrameCommands implements AutoCloseable {
         return begin(label, false);
     }
 
+    DebugMarkers.Scope checkpoint(VkCommandBuffer command, String label) {
+        if (!GpuDiagnosticCheckpoints.ENABLED) return DebugMarkers.Scope.NOOP;
+        return GpuDiagnosticCheckpoints.begin(command, "frame " + frameId + " " + label, DebugMarkers.Scope.NOOP);
+    }
+
     RtGpuTiming.Stage time(String label) {
         RtGpuTiming.Stage timing = gpuTiming.begin(stages.getLast().commands.commandBuffer(), frameId, label);
         if (timing == null) return null;
@@ -54,6 +62,7 @@ final class RtFrameCommands implements AutoCloseable {
         if (!stages.isEmpty()) endLastStage();
         Stage stage = new Stage(context.beginGraphicsCommands(label, heaps));
         stages.add(stage);
+        stage.checkpoint = checkpoint(stage.commands.commandBuffer(), label);
         // Queue order alone does not make writes visible across command buffers.
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VulkanBarriers.memoryBarrier(stage.commands.commandBuffer(), stack);
@@ -67,6 +76,7 @@ final class RtFrameCommands implements AutoCloseable {
     private void endLastStage() {
         Stage stage = stages.getLast();
         if (stage.timing != null) stage.timing.close();
+        stage.checkpoint.close();
         stage.commands.end();
     }
 

@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import dev.comfyfluffy.caustica.minecraft.client.entity.ContainedBlockSource;
 import net.minecraft.client.renderer.block.BlockModelResolver;
 import net.minecraft.client.renderer.block.BlockModelRenderState;
@@ -19,6 +20,8 @@ public class BlockModelResolverMixin {
     @Inject(method = "update", at = @At("TAIL"))
     private void caustica$recordContained(BlockModelRenderState renderState, BlockState blockState,
                                           BlockDisplayContext displayContext, CallbackInfo ci) {
-        ((ContainedBlockSource) renderState).caustica$setContainedBlock(blockState);
+        try (var hostWork = MinecraftHostTelemetry.work("entity.containedMetadata")) {
+            ((ContainedBlockSource) renderState).caustica$setContainedBlock(blockState);
+        }
     }
 }

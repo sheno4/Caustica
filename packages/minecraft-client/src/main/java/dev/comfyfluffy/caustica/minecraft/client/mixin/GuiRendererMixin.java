@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
@@ -20,10 +21,12 @@ public abstract class GuiRendererMixin {
 			method = "draw",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;mainRenderTarget()Lcom/mojang/blaze3d/pipeline/RenderTarget;"))
 	private RenderTarget caustica$redirectGuiToOverlay(RenderTarget original) {
-		MinecraftUiOverlay overlay = CausticaClientComposition.current().uiOverlay();
-		if (original != null && overlay.enabled()) {
-			return overlay.beginAndRedirect(original);
+		try (var hostWork = MinecraftHostTelemetry.work("ui.redirectGui")) {
+			MinecraftUiOverlay overlay = CausticaClientComposition.current().uiOverlay();
+			if (original != null && overlay.enabled()) {
+				return overlay.beginAndRedirect(original);
+			}
+			return original;
 		}
-		return original;
 	}
 }

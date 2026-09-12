@@ -135,9 +135,11 @@ public final class MinecraftDebugService implements AutoCloseable {
                 future.whenComplete((result, error) -> CompletableFuture.delayedExecutor(10, TimeUnit.MINUTES)
                         .execute(() -> jobs.remove(id, future)));
                 client.execute(() -> {
-                    if (future.isDone()) return;
-                    try { execute(op, request, future); }
-                    catch (Exception e) { future.completeExceptionally(e); }
+                    try (var hostWork = MinecraftHostTelemetry.work("debug.task")) {
+                        if (future.isDone()) return;
+                        try { execute(op, request, future); }
+                        catch (Exception e) { future.completeExceptionally(e); }
+                    }
                 });
                 reply(exchange, 202, Map.of("ok", true, "jobId", id));
             } catch (Exception e) {
@@ -292,7 +294,7 @@ public final class MinecraftDebugService implements AutoCloseable {
         if (request.has("events")) {
             for (var name : request.getAsJsonArray("events")) events.add(name.getAsString());
         } else {
-            events.addAll(List.of("Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
+            events.addAll(List.of("HostLoop", "HostWork", "HostCallbackTotals", "HostSubmission", "Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
                     "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
                     "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication",
                     "TerrainDispatchPlan"));
@@ -479,10 +481,12 @@ public final class MinecraftDebugService implements AutoCloseable {
 
     /** Detaches this boundary's work before running it, so newly queued captures wait for its next visit. */
     public static void captureBoundary(CapturePhase phase) {
-        if (instance == null) return;
-        instance.passPhase = phase.id;
-        var pending = instance.captures.remove(phase);
-        if (pending != null) pending.forEach(Runnable::run);
+        try (var hostWork = MinecraftHostTelemetry.work("debug.captureBoundary")) {
+            if (instance == null) return;
+            instance.passPhase = phase.id;
+            var pending = instance.captures.remove(phase);
+            if (pending != null) pending.forEach(Runnable::run);
+        }
     }
 
     public static void beginFrame() {
@@ -494,17 +498,19 @@ public final class MinecraftDebugService implements AutoCloseable {
 
     /** Records host attachment identities only during an explicitly requested frame trace. */
     public static void renderPass(com.mojang.blaze3d.systems.RenderPassDescriptor descriptor) {
-        if (instance == null || instance.passTrace == null) return;
-        var main = instance.client.gameRenderer.mainRenderTarget().getColorTexture();
-        var colors = new ArrayList<Object>();
-        for (var attachment : descriptor.colorAttachments()) {
-            if (attachment == null) continue;
-            var view = (com.mojang.blaze3d.vulkan.VulkanGpuTextureView) attachment.textureView();
-            colors.add(Map.of("image", Long.toUnsignedString(view.texture().vkImage()),
-                    "view", Long.toUnsignedString(view.vkImageView()), "main", view.texture() == main,
-                    "width", view.getWidth(0), "height", view.getHeight(0)));
+        try (var hostWork = MinecraftHostTelemetry.work("debug.renderPass")) {
+            if (instance == null || instance.passTrace == null) return;
+            var main = instance.client.gameRenderer.mainRenderTarget().getColorTexture();
+            var colors = new ArrayList<Object>();
+            for (var attachment : descriptor.colorAttachments()) {
+                if (attachment == null) continue;
+                var view = (com.mojang.blaze3d.vulkan.VulkanGpuTextureView) attachment.textureView();
+                colors.add(Map.of("image", Long.toUnsignedString(view.texture().vkImage()),
+                        "view", Long.toUnsignedString(view.vkImageView()), "main", view.texture() == main,
+                        "width", view.getWidth(0), "height", view.getHeight(0)));
+            }
+            instance.passTrace.add(Map.of("phase", instance.passPhase, "label", descriptor.label().get(), "colors", colors));
         }
-        instance.passTrace.add(Map.of("phase", instance.passPhase, "label", descriptor.label().get(), "colors", colors));
     }
 
     public static void tick() {

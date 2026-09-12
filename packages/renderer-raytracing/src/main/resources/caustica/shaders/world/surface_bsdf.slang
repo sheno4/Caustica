@@ -6,6 +6,8 @@ import caustica_types;
 
 static const float SURFACE_PI = 3.14159265359;
 static const float SURFACE_INV_PI = 0.31830988618;
+// GGX lobes narrower than perceptual roughness 0.08 use deterministic specular transport.
+static const float SURFACE_MIN_GGX_ALPHA = 0.0064;
 
 float surfaceGgxD(float ndh, float alpha) {
     float a2 = alpha * alpha;
@@ -142,7 +144,7 @@ public SurfaceClosure surfaceClosure(OpenPbrSurface material, float3 geometryNor
     surface.thinTransmissionWeight = material.geometry_thin_walled
             ? dielectricWeight * transmissionWeight : 0.0;
     surface.boundaryWeight = boundaryWeight;
-    surface.deltaSurface = roughness <= 0.001;
+    surface.deltaSurface = surface.alphaRoughness < SURFACE_MIN_GGX_ALPHA;
     return surface;
 }
 

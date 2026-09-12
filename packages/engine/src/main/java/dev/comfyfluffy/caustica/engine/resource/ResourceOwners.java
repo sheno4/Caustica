@@ -59,7 +59,7 @@ public final class ResourceOwners implements FrameResources, AutoCloseable {
 
     private <B, N> MeshBuild.SurfaceSlot<B, N> surface(
             MeshBuild.SurfaceSlot<B, N> source) {
-        return new MeshBuild.SurfaceSlot<>(source.surface(), data(source.bindingData()), source.coverage());
+        return new MeshBuild.SurfaceSlot<>(source.surface(), data(source.bindingData()), source.coverage(), source.shadow());
     }
 
     private <B, N> MeshBuild.VolumeSlot<B, N> volume(

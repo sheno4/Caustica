@@ -22,6 +22,8 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -76,9 +78,31 @@ final class WorldShaderCompilerTest {
             assertTrue(compiler.composition().rootSource().contains(
                     "default: { ErrorEnvironment value;"));
             assertFalse(compiler.composition().rootSource().contains("SurfaceModifier"));
-            assertSpirv(compiler.compileClosestHit());
-            assertSpirv(compiler.compileRadianceAnyHit());
+            byte[] closest = compiler.compileClosestHit();
+            byte[] radianceAny = compiler.compileRadianceAnyHit();
+            byte[] environment = compiler.compileEnvironmentMiss();
+            for (byte[] stage : List.of(closest, radianceAny, environment)) {
+                assertSpirv(stage);
+                assertEquals(28, incomingPayloadBytes(stage));
+            }
+            assertVulkan14(cache.resolve("radiance-closest.spv"), closest);
+            assertVulkan14(cache.resolve("radiance-any.spv"), radianceAny);
+            assertVulkan14(cache.resolve("environment-miss.spv"), environment);
             assertSpirv(compiler.compileShadowAnyHit());
+            byte[] shadowClosest = compiler.compileShadowClosestHit();
+            byte[] shadowAny = compiler.compileShadowAnyHit();
+            byte[] shadowMiss = compiler.compilePlain("shadow.rmiss.slang", WorldShaderCompiler.ENTRY_POINT);
+            byte[] shadowBlocker = compiler.compilePlain("shadow_blocker.slang", WorldShaderCompiler.ENTRY_POINT);
+            for (byte[] stage : List.of(shadowClosest, shadowAny, shadowMiss, shadowBlocker)) {
+                assertSpirv(stage);
+                assertEquals(36, incomingPayloadBytes(stage));
+            }
+            assertVulkan14(cache.resolve("shadow-closest.spv"), shadowClosest);
+            assertVulkan14(cache.resolve("shadow-any.spv"), shadowAny);
+            assertVulkan14(cache.resolve("shadow-miss.spv"), shadowMiss);
+            assertVulkan14(cache.resolve("shadow-blocker.spv"), shadowBlocker);
+            assertEquals(1, countOpcode(shadowBlocker, 4449)); // OpTerminateRayKHR
+            assertEquals(0, countOpcode(shadowBlocker, 4448)); // OpIgnoreIntersectionKHR
             assertSpirv(compiler.compileEnvironmentMiss());
             assertSpirv(compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
             assertSpirv(compiler.compileBuildStablePlanes());
@@ -88,11 +112,86 @@ final class WorldShaderCompilerTest {
             assertSpirv(reordered);
             assertVulkan14(cache.resolve("fill-stable-planes-ordinary.spv"), ordinary);
             assertVulkan14(cache.resolve("fill-stable-planes-ser.spv"), reordered);
+            assertShadowTraceRouting(ordinary);
+            assertShadowTraceRouting(reordered);
         }
     }
 
     private static ShaderDefinition shader(String module, String type) {
         return new ShaderDefinition(BUILTINS, module, type);
+    }
+
+    private static Map<Integer, int[]> spirvDefinitions(byte[] spirv) {
+        var words = ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+        Map<Integer, int[]> definitions = new HashMap<>();
+        for (int offset = 5; offset < words.limit();) {
+            int count = words.get(offset) >>> 16;
+            int opcode = words.get(offset) & 65535;
+            int[] instruction = new int[count];
+            for (int i = 0; i < count; i++) instruction[i] = words.get(offset + i);
+            if (opcode >= 20 && opcode <= 32) definitions.put(instruction[1], instruction);
+            if (opcode == 43 || opcode == 59) definitions.put(instruction[2], instruction);
+            offset += count;
+        }
+        return definitions;
+    }
+
+    private static int typeBytes(Map<Integer, int[]> definitions, int id) {
+        int[] type = definitions.get(id);
+        return switch (type[0] & 65535) {
+            case 20 -> 4;
+            case 21, 22 -> type[2] / 8;
+            case 23 -> typeBytes(definitions, type[2]) * type[3];
+            case 30 -> {
+                int bytes = 0;
+                for (int i = 2; i < type.length; i++) bytes += typeBytes(definitions, type[i]);
+                yield bytes;
+            }
+            case 32 -> typeBytes(definitions, type[3]);
+            default -> throw new AssertionError("Unexpected payload type opcode " + (type[0] & 65535));
+        };
+    }
+
+    private static int incomingPayloadBytes(byte[] spirv) {
+        var definitions = spirvDefinitions(spirv);
+        return definitions.values().stream()
+                .filter(instruction -> (instruction[0] & 65535) == 59 && instruction[3] == 5342)
+                .mapToInt(instruction -> typeBytes(definitions, instruction[1])).findFirst().orElseThrow();
+    }
+
+    private static void assertShadowTraceRouting(byte[] spirv) {
+        var definitions = spirvDefinitions(spirv);
+        var words = ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+        int shadowQueries = 0;
+        for (int offset = 5; offset < words.limit();) {
+            int count = words.get(offset) >>> 16;
+            if ((words.get(offset) & 65535) == 4445) {
+                int[] payload = definitions.get(words.get(offset + 11));
+                assertEquals(28, typeBytes(definitions, payload[1]));
+                assertEquals(0, definitions.get(words.get(offset + 2))[3]);
+                assertEquals(0, definitions.get(words.get(offset + 4))[3]);
+                assertEquals(2, definitions.get(words.get(offset + 5))[3]);
+                assertEquals(0, definitions.get(words.get(offset + 6))[3]);
+            } else if ((words.get(offset) & 65535) == 4473) { // OpRayQueryInitializeKHR
+                assertEquals(2, definitions.get(words.get(offset + 3))[3]); // NoOpaqueKHR
+                assertEquals(1, definitions.get(words.get(offset + 4))[3]); // Secondary mask
+                shadowQueries++;
+            }
+            offset += count;
+        }
+        assertEquals(1, shadowQueries);
+        assertTrue(countOpcode(spirv, 4477) > 0); // OpRayQueryProceedKHR
+        assertTrue(countOpcode(spirv, 4476) > 0); // OpRayQueryConfirmIntersectionKHR
+        assertTrue(countOpcode(spirv, 4474) > 0); // OpRayQueryTerminateKHR
+    }
+
+    private static int countOpcode(byte[] spirv, int opcode) {
+        var words = ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+        int found = 0;
+        for (int offset = 5; offset < words.limit(); offset += words.get(offset) >>> 16) {
+            if ((words.get(offset) & 65535) == opcode) found++;
+        }
+        return found;
     }
 
     private static void assertSpirv(byte[] spirv) {

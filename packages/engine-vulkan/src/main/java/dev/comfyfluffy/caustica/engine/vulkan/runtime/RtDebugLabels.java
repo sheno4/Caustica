@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuDiagnosticCheckpoints;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR;
 
@@ -39,6 +40,9 @@ public final class RtDebugLabels {
         if (ctx == null || cmd == null || label == null || label.isBlank()) {
             return DebugMarkers.Scope.NOOP;
         }
-        return ctx.backend().debugMarkers().begin(cmd, PREFIX + label);
+        String debugLabel = PREFIX + label;
+        var scope = ctx.backend().debugMarkers().begin(cmd, debugLabel);
+        if (GpuDiagnosticCheckpoints.ENABLED) return GpuDiagnosticCheckpoints.begin(cmd, debugLabel, scope);
+        return scope;
     }
 }

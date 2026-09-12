@@ -14,6 +14,7 @@ import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.engine.resource.ResourceDirectory;
+import dev.comfyfluffy.caustica.support.SharedResource;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -44,6 +45,7 @@ public final class ProgramSession {
     private List<Registration<?>> published = List.of();
     private long resolutionRevision;
     private BuildRequest inFlight;
+    private BuildRequest publishedBuild;
     private final int[] nextDeclarationSequences = new int[ProgramKey.Kind.values().length];
     private boolean declarationActive;
 
@@ -224,11 +226,12 @@ public final class ProgramSession {
                 if (introduced == null) return;
                 target = append(published, introduced);
             }
-            request = new BuildRequest(target, introduced);
+            request = new BuildRequest(target, introduced,
+                    target.stream().map(registration -> registration.lifetime.retain()).toList());
             inFlight = request;
         }
-        ProgramComposition composition = composition(request);
         try {
+            ProgramComposition composition = composition(request);
             backend.compile(composition, result -> {
                 compilerCompletions.add(new CompletionEvent(request, Objects.requireNonNull(result)));
                 synchronized (this) { notifyAll(); }
@@ -257,13 +260,18 @@ public final class ProgramSession {
     private void acceptCompletion(CompletionEvent event) {
         synchronized (this) {
             if (inFlight != event.request) {
-                if (event.result instanceof ProgramBackend.Compilation.Succeeded succeeded) {
-                    succeeded.program().close();
+                try {
+                    if (event.result instanceof ProgramBackend.Compilation.Succeeded succeeded) {
+                        succeeded.program().close();
+                    }
+                } finally {
+                    event.request.close();
                 }
                 return;
             }
             inFlight = null;
             if (event.result instanceof ProgramBackend.Compilation.Failed failed) {
+                event.request.close();
                 if (event.request.introduced != null) {
                     Registration<?> registration = event.request.introduced;
                     if (!registration.closed && registration.completion == null) {
@@ -284,9 +292,13 @@ public final class ProgramSession {
             ProgramBackend.CompiledProgram candidate =
                     ((ProgramBackend.Compilation.Succeeded) event.result).program();
             if (!valid(event.request)) {
-                candidate.close();
-                if (event.request.introduced != null && event.request.introduced.closed) {
-                    retire(event.request.introduced);
+                try {
+                    candidate.close();
+                } finally {
+                    event.request.close();
+                    if (event.request.introduced != null && event.request.introduced.closed) {
+                        retire(event.request.introduced);
+                    }
                 }
                 return;
             }
@@ -294,8 +306,13 @@ public final class ProgramSession {
             List<Registration<?>> previous = published;
             List<Registration<?>> removed = previous.stream()
                     .filter(registration -> !event.request.target.contains(registration)).toList();
-            backend.publish(candidate, () -> enqueue(null, () -> removed.forEach(this::retire)));
+            BuildRequest previousBuild = publishedBuild;
+            backend.publish(candidate, () -> {
+                if (previousBuild != null) previousBuild.close();
+            });
+            publishedBuild = event.request;
             removed.forEach(registration -> registration.published = false);
+            removed.forEach(this::retire);
             event.request.target.forEach(registration -> registration.published = true);
             published = event.request.target;
             resolutionRevision++;
@@ -348,6 +365,11 @@ public final class ProgramSession {
     }
 
     private void retire(Registration<?> registration) {
+        registration.lifetime.close();
+    }
+
+    /** Registration teardown follows its producer claim and every independently retained composition. */
+    private void releaseRegistration(Registration<?> registration) {
         synchronized (this) {
             if (registration.retired) return;
             registration.retired = true;
@@ -421,7 +443,11 @@ public final class ProgramSession {
         return new ProgramKey(kind, ++nextDeclarationSequences[ordinal]);
     }
 
-    private record BuildRequest(List<Registration<?>> target, Registration<?> introduced) { }
+    /** Compiler candidates and published programs each own their complete implementation dependency set. */
+    private record BuildRequest(List<Registration<?>> target, Registration<?> introduced,
+                                List<SharedResource<Registration<?>>> resources) implements AutoCloseable {
+        @Override public void close() { resources.forEach(SharedResource::close); }
+    }
     private record CompletionEvent(BuildRequest request, ProgramBackend.Compilation result) { }
     private record CallbackTask(ProgramContributionChannel channel, Runnable action) { }
 
@@ -552,6 +578,7 @@ public final class ProgramSession {
         private final E exports;
         private final List<Declaration> declarations;
         private final List<ResourceOwner> resourceLeases;
+        private final SharedResource<Registration<?>> lifetime;
         private final List<Consumer<? super Completion>> observers = new ArrayList<>();
         private Completion completion;
         private boolean closed;
@@ -566,6 +593,8 @@ public final class ProgramSession {
             this.exports = exports;
             this.declarations = List.copyOf(declarations);
             this.resourceLeases = resourceLeases;
+            lifetime = SharedResource.owned(this,
+                    registration -> session.enqueue(channel, () -> session.releaseRegistration(registration)));
         }
 
         @Override public E exports() { return exports; }

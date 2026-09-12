@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.client.mixin;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanUtils;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanDiagnostics;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import org.lwjgl.vulkan.VK10;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -16,8 +17,10 @@ public abstract class VulkanUtilsMixin {
             at = @At("HEAD"))
     private static void caustica$reportDeviceFault(VulkanDevice device, int result, String message,
                                                     CallbackInfo ci) {
-        if (result == VK10.VK_ERROR_DEVICE_LOST) {
-            MinecraftVulkanDiagnostics.reportDeviceLost(device, message);
+        try (var observation = MinecraftHostTelemetry.callback(MinecraftHostTelemetry.Callback.VULKAN_RESULT)) {
+            if (result == VK10.VK_ERROR_DEVICE_LOST) {
+                MinecraftVulkanDiagnostics.reportDeviceLost(device, message);
+            }
         }
     }
 }

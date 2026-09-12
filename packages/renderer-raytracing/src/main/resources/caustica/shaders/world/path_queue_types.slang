@@ -1,6 +1,6 @@
 module path_queue_types;
 
-// One restart ray per stable plane. Only the build/fill boundary uses device storage.
+// One restart ray per stable plane; build also stores queued paths in future endpoint slots.
 public struct PackedPathSegment {
     public float3 origin;
     public float hitDistance;
@@ -12,5 +12,7 @@ public struct PackedPathSegment {
     public uint flags;
 };
 public static const uint PATH_ENDPOINT_VALID = 1u;
-public static const uint PATH_ENDPOINT_CONTINUOUS = 2u;
+// Delegated delta lobes are owned by another plane; the endpoint samples every remaining lobe.
+public static const uint PATH_ENDPOINT_DELEGATED_REFLECTION = 2u;
 public static const uint PATH_ENDPOINT_VOLUME = 4u;
+public static const uint PATH_ENDPOINT_DELEGATED_TRANSMISSION = 8u;

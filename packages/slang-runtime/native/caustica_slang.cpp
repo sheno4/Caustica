@@ -286,6 +286,7 @@ int32_t caustica_slang_session_create(
     try
     {
         std::vector<slang::CompilerOptionEntry> options;
+        options.push_back(int_option(slang::CompilerOptionName::Optimization, SLANG_OPTIMIZATION_LEVEL_MAXIMAL));
         options.push_back(int_option(slang::CompilerOptionName::EmitSpirvDirectly, 1));
         options.push_back(int_option(slang::CompilerOptionName::DiagnosticColor, SLANG_DIAGNOSTIC_COLOR_NEVER));
         options.push_back(string_option(slang::CompilerOptionName::DisableWarnings, "41012"));

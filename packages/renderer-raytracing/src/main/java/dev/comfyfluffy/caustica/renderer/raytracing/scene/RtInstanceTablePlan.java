@@ -120,10 +120,11 @@ final class RtInstanceTablePlan {
                     row(rows, 0), row(rows, 4), row(rows, 8));
         }
 
-        private boolean matches(Input next) {
-            return input.identity() == next.identity() && input.placementOrdinal() == next.placementOrdinal()
-                    && input.mesh() == next.mesh() && input.transform().equals(next.transform())
-                    && input.instanceData() == next.instanceData();
+        private boolean matches(long identity, long placementOrdinal, MeshBuild<?> mesh,
+                                GeometryTransform transform, long instanceData) {
+            return input.identity() == identity && input.placementOrdinal() == placementOrdinal
+                    && input.mesh() == mesh && input.transform().equals(transform)
+                    && input.instanceData() == instanceData;
         }
     }
 
@@ -143,27 +144,55 @@ final class RtInstanceTablePlan {
 
         /** The previous table belongs to this builder's token namespace and the same retained scene. */
         RtInstanceTablePlan build(List<Input> inputs, RtInstanceTablePlan previous) {
-            int capacity = 1;
-            int minimum = Math.multiplyExact(inputs.size(), 2);
-            while (capacity < minimum) capacity = Math.multiplyExact(capacity, 2);
-            InstanceRecord[] records = new InstanceRecord[capacity];
+            var assembly = begin(inputs.size(), previous);
             for (Input input : inputs) {
-                int slot = hash(input.identity(), input.placementOrdinal()) & (capacity - 1);
+                assembly.add(input.identity(), input.placementOrdinal(), input.mesh(),
+                        input.transform(), input.instanceData());
+            }
+            return assembly.finish();
+        }
+
+        /** The caller adds the declared number of instances in their snapshot traversal order. */
+        Assembly begin(int instanceCount, RtInstanceTablePlan previous) {
+            int capacity = 1;
+            int minimum = Math.multiplyExact(instanceCount, 2);
+            while (capacity < minimum) capacity = Math.multiplyExact(capacity, 2);
+            return new Assembly(new InstanceRecord[capacity], previous);
+        }
+
+        /** Owns unpublished slots; finishing transfers their immutable contents to the table. */
+        final class Assembly {
+            private final InstanceRecord[] records;
+            private final RtInstanceTablePlan previous;
+
+            private Assembly(InstanceRecord[] records, RtInstanceTablePlan previous) {
+                this.records = records;
+                this.previous = previous;
+            }
+
+            void add(long identity, long placementOrdinal, MeshBuild<?> mesh,
+                     GeometryTransform transform, long instanceData) {
+                if (identity == 0) throw new IllegalArgumentException("instance identity must be nonzero");
+                if (placementOrdinal < 0) throw new IllegalArgumentException("placement ordinal must be non-negative");
+                int slot = hash(identity, placementOrdinal) & (records.length - 1);
                 while (records[slot] != null) {
                     InstanceRecord present = records[slot];
-                    if (present.identity() == input.identity()
-                            && present.placementOrdinal() == input.placementOrdinal()) {
+                    if (present.identity() == identity && present.placementOrdinal() == placementOrdinal) {
                         throw new IllegalArgumentException("duplicate instance placement");
                     }
-                    slot = (slot + 1) & (capacity - 1);
+                    slot = (slot + 1) & (records.length - 1);
                 }
-                int previousSlot = previous == null ? -1 : previous.slot(input.identity(), input.placementOrdinal());
+                int previousSlot = previous == null ? -1 : previous.slot(identity, placementOrdinal);
                 InstanceRecord prior = previousSlot < 0 ? null : previous.records[previousSlot];
-                records[slot] = prior != null && prior.matches(input) ? prior
-                        : new InstanceRecord(input, tokens(input.mesh()));
+                records[slot] = prior != null && prior.matches(identity, placementOrdinal, mesh, transform, instanceData)
+                        ? prior : new InstanceRecord(new Input(identity, placementOrdinal, mesh, transform, instanceData),
+                                tokens(mesh));
             }
-            return previous != null && Arrays.equals(previous.records, records) ? previous
-                    : new RtInstanceTablePlan(records);
+
+            RtInstanceTablePlan finish() {
+                return previous != null && Arrays.equals(previous.records, records) ? previous
+                        : new RtInstanceTablePlan(records);
+            }
         }
 
         private MeshTokens tokens(MeshBuild<?> mesh) {

@@ -47,6 +47,7 @@ public final class RtTerrain {
     private final TerrainUpdates<Build> updates;
     private final TerrainDispatchPlanner<Build> dispatchPlanner;
     private final TerrainWindow window = new TerrainWindow();
+    private final TerrainWindowObserver windowObserver = new TerrainWindowObserver();
     private final ConcurrentLinkedQueue<TerrainWindow.Observation> pendingWindows = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean windowScheduled = new AtomicBoolean();
     private final ConcurrentLinkedQueue<List<Long>> dirty = new ConcurrentLinkedQueue<>();
@@ -234,16 +235,8 @@ public final class RtTerrain {
         int radius = Math.max(1, mc.options.getEffectiveRenderDistance());
         int cx = mc.player.getBlockX() >> 4;
         int cz = mc.player.getBlockZ() >> 4;
-        var available = new it.unimi.dsi.fastutil.longs.LongArrayList();
         ClientChunkCache chunks = world.getChunkSource();
-        for (int x = cx - radius - 1; x <= cx + radius + 1; x++) {
-            for (int z = cz - radius - 1; z <= cz + radius + 1; z++) {
-                if (!chunks.hasChunk(x, z)) continue;
-                long column = columnKey(x, z);
-                available.add(column);
-            }
-        }
-        pendingWindows.add(new TerrainWindow.Observation(epoch, cx, cz, radius, minY, maxY, available.toLongArray()));
+        pendingWindows.add(windowObserver.observe(epoch, cx, cz, radius, minY, maxY, chunks::hasChunk));
         scheduleWindow();
         lowY = minY;
         highY = maxY;

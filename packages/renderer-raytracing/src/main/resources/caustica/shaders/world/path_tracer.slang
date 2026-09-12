@@ -9,6 +9,7 @@ import world_minimal;
 import world_common;
 import caustica_api;
 import trace_transport;
+import closest_hit;
 import retained_trace_policy;
 import stable_planes;
 import stable_plane_types;
@@ -32,19 +33,20 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
         float signalDistance = 0.0, diffuseWeight = 0.0, diffuseDistanceSum = 0.0;
         uint seed = traceSeed(pixel, frame.frameIndex, plane);
         while (true) {
-            WorldPayload hit = {};
-            hit.seed = seed;
-            hit.previousBsdfPdf = previousPdf;
-            hit.pathFlags = first ? WORLD_PATH_GUIDE : 0u;
+            WorldPayload intersection = {};
+            intersection.seed = seed;
             RayDesc ray = traceRay(path);
             if (first) {
+                // Restart coverage is deterministic, but fill does not consume reconstruction history.
+                intersection.pathFlags = WORLD_PATH_PRIMARY;
                 ray.TMin = max(traceEpsilon(), path.hitDistance * 0.99);
                 ray.TMax = path.hitDistance * 1.01 + traceEpsilon();
                 uint mask = path.depth == 0u ? WORLD_RAY_MASK_PRIMARY : WORLD_RAY_MASK_SECONDARY;
-                TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, hit);
+                TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, intersection);
             } else {
-                tracer.trace(hit, ray, path.depth > frame.maxBounces ? 1u : 0u);
+                tracer.trace(intersection, ray, path.depth > frame.maxBounces ? 1u : 0u);
             }
+            WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, previousPdf);
             bool missed = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
             float distance = missed ? TRACE_MAX_DISTANCE : hit.hitDistance;
             path.throughput *= exp(-path.absorption * distance);
@@ -73,9 +75,12 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
             }
             // The last scatter's emission is consumed before stopping, preserving the NEE/MIS pair.
             if (missed || path.depth > frame.maxBounces) break;
-            bool continuousOnly = first && (path.flags & PATH_ENDPOINT_CONTINUOUS) != 0u;
-            TraceLobes lobes = traceLobes(path, hit, continuousOnly);
-            TraceDirect direct = traceDirect(path, hit, lobes, pixel, coherent, seed);
+            TraceLobes lobes = traceLobes(path, hit);
+            if (first) {
+                float retainedProbability;
+                lobes = traceResidualLobes(lobes, path.flags, retainedProbability);
+            }
+            TraceDirect direct = traceDirect<TComposition>(path, hit, lobes, pixel, coherent, seed);
             float3 diffuse = path.throughput * direct.diffuse;
             float3 specular = path.throughput * direct.specular;
             if (first) {

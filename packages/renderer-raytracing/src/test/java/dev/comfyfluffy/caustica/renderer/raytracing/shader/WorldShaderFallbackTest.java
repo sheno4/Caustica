@@ -64,6 +64,7 @@ final class WorldShaderFallbackTest {
             assertSpirv(compiler.compileClosestHit());
             assertSpirv(compiler.compileRadianceAnyHit());
             assertSpirv(compiler.compileShadowAnyHit());
+            assertSpirv(compiler.compileShadowClosestHit());
         }
     }
 

@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
@@ -291,10 +292,15 @@ public abstract class VulkanGpuSurfaceMixin {
 			at = @At(value = "INVOKE",
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkQueuePresentKHR(Lorg/lwjgl/vulkan/VkQueue;Lorg/lwjgl/vulkan/VkPresentInfoKHR;)I"))
 	private int caustica$presentWithReflex(VkQueue queue, VkPresentInfoKHR presentInfo) {
-		MinecraftVulkanBackend backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
-		VulkanLowLatency lowLatency = backend == null ? null : backend.lowLatency();
-		boolean reflexActive = lowLatency != null && lowLatency.active()
-				&& this.swapchain == lowLatency.appliedSwapchain();
+		MinecraftVulkanBackend backend;
+		VulkanLowLatency lowLatency;
+		boolean reflexActive;
+		try (var hostWork = MinecraftHostTelemetry.work("reflex.presentGate")) {
+			backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
+			lowLatency = backend == null ? null : backend.lowLatency();
+			reflexActive = lowLatency != null && lowLatency.active()
+					&& this.swapchain == lowLatency.appliedSwapchain();
+		}
 		if (!reflexActive) {
 			return KHRSwapchain.vkQueuePresentKHR(queue, presentInfo);
 		}
@@ -303,9 +309,12 @@ public abstract class VulkanGpuSurfaceMixin {
 		// Minecraft.setScreenAndShow's synchronous redraw when opening a world), so presentID must advance on
 		// every actual vkQueuePresentKHR call, not just once per sleep()/runTick — otherwise a stale, already-
 		// used id gets resent and VUID-VkPresentIdKHR-presentIds-04999 fires.
-		long presentId = lowLatency.advancePresentId();
-		lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.RENDER_SUBMIT_END, presentId);
-		lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.PRESENT_START, presentId);
+		long presentId;
+		try (var hostWork = MinecraftHostTelemetry.work("reflex.presentStart")) {
+			presentId = lowLatency.advancePresentId();
+			lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.RENDER_SUBMIT_END, presentId);
+			lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.PRESENT_START, presentId);
+		}
 		int result;
 		if (backend.capabilities().presentIds()) {
 			try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -323,7 +332,9 @@ public abstract class VulkanGpuSurfaceMixin {
 		} else {
 			result = KHRSwapchain.vkQueuePresentKHR(queue, presentInfo);
 		}
-		lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.PRESENT_END, presentId);
+		try (var hostWork = MinecraftHostTelemetry.work("reflex.presentEnd")) {
+			lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.PRESENT_END, presentId);
+		}
 		return result;
 	}
 
@@ -338,45 +349,47 @@ public abstract class VulkanGpuSurfaceMixin {
 	 */
 	@Inject(method = "blitFromTexture", at = @At("HEAD"), cancellable = true)
 	private void caustica$presentHdr(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
-		try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.hdr")) {
-			// The mastering peak is a live option and selects a different baked ACES output LUT without forcing
-			// swapchain recreation. Refresh the metadata once when that selected LUT changes.
-			caustica$applyHdrMetadataIfNeeded();
-			if (this.currentImageIndex < 0) {
-				return;
-			}
-			MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
-			if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
-				VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
-				GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
-				UiPresentationResources ui = CausticaClientComposition.current().uiOverlay().capturePresentation();
-				presentation.presentHdr(submission, caustica$acquiredTarget(), ui);
-				if (ui.populated() && ui.colorView() != 0L) {
-					CausticaClientComposition.current().uiOverlay().markConsumed();
+		try (var hostWork = MinecraftHostTelemetry.work("presentation.hdr")) {
+			try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.hdr")) {
+				// The mastering peak is a live option and selects a different baked ACES output LUT without forcing
+				// swapchain recreation. Refresh the metadata once when that selected LUT changes.
+				caustica$applyHdrMetadataIfNeeded();
+				if (this.currentImageIndex < 0) {
+					return;
 				}
-				caustica$prepareGeneratedFrameHdr(submission, ui);
-				ci.cancel();
-				return;
-			}
-			// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
-			// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white using the
-			// active Vulkan context and RGBA8 source; conversion resources are created on demand.
-			if (CausticaClientComposition.current().runtime().isPqSdrPresentActive()) {
-				VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
-				if (gpu != null && textureView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView view
-						&& view.texture().getFormat() == com.mojang.blaze3d.GpuFormat.RGBA8_UNORM) {
-					if (caustica$sdrPresentationSource == null || !caustica$sdrPresentationSource.wraps(
-							gpu, view, this.swapchainWidth, this.swapchainHeight)) {
-						MinecraftVulkanImage old = caustica$sdrPresentationSource;
-						caustica$sdrPresentationSource = MinecraftVulkanImage.sampled(gpu, view,
-								this.swapchainWidth, this.swapchainHeight, VK10.VK_FORMAT_R8G8B8A8_UNORM);
-						if (old != null) old.close();
+				MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
+				if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
+					VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
+					GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
+					UiPresentationResources ui = CausticaClientComposition.current().uiOverlay().capturePresentation();
+					presentation.presentHdr(submission, caustica$acquiredTarget(), ui);
+					if (ui.populated() && ui.colorView() != 0L) {
+						CausticaClientComposition.current().uiOverlay().markConsumed();
 					}
-					if (presentation.presentSdrToPq(
-						MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder),
-						caustica$acquiredTarget(),
-						caustica$sdrPresentationSource)) {
+					caustica$prepareGeneratedFrameHdr(submission, ui);
 					ci.cancel();
+					return;
+				}
+				// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
+				// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white using the
+				// active Vulkan context and RGBA8 source; conversion resources are created on demand.
+				if (CausticaClientComposition.current().runtime().isPqSdrPresentActive()) {
+					VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
+					if (gpu != null && textureView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView view
+							&& view.texture().getFormat() == com.mojang.blaze3d.GpuFormat.RGBA8_UNORM) {
+						if (caustica$sdrPresentationSource == null || !caustica$sdrPresentationSource.wraps(
+								gpu, view, this.swapchainWidth, this.swapchainHeight)) {
+							MinecraftVulkanImage old = caustica$sdrPresentationSource;
+							caustica$sdrPresentationSource = MinecraftVulkanImage.sampled(gpu, view,
+									this.swapchainWidth, this.swapchainHeight, VK10.VK_FORMAT_R8G8B8A8_UNORM);
+							if (old != null) old.close();
+						}
+						if (presentation.presentSdrToPq(
+							MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder),
+							caustica$acquiredTarget(),
+							caustica$sdrPresentationSource)) {
+						ci.cancel();
+						}
 					}
 				}
 			}
@@ -413,22 +426,24 @@ public abstract class VulkanGpuSurfaceMixin {
 	 */
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
 	private void caustica$prepareGeneratedFrame(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
-		try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.frameGeneration")) {
-			if (this.currentImageIndex < 0
-					|| !CausticaClientComposition.current().runtime().frameGenerationActive(Minecraft.getInstance().level != null)) {
-				return;
+		try (var hostWork = MinecraftHostTelemetry.work("presentation.frameGeneration")) {
+			try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.frameGeneration")) {
+				if (this.currentImageIndex < 0
+						|| !CausticaClientComposition.current().runtime().frameGenerationActive(Minecraft.getInstance().level != null)) {
+					return;
+				}
+				long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
+				long srcView = caustica$vkImageView(textureView);
+				if (srcImage == 0L) {
+					return;
+				}
+				MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
+				presentation.prepareGeneratedFrame(
+						MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), caustica$swapchain(),
+						new BorrowedImage(srcImage, srcView, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+								this.swapchainWidth, this.swapchainHeight), false,
+						CausticaClientComposition.current().uiOverlay().capturePresentation());
 			}
-			long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
-			long srcView = caustica$vkImageView(textureView);
-			if (srcImage == 0L) {
-				return;
-			}
-			MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
-			presentation.prepareGeneratedFrame(
-					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), caustica$swapchain(),
-					new BorrowedImage(srcImage, srcView, VK10.VK_FORMAT_R8G8B8A8_UNORM,
-							this.swapchainWidth, this.swapchainHeight), false,
-					CausticaClientComposition.current().uiOverlay().capturePresentation());
 		}
 	}
 
@@ -484,8 +499,10 @@ public abstract class VulkanGpuSurfaceMixin {
 	// presents the real frame, giving display order generated-then-real.
 	@Inject(method = "present", at = @At("HEAD"))
 	private void caustica$flushGeneratedPresent(CallbackInfo ci) {
-		try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.generatedPresent")) {
-			CausticaClientComposition.current().runtime().flushGeneratedPresent(caustica$swapchain(), this.presentQueue);
+		try (var hostWork = MinecraftHostTelemetry.work("presentation.generatedPresent")) {
+			try (var ignored = CausticaClientComposition.current().runtime().profileStage("presentation.generatedPresent")) {
+				CausticaClientComposition.current().runtime().flushGeneratedPresent(caustica$swapchain(), this.presentQueue);
+			}
 		}
 	}
 }

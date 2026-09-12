@@ -8,6 +8,8 @@ import world_minimal;
 import retained_lights;
 import surface_bsdf;
 import path_queue_types;
+import closest_hit;
+import caustica_coverage;
 
 public static const float TRACE_MAX_DISTANCE = 10000.0;
 
@@ -33,7 +35,7 @@ public RayDesc traceRay(PackedPathSegment path) {
     return ray;
 }
 
-public PackedPathSegment traceAdvance(PackedPathSegment path, WorldPayload hit,
+public PackedPathSegment traceAdvance(PackedPathSegment path, WorldHit hit,
         float3 direction, float3 weight, bool crossesBoundary) {
     path.origin = hit.position + hit.geometricNormal
             * (dot(hit.geometricNormal, direction) >= 0.0 ? 2.0 : -2.0) * traceEpsilon();
@@ -71,24 +73,22 @@ float traceFresnel(float cosine, float etaI, float etaT) {
     return 0.5 * (rs * rs + rp * rp);
 }
 
-public TraceLobes traceLobes(PackedPathSegment path, WorldPayload hit, bool continuousOnly) {
+public TraceLobes traceLobes(PackedPathSegment path, WorldHit hit) {
     TraceLobes lobes = {};
     float3 outgoing = -path.direction;
     float3 normal = hit.surface.shadingNormal;
     lobes.reflectedDirection = reflect(path.direction, normal);
     lobes.transmittedDirection = path.direction;
-    if (!continuousOnly) {
-        surfaceDeltaLobes(hit.surface, outgoing, lobes.reflection, lobes.transmission);
-        if (hit.surface.boundaryWeight > 0.0) {
-            float cosine = max(dot(outgoing, normal), 0.0);
-            float fresnel = traceFresnel(cosine, path.ior, hit.volumeIor);
-            lobes.reflection += hit.surface.boundaryWeight * fresnel;
-            lobes.transmittedDirection = refract(path.direction, normal, path.ior / hit.volumeIor);
-            lobes.transmission += hit.surface.boundaryWeight * (1.0 - fresnel)
-                    * hit.surface.thinTransmissionColor
-                    * ((path.ior * path.ior) / (hit.volumeIor * hit.volumeIor));
-            lobes.volumeTransmission = true;
-        }
+    surfaceDeltaLobes(hit.surface, outgoing, lobes.reflection, lobes.transmission);
+    if (hit.surface.boundaryWeight > 0.0) {
+        float cosine = max(dot(outgoing, normal), 0.0);
+        float fresnel = traceFresnel(cosine, path.ior, hit.volumeIor);
+        lobes.reflection += hit.surface.boundaryWeight * fresnel;
+        lobes.transmittedDirection = refract(path.direction, normal, path.ior / hit.volumeIor);
+        lobes.transmission += hit.surface.boundaryWeight * (1.0 - fresnel)
+                * hit.surface.thinTransmissionColor
+                * ((path.ior * path.ior) / (hit.volumeIor * hit.volumeIor));
+        lobes.volumeTransmission = true;
     }
     float3 diffuse, specular;
     surfaceDenoiserEstimates(hit.surface, outgoing, diffuse, specular);
@@ -105,7 +105,30 @@ public TraceLobes traceLobes(PackedPathSegment path, WorldPayload hit, bool cont
     return lobes;
 }
 
-public bool traceScatter(inout PackedPathSegment path, WorldPayload hit, TraceLobes lobes,
+// Keep RGB lobe weights intact while conditioning sampling on this endpoint's owned transport.
+// The pre-normalization share is only a guide-dominance estimate, never a radiance multiplier.
+public TraceLobes traceResidualLobes(TraceLobes lobes, uint endpointFlags, out float retainedProbability) {
+    retainedProbability = 1.0;
+    if ((endpointFlags & (PATH_ENDPOINT_DELEGATED_REFLECTION | PATH_ENDPOINT_DELEGATED_TRANSMISSION)) == 0u)
+        return lobes;
+    if ((endpointFlags & PATH_ENDPOINT_DELEGATED_REFLECTION) != 0u) {
+        lobes.reflection = float3(0.0);
+        lobes.reflectionProbability = 0.0;
+    }
+    if ((endpointFlags & PATH_ENDPOINT_DELEGATED_TRANSMISSION) != 0u) {
+        lobes.transmission = float3(0.0);
+        lobes.transmissionProbability = 0.0;
+    }
+    retainedProbability = lobes.continuousProbability + lobes.reflectionProbability + lobes.transmissionProbability;
+    if (retainedProbability > 0.0) {
+        lobes.continuousProbability /= retainedProbability;
+        lobes.reflectionProbability /= retainedProbability;
+        lobes.transmissionProbability /= retainedProbability;
+    }
+    return lobes;
+}
+
+public bool traceScatter(inout PackedPathSegment path, WorldHit hit, TraceLobes lobes,
         inout uint seed, out float pdf, out uint event) {
     pdf = 0.0;
     event = EVENT_NONE;
@@ -136,7 +159,95 @@ public bool traceScatter(inout PackedPathSegment path, WorldPayload hit, TraceLo
     return true;
 }
 
-public float3 traceVisibility(PackedPathSegment path, WorldPayload hit,
+public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
+        uint seed, float3 absorption, float ior) {
+    ShadowPayload shadow = {};
+    shadow.seed = seed;
+    shadow.volumeAbsorption = absorption;
+    shadow.volumeIor = ior;
+    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> query;
+    query.TraceRayInline(worldAccelerationStructure(), RAY_FLAG_NONE,
+            WORLD_RAY_MASK_SECONDARY, ray);
+    while (query.Proceed()) {
+        uint instanceBase = query.CandidateInstanceID();
+        uint geometryIndex = query.CandidateGeometryIndex();
+        uint primitiveIndex = query.CandidatePrimitiveIndex();
+        RetainedGeometryRecord record = ((ConstPtr<RetainedGeometryRecord>)worldBindings.geometryTableAddress)
+                [instanceBase + geometryIndex];
+        // A certified blocker has full coverage and zero transmission across its entire revision.
+        if ((record.flags & RETAINED_GEOMETRY_GUARANTEED_SHADOW_BLOCKER) != 0u) {
+            shadow.hitDistance = query.CandidateTriangleRayT();
+            query.Abort();
+            return shadow;
+        }
+        if ((record.flags & RETAINED_GEOMETRY_HAS_VOLUME) == 0u) {
+            CoverageInput input = {};
+            input.shaderRoot = worldShaderRoot();
+            input.bindingData = record.surfaceBinding;
+            input.instanceData = worldInstanceRecord(record).instanceData;
+            input.primitiveIndex = primitiveIndex;
+            input.barycentrics = query.CandidateTriangleBarycentrics();
+            TComposition.Coverages coverages = {};
+            float coverage = clamp(coverages.evaluateCoverage(record.coverageImplementation, input), 0.0, 1.0);
+            bool stochastic = (record.flags & RETAINED_GEOMETRY_STOCHASTIC) != 0u;
+            if (stochastic ? worldCoverageRandom(seed, instanceBase, geometryIndex, primitiveIndex) >= coverage
+                    : coverage < record.alphaCutoff) continue;
+        }
+        // Committing narrows the search distance; traversal still finds the nearest accepted surface.
+        query.CommitNonOpaqueTriangleHit();
+    }
+    if (query.CommittedStatus() == COMMITTED_NOTHING) {
+        shadow.hitDistance = -1.0;
+        return shadow;
+    }
+    RetainedGeometryRecord record = ((ConstPtr<RetainedGeometryRecord>)worldBindings.geometryTableAddress)
+            [query.CommittedInstanceID() + query.CommittedGeometryIndex()];
+    uint primitiveIndex = query.CommittedPrimitiveIndex();
+    shadow.hitDistance = query.CommittedRayT();
+    WorldInstanceHistory history = worldInstanceHistory(record, false);
+    uint3 indices = worldTriangleIndices(record, primitiveIndex);
+    float3 p0 = worldVertex(history.current, indices.x);
+    float3 edgeU = worldVertex(history.current, indices.y) - p0;
+    float3 edgeV = worldVertex(history.current, indices.z) - p0;
+    SurfaceInput input = worldSurfaceInput(query.CommittedTriangleBarycentrics(), primitiveIndex,
+            ray.Origin + ray.Direction * shadow.hitDistance, ray.Direction, edgeU, edgeV,
+            record, history, false);
+    bool volume = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u;
+    TComposition.Surfaces surfaces = {};
+    OpenPbrSurface material = surfaces.evaluateSurface(record.surfaceImplementation, input);
+    material.geometry_thin_walled = !volume;
+    if (dot(material.geometry_normal, input.geometricNormal) < 0.0)
+        material.geometry_normal = -material.geometry_normal;
+    SurfaceClosure surface = surfaceClosure(material, input.geometricNormal);
+    if (!volume) {
+        shadow.transmission = surfaceShadowTransmission(surface, input.outgoingDirection);
+        return shadow;
+    }
+    float incomingIor = shadow.volumeIor;
+    shadow.volumeAbsorption = float3(0.0);
+    shadow.volumeIor = 1.0;
+    if (surface.boundaryWeight <= 0.0) return shadow;
+    shadow.transmission = surface.thinTransmissionColor * surface.boundaryWeight;
+    TComposition.Volumes volumes = {};
+    VolumeInput volumeQuery = volumeInput(input, record.volumeBinding,
+            input.evaluationFlags & EVALUATION_ANIMATION_ENABLED);
+    if (dot(worldTriangleNormal(input.objectToScene, edgeU, edgeV), ray.Direction) < 0.0) {
+        VolumeProperties properties = volumes.evaluateVolume(record.volumeImplementation, volumeQuery);
+        shadow.volumeAbsorption = max(properties.absorptionCoefficient, float3(0.0));
+        shadow.volumeIor = max(properties.indexOfRefraction, 1.0);
+    } else {
+        VolumeBoundaryLightingInput boundary = {};
+        boundary.volume = volumeQuery;
+        boundary.lightDirection = normalize(ray.Direction);
+        boundary.boundaryDistance = shadow.hitDistance;
+        boundary.interiorIor = incomingIor;
+        shadow.transmission *= max(volumes.evaluateBoundaryLighting(
+                record.volumeImplementation, boundary), float3(0.0));
+    }
+    return shadow;
+}
+
+public float3 traceVisibility<TComposition : IComposition>(PackedPathSegment path, WorldHit hit,
         DirectLightSample selected, inout uint seed) {
     float3 visibility = float3(1.0);
     RayDesc ray;
@@ -146,17 +257,10 @@ public float3 traceVisibility(PackedPathSegment path, WorldPayload hit,
     ray.TMin = traceEpsilon();
     ray.TMax = selected.maximumDistance;
     while (ray.TMax > ray.TMin) {
-        WorldPayload shadow = {};
         retainedLightRandom(seed);
-        shadow.seed = seed;
-        shadow.volumeIor = path.ior;
-        shadow.volumeAbsorption = path.absorption;
-        shadow.pathFlags = WORLD_PATH_SHADOW;
-        // Any-hit only rejects coverage holes; closest-hit resolves one ordered boundary.
-        TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE,
-                WORLD_RAY_MASK_SECONDARY, 0u, 2u, 1u, ray, shadow);
-        if ((shadow.pathFlags & WORLD_PATH_MISS) != 0u) break;
-        visibility *= exp(-path.absorption * shadow.hitDistance) * shadow.radiance;
+        ShadowPayload shadow = traceShadowQuery<TComposition>(ray, seed, path.absorption, path.ior);
+        if (shadow.hitDistance < 0.0) break;
+        visibility *= exp(-path.absorption * shadow.hitDistance) * shadow.transmission;
         if (!any(visibility > 0.0)) return float3(0.0);
         path.absorption = shadow.volumeAbsorption;
         path.ior = shadow.volumeIor;
@@ -182,7 +286,7 @@ struct TraceLightSelection {
 };
 
 // The reservoir keeps one candidate; its sum and target normalize that candidate's contribution.
-TraceLightSelection traceSelectLight(WorldPayload hit, float3 outgoingDirection,
+TraceLightSelection traceSelectLight(WorldHit hit, float3 outgoingDirection,
         uint2 pixel, bool coherent, inout uint seed) {
     uint count;
     DirectLightSample selected = invalidDirectLight();
@@ -212,14 +316,14 @@ TraceLightSelection traceSelectLight(WorldPayload hit, float3 outgoingDirection,
     return { selected, sum, selectedTarget, count };
 }
 
-public TraceDirect traceDirect(PackedPathSegment path, WorldPayload hit, TraceLobes lobes,
+public TraceDirect traceDirect<TComposition : IComposition>(PackedPathSegment path, WorldHit hit, TraceLobes lobes,
         uint2 pixel, bool coherent, inout uint seed) {
     TraceDirect result = {};
     if (lobes.continuousProbability == 0.0) return result;
     TraceLightSelection selection = traceSelectLight(hit, -path.direction, pixel, coherent, seed);
     DirectLightSample selected = selection.light;
     if (!selected.valid || selection.target <= 0.0) return result;
-    float3 visibility = traceVisibility(path, hit, selected, seed);
+    float3 visibility = traceVisibility<TComposition>(path, hit, selected, seed);
     if (!any(visibility > 0.0)) return result;
     BsdfQuery query;
     query.surface = hit.surface;

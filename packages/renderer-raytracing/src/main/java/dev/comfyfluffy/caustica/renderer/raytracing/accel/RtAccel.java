@@ -22,6 +22,7 @@ import org.lwjgl.vulkan.VkCopyAccelerationStructureInfoKHR;
 import org.lwjgl.vulkan.VkQueryPoolCreateInfo;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 
@@ -143,8 +144,14 @@ public final class RtAccel {
         public long readSize() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 var result = stack.mallocLong(1);
-                context.checkDeviceResult(VK10.vkGetQueryPoolResults(context.vk(), pool, 0, 1, result,
-                        Long.BYTES, VK10.VK_QUERY_RESULT_64_BIT), "vkGetQueryPoolResults(BLAS compaction)");
+                int status = VK10.vkGetQueryPoolResults(context.vk(), pool, 0, 1, result,
+                        Long.BYTES, VK10.VK_QUERY_RESULT_64_BIT);
+                if (status != VK10.VK_SUCCESS) {
+                    GpuCrashHistory.record(status == VK10.VK_NOT_READY
+                                    ? GpuCrashHistory.Event.QUERY_UNAVAILABLE : GpuCrashHistory.Event.QUERY_ERROR,
+                            pool, 0, 4, status);
+                }
+                context.checkDeviceResult(status, "vkGetQueryPoolResults(BLAS compaction)");
                 return result.get(0);
             }
         }

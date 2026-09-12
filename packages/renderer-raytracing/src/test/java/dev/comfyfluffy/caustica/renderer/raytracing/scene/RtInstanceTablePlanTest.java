@@ -254,6 +254,129 @@ final class RtInstanceTablePlanTest {
         assertThrows(IllegalArgumentException.class, () -> builder.build(List.of(input(1, 0, mesh), input(1, 0, mesh))));
     }
 
+    @Test
+    void directAssemblyPreservesCollisionOrderPackingAndEqualTransformReuse() {
+        var builder = new RtInstanceTablePlan.Builder();
+        var mesh = mesh(0x1000, 12, 8, new MeshBuild.IndexRevision(4), 0, 6);
+        long collision = 2;
+        while ((RtInstanceTablePlan.hash(1, 0) & 3) != (RtInstanceTablePlan.hash(collision, 0) & 3)) collision++;
+        var baseline = builder.build(List.of(input(1, 0, mesh), input(collision, 0, mesh)));
+        var direct = builder.begin(2, baseline);
+        direct.add(1, 0, mesh, GeometryTransform.translation(0, 0, 0), 0);
+        direct.add(collision, 0, mesh, IDENTITY, 0);
+        assertSame(baseline, direct.finish());
+        var reversed = builder.begin(2, baseline);
+        reversed.add(collision, 0, mesh, IDENTITY, 0);
+        reversed.add(1, 0, mesh, IDENTITY, 0);
+        var actual = reversed.finish();
+        var expected = builder.build(List.of(input(collision, 0, mesh), input(1, 0, mesh)), baseline);
+        assertEquals(pack(expected, SceneOrigin.ZERO), pack(actual, SceneOrigin.ZERO));
+        assertSame(record(baseline, 1, 0), record(actual, 1, 0));
+        assertSame(record(baseline, collision, 0), record(actual, collision, 0));
+    }
+
+    @Test
+    void directAssemblyChangesOnlyAffectedRecordAndPreservesRetainedAndAbandonedRevisions() {
+        var builder = new RtInstanceTablePlan.Builder();
+        var revision = new MeshBuild.IndexRevision(9);
+        var mesh = mesh(0x1000, 12, 8, revision, 0, 6);
+        var nextMesh = mesh(0x2000, 16, 8, revision, 0, 6);
+        var a = builder.build(List.of(input(1, 0, mesh), input(2, 0, mesh), input(3, 0, mesh)));
+        var savedA = pack(a, SceneOrigin.ZERO);
+        var abandoned = builder.begin(3, a);
+        abandoned.add(1, 0, nextMesh, GeometryTransform.translation(7, 8, 9), 17);
+        var b = builder.begin(3, a);
+        b.add(1, 0, nextMesh, IDENTITY, 0);
+        b.add(2, 0, mesh, IDENTITY, 91);
+        b.add(4, 0, mesh, IDENTITY, 0);
+        var changed = b.finish();
+        assertEquals(-1, changed.slot(3, 0));
+        assertEquals(0, record(a, 2, 0).instanceData());
+        assertEquals(91, record(changed, 2, 0).instanceData());
+        assertNotSame(record(a, 1, 0), record(changed, 1, 0));
+        assertNotSame(record(a, 2, 0), record(changed, 2, 0));
+        assertNotEquals(record(a, 1, 0).meshRevision(), record(changed, 1, 0).meshRevision());
+        assertEquals(record(a, 1, 0).topologyToken(), record(changed, 1, 0).topologyToken());
+        assertEquals(savedA, pack(a, SceneOrigin.ZERO));
+        var restore = builder.begin(3, changed);
+        restore.add(1, 0, mesh, IDENTITY, 0);
+        restore.add(2, 0, mesh, IDENTITY, 0);
+        restore.add(3, 0, mesh, IDENTITY, 0);
+        var c = restore.finish();
+        assertEquals(record(a, 1, 0).meshRevision(), record(c, 1, 0).meshRevision());
+        assertEquals(savedA, pack(c, SceneOrigin.ZERO));
+        assertEquals(0x2000, record(changed, 1, 0).positionAddress());
+    }
+
+    @Test
+    void directAssemblyRejectsInvalidAndDuplicateKeysWithoutChangingPreviousTable() {
+        var builder = new RtInstanceTablePlan.Builder();
+        var mesh = mesh(0x1000, 12, 8, null, 0, 6);
+        var a = builder.build(List.of(input(1, 0, mesh)));
+        var add = builder.begin(2, a);
+        assertThrows(IllegalArgumentException.class, () -> add.add(0, 0, mesh, IDENTITY, 0));
+        assertThrows(IllegalArgumentException.class, () -> add.add(2, -1, mesh, IDENTITY, 0));
+        add.add(1, 0, mesh, IDENTITY, 0);
+        assertThrows(IllegalArgumentException.class, () -> add.add(1, 0, mesh, IDENTITY, 8));
+        assertEquals(0, record(a, 1, 0).instanceData());
+        assertEquals(1, builder.begin(0, null).finish().capacity());
+        assertEquals(-1, builder.begin(0, a).finish().slot(1, 0));
+    }
+
+    @Test
+    void denseUnchangedDirectAddsAllocateNoInputsAndFullBuildAvoidsMaterializedInputCost() {
+        var bean = java.lang.management.ManagementFactory.getPlatformMXBean(com.sun.management.ThreadMXBean.class);
+        assertTrue(bean.isThreadAllocatedMemorySupported());
+        assertTrue(bean.isThreadAllocatedMemoryEnabled());
+        var builder = new RtInstanceTablePlan.Builder();
+        var mesh = mesh(0x1000, 12, 8, new MeshBuild.IndexRevision(5), 0, 6);
+        int count = 8192;
+        var prior = materialized(builder, count, mesh, null);
+        for (int round = 0; round < 100; round++) {
+            var a = builder.begin(count, prior);
+            addDense(a, count, mesh);
+            allocationSink = a.finish();
+            allocationSink = materialized(builder, count, mesh, prior);
+        }
+        long inputAddBytes = 0;
+        long directBytes = 0;
+        long materializedBytes = 0;
+        for (int round = 0; round < 8; round++) {
+            var a = builder.begin(count, prior);
+            long before = bean.getCurrentThreadAllocatedBytes();
+            addDense(a, count, mesh);
+            inputAddBytes += bean.getCurrentThreadAllocatedBytes() - before;
+            assertSame(prior, a.finish());
+            before = bean.getCurrentThreadAllocatedBytes();
+            var direct = builder.begin(count, prior);
+            addDense(direct, count, mesh);
+            allocationSink = direct.finish();
+            directBytes += bean.getCurrentThreadAllocatedBytes() - before;
+            before = bean.getCurrentThreadAllocatedBytes();
+            allocationSink = materialized(builder, count, mesh, prior);
+            materializedBytes += bean.getCurrentThreadAllocatedBytes() - before;
+        }
+        assertEquals(0, inputAddBytes, "Unchanged primitive/reference adds must allocate no per-instance objects");
+        assertTrue(materializedBytes - directBytes >= 8L * count * 24L,
+                "The dense build must remove the per-instance materialization cost");
+        System.out.printf("DENSE_ALLOCATION instances=%d rounds=8 directAddBytes=%d directBuildBytes=%d materializedBuildBytes=%d%n",
+                count, inputAddBytes, directBytes, materializedBytes);
+        for (int i = 1; i <= count; i++) assertSame(record(prior, i, 0), record(allocationSink, i, 0));
+    }
+
+    private static volatile RtInstanceTablePlan allocationSink;
+
+    private static void addDense(RtInstanceTablePlan.Builder.Assembly assembly, int count, MeshBuild<?> mesh) {
+        for (int i = 1; i <= count; i++) assembly.add(i, 0, mesh, IDENTITY, 0);
+    }
+
+    private static RtInstanceTablePlan materialized(RtInstanceTablePlan.Builder builder, int count,
+                                                  MeshBuild<?> mesh, RtInstanceTablePlan previous) {
+        var inputs = new ArrayList<RtInstanceTablePlan.Input>(count);
+        for (int i = 1; i <= count; i++) inputs.add(input(i, 0, mesh));
+        return builder.build(inputs, previous);
+    }
+
     private static RtInstanceTablePlan.InstanceRecord record(RtInstanceTablePlan table, long identity, long ordinal) {
         return table.record(table.slot(identity, ordinal));
     }

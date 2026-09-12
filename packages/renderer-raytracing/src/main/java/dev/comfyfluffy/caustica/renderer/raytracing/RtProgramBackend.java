@@ -149,13 +149,16 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             RtShaderCode build = new RtShaderCode("build-stable-planes", shaderCompiler.compileBuildStablePlanes());
             RtShaderCode fill = new RtShaderCode("fill-stable-planes", shaderCompiler.compileFillStablePlanes(reordered));
             RtShaderCode environment = new RtShaderCode("environment", shaderCompiler.compileEnvironmentMiss());
-            RtShaderCode guide = new RtShaderCode("guide", shaderCompiler.compilePlain(
-                    "guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
+            RtShaderCode shadowMiss = new RtShaderCode("shadow-miss", shaderCompiler.compilePlain(
+                    "shadow.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
             RtShaderCode closest = new RtShaderCode("closest-hit", shaderCompiler.compileClosestHit());
             RtShaderCode radiance = new RtShaderCode("radiance-any-hit", shaderCompiler.compileRadianceAnyHit());
             RtShaderCode shadow = new RtShaderCode("shadow-any-hit", shaderCompiler.compileShadowAnyHit());
+            RtShaderCode shadowClosest = new RtShaderCode("shadow-closest-hit", shaderCompiler.compileShadowClosestHit());
+            RtShaderCode shadowBlocker = new RtShaderCode("shadow-blocker",
+                    shaderCompiler.compilePlain("shadow_blocker.slang", WorldShaderCompiler.ENTRY_POINT));
             pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill},
-                    new RtShaderCode[]{environment, guide}, closest, radiance, shadow);
+                    new RtShaderCode[]{environment, shadowMiss}, closest, radiance, shadow, shadowClosest, shadowBlocker);
             return new Candidate(composition, shaderCompiler, table, pipeline);
         } catch (IOException | RuntimeException | Error failure) {
             if (pipeline != null) pipeline.destroy();

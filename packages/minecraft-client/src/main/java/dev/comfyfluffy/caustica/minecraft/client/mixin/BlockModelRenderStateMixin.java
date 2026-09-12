@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.minecraft.client.entity.ContainedBlockSource;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityCollector;
@@ -35,18 +36,22 @@ public abstract class BlockModelRenderStateMixin implements ContainedBlockSource
 
     @Inject(method = "clear", at = @At("HEAD"))
     private void caustica$clearContained(CallbackInfo ci) {
-        this.caustica$containedState = null;
+        try (var hostWork = MinecraftHostTelemetry.work("entity.containedClear")) {
+            this.caustica$containedState = null;
+        }
     }
 
     @Inject(method = "submit", at = @At("HEAD"), cancellable = true)
     private void caustica$captureForRt(PoseStack poseStack, SubmitNodeCollector submitNodeCollector,
                                        int externalLightCoords, int overlayCoords, int outlineColor, CallbackInfo ci) {
-        if (this.caustica$containedState == null || !(submitNodeCollector instanceof RtEntityCollector rt)) {
-            return;
+        try (var hostWork = MinecraftHostTelemetry.work("entity.containedSubmit")) {
+            if (this.caustica$containedState == null || !(submitNodeCollector instanceof RtEntityCollector rt)) {
+                return;
+            }
+            // Both display paths normalize an identity transform to null.
+            Matrix4fc transform = this.transformation != null ? this.transformation : this.specialRendererTransformation;
+            rt.captureBlockState(this.caustica$containedState, transform, poseStack);
+            ci.cancel();
         }
-        // Both display paths normalize an identity transform to null.
-        Matrix4fc transform = this.transformation != null ? this.transformation : this.specialRendererTransformation;
-        rt.captureBlockState(this.caustica$containedState, transform, poseStack);
-        ci.cancel();
     }
 }

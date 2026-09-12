@@ -252,14 +252,14 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             var revision = source.get();
             var cache = preparationCaches.computeIfAbsent(scene, ignored -> new SceneCaches());
             var inputs = FrameSceneSnapshot.prepare(revision.content.get(scene), revision.instances.get(scene));
-            var tableInputs = new ArrayList<RtInstanceTablePlan.Input>(inputs.instances.size());
-            for (var page : SnapshotList.pagesOf(inputs.instances)) {
-                for (var instance : page) tableInputs.add(new RtInstanceTablePlan.Input(
-                        instance.current.identity(), instance.current.placementOrdinal(),
-                        instance.resolvedMesh().build(), instance.current.transform(), instance.current.instanceData().bits()));
-            }
             var previous = preparedGeometryByScene.get(scene);
-            var instanceTable = instanceTables.build(tableInputs, previous == null ? null : previous.get().instanceTable);
+            var table = instanceTables.begin(inputs.instances.size(), previous == null ? null : previous.get().instanceTable);
+            for (var page : SnapshotList.pagesOf(inputs.instances)) {
+                for (var instance : page) table.add(
+                        instance.current.identity(), instance.current.placementOrdinal(),
+                        instance.resolvedMesh().build(), instance.current.transform(), instance.current.instanceData().bits());
+            }
+            var instanceTable = table.finish();
             InstanceUploadSlot instanceSlot = instanceBuffers.acquire(slot -> slot.buffer.size() >= instanceTable.byteSize(),
                     () -> new InstanceUploadSlot(ctx.createMappedGpuUploadBuffer(RtCompletionSlotPool.capacity(instanceTable.byteSize()),
                             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "retained instance history table")), resources::add);

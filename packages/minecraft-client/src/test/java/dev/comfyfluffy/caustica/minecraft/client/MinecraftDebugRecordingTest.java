@@ -18,6 +18,16 @@ final class MinecraftDebugRecordingTest {
     static final class Marker extends Event { int value = 42; }
 
     @Test
+    void defaultRecordingIncludesRawHostLoopAndWorkEvents() throws Exception {
+        try (var recording = MinecraftDebugService.startRecording(new com.google.gson.JsonObject())) {
+            assertEquals("true", recording.getSettings().get("dev.comfyfluffy.caustica.HostLoop#enabled"));
+            assertEquals("true", recording.getSettings().get("dev.comfyfluffy.caustica.HostWork#enabled"));
+            assertEquals("true", recording.getSettings().get("dev.comfyfluffy.caustica.HostCallbackTotals#enabled"));
+            assertEquals("true", recording.getSettings().get("dev.comfyfluffy.caustica.HostSubmission#enabled"));
+        }
+    }
+
+    @Test
     void successfulStartReturnsARunningConfiguredRecording() throws Exception {
         var request = JsonParser.parseString("{\"events\":[\"Frame\"]}").getAsJsonObject();
         try (var recording = MinecraftDebugService.startRecording(request)) {

@@ -46,6 +46,7 @@ public struct RetainedInstanceRecord {
 
 public static const uint RETAINED_GEOMETRY_HAS_VOLUME = 2u;
 public static const uint RETAINED_GEOMETRY_STOCHASTIC = 8u;
+public static const uint RETAINED_GEOMETRY_GUARANTEED_SHADOW_BLOCKER = 16u;
 
 // Scene-relative geometry and physical radiometry for one immutable retained light.
 public struct RetainedLightRecord {

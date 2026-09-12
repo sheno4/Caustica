@@ -3,11 +3,13 @@ package dev.comfyfluffy.caustica.minecraft.client;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetry.MetricSchema;
 import dev.comfyfluffy.caustica.renderer.runtime.RtTelemetryImpl;
 import jdk.jfr.Recording;
+import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -45,6 +47,7 @@ final class MinecraftFrameMetricsTest {
         var events = RecordingFile.readAllEvents(output);
         var stages = events.stream()
                 .filter(event -> event.getEventType().getName().equals("dev.comfyfluffy.caustica.CpuStage"))
+                .sorted(Comparator.comparing(RecordedEvent::getStartTime))
                 .toList();
         assertEquals(List.of("terrain.tick", "runtime.tick", "terrain.tick", "runtime.tick", "frame.capture"),
                 stages.stream().map(event -> event.getString("stage")).toList());
@@ -59,6 +62,7 @@ final class MinecraftFrameMetricsTest {
         var counters = events.stream()
                 .filter(event -> event.getEventType().getName().equals("dev.comfyfluffy.caustica.FrameCounter"))
                 .filter(event -> event.getString("counter").equals("sectionsSnapshotted"))
+                .sorted(Comparator.comparing(RecordedEvent::getStartTime))
                 .toList();
         assertEquals(List.of(1L, 2L), counters.stream().map(event -> event.getLong("frameId")).toList());
         assertEquals(List.of(2L, 0L), counters.stream().map(event -> event.getLong("value")).toList());
@@ -101,8 +105,10 @@ final class MinecraftFrameMetricsTest {
             recording.dump(output);
         }
         var events = RecordingFile.readAllEvents(output);
+        // JFR storage order is independent of event chronology across recording buffers.
         var stages = events.stream()
                 .filter(event -> event.getEventType().getName().equals("dev.comfyfluffy.caustica.CpuStage"))
+                .sorted(Comparator.comparing(RecordedEvent::getStartTime))
                 .toList();
         assertEquals(List.of("terrain.markDirty", "runtime.frameSetup", "entity.capture", "host.frameCapture",
                         "presentation.hdr", "presentation.generatedPresent", "host.textureRetire", "runtime.tick"),

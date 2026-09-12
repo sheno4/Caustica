@@ -70,13 +70,25 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
     /** Traversal category remains separate from optical transmission. */
     public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
 
-    /** One shader-homogeneous range in the source index stream. */
+    /**
+     * One shader-homogeneous range in the source index stream. A shadow blocker certificate applies to
+     * every primitive in the range and requires a resolved built-in material with zero transmission
+     * throughout its resource-pack epoch, full coverage, and no interior volume.
+     */
     public record Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount,
-                           float alphaCutoff, dev.comfyfluffy.caustica.api.geometry.OpacityMicromap opacityMicromap) {
+                           float alphaCutoff, dev.comfyfluffy.caustica.api.geometry.OpacityMicromap opacityMicromap,
+                           boolean guaranteedShadowBlocker) {
         public Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount, float alphaCutoff) {
-            this(program, coverage, firstIndex, indexCount, alphaCutoff, null);
+            this(program, coverage, firstIndex, indexCount, alphaCutoff, null, false);
+        }
+        public Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount, float alphaCutoff,
+                        dev.comfyfluffy.caustica.api.geometry.OpacityMicromap opacityMicromap) {
+            this(program, coverage, firstIndex, indexCount, alphaCutoff, opacityMicromap, false);
         }
         public Geometry {
+            if (guaranteedShadowBlocker && (program != ProgramCategory.MATERIAL || coverage != Coverage.OPAQUE)) {
+                throw new IllegalArgumentException("terrain shadow certificates require a fully covered material surface");
+            }
             java.util.Objects.requireNonNull(program, "program");
             java.util.Objects.requireNonNull(coverage, "coverage");
             if (firstIndex < 0 || firstIndex % 3 != 0 || indexCount <= 0 || indexCount % 3 != 0) {

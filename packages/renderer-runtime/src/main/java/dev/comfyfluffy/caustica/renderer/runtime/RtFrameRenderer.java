@@ -196,7 +196,7 @@ public final class RtFrameRenderer {
     public static List<String> debugImageNames() {
         return List.of("display-color", "reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
                 "specular-albedo", "depth", "motion", "specular-motion", "nrd-view-z",
-                "nrd-diffuse", "nrd-specular", "nrd-stable-radiance");
+                "nrd-diffuse", "nrd-specular", "nrd-stable-radiance", "stable-plane-metadata");
     }
 
     /** Synchronous render-thread capture of a submitted frame, with no display or exposure transform. */
@@ -219,12 +219,15 @@ public final class RtFrameRenderer {
             case "nrd-diffuse" -> images.diffuseRadianceHitDistance();
             case "nrd-specular" -> images.specularRadianceHitDistance();
             case "nrd-stable-radiance" -> images.nrdStableRadiance();
+            case "stable-plane-metadata" -> images.stablePlaneMetadata();
             default -> throw new IllegalArgumentException(name);
         };
         String encoding = switch (name) {
             case "display-color" -> "RGBA: SDR display output, normalized UNORM8, before Minecraft UI composition";
             case "reconstructed-color", "trace-color" -> "RGB: ACEScg scene radiance * preExposure";
             case "nrd-stable-radiance" -> "RGB: ACEScg scene-linear radiance (unexposed)";
+            case "stable-plane-metadata" -> "R: available planes / 3; G: dominant plane index / 2; "
+                    + "B: dominant endpoint delta depth / 9; A: dominant path crossed transmission (0 or 1)";
             case "normal-roughness" -> "RGB: world-space unit normal; A: roughness";
             case "diffuse-albedo", "specular-albedo" -> "RGB: dimensionless ACEScg BSDF estimate; A: 1";
             case "depth" -> "R: reverse-Z device depth (dimensionless)";
@@ -619,8 +622,12 @@ public final class RtFrameRenderer {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                         roots, 1, trace.hitTable());
             }
-            VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to reconstruction reads
-            scenes.finishLighting(entryScene, lighting, cmd, graphicsUse);
+            try (var checkpoint = commands.checkpoint(cmd, "post-fill memory barrier")) {
+                VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to reconstruction reads
+            }
+            try (var checkpoint = commands.checkpoint(cmd, "finish lighting")) {
+                scenes.finishLighting(entryScene, lighting, cmd, graphicsUse);
+            }
             lightingFinished = true;
         } catch (Throwable failure) {
             scenes.abandonLighting(entryScene, lighting);

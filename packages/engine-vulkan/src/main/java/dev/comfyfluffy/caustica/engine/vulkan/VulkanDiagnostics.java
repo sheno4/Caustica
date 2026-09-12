@@ -180,25 +180,42 @@ public final class VulkanDiagnostics {
         if (!FAULT_REPORTED.compareAndSet(false, true)) {
             return;
         }
-        LOGGER.error("Vulkan device lost while {}", operation);
-        queues.forEach((label, queue) -> logNvQueueCheckpoints(queue, label));
-        logRuntimeSnapshot();
-        if (!deviceFaultEnabled || device == null || device.getCapabilities().vkGetDeviceFaultInfoEXT == 0L) {
-            LOGGER.error("VK_EXT_device_fault is unavailable; no driver fault details can be queried");
-            return;
-        }
-
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDeviceFaultCountsEXT counts = VkDeviceFaultCountsEXT.calloc(stack).sType$Default();
-            int result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, null);
-            if (result != VK10.VK_SUCCESS) {
-                LOGGER.error("vkGetDeviceFaultInfoEXT(counts) failed: {}", result);
+        var history = GpuCrashHistory.capture();
+        var anomalies = GpuCrashHistory.captureAnomalies();
+        try {
+            LOGGER.error("Vulkan device lost while {}", operation);
+            queues.forEach((label, queue) -> logNvQueueCheckpoints(queue, label));
+            logRuntimeSnapshot();
+            if (!deviceFaultEnabled || device == null || device.getCapabilities().vkGetDeviceFaultInfoEXT == 0L) {
+                LOGGER.error("VK_EXT_device_fault is unavailable; no driver fault details can be queried");
                 return;
             }
 
-            logFaultDetails(device, counts, stack);
-        } catch (Throwable t) {
-            LOGGER.error("Failed to query VK_EXT_device_fault after device loss", t);
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkDeviceFaultCountsEXT counts = VkDeviceFaultCountsEXT.calloc(stack).sType$Default();
+                int result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, null);
+                if (result != VK10.VK_SUCCESS) {
+                    LOGGER.error("vkGetDeviceFaultInfoEXT(counts) failed: {}", result);
+                    return;
+                }
+
+                logFaultDetails(device, counts, stack);
+            } catch (Throwable t) {
+                LOGGER.error("Failed to query VK_EXT_device_fault after device loss", t);
+            }
+        } finally {
+            logHistory("recent", history);
+            logHistory("query anomalies", anomalies);
+        }
+    }
+
+    private static void logHistory(String label, List<GpuCrashHistory.Entry> entries) {
+        LOGGER.error("Vulkan lifetime {}: {} entries; semaphore kind 1=graphics/2=compute; query flags 1=submitted/2=ended/4=BLAS", label, entries.size());
+        for (var entry : entries) {
+            LOGGER.error("GPU history #{} ns={} thread={} {} handle=0x{} target={} observed={} detail={} (0x{})",
+                    entry.sequence(), entry.nanoTime(), entry.threadId(), entry.event(),
+                    Long.toUnsignedString(entry.handle(), 16), entry.target(), entry.observed(),
+                    entry.detail(), Long.toUnsignedString(entry.detail(), 16));
         }
     }
 
@@ -296,9 +313,23 @@ public final class VulkanDiagnostics {
             for (int i = 0; i < Math.min(checkpointCount, count.get(0)); i++) {
                 VkCheckpointDataNV checkpoint = checkpoints.get(i);
                 long marker = checkpoint.pCheckpointMarker();
-                LOGGER.error("  stage={} (0x{}), marker=0x{}",
-                        pipelineStage(checkpoint.stage()), Integer.toUnsignedString(checkpoint.stage(), 16),
-                        Long.toUnsignedString(marker, 16));
+                var entry = GpuDiagnosticCheckpoints.resolve(marker);
+                if (entry == null) {
+                    LOGGER.error("  stage={} (0x{}), marker=0x{}, label=<unknown or expired>",
+                            pipelineStage(checkpoint.stage()), Integer.toUnsignedString(checkpoint.stage(), 16),
+                            Long.toUnsignedString(marker, 16));
+                } else {
+                    LOGGER.error("  stage={} (0x{}), marker=0x{}, command=0x{}, boundary={}, label='{}'",
+                            pipelineStage(checkpoint.stage()), Integer.toUnsignedString(checkpoint.stage(), 16),
+                            Long.toUnsignedString(marker, 16), Long.toUnsignedString(entry.command(), 16),
+                            entry.boundary(), entry.label());
+                    LOGGER.error("  Nearby recorded checkpoints (same command; not execution progress):");
+                    for (var nearby : GpuDiagnosticCheckpoints.neighborhood(marker)) {
+                        LOGGER.error("    marker=0x{}, boundary={}, label='{}'{}",
+                                Long.toUnsignedString(nearby.token(), 16), nearby.boundary(), nearby.label(),
+                                nearby.token() == marker ? " [reported]" : "");
+                    }
+                }
             }
         } catch (Throwable t) {
             LOGGER.error("Failed to retrieve NVIDIA checkpoints for " + label, t);

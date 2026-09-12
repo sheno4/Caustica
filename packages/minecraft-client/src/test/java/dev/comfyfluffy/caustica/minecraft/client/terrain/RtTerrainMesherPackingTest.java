@@ -12,6 +12,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtTerrainMesherPackingTest {
     @Test
+    void certifiedBlockersDoNotShareGeometryWithUncertifiedFullyCoveredSheets() {
+        var sheet = route(MinecraftTerrainMesh.ProgramCategory.MATERIAL, MinecraftTerrainMesh.Coverage.OPAQUE, .5f);
+        var blocker = new RtTerrainMesher.TriangleRouting(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
+                MinecraftTerrainMesh.Coverage.OPAQUE, .5f, true);
+        var packed = RtTerrainMesher.bucketTriangles(integerTriangleLanes(4, 3), triangleLanes(4, 6),
+                triangleLanes(4, MinecraftTerrainMesh.PRIMITIVE_FLOATS), List.of(blocker, sheet, blocker, sheet));
+        assertEquals(List.of(true, false), packed.geometries().stream()
+                .map(MinecraftTerrainMesh.Geometry::guaranteedShadowBlocker).toList());
+        assertEquals(List.of(6, 6), packed.geometries().stream().map(MinecraftTerrainMesh.Geometry::indexCount).toList());
+        assertArrayEquals(new int[]{0, 2, 1, 3}, packed.sourceToDestinationPrimitives());
+        assertTriangleOrder(new int[]{0, 2, 1, 3}, packed.primitiveData(), MinecraftTerrainMesh.PRIMITIVE_FLOATS);
+    }
+
+    @Test
     void packingIgnoresSpareWorkerCapacityAndOwnsItsOutput() {
         int[] indices = integerTriangleLanes(4, 3);
         float[] cornerUvs = triangleLanes(4, 6);

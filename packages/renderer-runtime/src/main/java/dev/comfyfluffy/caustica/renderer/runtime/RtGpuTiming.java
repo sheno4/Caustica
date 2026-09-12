@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.GpuCrashHistory;
 import jdk.jfr.Category;
 import jdk.jfr.Enabled;
 import jdk.jfr.Event;
@@ -94,6 +95,7 @@ final class RtGpuTiming implements AutoCloseable {
         private final long frameId;
         private final String label;
         private boolean submitted;
+        private boolean ended;
 
         private Stage(VkCommandBuffer command, long pool, long frameId, String label) {
             this.command = command;
@@ -105,6 +107,7 @@ final class RtGpuTiming implements AutoCloseable {
         /** Ends timestamp recording; the graphics completion callback owns query-pool recycling. */
         @Override public void close() {
             VK13.vkCmdWriteTimestamp2(command, VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, pool, 1);
+            ended = true;
         }
 
         void submitted() {
@@ -119,6 +122,11 @@ final class RtGpuTiming implements AutoCloseable {
                     int result = VK10.vkGetQueryPoolResults(context.vk(), pool, 0, 2, values,
                             Long.BYTES, VK10.VK_QUERY_RESULT_64_BIT);
                     // Abandoned or partially recorded work must never make telemetry wait for a query.
+                    if (result != VK10.VK_SUCCESS) {
+                        GpuCrashHistory.record(result == VK10.VK_NOT_READY
+                                        ? GpuCrashHistory.Event.QUERY_UNAVAILABLE : GpuCrashHistory.Event.QUERY_ERROR,
+                                pool, frameId, ended ? 3 : 1, result);
+                    }
                     if (result == VK10.VK_NOT_READY) return;
                     context.checkDeviceResult(result, "vkGetQueryPoolResults(GPU timing)");
                     var event = new GpuStageEvent();

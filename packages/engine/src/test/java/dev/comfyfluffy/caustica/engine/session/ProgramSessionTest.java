@@ -404,6 +404,88 @@ final class ProgramSessionTest {
     }
 
     @Test
+    void eachCompositionKeepsSharedImplementationResourcesUntilItsOwnRetirement() {
+        ResourceDirectory resources = resources();
+        var factory = resources.openFactory(new ContributionOwner(1));
+        ManualBackend backend = new ManualBackend();
+        ProgramSession session = new ProgramSession(
+                resources, backend, failure -> { throw new AssertionError(failure); });
+        var sharedChannel = session.openChannel();
+        var laterChannel = session.openChannel();
+        AtomicInteger sharedReleased = new AtomicInteger();
+        AtomicInteger laterReleased = new AtomicInteger();
+        ProgramRegistration<?> shared;
+        try (var owner = factory.create(sharedReleased::incrementAndGet);
+             var surface = IMPLEMENTATION.data(1, owner);
+             var volume = IMPLEMENTATION.data(2, owner)) {
+            shared = sharedChannel.register(builder -> {
+                builder.surface(new SurfaceDefinition<>(shader("shared_surface", "sample.SharedSurface"),
+                        null, surface, BINDING, INSTANCE));
+                return builder.volume(new VolumeDefinition<>(shader("shared_volume", "sample.SharedVolume"),
+                        volume, BINDING, INSTANCE));
+            });
+        }
+        session.progress();
+        backend.succeed();
+        session.progress(); // A contains the shared registration.
+        ProgramRegistration<?> later;
+        try (var owner = factory.create(laterReleased::incrementAndGet);
+             var data = IMPLEMENTATION.data(3, owner)) {
+            later = laterChannel.register(builder -> builder.surface(new SurfaceDefinition<>(
+                    shader("later_surface", "sample.LaterSurface"), null, data, BINDING, INSTANCE)));
+        }
+        session.progress();
+        backend.succeed();
+        session.progress(); // B contains both registrations; A's retirement is still pending.
+        shared.close();
+        later.close();
+        session.progress();
+        backend.succeed();
+        session.progress(); // C contains neither registration.
+
+        backend.retireLatestPrevious(); // B finishes before A.
+        session.progress();
+        resources.awaitRetirements();
+        assertEquals(0, sharedReleased.get(), "A still reaches the shared implementation generation");
+        assertEquals(1, laterReleased.get(), "B's exclusive generation must not wait for A");
+        assertFalse(session.isDrained(sharedChannel), "A still belongs to the shared registration's owner");
+        assertTrue(session.isDrained(laterChannel));
+
+        backend.retireLatestPrevious(); // A finishes.
+        session.progress();
+        resources.awaitRetirements();
+        assertEquals(1, sharedReleased.get());
+        assertEquals(1, laterReleased.get());
+        assertTrue(session.isDrained(sharedChannel));
+    }
+
+    @Test
+    void synchronousCompilerFailureReleasesItsCompositionOwnership() {
+        ResourceDirectory resources = resources();
+        ManualBackend backend = new ManualBackend();
+        backend.compileFailure = new IllegalStateException("compiler unavailable");
+        ProgramSession session = new ProgramSession(
+                resources, backend, failure -> { throw new AssertionError(failure); });
+        var channel = session.openChannel();
+        AtomicInteger released = new AtomicInteger();
+        List<ProgramRegistration.Completion> completions = new ArrayList<>();
+        try (var owner = resources.openFactory(new ContributionOwner(1)).create(released::incrementAndGet);
+             var data = IMPLEMENTATION.data(1, owner)) {
+            channel.register(builder -> builder.surface(new SurfaceDefinition<>(
+                    shader("throwing_surface", "sample.ThrowingSurface"), null, data, BINDING, INSTANCE)))
+                    .whenComplete(completions::add);
+        }
+        session.progress();
+        resources.awaitRetirements();
+        assertEquals(0, released.get(), "the queued compiler outcome still owns the registration");
+        session.progress();
+        resources.awaitRetirements();
+        assertInstanceOf(ProgramRegistration.Failed.class, completions.getFirst());
+        assertEquals(1, released.get());
+        assertTrue(session.isDrained(channel));
+    }
+
+    @Test
     void failedAndCancelledCompilationsHoldImplementationGenerationsUntilCompletion() {
         ResourceDirectory resources = resources();
         ContributionOwner owner = new ContributionOwner(1);
@@ -482,10 +564,12 @@ final class ProgramSessionTest {
         private final List<Runnable> previousRetirements = new ArrayList<>();
         private int closedCandidates;
         private int publishedUseDrains;
+        private RuntimeException compileFailure;
 
         @Override
         public void compile(ProgramComposition composition,
                             java.util.function.Consumer<? super Compilation> completion) {
+            if (compileFailure != null) throw compileFailure;
             if (pending != null) throw new AssertionError("only one compile may be in flight");
             requested.add(composition);
             pending = new Pending(composition, completion);

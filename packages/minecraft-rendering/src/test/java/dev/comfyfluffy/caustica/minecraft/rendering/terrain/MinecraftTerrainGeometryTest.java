@@ -470,7 +470,7 @@ final class MinecraftTerrainGeometryTest {
     @Test
     void uploaderPreservesEveryProgramRangeAsOneNativeGeometry() {
         var first = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f);
+                MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null, true);
         var second = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.WATER,
                 MinecraftTerrainMesh.Coverage.OPAQUE, 3, 3, 0.5f);
         var source = new MinecraftTerrainMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
@@ -496,6 +496,8 @@ final class MinecraftTerrainGeometryTest {
 
             assertEquals(2, geometries.size());
             assertSame(materialSurface, geometries.get(0).surface().surface());
+            assertEquals(MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER, geometries.get(0).surface().shadow());
+            assertEquals(MeshBuild.ShadowPolicy.EVALUATE_SURFACE, geometries.get(1).surface().shadow());
             assertEquals(0x4000L, geometries.get(0).surface().bindingData().bits());
             assertSame(waterSurface, geometries.get(1).surface().surface());
             assertSame(waterVolume, geometries.get(1).volume().volume());
@@ -527,6 +529,18 @@ final class MinecraftTerrainGeometryTest {
                 MinecraftVulkanTerrainUploader.coveragePolicy(geometry));
 
         assertEquals(0.4f, policy.guideAlphaCutoff());
+    }
+
+    @Test
+    void rejectsTerrainCertificateOnWaterPortalAndCoverageHoles() {
+        for (var program : MinecraftTerrainMesh.ProgramCategory.values()) {
+            for (var coverage : MinecraftTerrainMesh.Coverage.values()) {
+                if (program == MinecraftTerrainMesh.ProgramCategory.MATERIAL
+                        && coverage == MinecraftTerrainMesh.Coverage.OPAQUE) continue;
+                assertThrows(IllegalArgumentException.class, () -> new MinecraftTerrainMesh.Geometry(
+                        program, coverage, 0, 3, .5f, null, true));
+            }
+        }
     }
 
     private static MinecraftTerrainMesh mesh() {

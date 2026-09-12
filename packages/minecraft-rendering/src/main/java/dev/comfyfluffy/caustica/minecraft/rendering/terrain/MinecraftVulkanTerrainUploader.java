@@ -120,7 +120,9 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                 claims.add(binding::close);
                 MeshBuild.CoveragePolicy policy = coveragePolicy(geometry);
                 var surface = switch (geometry.program()) {
-                    case MATERIAL -> new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
+                    case MATERIAL -> new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy,
+                            geometry.guaranteedShadowBlocker() ? MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER
+                                    : MeshBuild.ShadowPolicy.EVALUATE_SURFACE);
                     case WATER -> new MeshBuild.SurfaceSlot<>(programs.waterSurface(), binding, policy);
                     case PORTAL -> new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy);
                 };

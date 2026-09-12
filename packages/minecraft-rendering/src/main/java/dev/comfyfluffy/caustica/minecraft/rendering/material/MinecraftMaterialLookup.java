@@ -121,6 +121,15 @@ public final class MinecraftMaterialLookup {
     public List<MinecraftMaterialTexture> textures() { return textures; }
     public MinecraftOpacityBounds opacity(ResourceId material) { return opacity.get(material); }
 
+    /**
+     * Certificate for the built-in material shader only. Its textures, including animated base alpha,
+     * can only multiply the immutable transmission weight, so zero remains zero for every sample.
+     * The fallback record is left uncertified. Callers must separately require full coverage and no volume.
+     */
+    public boolean guaranteesZeroShadowTransmission(int materialIndex) {
+        return materialIndex != 0 && records.get(materialIndex).transmissionWeight() == 0.0f;
+    }
+
     public MinecraftMaterialResolution resolve(MinecraftMaterialKey key) {
         MinecraftMaterialResolution value = resolutions.get(key);
         if (value == null && key.geometry() != null) value = resolutions.get(key.defaultGeometry());

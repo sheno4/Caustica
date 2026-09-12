@@ -19,6 +19,25 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MeshBuildTest {
+    @Test
+    void shadowBlockerCertificationRequiresFullCoverageAndNoVolume() {
+        SurfaceId<Object, Object> surface = new SurfaceId<>() { };
+        VolumeId<Object, Object> volume = new VolumeId<>() { };
+        var data = ShaderDataType.<Object>create("shadow certificate").data(0);
+        var ordinary = new MeshBuild.SurfaceSlot<>(surface, data, new MeshBuild.CoveragePolicy.Opaque());
+        assertEquals(MeshBuild.ShadowPolicy.EVALUATE_SURFACE, ordinary.shadow());
+        var blocker = new MeshBuild.SurfaceSlot<>(surface, data, new MeshBuild.CoveragePolicy.Opaque(),
+                MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER);
+        assertEquals(blocker, new MeshBuild.Geometry<>(blocker, null, 0, 3).surface());
+        for (var coverage : List.of(new MeshBuild.CoveragePolicy.Cutout(.5f),
+                new MeshBuild.CoveragePolicy.Stochastic(.5f))) {
+            assertThrows(IllegalArgumentException.class, () -> new MeshBuild.SurfaceSlot<>(surface, data,
+                    coverage, MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER));
+        }
+        assertThrows(IllegalArgumentException.class, () -> new MeshBuild.Geometry<>(blocker,
+                new MeshBuild.VolumeSlot<>(volume, data), 0, 3));
+    }
+
     private interface Binding { }
     private interface Instance { }
 

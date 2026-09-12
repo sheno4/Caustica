@@ -29,6 +29,32 @@ final class RtRetainedGeometryPlanTest {
     private static final VolumeId<Binding, Instance> VOLUME = new VolumeId<>() { };
     private static final ProgramComposition PROGRAMS = new ProgramComposition(List.of(), java.util.Map.of(SURFACE, 1));
 
+    @Test
+    void onlyCertifiedSurfaceGetsBlockerRoutingAndCapturePreservesItsCertificate() {
+        var ordinary = new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(11), new MeshBuild.CoveragePolicy.Opaque());
+        var blocker = new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22), new MeshBuild.CoveragePolicy.Opaque(),
+                MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER);
+        var uncertified = build(new MeshBuild.IndexRevision(7), 0x1000, ordinary, ordinary);
+        var certified = build(new MeshBuild.IndexRevision(7), 0x1000, ordinary, blocker);
+        assertEquals(RtRetainedGeometryPlan.blasRanges(uncertified), RtRetainedGeometryPlan.blasRanges(certified));
+        assertTrue(RtRetainedGeometryPlan.canReuseBlas(uncertified, certified));
+        try (var owners = new dev.comfyfluffy.caustica.engine.resource.ResourceOwners()) {
+            var captured = owners.mesh(certified);
+            assertEquals(blocker.shadow(), captured.geometries().get(1).surface().shadow());
+            var records = RtRetainedGeometryPlan.records(RtRetainedGeometryPlan.resolve(captured, PROGRAMS), 3);
+            assertEquals(0, records.get(0).flags() & RtRetainedGeometryPlan.GUARANTEED_SHADOW_BLOCKER);
+            assertEquals(RtRetainedGeometryPlan.GUARANTEED_SHADOW_BLOCKER,
+                    records.get(1).flags() & RtRetainedGeometryPlan.GUARANTEED_SHADOW_BLOCKER);
+            assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
+                            RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE,
+                            RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
+                            RtRetainedGeometryPlan.HitGroup.SHADOW_BLOCKER),
+                    RtRetainedGeometryPlan.hitGroups(records));
+            assertEquals(records.get(1).flags(), RtRetainedGeometryPlan.pack(records)
+                    .getInt(RtRetainedGeometryPlan.RECORD_BYTES + RtRetainedGeometryPlan.FLAGS_OFFSET));
+        }
+    }
+
     @Test void changedOpacityRequiresRebuildAndMicromapMeshesDoNotRefit() {
         var surface = new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1), new MeshBuild.CoveragePolicy.Cutout(.5f));
         var opaque = new dev.comfyfluffy.caustica.api.geometry.OpacityMicromap(0,1,new byte[]{1});

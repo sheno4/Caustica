@@ -109,7 +109,10 @@ final class RtTerrainMesher {
             var program = surface.material().material().equals(MinecraftMaterialIds.WATER)
                     ? MinecraftTerrainMesh.ProgramCategory.WATER
                     : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
-            routing.add(new TriangleRouting(program, surface.coverage(), 0.5f));
+            boolean blocker = program == MinecraftTerrainMesh.ProgramCategory.MATERIAL
+                    && surface.coverage() == Coverage.OPAQUE
+                    && materials.guaranteesZeroShadowTransmission(surface.material().materialIndex());
+            routing.add(new TriangleRouting(program, surface.coverage(), 0.5f, blocker));
         }
         var packed = bucketTriangles(geom.idx.elements(), geom.cornerUv.elements(), geom.prim.elements(), routing);
         int[] sourceTriangles = new int[routing.size()];
@@ -131,7 +134,8 @@ final class RtTerrainMesher {
                                 (maxU - uv.u()) * uv.inverseDu(), (maxV - uv.v()) * uv.inverseDv(), geometry.alphaCutoff());
                     }) : null;
             geometries.add(new MinecraftTerrainMesh.Geometry(geometry.program(), geometry.coverage(),
-                    geometry.firstIndex(), geometry.indexCount(), geometry.alphaCutoff(), opacity));
+                    geometry.firstIndex(), geometry.indexCount(), geometry.alphaCutoff(), opacity,
+                    geometry.guaranteedShadowBlocker()));
         }
         return new PackedSection(new MinecraftTerrainMesh(
                 java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
@@ -158,7 +162,12 @@ final class RtTerrainMesher {
     /** Vulkan routing shared by triangles that may occupy one contiguous acceleration-geometry range. */
     record TriangleRouting(MinecraftTerrainMesh.ProgramCategory program,
                            MinecraftTerrainMesh.Coverage coverage,
-                           float alphaCutoff) { }
+                           float alphaCutoff, boolean guaranteedShadowBlocker) {
+        TriangleRouting(MinecraftTerrainMesh.ProgramCategory program,
+                        MinecraftTerrainMesh.Coverage coverage, float alphaCutoff) {
+            this(program, coverage, alphaCutoff, false);
+        }
+    }
 
     /** Triangle streams packed in stable routing-bucket order. */
     private record PackedSection(MinecraftTerrainMesh mesh, int[] sourceToDestinationPrimitives) { }
@@ -196,7 +205,7 @@ final class RtTerrainMesher {
             }
             TriangleRouting route = bucket.getKey();
             geometries.add(new MinecraftTerrainMesh.Geometry(route.program(), route.coverage(), firstIndex,
-                    sourceTriangles.size() * 3, route.alphaCutoff()));
+                    sourceTriangles.size() * 3, route.alphaCutoff(), null, route.guaranteedShadowBlocker()));
         }
         return new PackedTriangles(indices, cornerUvs, primitiveData, geometries,
                 sourceToDestinationPrimitives);

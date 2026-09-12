@@ -27,6 +27,23 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftMaterialLookupTest {
     @Test
+    void certifiesOnlyResolvedZeroTransmissionIncludingTexturedMaterialOverrides() {
+        var id = ResourceId.of("test", "material");
+        for (boolean textured : new boolean[]{false, true}) {
+            for (float transmission : new float[]{0.0f, Float.MIN_NORMAL, 0.6f, 1.0f}) {
+                var lookup = overriddenMaterial(new MinecraftMaterialRule.Parameters(
+                        null, null, null, transmission, null, null), textured);
+                var resolved = lookup.resolve(id);
+                assertEquals(transmission == 0.0f,
+                        lookup.guaranteesZeroShadowTransmission(resolved.materialIndex()));
+                assertEquals(false, lookup.guaranteesZeroShadowTransmission(0));
+                assertEquals(false, lookup.guaranteesZeroShadowTransmission(
+                        lookup.resolve(MinecraftMaterialIds.WATER).materialIndex()));
+            }
+        }
+    }
+
+    @Test
     void topologyOverridesChooseDefaultsBeforeParameterOverrides() {
         for (var topology : MinecraftMaterialTopology.values()) {
             var defaults = overriddenMaterial(new MinecraftMaterialRule.Parameters(

@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.mixin;
 
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftHostTelemetry;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
@@ -25,8 +26,10 @@ public abstract class LevelRendererMixin {
 
 	@Inject(method = "doEntityOutline", at = @At("HEAD"), cancellable = true)
 	private void caustica$skipUnrenderedEntityOutline(CallbackInfo ci) {
-		// Cancelling world rendering also skips the outline target's clear and population.
-		if (CausticaClientComposition.current().renderController().wasWorldSkippedThisFrame()) ci.cancel();
+		try (var hostWork = MinecraftHostTelemetry.work("world.outlineGate")) {
+			// Cancelling world rendering also skips the outline target's clear and population.
+			if (CausticaClientComposition.current().renderController().wasWorldSkippedThisFrame()) ci.cancel();
+		}
 	}
 
 	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
@@ -40,39 +43,41 @@ public abstract class LevelRendererMixin {
 			Vector4f fogColor,
 			boolean shouldRenderSky,
 			CallbackInfo ci) {
-		try (var ignored = CausticaClientComposition.current().runtime().profileStage("host.worldMaintenance")) {
-			Runnable playerCompiledSectionCallback = this.levelRenderState.playerCompiledSectionCallback;
-			boolean waitingForRtPlayerSection = false;
-			if (CausticaClientComposition.current().renderController().rtRuntimeWorkRequested() && playerCompiledSectionCallback != null) {
-				if (CausticaClientComposition.current().terrain().isSectionReady(cameraState.blockPos)) {
-					playerCompiledSectionCallback.run();
-					CausticaClientComposition.current().renderController().markRtPlayerSectionReady();
-				} else {
-					waitingForRtPlayerSection = true;
+		try (var hostWork = MinecraftHostTelemetry.work("world.maintenance")) {
+			try (var ignored = CausticaClientComposition.current().runtime().profileStage("host.worldMaintenance")) {
+				Runnable playerCompiledSectionCallback = this.levelRenderState.playerCompiledSectionCallback;
+				boolean waitingForRtPlayerSection = false;
+				if (CausticaClientComposition.current().renderController().rtRuntimeWorkRequested() && playerCompiledSectionCallback != null) {
+					if (CausticaClientComposition.current().terrain().isSectionReady(cameraState.blockPos)) {
+						playerCompiledSectionCallback.run();
+						CausticaClientComposition.current().renderController().markRtPlayerSectionReady();
+					} else {
+						waitingForRtPlayerSection = true;
+					}
 				}
-			}
 
-			if (!CausticaClientComposition.current().renderController().shouldCancelLevelRenderer(waitingForRtPlayerSection)) {
-				return;
-			}
+				if (!CausticaClientComposition.current().renderController().shouldCancelLevelRenderer(waitingForRtPlayerSection)) {
+					return;
+				}
 
-			LevelRenderer renderer = (LevelRenderer) (Object) this;
-			CausticaClientComposition.current().renderController().suspendVanillaTerrain(() -> {
-				renderer.viewArea().releaseAllBuffers();
-				renderer.sectionRenderDispatcher().clearCompileQueue();
-				renderer.sectionOcclusionGraph().waitAndReset(renderer.viewArea());
-				renderer.clearVisibleSections();
-			});
-			// Extraction rotates its delta buffers every frame; copy membership before they are reused.
-			var residency = (SectionOcclusionGraphAccessor) renderer.sectionOcclusionGraph();
-			var changes = this.levelRenderState.chunkLoadingRenderState;
-			VanillaTerrainSuspension.applyDelta(residency.caustica$getLoadedChunks(),
-					changes.addedLoadedChunks, changes.removedLoadedChunks);
-			VanillaTerrainSuspension.applyDelta(residency.caustica$getEmptySections(),
-					changes.addedEmptySections, changes.removedEmptySections);
-			caustica$drainVanillaGizmos();
-			CausticaClientComposition.current().renderController().markWorldSkipped();
-			ci.cancel();
+				LevelRenderer renderer = (LevelRenderer) (Object) this;
+				CausticaClientComposition.current().renderController().suspendVanillaTerrain(() -> {
+					renderer.viewArea().releaseAllBuffers();
+					renderer.sectionRenderDispatcher().clearCompileQueue();
+					renderer.sectionOcclusionGraph().waitAndReset(renderer.viewArea());
+					renderer.clearVisibleSections();
+				});
+				// Extraction rotates its delta buffers every frame; copy membership before they are reused.
+				var residency = (SectionOcclusionGraphAccessor) renderer.sectionOcclusionGraph();
+				var changes = this.levelRenderState.chunkLoadingRenderState;
+				VanillaTerrainSuspension.applyDelta(residency.caustica$getLoadedChunks(),
+						changes.addedLoadedChunks, changes.removedLoadedChunks);
+				VanillaTerrainSuspension.applyDelta(residency.caustica$getEmptySections(),
+						changes.addedEmptySections, changes.removedEmptySections);
+				caustica$drainVanillaGizmos();
+				CausticaClientComposition.current().renderController().markWorldSkipped();
+				ci.cancel();
+			}
 		}
 	}
 

@@ -11,8 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 final class RtPipelineRetainedHitPackingTest {
     @Test
     void duplicatesFixedGroupHandlesInPlacementGeometryRayOrder() {
-        ByteBuffer handles = ByteBuffer.allocate(5 * 4);
-        for (int group = 0; group < 5; group++) handles.putInt(group * 4, 100 + group);
+        int groupCount = RtRetainedGeometryPlan.HitGroup.values().length;
+        ByteBuffer handles = ByteBuffer.allocate(groupCount * 4);
+        for (int group = 0; group < groupCount; group++) handles.putInt(group * 4, 100 + group);
         handles.position(3);
 
         ByteBuffer packed = RtPipeline.packRetainedHitRecords(handles, 4, 8, List.of(
@@ -21,7 +22,9 @@ final class RtPipelineRetainedHitPackingTest {
                 RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
                 RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE,
                 RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
-                RtRetainedGeometryPlan.HitGroup.SHADOW_TRANSMISSIVE));
+                RtRetainedGeometryPlan.HitGroup.SHADOW_TRANSMISSIVE,
+                RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
+                RtRetainedGeometryPlan.HitGroup.SHADOW_BLOCKER));
 
         assertEquals(101, packed.getInt(0));
         assertEquals(103, packed.getInt(8));
@@ -29,9 +32,11 @@ final class RtPipelineRetainedHitPackingTest {
         assertEquals(102, packed.getInt(24));
         assertEquals(100, packed.getInt(32));
         assertEquals(104, packed.getInt(40));
-        for (int record = 0; record < 6; record++) assertEquals(0, packed.getInt(record * 8 + 4));
+        assertEquals(100, packed.getInt(48));
+        assertEquals(105, packed.getInt(56));
+        for (int record = 0; record < 8; record++) assertEquals(0, packed.getInt(record * 8 + 4));
         assertEquals(3, handles.position());
         assertEquals(0, packed.position());
-        assertEquals(48, packed.remaining());
+        assertEquals(64, packed.remaining());
     }
 }

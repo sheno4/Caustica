@@ -154,6 +154,55 @@ final class RtEntityCaptureTest {
     }
 
     @Test
+    void consecutiveFacesShareShadingWithoutChangingAttributesOrFingerprint() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.currentMaterial = material("entity");
+        for (int i = 0; i < 64; i++) {
+            capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, (i << 24) | 0xFFFFFF);
+        }
+        MinecraftEntityMesh mesh = capture.entityMesh();
+        assertEquals(256, mesh.vertexCount());
+        assertEquals(128, mesh.triangleCount());
+        MinecraftEntityMesh.Triangle surface = mesh.triangles().getFirst();
+        for (var triangle : mesh.triangles()) assertSame(surface, triangle);
+        assertEquals(0f, mesh.vertexColors().get(3));
+        assertEquals(63f / 255f, mesh.vertexColors().get(63 * 16 + 3), 1e-7f);
+
+        var shared = RtEntities.meshFingerprint(capture);
+        for (int i = 0; i < capture.surfaces.size(); i++) {
+            capture.surfaces.set(i, new MinecraftEntityMesh.Triangle(
+                    surface.material(), surface.coverage(), surface.emission()));
+        }
+        assertEquals(shared, RtEntities.meshFingerprint(capture));
+        assertEquals(mesh.triangles(), capture.entityMesh().triangles());
+    }
+
+    @Test
+    void sharingStopsAtEachShadingChange() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.currentMaterial = material("first");
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1, 0f);
+        capture.currentMaterial = material("second");
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1, 0f);
+        capture.currentCoverage = MinecraftEntityMesh.Coverage.STOCHASTIC;
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1, 0f);
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1, -0f);
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1, 2f);
+
+        var triangles = capture.entityMesh().triangles();
+        for (int i = 0; i < triangles.size(); i += 2) {
+            assertSame(triangles.get(i), triangles.get(i + 1));
+            if (i > 0) assertNotSame(triangles.get(i - 1), triangles.get(i));
+        }
+        assertEquals(material("first"), triangles.get(0).material());
+        assertEquals(material("second"), triangles.get(2).material());
+        assertEquals(MinecraftEntityMesh.Coverage.CUTOUT, triangles.get(2).coverage());
+        assertEquals(MinecraftEntityMesh.Coverage.STOCHASTIC, triangles.get(4).coverage());
+        assertEquals(Float.floatToRawIntBits(-0f), Float.floatToRawIntBits(triangles.get(6).emission()));
+        assertEquals(2f, triangles.get(8).emission());
+    }
+
+    @Test
     void resetDoesNotReuseTheRetiredSurfaceObject() {
         RtEntityCapture capture = new RtEntityCapture();
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
