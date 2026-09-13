@@ -77,6 +77,8 @@ public final class TraceResources {
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide diffuse albedo " + renderWidth + "x" + renderHeight);
         GpuImage depth = createImage(context, renderWidth, renderHeight,
                 VK10.VK_FORMAT_R32_SFLOAT, "guide reverse depth " + renderWidth + "x" + renderHeight);
+        GpuImage primaryDepth = createImage(context, renderWidth, renderHeight,
+                VK10.VK_FORMAT_R32_SFLOAT, "primary reverse depth " + renderWidth + "x" + renderHeight);
         GpuImage motion = createImage(context, renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderWidth + "x" + renderHeight);
         GpuImage specularAlbedo = createImage(context, renderWidth, renderHeight,
@@ -119,7 +121,7 @@ public final class TraceResources {
                         + "x" + PATH_RECORDS_PER_PIXEL);
         releases.add(pathScratchBuffer::destroy);
         images = new TraceImages(traceColor, stablePlaneMetadata,
-                normalRoughness, diffuseAlbedo, depth, motion,
+                normalRoughness, diffuseAlbedo, depth, primaryDepth, motion,
                 specularAlbedo, specularMotion, diffuseRadianceHitDistance,
                 specularRadianceHitDistance, nrdViewZ, nrdMotion, nrdDisocclusionThresholdMix,
                 denoisedDiffuseRadianceHitDistance,

@@ -58,6 +58,12 @@ public final class CausticaOptions implements SettingsAccess {
         return store;
     }
 
+    /** Declared tokens for a feature, for host settings inspection and editing. */
+    public List<Option<?>> declaredOptions(ResourceId feature) {
+        return List.copyOf(Objects.requireNonNull(state.declared().get(feature),
+                () -> "unknown feature " + feature).values());
+    }
+
     private static CommentedFileConfig open(Path path) {
         CommentedFileConfig file = CommentedFileConfig.builder(path, TomlFormat.instance())
                 .onFileNotFound(FileNotFoundAction.CREATE_EMPTY).preserveInsertionOrder().sync().build();

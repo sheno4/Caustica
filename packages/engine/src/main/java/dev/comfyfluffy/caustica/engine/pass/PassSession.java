@@ -47,6 +47,12 @@ public final class PassSession implements AutoCloseable {
         return add(channel, PassKey.Stage.WORLD_RESOURCE, null, null, factory, backend.worldResourceSetup());
     }
 
+    PassRegistration addSceneEffect(
+            PassContributionChannel channel, PassId id, PassPlacement placement,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory) {
+        return add(channel, PassKey.Stage.SCENE_EFFECT, id, placement, factory, backend.postEffectSetup());
+    }
+
     PassRegistration addPostEffect(
             PassContributionChannel channel, PassId id, PassPlacement placement,
             PassFactory<PostEffectSetup, PostEffectFrame> factory) {
@@ -100,6 +106,11 @@ public final class PassSession implements AutoCloseable {
     /** Records all active world-resource passes in global acceptance order. */
     public void recordWorldResources() {
         dispatch(PassKey.Stage.WORLD_RESOURCE);
+    }
+
+    /** Composes scene effects before exposure metering. */
+    public void recordSceneEffects() {
+        dispatch(PassKey.Stage.SCENE_EFFECT);
     }
 
     /** Records and composes all active post effects in constrained order. */
@@ -189,6 +200,7 @@ public final class PassSession implements AutoCloseable {
     private static String stageName(PassKey.Stage stage) {
         return switch (stage) {
             case WORLD_RESOURCE -> "world-resource";
+            case SCENE_EFFECT -> "scene-effect";
             case POST_EFFECT -> "post-effect";
             case UI -> "ui";
         };
@@ -209,7 +221,7 @@ public final class PassSession implements AutoCloseable {
         try {
             invocation = (PassSchedulerBackend.Invocation<F>) switch (registration.key.stage()) {
                 case WORLD_RESOURCE -> backend.beginWorldResource(registration.key);
-                case POST_EFFECT -> backend.beginPostEffect(registration.key);
+                case SCENE_EFFECT, POST_EFFECT -> backend.beginPostEffect(registration.key);
                 case UI -> backend.beginUi(registration.key);
             };
         } catch (Throwable failure) {

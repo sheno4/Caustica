@@ -47,7 +47,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
         MinecraftLightFrame frame = frames.get();
         if (frame == null) return;
         CelestialLights celestial = frame.celestial()
-                .map(value -> celestialLights(celestialFrame(value, celestialSettings.get())))
+                .map(value -> celestialLights(value, celestialSettings.get()))
                 .orElse(CelestialLights.NONE);
         publish(celestial, frame.helmet());
     }
@@ -80,6 +80,10 @@ public final class MinecraftLightProvider implements AutoCloseable {
     public void close() {
         lights.edit(List.of(new SceneEdit.DropLight(sunLight), new SceneEdit.DropLight(moonLight),
                 new SceneEdit.DropLight(helmetLight)));
+    }
+
+    public static CelestialLights celestialLights(MinecraftCelestialFrame frame, CelestialSettings settings) {
+        return celestialLights(celestialFrame(frame, settings));
     }
 
     static CelestialLights celestialLights(CelestialFrame frame) {
@@ -119,7 +123,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
                 illuminance, illuminance, illuminance, angularRadius, true));
     }
 
-    record CelestialLights(Optional<LightDescriptor.Distant> sun,
+    public record CelestialLights(Optional<LightDescriptor.Distant> sun,
                            Optional<LightDescriptor.Distant> moon) {
         private static final CelestialLights NONE = new CelestialLights(Optional.empty(), Optional.empty());
     }

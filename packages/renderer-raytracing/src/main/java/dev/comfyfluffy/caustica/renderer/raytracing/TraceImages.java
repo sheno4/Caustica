@@ -11,6 +11,7 @@ public record TraceImages(
         GpuImage normalRoughness,
         GpuImage diffuseAlbedo,
         GpuImage depth,
+        GpuImage primaryDepth,
         GpuImage motion,
         GpuImage specularAlbedo,
         GpuImage specularMotion,
@@ -29,6 +30,7 @@ public record TraceImages(
         Objects.requireNonNull(normalRoughness, "normalRoughness");
         Objects.requireNonNull(diffuseAlbedo, "diffuseAlbedo");
         Objects.requireNonNull(depth, "depth");
+        Objects.requireNonNull(primaryDepth, "primaryDepth");
         Objects.requireNonNull(motion, "motion");
         Objects.requireNonNull(specularAlbedo, "specularAlbedo");
         Objects.requireNonNull(specularMotion, "specularMotion");

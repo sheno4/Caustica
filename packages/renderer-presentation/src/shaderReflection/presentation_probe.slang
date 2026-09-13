@@ -1,5 +1,12 @@
 import display_common;
 import presentation_common;
+import caustica_fog_types;
+[[vk::push_constant]] FogPush fogPushProbe;
+[shader("compute")]
+[numthreads(1,1,1)]
+void probeFogPush(uint3 id : SV_DispatchThreadID) {
+    if(id.x == 0xFFFFFFFFu) { float sink = fogPushProbe.medium.x; }
+}
 
 struct ExposureStateLayoutProbe { ExposureState values[2]; };
 [[vk::binding(0, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;

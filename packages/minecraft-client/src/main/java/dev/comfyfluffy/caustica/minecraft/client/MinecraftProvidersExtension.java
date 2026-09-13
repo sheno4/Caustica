@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.minecraft.client.program.MinecraftProgramSession;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.renderer.presentation.fog.FogPass;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.DisplayText;
@@ -60,6 +61,7 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
 
     @Override public void registerSettings(SettingsRegistry registry) {
         registry.feature(ID).title(DisplayText.literal("Minecraft"))
-                .group(SkyLutPass.GROUP).options(SkyLutPass.OPTIONS).register();
+                .group(SkyLutPass.GROUP).options(SkyLutPass.OPTIONS)
+                .group(FogPass.GROUP).options(FogPass.OPTIONS).register();
     }
 }

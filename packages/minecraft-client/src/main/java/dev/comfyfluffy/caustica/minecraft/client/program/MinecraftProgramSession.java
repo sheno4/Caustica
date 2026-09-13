@@ -25,6 +25,7 @@ import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftProgramRes
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.renderer.presentation.fog.FogPass;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftTerrainSession;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.entity.*;
@@ -51,6 +52,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final MinecraftLightProvider lights;
     private final PassRegistration lightRegistration;
     private final PassRegistration overlayRegistration;
+    private final PassRegistration fogRegistration;
     private final RtEntities entities;
     private final RtEntityTextures entityTextures;
     private final RtTerrain terrain;
@@ -65,7 +67,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     MinecraftFrameCaptureState frames,
                                     MinecraftFrameCaptureInstaller.Lease frameCapture,
                                     MinecraftLightProvider lights, PassRegistration lightRegistration,
-                                    PassRegistration overlayRegistration,
+                                    PassRegistration overlayRegistration, PassRegistration fogRegistration,
                                     RtEntities entities,
                                     RtEntityTextures entityTextures,
                                     RtTerrain terrain, OptionLookup options) {
@@ -78,6 +80,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         this.lights = lights;
         this.lightRegistration = lightRegistration;
         this.overlayRegistration = overlayRegistration;
+        this.fogRegistration = fogRegistration;
         this.entities = entities;
         this.entityTextures = entityTextures;
         this.terrain = terrain;
@@ -109,6 +112,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         MinecraftLightProvider lights = null;
         PassRegistration lightRegistration = null;
         PassRegistration overlayRegistration = null;
+        PassRegistration fogRegistration = null;
         try {
             frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames, calibration),
                     "frame capture lease");
@@ -120,13 +124,20 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     setup -> new LightUpdatePass(installedLights, instrumentation));
             overlayRegistration = context.renderSession().passes().addUiPass(
                     WorldOverlayPass.ID, setup -> new WorldOverlayPass(setup, entities, terrain, context.renderSession().resources()));
+            MinecraftFogInputs fogInputs = new MinecraftFogInputs();
+            fogRegistration = context.renderSession().passes().addSceneEffectPass(FogPass.ID,
+                    setup -> new FogPass(setup, context.renderSession().resources(),
+                            () -> options.snapshot().options(MinecraftProvidersExtension.ID),
+                            () -> fogInputs.capture(frames.fogFrame(),
+                                    options.snapshot().options(MinecraftProvidersExtension.ID))));
             MinecraftProgramSession session = new MinecraftProgramSession(
                     context, resources, materialEpochs, frameSelections, frames, frameCapture,
-                    lights, lightRegistration, overlayRegistration, entities, entityTextures, terrain, options);
+                    lights, lightRegistration, overlayRegistration, fogRegistration, entities, entityTextures, terrain, options);
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
             var releases = new ArrayList<Runnable>();
+            if (fogRegistration != null) releases.add(fogRegistration::close);
             if (overlayRegistration != null) releases.add(overlayRegistration::close);
             if (lightRegistration != null) releases.add(lightRegistration::close);
             if (lights != null) releases.add(lights::close);
@@ -343,7 +354,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         Pending cancelled = pending;
         pending = null;
         active = null;
-        new ResourceLifetime(frameCapture::close, overlayRegistration::close, lightRegistration::close,
+        new ResourceLifetime(frameCapture::close, fogRegistration::close, overlayRegistration::close, lightRegistration::close,
                 () -> { if (retiring != null && retiring.sky != null) retiring.sky.close(); },
                 () -> { if (retiring != null) retiring.stopSceneProducers(); },
                 lights::close,

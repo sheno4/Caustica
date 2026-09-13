@@ -48,6 +48,7 @@ public final class RtFrameStats {
             "frame.rawCopy",
             "frame.upscale",
             "frame.postChain",
+            "frame.sceneEffects",
             "frame.displayMap",
             "frame.debugPresent",
             "frame.copyOutput"), List.of());

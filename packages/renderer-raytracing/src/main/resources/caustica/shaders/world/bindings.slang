@@ -20,6 +20,7 @@ public struct WorldResourceIndices {
     public StorageImageIndex normalGuide;
     public StorageImageIndex albedoGuide;
     public StorageImageIndex depthGuide;
+    public StorageImageIndex primaryDepth;
     public StorageImageIndex motionGuide;
     public StorageImageIndex specularAlbedoGuide;
     public StorageImageIndex specularMotionGuide;

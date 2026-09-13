@@ -24,6 +24,16 @@ public interface PassChannel {
     PassRegistration addWorldResourcePass(PassFactory<WorldResourceSetup, PassFrame> factory);
 
     /**
+     * Compose scene-linear effects after reconstruction and before exposure metering. Ordering anchors
+     * apply only within this stage. The resulting image feeds exposure and ordinary post effects.
+     */
+    PassRegistration addSceneEffectPass(PassId id, PassFactory<PostEffectSetup, PostEffectFrame> factory);
+
+    /** Adds a scene effect with an ordering relationship within the pre-exposure stage. */
+    PassRegistration addSceneEffectPass(PassId id, PassPlacement placement,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory);
+
+    /**
      * Record after reconstruction and before the display transform. Effects compose in constrained order,
      * with global acceptance order breaking otherwise-unconstrained ties. A pass joins the scene-colour
      * chain for a frame only by acquiring and fully writing its output.

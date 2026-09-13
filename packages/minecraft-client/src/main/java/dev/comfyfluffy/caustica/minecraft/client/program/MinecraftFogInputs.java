@@ -1,0 +1,42 @@
+package dev.comfyfluffy.caustica.minecraft.client.program;
+
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFogFrame;
+import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
+import dev.comfyfluffy.caustica.renderer.presentation.fog.FogField;
+import dev.comfyfluffy.caustica.renderer.presentation.fog.FogFrame;
+import dev.comfyfluffy.caustica.settings.OptionValues;
+
+import java.nio.FloatBuffer;
+
+/** Converts captured Minecraft weather and biome facts into renderer medium parameters. */
+final class MinecraftFogInputs {
+    private MinecraftFogFrame.Grid source;
+    private FogField field;
+
+    FogFrame capture(MinecraftFogFrame frame, OptionValues options) {
+        if (frame == null) return null;
+        var grid = frame.grid();
+        if (source != grid) {
+            float[] voxels = new float[grid.voxelCount() * 4];
+            grid.writeVoxels(FloatBuffer.wrap(voxels));
+            field = new FogField(grid.originX(), grid.originY(), grid.originZ(), grid.spacing(),
+                    grid.sizeX(), grid.sizeY(), grid.sizeZ(), voxels);
+            source = grid;
+        }
+        var celestial = frame.celestial();
+        var lights = MinecraftLightProvider.celestialLights(celestial,
+                MinecraftProgramSession.celestialSettings(options));
+        var light = lights.sun().or(() -> lights.moon()).orElse(null);
+        float[] direction = light == null ? new float[]{0, 1, 0}
+                : new float[]{(float) light.directionX(), (float) light.directionY(), (float) light.directionZ()};
+        float[] illuminance = light == null ? new float[3] : new float[]{
+                (float) light.illuminanceRedLux(), (float) light.illuminanceGreenLux(),
+                (float) light.illuminanceBlueLux()};
+        float daylight = (float) Math.max(0, Math.cos(celestial.sunAngleRadians()));
+        float sky = celestial.lighting().sunIlluminanceLux() * daylight * 0.015f
+                + celestial.lighting().nightAirglowLuminanceCdM2();
+        return new FogFrame(field, frame.dailyDensity(), celestial.seaLevel() + 6, 18,
+                (float) (frame.animationSeconds() % 65536.0), direction, illuminance,
+                new float[]{sky * 0.7f, sky * 0.85f, sky});
+    }
+}

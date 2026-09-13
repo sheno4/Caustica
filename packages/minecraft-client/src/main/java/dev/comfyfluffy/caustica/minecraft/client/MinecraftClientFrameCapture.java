@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftSkyFrame;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFogFrame;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -34,13 +35,19 @@ final class MinecraftClientFrameCapture {
     private MinecraftClientFrameCapture() { }
 
     static MinecraftCapturedFrame capture(Minecraft minecraft, double cameraY, double metersPerSceneUnit,
-                                          MinecraftLightingCalibration calibration) {
+                                          MinecraftLightingCalibration calibration,
+                                          MinecraftFogFrame.Grid fogGrid) {
         Optional<MinecraftCelestialFrame> celestial = celestial(
                 minecraft, cameraY, metersPerSceneUnit, calibration);
         MinecraftLightFrame light = new MinecraftLightFrame(celestial, helmet(minecraft));
         Optional<MinecraftSkyFrame> sky = celestial.flatMap(value -> atlas(minecraft, value)
                 .map(atlas -> new MinecraftSkyFrame(value, atlas)));
-        return new MinecraftCapturedFrame(light, sky);
+        Optional<MinecraftFogFrame> fog = fogGrid == null ? Optional.empty() : celestial.map(value ->
+                new MinecraftFogFrame(value,
+                        ((double) minecraft.level.getGameTime()
+                                + minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false)) / 20.0,
+                        fogGrid));
+        return new MinecraftCapturedFrame(light, sky, fog);
     }
 
     private static Optional<MinecraftCelestialFrame> celestial(

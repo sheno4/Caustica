@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.renderer.presentation.bloom.BloomExtension;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.renderer.presentation.fog.FogPass;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtWorkerPool;
@@ -47,7 +48,9 @@ final class MinecraftProvidersExtensionTest {
 
         assertTrue(settings.declared(BloomExtension.ID));
         assertTrue(settings.declared(MinecraftProvidersExtension.ID));
-        assertEquals(SkyLutPass.OPTIONS, settings.settings(MinecraftProvidersExtension.ID).options());
+        var expected = new ArrayList<>(SkyLutPass.OPTIONS);
+        expected.addAll(FogPass.OPTIONS);
+        assertEquals(expected, settings.settings(MinecraftProvidersExtension.ID).options());
     }
 
     @Test

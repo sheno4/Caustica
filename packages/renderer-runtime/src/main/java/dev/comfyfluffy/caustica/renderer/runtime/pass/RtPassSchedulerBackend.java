@@ -86,7 +86,9 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
 
     @Override
     public PostInvocation beginPostEffect(PassKey pass) {
-        requireStage(pass, PassKey.Stage.POST_EFFECT);
+        if (pass.stage() != PassKey.Stage.POST_EFFECT && pass.stage() != PassKey.Stage.SCENE_EFFECT) {
+            throw new IllegalArgumentException("pass stage is " + pass.stage());
+        }
         FrameState frame = beginInvocation();
         return activate(new Post(frame, sceneColor, nextPostTarget));
     }
@@ -135,6 +137,13 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             GpuImage exposureImage,
             GpuImage postColorA,
             GpuImage postColorB,
+            GpuImage depth,
+            GpuImage primaryDepth,
+            float[] cameraRelativeFromClip,
+            GpuAccelerationStructureDescriptor entrySceneTlasDescriptor,
+            float[] cameraTlasPosition,
+            float[] traceJitter,
+            float preExposure,
             UiState ui) {
         public FrameState {
             Objects.requireNonNull(commandBuffer, "commandBuffer");
@@ -312,6 +321,15 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
                 return output;
             }
 
+            @Override public float[] traceJitter() { requireLive(); return state.traceJitter().clone(); }
+            @Override public float preExposure() { requireLive(); return state.preExposure(); }
+            @Override public GpuImage primaryDepth() { requireLive(); return state.primaryDepth(); }
+            @Override public GpuImage depth() { requireLive(); return state.depth(); }
+            @Override public float[] cameraRelativeFromClip() { requireLive(); return state.cameraRelativeFromClip().clone(); }
+            @Override public GpuAccelerationStructureDescriptor entrySceneTlasDescriptor() {
+                requireLive(); return state.entrySceneTlasDescriptor();
+            }
+            @Override public float[] cameraTlasPosition() { requireLive(); return state.cameraTlasPosition().clone(); }
             @Override public GpuImage exposureImage() { requireLive(); return state.exposureImage(); }
         }
     }

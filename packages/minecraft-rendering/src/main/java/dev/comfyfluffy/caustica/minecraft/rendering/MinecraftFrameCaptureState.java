@@ -10,6 +10,11 @@ public final class MinecraftFrameCaptureState implements MinecraftFrameCaptureIn
 
     public MinecraftCapturedFrame current() { return current; }
 
+    public MinecraftFogFrame fogFrame() {
+        MinecraftCapturedFrame frame = current;
+        return frame == null ? null : frame.fog().orElse(null);
+    }
+
     public MinecraftLightFrame lightFrame() {
         MinecraftCapturedFrame frame = current;
         return frame == null ? null : frame.light();

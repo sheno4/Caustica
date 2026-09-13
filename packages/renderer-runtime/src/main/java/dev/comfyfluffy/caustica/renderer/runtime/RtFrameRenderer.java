@@ -97,6 +97,7 @@ public final class RtFrameRenderer {
     private FrameExecution execution;
     private boolean loggedActive;
     private long debugCaptureFrameSerial = -1;
+    private GpuImage debugCaptureSceneColor;
     private float debugCapturePreExposure;
     private RtDenoisingSettings debugCaptureDenoising;
 
@@ -194,8 +195,8 @@ public final class RtFrameRenderer {
                                     String denoiserRoute, String signalEncoding) { }
 
     public static List<String> debugImageNames() {
-        return List.of("display-color", "reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
-                "specular-albedo", "depth", "motion", "specular-motion", "nrd-view-z",
+        return List.of("display-color", "scene-color", "reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
+                "specular-albedo", "depth", "primary-depth", "motion", "specular-motion", "nrd-view-z",
                 "nrd-diffuse", "nrd-specular", "nrd-stable-radiance", "stable-plane-metadata");
     }
 
@@ -207,12 +208,14 @@ public final class RtFrameRenderer {
         TraceImages images = traceImages();
         GpuImage image = switch (name) {
             case "display-color" -> presentationResources().displayImage();
+            case "scene-color" -> debugCaptureSceneColor;
             case "reconstructed-color" -> images.reconstructedColor();
             case "trace-color" -> images.traceColor();
             case "normal-roughness" -> images.normalRoughness();
             case "diffuse-albedo" -> images.diffuseAlbedo();
             case "specular-albedo" -> images.specularAlbedo();
             case "depth" -> images.depth();
+            case "primary-depth" -> images.primaryDepth();
             case "motion" -> images.motion();
             case "specular-motion" -> images.specularMotion();
             case "nrd-view-z" -> images.nrdViewZ();
@@ -225,12 +228,14 @@ public final class RtFrameRenderer {
         String encoding = switch (name) {
             case "display-color" -> "RGBA: SDR display output, normalized UNORM8, before Minecraft UI composition";
             case "reconstructed-color", "trace-color" -> "RGB: ACEScg scene radiance * preExposure";
+            case "scene-color" -> "RGB: post-chain ACEScg radiance * preExposure; effect diagnostic modes override the signal";
             case "nrd-stable-radiance" -> "RGB: ACEScg scene-linear radiance (unexposed)";
             case "stable-plane-metadata" -> "R: available planes / 3; G: dominant plane index / 2; "
                     + "B: dominant endpoint delta depth / 9; A: dominant path crossed transmission (0 or 1)";
             case "normal-roughness" -> "RGB: world-space unit normal; A: roughness";
             case "diffuse-albedo", "specular-albedo" -> "RGB: dimensionless ACEScg BSDF estimate; A: 1";
-            case "depth" -> "R: reverse-Z device depth (dimensionless)";
+            case "depth" -> "R: dominant virtual endpoint reverse-Z device depth (dimensionless)";
+            case "primary-depth" -> "R: physical first-hit reverse-Z device depth; zero denotes environment";
             case "motion", "specular-motion" -> "RG: previous minus current position in render pixels";
             case "nrd-view-z" -> "R: absolute view Z in scene distance units; invalid: 65504";
             case "nrd-diffuse", "nrd-specular" -> "RGB: demodulated scene-linear radiance; A: hit distance; scale: "
@@ -316,6 +321,7 @@ public final class RtFrameRenderer {
             throw new IllegalStateException("Previous RT graphics use was never completed");
         }
         debugCaptureFrameSerial = -1;
+        debugCaptureSceneColor = null;
         frameCounter++;
         telemetry.beginRenderFrame();
         telemetry.beginFrameIfInactive();
@@ -484,7 +490,7 @@ public final class RtFrameRenderer {
                     revision.get().publicationCutoff());
             var output = reconstruction.record(commands, stack, graphicsUse, execution.frame,
                     traceResources());
-            recordPostProcessing(ctx, commands.heap("post processing and display"), stack,
+            recordPostProcessing(ctx, commands, commands.heap("post processing and display"), stack,
                     graphicsUse, output, nativeColorImage, debugView);
             commands.submit(submission);
             debugCaptureFrameSerial = telemetry.frameSerial();
@@ -635,18 +641,23 @@ public final class RtFrameRenderer {
         }
     }
 
-    private void recordPostProcessing(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+    private void recordPostProcessing(VulkanDeviceContext ctx, RtFrameCommands commands, VkCommandBuffer cmd, MemoryStack stack,
             GraphicsUse graphicsUse, dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage output, long dstImage, int debugView) {
         passes.beginFrame(passFrame(cmd, graphicsUse, null, output));
         try {
             VulkanBarriers.memoryBarrier(cmd, stack); // reconstructed output visible to exposure histogram
 
-            // Auto-exposure meters the selected route's reconstructed output. This keeps temporal routes
-            // stable and leaves RR exposure-independent as required by its integration contract; raw mode
-            // deliberately meters its own noisy reference.
+            try (var gpu = commands.time("scene effects");
+                 var ignored = RtDebugLabels.scope(ctx, cmd, "scene effects");
+                 var cpu = telemetry.frame().stage("frame.sceneEffects")) {
+                services.passes().recordSceneEffects();
+            }
+            VulkanBarriers.memoryBarrier(cmd, stack);
+
+            // Meter the scene after participating media composition, before exposure-dependent effects.
             try (var ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.exposure")) {
-                presentationResources().exposure().record(ctx, cmd, stack, output,
+                presentationResources().exposure().record(ctx, cmd, stack, (dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage) passes.sceneColor(),
                         traceImages().depth(), traceImages().diffuseAlbedo());
                 presentationResources().exposure().recordStateReadback(cmd, stack);
             }
@@ -656,6 +667,7 @@ public final class RtFrameRenderer {
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.postChain")) {
                 services.passes().recordPostEffects();
             }
+            debugCaptureSceneColor = (GpuImage) passes.sceneColor();
             RtToneLut displayLookLut = presentationResources().lookLut();
             try (var ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.displayMap")) {
@@ -714,7 +726,13 @@ public final class RtFrameRenderer {
                 execution.frame.snapshot().metersPerWorldUnit(),
                 traceExtent().renderWidth(), traceExtent().renderHeight(), output,
                 presentationResources().exposure().image(), presentationResources().postColorA(),
-                presentationResources().postColorB(), ui);
+                presentationResources().postColorB(), traceImages().depth(), traceImages().primaryDepth(),
+                new Matrix4f(execution.frame.projection()).mul(execution.frame.viewRotation()).invert().get(new float[16]),
+                execution.trace.tlasDescriptor(),
+                new float[] { execution.frame.cameraOffset().x(), execution.frame.cameraOffset().y(),
+                        execution.frame.cameraOffset().z() },
+                new float[] { execution.frame.jitterX(), execution.frame.jitterY() },
+                execution.frame.preExposure(), ui);
     }
 
     private void writeFrameRoots(ByteBuffer roots, VulkanDeviceAddress worldPushAddress, FrameSnapshot snapshot,
@@ -734,6 +752,7 @@ public final class RtFrameRenderer {
         target.putInt(base + RtBindings.WORLD_NORMAL_GUIDE_INDEX_OFFSET, storageIndex(traceImages().normalRoughness()));
         target.putInt(base + RtBindings.WORLD_ALBEDO_GUIDE_INDEX_OFFSET, storageIndex(traceImages().diffuseAlbedo()));
         target.putInt(base + RtBindings.WORLD_DEPTH_GUIDE_INDEX_OFFSET, storageIndex(traceImages().depth()));
+        target.putInt(base + RtBindings.WORLD_PRIMARY_DEPTH_INDEX_OFFSET, storageIndex(traceImages().primaryDepth()));
         target.putInt(base + RtBindings.WORLD_MOTION_GUIDE_INDEX_OFFSET, storageIndex(traceImages().motion()));
         target.putInt(base + RtBindings.WORLD_SPECULAR_ALBEDO_GUIDE_INDEX_OFFSET,
                 storageIndex(traceImages().specularAlbedo()));

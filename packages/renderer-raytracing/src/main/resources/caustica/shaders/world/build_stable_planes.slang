@@ -114,6 +114,12 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, intersection);
             WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, 0.0);
             bool environment = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
+            if (plane == 0u && step == 0u) {
+                // Camera-segment media stop at the physical boundary, before delta branches continue.
+                float4 clip = mul(frame.curViewProj, float4(hit.position - frame.camOffset, 1.0));
+                worldFloatStorageImage(worldBindings.resources.primaryDepth)[pixel] =
+                        !environment && clip.w > 0.0 ? saturate(clip.z / clip.w) : 0.0;
+            }
             float distance = environment ? TRACE_MAX_DISTANCE : hit.hitDistance;
             float3 transmission = exp(-branch.path.absorption * distance);
             // Restart stores incoming throughput; fill applies the endpoint segment's attenuation once.

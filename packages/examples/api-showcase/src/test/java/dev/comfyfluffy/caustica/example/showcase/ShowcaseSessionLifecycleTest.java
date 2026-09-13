@@ -107,6 +107,11 @@ final class ShowcaseSessionLifecycleTest {
     };
 
     private static final class Passes implements PassChannel {
+        @Override public PassRegistration addSceneEffectPass(PassId id,
+                PassFactory<PostEffectSetup, PostEffectFrame> factory) { return registration(); }
+        @Override public PassRegistration addSceneEffectPass(PassId id, PassPlacement placement,
+                PassFactory<PostEffectSetup, PostEffectFrame> factory) { return registration(); }
+
         private PassFactory<WorldResourceSetup, PassFrame> worldFactory;
         private final AtomicInteger closed = new AtomicInteger();
 

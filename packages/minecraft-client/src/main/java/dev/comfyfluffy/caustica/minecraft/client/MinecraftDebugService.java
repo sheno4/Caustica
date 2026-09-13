@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
 import dev.comfyfluffy.caustica.renderer.runtime.RtFrameCapture;
 import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
 import jdk.jfr.RecordingState;
@@ -183,7 +184,7 @@ public final class MinecraftDebugService implements AutoCloseable {
                 else GLFW.glfwRestoreWindow(window.handle());
                 future.complete(Map.of("requested", op));
             }
-            case "settings.get" -> future.complete(settings());
+            case "settings.get" -> future.complete(settings(settingsFeature(request)));
             case "runtime.set" -> {
                 var enabled = request.get("enabled");
                 if (enabled == null || !enabled.isJsonPrimitive() || !enabled.getAsJsonPrimitive().isBoolean())
@@ -195,8 +196,9 @@ public final class MinecraftDebugService implements AutoCloseable {
                 future.complete(runtimeStatus());
             }
             case "settings.set" -> {
-                applySettings(request.getAsJsonObject("values"));
-                future.complete(settings());
+                ResourceId feature = settingsFeature(request);
+                applySettings(feature, request.getAsJsonObject("values"));
+                future.complete(settings(feature));
             }
             case "view.set" -> {
                 int view = VIEWS.indexOf(request.get("name").getAsString());
@@ -329,17 +331,22 @@ public final class MinecraftDebugService implements AutoCloseable {
     }
 
     /** Validate every requested value before applying any setting in the batch. */
-    private void applySettings(JsonObject values) {
-        var options = MinecraftOptions.allSettings();
+    private static ResourceId settingsFeature(JsonObject request) {
+        return request.has("feature") ? ResourceId.parse(request.get("feature").getAsString())
+                : CausticaConfig.FEATURE;
+    }
+
+    private void applySettings(ResourceId feature, JsonObject values) {
+        var options = CausticaConfig.store().declaredOptions(feature);
         Map<Option<?>, Object> normalized = new LinkedHashMap<>();
         for (var entry : values.entrySet()) {
             var option = options.stream().filter(o -> o.id().equals(entry.getKey())).findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("Unknown setting " + entry.getKey()));
-            if (CausticaConfig.store().overridden(CausticaConfig.FEATURE, option))
+            if (CausticaConfig.store().overridden(feature, option))
                 throw new IllegalArgumentException("Setting has a JVM override: " + option.id());
             normalized.put(option, option.normalize(JSON.fromJson(entry.getValue(), Object.class)));
         }
-        normalized.forEach((option, value) -> CausticaConfig.store().apply(CausticaConfig.FEATURE, option, value));
+        normalized.forEach((option, value) -> CausticaConfig.store().apply(feature, option, value));
     }
 
     private void requireWorld() {
@@ -373,10 +380,15 @@ public final class MinecraftDebugService implements AutoCloseable {
     }
 
     private Map<String, Object> settings() {
+        return settings(CausticaConfig.FEATURE);
+    }
+
+    private Map<String, Object> settings(ResourceId feature) {
         Map<String, Object> result = new LinkedHashMap<>();
-        for (Option<?> option : MinecraftOptions.allSettings()) result.put(option.id(), Map.of(
-                "value", option.encode(CausticaConfig.get(option)).orElse(""),
-                "overridden", CausticaConfig.store().overridden(CausticaConfig.FEATURE, option)));
+        var values = CausticaConfig.store().snapshot().options(feature);
+        for (Option<?> option : CausticaConfig.store().declaredOptions(feature)) result.put(option.id(), Map.of(
+                "value", option.encode(values.get(option)).orElse(""),
+                "overridden", CausticaConfig.store().overridden(feature, option)));
         return result;
     }
 

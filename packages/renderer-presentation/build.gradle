@@ -56,6 +56,7 @@ def preparePresentationReflectionSources = tasks.register("preparePresentationRe
     into(reflectionRoot)
 }
 def presentationRecordSpecs = [
+        "push|fogPushProbe|FogPush|dev.comfyfluffy.caustica.renderer.presentation.gen|FogPushData|false",
         "push|bloomPushProbe|BloomPush|dev.comfyfluffy.caustica.renderer.presentation.gen|BloomPushData|false",
         "buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureStateData|true",
         "push|exposureHistPushProbe|ExposureHistPush|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureHistPushData|false",
@@ -117,7 +118,7 @@ def verifyPresentationSpirvTarget = tasks.register("verifyPresentationSpirvTarge
 }
 
 def expectedPipelines = ["debug_present", "display", "exposure_hist", "exposure_resolve",
-                         "hdr_composite", "sdr_present", "bloom"] as Set
+                         "hdr_composite", "sdr_present", "bloom", "fog"] as Set
 def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJar") {
     group = "verification"
     dependsOn(tasks.named("jar"))
@@ -128,7 +129,7 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
             while (entries.hasMoreElements()) names.add(entries.nextElement().name)
         }
         def generated = ["ExposureStateData", "ExposureHistPushData", "ExposureResolvePushData",
-                         "DisplayPushData", "DebugPresentPushData", "PresentPushData", "BloomPushData"].collect {
+                         "DisplayPushData", "DebugPresentPushData", "PresentPushData", "BloomPushData", "FogPushData"].collect {
             "dev/comfyfluffy/caustica/renderer/presentation/gen/" + it + ".class"
         } as Set
         def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/renderer/presentation/gen/")
@@ -182,7 +183,7 @@ def verifyRendererPresentationResources = tasks.register("verifyRendererPresenta
             rootProject.file("shaders/common/${it}").exists()
         }
         if (actualPipelines != expectedPipelines
-                || actualCommon != ["display_common.slang", "presentation_common.slang", "caustica_bloom.slang", "caustica_bloom_types.slang"] as Set
+                || actualCommon != ["display_common.slang", "presentation_common.slang", "caustica_bloom.slang", "caustica_bloom_types.slang", "caustica_fog.slang", "caustica_fog_types.slang"] as Set
                 || !rootDuplicates.empty || !rootCommonDuplicates.empty) {
             throw new GradleException("presentation resource ownership mismatch: pipelines=${actualPipelines}, "
                     + "common=${actualCommon}, rootPipelines=${rootDuplicates}, rootCommon=${rootCommonDuplicates}")

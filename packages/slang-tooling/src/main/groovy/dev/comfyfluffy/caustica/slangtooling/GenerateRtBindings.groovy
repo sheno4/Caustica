@@ -58,6 +58,7 @@ abstract class GenerateRtBindings extends DefaultTask {
                         "stablePlaneMetadataImage": "StorageImageIndex",
                         "normalGuide": "StorageImageIndex",
                         "albedoGuide": "StorageImageIndex", "depthGuide": "StorageImageIndex",
+                        "primaryDepth": "StorageImageIndex",
                         "motionGuide": "StorageImageIndex", "specularAlbedoGuide": "StorageImageIndex",
                         "specularMotionGuide": "StorageImageIndex",
                         "diffuseRadianceHitDistance": "StorageImageIndex",

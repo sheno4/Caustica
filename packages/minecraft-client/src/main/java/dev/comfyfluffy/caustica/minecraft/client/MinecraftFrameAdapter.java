@@ -44,6 +44,7 @@ public final class MinecraftFrameAdapter {
     private final RtEntityTextures entityTextures = new RtEntityTextures();
     private final RtEntities entities;
     private long renderedWorldFrameIndex;
+    private final MinecraftFogCapture fog = new MinecraftFogCapture();
 
     public MinecraftFrameAdapter(RtTerrain terrain, MinecraftTelemetry.Instrumentation instrumentation) {
         this.terrain = Objects.requireNonNull(terrain, "terrain");
@@ -89,8 +90,15 @@ public final class MinecraftFrameAdapter {
             }
             FrameCaptureBinding capture = frameCapture.get();
             if (capture != null) {
+                dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFogFrame.Grid fogGrid;
+                try (var fogScope = CausticaClientComposition.current().runtime().profileStage("host.fogCapture")) {
+                    fogGrid = level != null && net.minecraft.world.level.Level.OVERWORLD.equals(level.dimension())
+                            ? fog.capture(level, camera.x(), camera.z()) : null;
+                }
+                if (fogGrid == null && (level == null
+                        || !net.minecraft.world.level.Level.OVERWORLD.equals(level.dimension()))) fog.clear();
                 capture.sink.update(MinecraftClientFrameCapture.capture(
-                        client, camera.y(), METERS_PER_WORLD_UNIT, capture.calibration));
+                        client, camera.y(), METERS_PER_WORLD_UNIT, capture.calibration, fogGrid));
             }
             MinecraftFrameSelector.Selection selection = selection(submerged);
             if (selection == null) return null;
@@ -160,6 +168,7 @@ public final class MinecraftFrameAdapter {
 
     private long identify(ClientLevel level) {
         if (level != identifiedLevel) {
+            fog.clear();
             identifiedLevel = level;
             sceneId = level == null ? 0L : ++nextSceneId;
         }

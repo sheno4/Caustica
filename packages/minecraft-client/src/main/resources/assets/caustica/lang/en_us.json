@@ -116,5 +116,13 @@
 	"caustica.option.caustica.minecraft.sky.horizon-soften-degrees": "Horizon Softness",
 	"caustica.option.caustica.minecraft.sky.horizon-soften-degrees.tooltip": "How far the horizon is blurred, in degrees, to hide the hard edge of the sky model.",
 
+	"caustica.option.caustica.minecraft.fog.enabled": "Volumetric Fog",
+	"caustica.option.caustica.minecraft.fog.enabled.tooltip": "Add drifting mist that varies with time of day, terrain height, and biome.",
+	"caustica.option.caustica.minecraft.fog.density": "Fog Density",
+	"caustica.option.caustica.minecraft.fog.density.tooltip": "Scale the thickness of the mist. Higher values reduce visibility.",
+	"caustica.option.caustica.minecraft.fog.resolution-divisor": "Fog Resolution Divisor",
+	"caustica.option.caustica.minecraft.fog.resolution-divisor.tooltip": "Lower values sharpen fog around terrain and trees at a higher GPU cost.",
+	"caustica.option.caustica.minecraft.fog.debug": "Fog Debug View",
+	"caustica.option.caustica.minecraft.fog.debug.tooltip": "0: Normal image. 1: Fog transmittance. 2: Scattered light.",
 	"item.caustica.spotlight_helmet": "Spotlight Helmet"
 }

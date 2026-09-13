@@ -30,6 +30,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtPassSchedulerBackendTest {
     @Test
+    void sceneEffectOutputFeedsExposureAndContinuesPostChain() {
+        Fixture fixture = new Fixture();
+        var scene = fixture.backend.beginPostEffect(new PassKey(0, PassKey.Stage.SCENE_EFFECT));
+        GpuImage fogged = scene.frame().acquireSceneColorOutput();
+        assertSame(fixture.reconstruction, scene.frame().depth());
+        assertSame(fixture.exposure, scene.frame().primaryDepth());
+        assertEquals(16, scene.frame().cameraRelativeFromClip().length);
+        scene.validateOutputChain();
+        scene.submit(() -> { });
+        assertSame(fogged, fixture.backend.sceneColor());
+        var bloom = fixture.backend.beginPostEffect(post(1));
+        assertSame(fogged, bloom.frame().sceneColor());
+        assertNotSame(fogged, bloom.frame().acquireSceneColorOutput());
+        bloom.validateOutputChain();
+        bloom.submit(() -> { });
+    }
+
+    @Test
     void passRetentionBelongsToExecutionAndCannotBeUsedAfterInvocation() {
         Fixture fixture = new Fixture();
         var destroyed = new java.util.concurrent.atomic.AtomicInteger();
@@ -160,7 +178,7 @@ final class RtPassSchedulerBackendTest {
         RtPassSchedulerBackend.FrameState frameState() {
             return new RtPassSchedulerBackend.FrameState(
                     fakeCommandBuffer(), use, resources, 4L, view, 12.5, 0.5, 960, 540,
-                    reconstruction, exposure, postA, postB, null);
+                    reconstruction, exposure, postA, postB, reconstruction, exposure, new float[16], null, new float[3], new float[2], 1.0f, null);
         }
     }
 

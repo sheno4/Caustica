@@ -14,7 +14,8 @@ import java.util.Objects;
 /** Synchronization2 barriers for extension-owned compute images in the unified GENERAL layout. */
 public final class ComputeSynchronization {
     static final long COMPUTE = VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    static final long STORAGE_ACCESS = VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+    static final long COMPUTE_ACCESS = VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+            | VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
             | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
 
     private ComputeSynchronization() { }
@@ -31,7 +32,7 @@ public final class ComputeSynchronization {
                 barriers.get(index).sType$Default()
                         .srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE)
                         .srcAccessMask(VK13.VK_ACCESS_2_NONE)
-                        .dstStageMask(COMPUTE).dstAccessMask(STORAGE_ACCESS)
+                        .dstStageMask(COMPUTE).dstAccessMask(COMPUTE_ACCESS)
                         .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED)
                         .newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                         .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
@@ -46,14 +47,14 @@ public final class ComputeSynchronization {
         }
     }
 
-    /** Make storage writes from one compute dispatch visible to subsequent compute reads and writes. */
+    /** Make storage writes visible to subsequent sampled-image and storage reads and writes. */
     public static void betweenDispatches(VkCommandBuffer commandBuffer) {
         Objects.requireNonNull(commandBuffer, "commandBuffer");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack);
             barrier.get(0).sType$Default().srcStageMask(COMPUTE)
                     .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                    .dstStageMask(COMPUTE).dstAccessMask(STORAGE_ACCESS);
+                    .dstStageMask(COMPUTE).dstAccessMask(COMPUTE_ACCESS);
             VkDependencyInfo dependency = VkDependencyInfo.calloc(stack).sType$Default()
                     .pMemoryBarriers(barrier);
             VK13.vkCmdPipelineBarrier2(commandBuffer, dependency);

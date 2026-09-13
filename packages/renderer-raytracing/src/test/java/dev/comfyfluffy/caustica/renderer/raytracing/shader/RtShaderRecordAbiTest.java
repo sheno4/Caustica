@@ -139,11 +139,12 @@ final class RtShaderRecordAbiTest {
 
     @Test
     void worldPushRootsRetainTheirDescriptorHeapAbi() {
-        assertArrayEquals(new int[]{0, 8, 16, 24, 32, 40, 64, 68, 72, 76, 80, 84, 88,
-                        92, 96, 104, 112, 120, 128, 136, 144},
+        assertArrayEquals(new int[]{0, 8, 16, 24, 32, 40, 56, 68, 72, 76, 80, 84, 88, 92,
+                        96, 100, 104, 112, 120, 128, 136, 144},
                 new int[]{RtBindings.WORLD_PUSH_ADDRESS_OFFSET, RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET,
                         RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET, RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
                         RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, RtBindings.WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET,
+                        RtBindings.WORLD_PRIMARY_DEPTH_INDEX_OFFSET,
                         RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET, RtBindings.WORLD_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET,
                         RtBindings.WORLD_SPECULAR_RADIANCE_HIT_DISTANCE_INDEX_OFFSET, RtBindings.WORLD_NRD_VIEW_Z_INDEX_OFFSET,
                         RtBindings.WORLD_DENOISED_DIFFUSE_RADIANCE_HIT_DISTANCE_INDEX_OFFSET,

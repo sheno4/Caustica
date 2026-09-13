@@ -29,6 +29,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PassSessionTest {
     @Test
+    void sceneEffectsAreOrderedIndependentlyBeforeExposure() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (key, failure) -> { throw new AssertionError(failure); });
+        var channel = session.openChannel();
+        List<String> events = new ArrayList<>();
+        channel.addPostEffectPass(id("bloom"), setup -> pass(frame -> events.add("bloom"), () -> { }));
+        channel.addSceneEffectPass(id("fog"), new PassPlacement.After(id("air")),
+                setup -> pass(frame -> events.add("fog"), () -> { }));
+        channel.addSceneEffectPass(id("air"), setup -> pass(frame -> events.add("air"), () -> { }));
+        session.recordSceneEffects();
+        events.add("exposure");
+        session.recordPostEffects();
+        assertEquals(List.of("air", "fog", "exposure", "bloom"), events);
+    }
+
+    @Test
     void worldResourceUploadRecordsBeforeTheRendererStartsTracing() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });
@@ -447,6 +463,13 @@ final class PassSessionTest {
     };
 
     private static final PostEffectFrame POST_FRAME = new PostEffectFrame() {
+        @Override public float[] traceJitter() { return new float[2]; }
+        @Override public float preExposure() { return 1.0f; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage primaryDepth() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage depth() { return null; }
+        @Override public float[] cameraRelativeFromClip() { return new float[16]; }
+        @Override public float[] cameraTlasPosition() { return new float[3]; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor entrySceneTlasDescriptor() { return null; }
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage sceneColor() { return null; }
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage acquireSceneColorOutput() { return null; }
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage exposureImage() { return null; }
