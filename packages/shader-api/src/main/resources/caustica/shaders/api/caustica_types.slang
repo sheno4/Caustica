@@ -69,6 +69,18 @@ public struct VolumeProperties {
     public float indexOfRefraction = 1.0;
 };
 
+/** Local transport coefficients for a spatial medium; all colors use scene-linear ACEScg. */
+public struct SpatialMediumProperties {
+    /** Non-negative absorption plus out-scattering coefficient per scene unit. */
+    public float3 extinction = float3(0.0);
+    /** Fraction of extinction attributable to scattering, in [0, 1]. */
+    public float3 scatteringAlbedo = float3(0.0);
+    /** Isotropic ambient/emission source radiance per scene unit, without pre-exposure. */
+    public float3 ambientSource = float3(0.0);
+    /** Henyey-Greenstein anisotropy, strictly between -1 and 1. */
+    public float anisotropy = 0.0;
+};
+
 /**
  * The OpenPBR Surface description a surface implementation produces and the engine's BSDF consumes.
  *
@@ -238,6 +250,22 @@ public struct SurfaceInput {
     public float previousTime;
     /** SURFACE_* and EVALUATION_* bits describing this evaluation. */
     public uint evaluationFlags;
+};
+
+/** Inputs for the spatial medium captured by a view. */
+public struct SpatialMediumInput {
+    public ShaderRootData shaderRoot;
+    /** Registered implementation word, supplied by the volume dispatch. */
+    public uint64_t implementationData;
+    public uint64_t bindingData;
+    public uint64_t instanceData;
+    /** Position in scene units relative to the captured spatial-medium origin. */
+    public float3 position;
+    /** Precision-safe scene position using the renderer's periodic procedural domain. */
+    public float3 proceduralPosition;
+    public float metersPerSceneUnit;
+    /** Renderer animation time in seconds, matching volume boundary evaluation. */
+    public float time;
 };
 
 /** Inputs used to describe the homogeneous interior selected by one geometry volume slot. */

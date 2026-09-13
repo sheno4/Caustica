@@ -28,6 +28,11 @@ public struct VacuumVolume : IVolumeModel {
 };
 
 public struct FixedVolumes : IVolumeDispatch {
+    public SpatialMediumProperties evaluateSpatialMedium(uint implementation, SpatialMediumInput input) {
+        VacuumVolume volume;
+        return volume.evaluateSpatialMedium(input);
+    }
+
     public VolumeProperties evaluateVolume(uint implementation, VolumeInput input) {
         VacuumVolume volume;
         return volume.evaluateVolume(input);

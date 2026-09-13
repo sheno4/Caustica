@@ -274,13 +274,18 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("public struct VolumeDispatch : IVolumeDispatch {\n")
                 .append("    public VolumeProperties evaluateVolume(uint implementation, VolumeInput input) {\n")
                 .append("        switch (implementation) {\n");
-        appendVolumeCases(source, volumes, dataOffsets, false);
+        appendVolumeCases(source, volumes, dataOffsets, "input", "evaluateVolume");
         source.append("            default: { VacuumVolume value; return value.evaluateVolume(input); }\n")
                 .append("        }\n    }\n\n")
                 .append("    public float3 evaluateBoundaryLighting(uint implementation, VolumeBoundaryLightingInput input) {\n")
                 .append("        switch (implementation) {\n");
-        appendVolumeCases(source, volumes, dataOffsets, true);
+        appendVolumeCases(source, volumes, dataOffsets, "input.volume", "evaluateBoundaryLighting");
         source.append("            default: { VacuumVolume value; return value.evaluateBoundaryLighting(input); }\n")
+                .append("        }\n    }\n\n")
+                .append("    public SpatialMediumProperties evaluateSpatialMedium(uint implementation, SpatialMediumInput input) {\n")
+                .append("        switch (implementation) {\n");
+        appendVolumeCases(source, volumes, dataOffsets, "input", "evaluateSpatialMedium");
+        source.append("            default: { VacuumVolume value; return value.evaluateSpatialMedium(input); }\n")
                 .append("        }\n    }\n};\n\n")
                 .append("public struct EnvironmentDispatch : IEnvironmentDispatch {\n")
                 .append("    public float3 evaluateEnvironment(uint implementation, EnvironmentQuery query) {\n")
@@ -303,9 +308,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     }
 
     private static void appendVolumeCases(StringBuilder source, List<ProgramComposition.Volume> volumes,
-                                          Map<ProgramKey, Integer> offsets, boolean lighting) {
-        String dataInput = lighting ? "input.volume" : "input";
-        String method = lighting ? "evaluateBoundaryLighting" : "evaluateVolume";
+                                          Map<ProgramKey, Integer> offsets, String dataInput, String method) {
         for (ProgramComposition.Volume value : volumes) {
             source.append("            case ").append(value.key().implementationIndex()).append("u: { ")
                     .append(dataInput).append(".implementationData = ")

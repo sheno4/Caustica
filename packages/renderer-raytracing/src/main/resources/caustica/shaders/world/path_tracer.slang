@@ -49,7 +49,22 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
             WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, previousPdf);
             bool missed = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
             float distance = missed ? TRACE_MAX_DISTANCE : hit.hitDistance;
-            path.throughput *= exp(-path.absorption * distance);
+            TraceSpatialMedium spatial = traceSpatialMediumSegment<TComposition>(path, distance, pixel, !first);
+            float3 segmentScattering = path.throughput * spatial.scattering;
+            path.throughput *= exp(-path.absorption * distance) * spatial.transmittance;
+            // Build owns restart scattering. Later scattering has a finite guide even on a sky miss.
+            if (!first && any(segmentScattering > 0.0)) {
+                float scatteringDistance = signalDistance + spatial.scatteringDistance;
+                if (diffusePath) {
+                    noisyDiffuseRadiance += segmentScattering;
+                    float weight = traceLuminance(segmentScattering);
+                    diffuseWeight += weight;
+                    diffuseDistanceSum += weight * scatteringDistance;
+                } else {
+                    noisySpecularRadiance += segmentScattering;
+                    if (specularHitDistance == 0.0) specularHitDistance = scatteringDistance;
+                }
+            }
             if (!first && !missed) signalDistance += distance;
             float3 emission = float3(0.0);
             if (!first) {

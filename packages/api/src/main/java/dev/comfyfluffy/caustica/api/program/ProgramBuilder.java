@@ -14,7 +14,7 @@ public interface ProgramBuilder {
      */
     <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition);
 
-    /** Declare one homogeneous interior-volume implementation. */
+    /** Declare one volume implementation for homogeneous interiors or captured spatial media. */
     <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition);
 
     /** Declare one environment implementation selected by a scene binding. */

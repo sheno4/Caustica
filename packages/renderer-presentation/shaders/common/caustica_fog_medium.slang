@@ -1,8 +1,7 @@
 module caustica_fog_medium;
 import caustica_fog_types;
 import caustica_volume;
-
-public struct FogVolumeModel : IVolumeModel {};
+import caustica_types;
 
 /** Spatial medium evaluated in coordinates relative to the caller's origin. */
 public struct FogMedium {
@@ -69,3 +68,16 @@ public float fogDensity(FogMedium medium, float3 relative) {
     float noise = 0.65 + 0.35 * sin(n.x + sin(n.z)) * sin(n.z + n.y);
     return medium.densityScale * v.x * v.z * outdoor * (layer * 0.8 + ground * 0.2) * noise;
 }
+
+public struct FogVolumeModel : IVolumeModel {
+    public override SpatialMediumProperties evaluateSpatialMedium(SpatialMediumInput input) {
+        FogVolumeData volume = ((FogVolumeData*)input.bindingData)[0];
+        float sigma = fogDensity(mediumFromFogVolume(volume), input.position);
+        SpatialMediumProperties properties = {};
+        properties.extinction = float3(sigma);
+        properties.scatteringAlbedo = float3(0.95);
+        properties.ambientSource = sigma * 0.95 * volume.ambientRadiance.xyz;
+        properties.anisotropy = 0.45;
+        return properties;
+    }
+};

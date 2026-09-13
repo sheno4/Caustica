@@ -124,7 +124,9 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             float3 transmission = exp(-branch.path.absorption * distance);
             // Restart stores incoming throughput; fill applies the endpoint segment's attenuation once.
             PackedPathSegment restart = branch.path;
-            branch.path.throughput *= transmission;
+            TraceSpatialMedium spatial = traceSpatialMediumSegment<TComposition>(branch.path, distance, pixel, true);
+            stableRadiance += branch.path.throughput * spatial.scattering;
+            branch.path.throughput *= transmission * spatial.transmittance;
             branch.length += distance;
             stableRadiance += branch.path.throughput * (environment ? hit.radiance : hit.surface.emissionRadiance);
             TraceLobes lobes = {};

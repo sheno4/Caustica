@@ -7,8 +7,7 @@ import java.util.Objects;
  *
  * <p>{@code implementationData} reaches the implementation unchanged. It is commonly a device address for a table of
  * density fields and texture descriptors, but may be any packed 64-bit value. The binding and instance
- * schema tokens declare the typed words accepted by volume slots and placements and are validated when
- * geometry is submitted.
+ * schema tokens declare typed binding and instance words for geometry interiors and captured spatial media.
  *
  * @param <B> geometry-slot binding data schema
  * @param <N> mesh-placement instance data schema

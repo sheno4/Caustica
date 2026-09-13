@@ -41,6 +41,13 @@ public struct MinecraftVacuum : IVolumeModel {
 };
 
 public struct MinecraftVolumes : IVolumeDispatch {
+    public SpatialMediumProperties evaluateSpatialMedium(uint implementation, SpatialMediumInput input) {
+        switch (implementation) {
+            case 1u: { WaterVolume value; return value.evaluateSpatialMedium(input); }
+            default: { MinecraftVacuum value; return value.evaluateSpatialMedium(input); }
+        }
+    }
+
     public VolumeProperties evaluateVolume(uint implementation, VolumeInput input) {
         switch (implementation) {
             case 1u: { WaterVolume value; return value.evaluateVolume(input); }

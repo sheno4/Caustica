@@ -112,12 +112,31 @@ final class WorldShaderCompilerTest {
             assertSpirv(reordered);
             assertVulkan14(cache.resolve("fill-stable-planes-ordinary.spv"), ordinary);
             assertVulkan14(cache.resolve("fill-stable-planes-ser.spv"), reordered);
-            assertShadowTraceRouting(ordinary);
-            assertShadowTraceRouting(reordered);
+            assertShadowTraceRouting(ordinary, 2);
+            assertShadowTraceRouting(reordered, 2);
             byte[] visibility = compiler.compileVisibilityRays();
             assertSpirv(visibility);
             assertVulkan14(cache.resolve("visibility-rays.spv"), visibility);
-            assertShadowTraceRouting(visibility);
+            assertShadowTraceRouting(visibility, 1);
+        }
+    }
+
+    @Test
+    void spatialAndHomogeneousVolumesCompileThroughTheSameDispatch(@TempDir Path cache) throws Exception {
+        ShaderSource source = ShaderSource.classpath(WorldShaderCompilerTest.class, "/caustica-test");
+        var program = new ProgramComposition(List.of(
+                new ProgramComposition.Volume(new ProgramKey(ProgramKey.Kind.VOLUME, 1),
+                        new VolumeDefinition<>(source.definition("spatial_medium_test", "SpatialTestVolume"),
+                                DATA.data(37), BINDING, INSTANCE)),
+                new ProgramComposition.Volume(new ProgramKey(ProgramKey.Kind.VOLUME, 2),
+                        new VolumeDefinition<>(source.definition("spatial_medium_test", "HomogeneousTestVolume"),
+                                DATA.data(41), BINDING, INSTANCE))));
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache, program)) {
+            assertEquals(List.of(37L, 41L), compiler.composition().implementationData());
+            byte[] build = compiler.compileBuildStablePlanes();
+            byte[] fill = compiler.compileFillStablePlanes(false);
+            assertVulkan14(cache.resolve("spatial-build.spv"), build);
+            assertVulkan14(cache.resolve("spatial-fill.spv"), fill);
         }
     }
 
@@ -163,7 +182,7 @@ final class WorldShaderCompilerTest {
                 .mapToInt(instruction -> typeBytes(definitions, instruction[1])).findFirst().orElseThrow();
     }
 
-    private static void assertShadowTraceRouting(byte[] spirv) {
+    private static void assertShadowTraceRouting(byte[] spirv, int expectedShadowQueries) {
         var definitions = spirvDefinitions(spirv);
         var words = ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
         int shadowQueries = 0;
@@ -183,7 +202,7 @@ final class WorldShaderCompilerTest {
             }
             offset += count;
         }
-        assertEquals(1, shadowQueries);
+        assertEquals(expectedShadowQueries, shadowQueries);
         assertTrue(countOpcode(spirv, 4477) > 0); // OpRayQueryProceedKHR
         assertTrue(countOpcode(spirv, 4476) > 0); // OpRayQueryConfirmIntersectionKHR
         assertTrue(countOpcode(spirv, 4474) > 0); // OpRayQueryTerminateKHR

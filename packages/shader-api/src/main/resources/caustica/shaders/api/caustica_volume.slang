@@ -12,10 +12,15 @@ public float3 volumeAbsorptionFromTransmittance(float3 transmittance,
             * metersPerSceneUnit / referenceDistanceMeters;
 }
 
-/** One volume implementation selected independently by a mesh geometry's interior slot. */
+/** One volume implementation selected by a geometry interior or a view spatial-medium binding. */
 public interface IVolumeModel {
     /** Describe the homogeneous interior entered through this boundary. */
     public VolumeProperties evaluateVolume(VolumeInput input) {
+        return {};
+    }
+
+    /** Describe local spatial transport; an implementation without spatial behavior is vacuum. */
+    public SpatialMediumProperties evaluateSpatialMedium(SpatialMediumInput input) {
         return {};
     }
 
@@ -25,8 +30,9 @@ public interface IVolumeModel {
     }
 };
 
-/** Generated fan-out over registered volume implementations, selected per mesh geometry. */
+/** Generated fan-out over volume implementations selected by geometry or a captured view. */
 public interface IVolumeDispatch {
     public VolumeProperties evaluateVolume(uint implementation, VolumeInput input);
+    public SpatialMediumProperties evaluateSpatialMedium(uint implementation, SpatialMediumInput input);
     public float3 evaluateBoundaryLighting(uint implementation, VolumeBoundaryLightingInput input);
 };

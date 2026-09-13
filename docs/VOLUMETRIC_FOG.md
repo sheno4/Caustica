@@ -10,6 +10,8 @@ The generic renderer combines that field with altitude falloff, a weaker ground 
 
 A separate R32 primary-depth guide records the first camera intersection during the existing stable-plane build, before delta transmission or reflection. Fog stops at that physical boundary rather than at the reconstruction guide's virtual endpoint. No extra rays are needed for this guide. Outdoor fog is skipped when the camera starts inside a volume.
 
+Secondary transport evaluates the same captured spatial medium along reflected, transmitted and diffuse continuation segments. The engine integrates extinction and single scattering with up to eight fixed 32-metre steps and one retained-light visibility sample per segment. Explicit volume interiors use their existing absorption instead of outdoor fog. The primary post pass still owns the camera segment.
+
 ## Controls and diagnostics
 
 The Minecraft settings feature (`caustica:minecraft`) exposes `fog.enabled`, `fog.density`, `fog.resolution-divisor` (4 or 8), and `fog.debug` (0: normal, 1: transmittance, 2: scattering).
@@ -98,25 +100,27 @@ Raw transmittance contained 8,294,400 finite pixels in [0,1], minimum 0.80664, m
 ## Remaining iteration targets
 
 - Replace the coarse integration/reconstruction with a froxel volume and explicit temporal reprojection if moving-camera captures justify it. Sparse visibility sampling can band, and thin silhouettes can exceed the current spatial resolution.
-- Validate foliage coverage during motion and more complex transmission stacks. Local lights and accurate sky visibility are not integrated yet.
+- Validate foliage coverage during motion and more complex transmission stacks. Primary fog still uses only captured sun/moon lighting and approximate ambient sky; secondary local-light sampling is coarse.
 - Improve terrain and shelter coverage. A 32-block height/light lattice approximates slopes, overhangs, rooms, and biome boundaries. It cannot establish exact interior occupancy.
-- Integrate fog along reflected/refracted segments. First-hit composition correctly covers the air before glass/water, but does not fog the subsequent transport segments.
+- Improve and validate secondary integration against controlled transport references. Its coarse density quadrature and shared midpoint lighting can miss narrow layers or shadows; the measured 4K scene has little performance headroom.
 - Extend high-speed travel and scene-rebasing validation with consecutive raw captures, night lighting, denser biome fixtures, and additional representative 32-section scenes. Reload/resize recovery and wind-wrap continuity have initial coverage.
 - Quantify peak fog allocation residency and publication hitches. The primary guide costs about 7.9 MiB at this trace resolution; field and reduced-resolution images are small, but replacement overlap and driver allocation overhead were not measured separately.
 
 The broader fog goal remains active. This checkpoint provides a measured first implementation, not completion of the full visual target.
 
 
-## Planned secondary transport
+## Secondary transport iteration
 
-The following shader evaluation and transport changes are planned and are not part of this checkpoint.
+`IVolumeModel.evaluateSpatialMedium()` supplies extinction per scene unit, scattering albedo, anisotropy and an ambient/emission source per scene unit. Its default is vacuum, preserving existing homogeneous models. The engine dispatches using the captured volume binding and adds the captured-origin delta to TLAS positions. `FogVolumeModel` evaluates the shared density definition; the engine owns light selection and visibility.
 
-Extend the volume shader interfaces with spatial evaluation of extinction, scattering albedo, and anisotropy; existing homogeneous implementations use a default zero-scattering evaluation. The captured `SpatialMedium` already reuses `VolumeId` registration and typed `ShaderData` ownership.
+Secondary integration uses fixed 32-metre steps, clips the last step, and stops at 256 metres. A single global retained-light sample supplies incident lighting at the segment midpoint, with material-aware visibility capped at 256 metres. Sampling is lazy when scattering coefficients are zero. The position-based seed avoids frame-random noise in build radiance, which bypasses temporal reconstruction. This is a coarse single-scattering approximation: local-light falloff, light direction and visibility are reused across the segment, and fog extinction along light paths is omitted.
 
-Use the captured binding and origin delta for the new volume evaluator. A pretrace pass may prepare captured resources, but must not change a global selected medium: world roots are assembled before world-resource callbacks. The shared `caustica_fog_medium` module contains the density definition; the volume evaluator and primary integration should both import it.
+Build saves restart throughput before segment attenuation, adds incoming throughput times scattering, then attenuates endpoint emission and child branches. Fill applies the restart segment's attenuation to its alternative contribution but skips scattering and emission already owned by build. Later fill segments add scattering to their diffuse or specular signal. Scattering-weighted sample distances supply finite guides even when the segment ends at the sky. Depth-zero segments and explicit volume interiors are excluded.
 
-Integrate secondary segments in `build_stable_planes.slang` before delta branches continue and in `runFillStablePlanes()` in `path_tracer.slang`. For each owned segment, add incoming throughput times segment scattering `S` to radiance, then multiply throughput by transmittance `T`. Depth-zero camera segments remain exclusively owned by post fog.
+Public shader API, API, presentation, ray-tracing, Minecraft rendering and client checks passed, including mixed spatial/homogeneous program compilation and SPIR-V validation. The shadow-routing test verifies both surface and spatial query sites retain the secondary mask and material traversal flags. Runtime composition also compiled and rendered successfully.
 
-Preserve the build/fill alternatives precisely. Build saves the restart path before attenuation: build and the first fill evaluation therefore each need `T` for their respective contributions. Build owns `S` once, including the endpoint segment, while fill's first evaluation skips `S` and endpoint emission already consumed by build. Subsequent fill segments add `S` to the diffuse or specular signal according to the existing path classification. Removing attenuation from fill merely because build visited the same geometry would leave the restarted contribution unattenuated; adding scattering in both would double count it.
+The copied workbench captured air, glass and water twice at density multipliers 0, 1 and 4, with fog game time fixed at 2476998. Pre-fog, pre-bloom `reconstructed-color` provides the useful control: glass density 4 increased mean RGB radiance by 2.7–6.1% relative to density zero, while glass density-4 repeat drift stayed below 0.40% per channel. The opaque air baseline changed by roughly 0.05–0.92%, consistent with secondary diffuse paths also receiving fog. These establish a secondary-transport response, not exact energy correctness. Water waves use renderer time and continued moving despite frozen game ticks, weakening that control. Post-chain inversion using diagnostic T/S remains provisional because bloom was not explicitly disabled. Full raw metadata, upstream analysis and labeled contacts are in `tmp/fog/secondary-transport/`.
 
-Use `PATH_ENDPOINT_VOLUME` with explicit medium selection to avoid outdoor fog inside water or other closed volumes. Validate glass, water, mirrors, foliage, and mixed transmission against the opaque-terrain baseline, including build/fill signal ownership and captured-data lifetime, before expanding light sampling.
+Two paired off/on JFR repeats used the natural lake at 4K, RR Performance, four bounces and 32 sections, with 180 warmup frames and 400 requested measured frames per condition. Fog-off cadence was 58.99/59.36 FPS; fog-on was 52.44/52.34 FPS. Mean trace time increased by 1.7906 ms, split approximately 0.3932 ms in build and 1.4068 ms in fill. Primary scene effects measured about 0.3826 ms enabled. The non-overlapping trace-plus-post difference was 2.1592 ms; nested scene-effects time is not added again. CPU fog preparation increased by 0.0210 ms. Maximum enabled frame-start intervals were 20.01/19.89 ms. The scene meets 50 FPS with limited headroom; it does not establish a general gameplay bound. Complete exports and `comparison.json` are in `tmp/fog/secondary-benchmark/`.
+
+Nsight captured three 4K frames in `tmp/fog/nsight-secondary/java_2026_09_13_20_57_30.ngfx-gputrace`. Build measured 4.657/4.338/4.635 ms, fill 11.635/11.593/11.813 ms and primary scene effects 0.4065/0.4068/0.4314 ms. These include all build/fill work, not isolated secondary-fog timings. Instrumented base-clock measurements corroborate that continuation tracing dominates this slice; paired JFR remains the performance comparison.
