@@ -1,5 +1,6 @@
 module caustica_fog;
 import caustica_fog_types;
+import caustica_fog_medium;
 [[vk::push_constant]] FogPush pc;
 
 float3 unproject(float2 uv, float depth) {
@@ -15,37 +16,18 @@ float distanceAt(float2 uv) {
     float2 traceUv = (float2(pixel)+0.5+float2(pc.fieldSize.w,pc.tlasCamera.w))/float2(w,h);
     return d <= 0.0 ? pc.medium.w : min(length(unproject(traceUv,d)), pc.medium.w);
 }
-float4 voxel(int3 p) {
-    int3 s = int3(pc.fieldSize.xyz);
-    p = clamp(p, int3(0), s - 1);
-    float4* cells = (float4*)pc.fieldAddress;
-    return cells[p.x + s.x * (p.z + s.z * p.y)];
-}
-float4 field(float3 world) {
-    float3 p = (world - pc.fieldOrigin.xyz) / pc.fieldOrigin.w;
-    float3 blend = saturate(p - floor(p));
-    int3 cell = int3(floor(p));
-    float4 v = lerp(lerp(lerp(voxel(cell), voxel(cell+int3(1,0,0)),blend.x),
-                        lerp(voxel(cell+int3(0,0,1)),voxel(cell+int3(1,0,1)),blend.x),blend.z),
-                   lerp(lerp(voxel(cell+int3(0,1,0)),voxel(cell+int3(1,1,0)),blend.x),
-                        lerp(voxel(cell+int3(0,1,1)),voxel(cell+int3(1,1,1)),blend.x),blend.z),blend.y);
-    // Coverage fades at the prepared field boundary rather than extending unknown terrain.
-    float edge = min(min(p.x,pc.fieldSize.x-1-p.x),min(p.z,pc.fieldSize.z-1-p.z));
-    v.z *= saturate(edge);
-    return v;
-}
 float density(float3 relative) {
-    float4 v = field(relative);
-    float aboveGround = relative.y - (v.w + pc.fieldOrigin.y);
-    float layer = exp(-max(relative.y - pc.medium.y,0.0) / pc.medium.z);
-    float ground = exp(-max(aboveGround,0.0) / lerp(6.0,18.0,saturate(v.y)));
-    // The coarse outdoor field excludes points below its terrain surface.
-    float outdoor = smoothstep(-2.0,2.0,aboveGround);
-    // Integer spatial and wind-phase harmonics remain periodic across both coordinate wraps.
-    float3 n = (relative + pc.camera.xyz) * (23.0 * 6.28318530718 / 4096.0)
-             + float3(pc.camera.w * 192.0,0,pc.camera.w * 96.0);
-    float noise = 0.65 + 0.35 * sin(n.x + sin(n.z)) * sin(n.z + n.y);
-    return pc.medium.x * v.x * v.z * outdoor * (layer * 0.8 + ground * 0.2) * noise;
+    FogMedium medium = {};
+    medium.fieldAddress = pc.fieldAddress;
+    medium.fieldOrigin = pc.fieldOrigin.xyz;
+    medium.spacing = pc.fieldOrigin.w;
+    medium.fieldSize = int3(pc.fieldSize.xyz);
+    medium.noiseOrigin = pc.camera.xyz;
+    medium.windPhase = pc.camera.w;
+    medium.densityScale = pc.medium.x;
+    medium.layerHeight = pc.medium.y;
+    medium.heightFalloff = pc.medium.z;
+    return fogDensity(medium, relative);
 }
 public void runFog(uint3 id) {
     RWTexture2D<float4> output = ResourceDescriptorHeap[pc.destinationIndex];

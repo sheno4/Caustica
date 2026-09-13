@@ -75,6 +75,14 @@ Nsight independently captured three 4K frames with GPU scene-effects intervals o
 
 The JFR run contained seven frame-start intervals of 43–58 ms. Each overlapped a render-thread native sample in `vkQueuePresentKHR`; fog GPU time stayed at 0.341–0.358 ms and no GC pause or safepoint overlapped. This points to presentation-side waiting rather than fog execution spikes, but does not identify the driver/compositor cause. Detailed timestamps and sampled stacks are retained in `tmp/fog/visibility/hitch-analysis.json`. The long-frame behavior remains a performance limitation despite acceptable average cadence.
 
+## Shared density and secondary-path baseline
+
+Density evaluation now lives in `caustica_fog_medium.slang`, parameterized by `FogMedium` rather than a global post-pass push block. It contains the existing lattice interpolation, height profile, boundary coverage and periodic noise. The primary pass supplies its existing values through an adapter. This provides one implementation for the planned spatial-volume shader; secondary integration itself is not implemented yet. Presentation compilation, reflection, SPIR-V validation and tests passed after extraction.
+
+A copied-workbench baseline places glass at Z=4100 between a camera near `(4096.5, 69.62, 4048.5)` and a backstop at Z=4160. With frozen ticks and density multiplier 4, the central transmittance diagnostic averaged 0.934839 without glass, 0.960603 with glass, and 0.934842 after removing it. Raw physical and virtual depths diverged with glass. This establishes the current first-physical-segment cutoff, not the correctness of the full transmitted path. Normal-color differences also include the glass material and cannot isolate secondary scattering.
+
+The fixture was repeated after the shared-module extraction and remained finite and bounded. Its game time advanced from 2476127 to 2476606 between clients, changing the animated density phase, so those images are not an exact numerical equivalence comparison. Baseline and repeated raw metadata are retained in `tmp/fog/secondary/` and `tmp/fog/shared-medium/`.
+
 ## Remaining iteration targets
 
 - Replace the coarse integration/reconstruction with a froxel volume and explicit temporal reprojection if moving-camera captures justify it. Sparse visibility sampling can band, and thin silhouettes can exceed the current spatial resolution.
@@ -89,8 +97,14 @@ The broader fog goal remains active. This checkpoint provides a measured first i
 
 ## Planned secondary transport
 
-The following changes are planned and are not part of this checkpoint.
+The following binding and transport changes are planned and are not part of this checkpoint.
 
-Secondary fog needs a generic retained spatial-medium binding in the world frame roots. Evaluate segment scattering and transmittance in `build_stable_planes.slang` before delta branches continue, and in `runFillStablePlanes()` in `path_tracer.slang` for later traced segments. Add incoming throughput times segment scattering to radiance, then multiply throughput by segment transmittance.
+Add a captured `SpatialMedium<B, N>` binding to `SceneView`, separate from the homogeneous `ViewMedium` containing the camera. The proposed binding contains an existing `VolumeId<B, N>` plus typed binding and instance `ShaderData`. Extend the volume shader interfaces with spatial evaluation of extinction, scattering albedo, and anisotropy; existing homogeneous implementations use a default zero-scattering evaluation. This reuses program registration and resource ownership rather than adding a second material registry.
 
-Assign every segment to exactly one stage: fill retraces the build endpoint, so it must not integrate that segment twice. While camera-segment fog remains a post effect, transport integration must exclude the first camera segment. Delta-chain scattering belongs in stable radiance; stochastic continuation must follow the appropriate reconstruction signal. Use the existing `PATH_ENDPOINT_VOLUME` state with explicit medium selection to avoid adding outdoor fog inside water or other closed volumes. Validate glass, water, mirrors, foliage, and mixed transmission against the opaque-terrain baseline before expanding light sampling.
+Prepare immutable GPU field revisions before `MinecraftFrameAdapter` captures `FrameSnapshot`. Extend `RtCapturedFrame` to retain independent claims on both spatial-medium data handles, then forward the selected implementation and opaque words through world roots. Primary fog must consume this captured binding instead of sampling a fresh supplier during its post callback. A pretrace pass may prepare captured resources, but must not change a global selected medium: world roots are assembled before world-resource callbacks. The shared `caustica_fog_medium` module now contains the density definition; the proposed volume evaluator and primary integration should both import it.
+
+Integrate secondary segments in `build_stable_planes.slang` before delta branches continue and in `runFillStablePlanes()` in `path_tracer.slang`. For each owned segment, add incoming throughput times segment scattering `S` to radiance, then multiply throughput by transmittance `T`. Depth-zero camera segments remain exclusively owned by post fog.
+
+Preserve the build/fill alternatives precisely. Build saves the restart path before attenuation: build and the first fill evaluation therefore each need `T` for their respective contributions. Build owns `S` once, including the endpoint segment, while fill's first evaluation skips `S` and endpoint emission already consumed by build. Subsequent fill segments add `S` to the diffuse or specular signal according to the existing path classification. Removing attenuation from fill merely because build visited the same geometry would leave the restarted contribution unattenuated; adding scattering in both would double count it.
+
+Use `PATH_ENDPOINT_VOLUME` with explicit medium selection to avoid outdoor fog inside water or other closed volumes. Validate glass, water, mirrors, foliage, and mixed transmission against the opaque-terrain baseline, including build/fill signal ownership and captured-data lifetime, before expanding light sampling.

@@ -183,7 +183,7 @@ def verifyRendererPresentationResources = tasks.register("verifyRendererPresenta
             rootProject.file("shaders/common/${it}").exists()
         }
         if (actualPipelines != expectedPipelines
-                || actualCommon != ["display_common.slang", "presentation_common.slang", "caustica_bloom.slang", "caustica_bloom_types.slang", "caustica_fog.slang", "caustica_fog_types.slang"] as Set
+                || actualCommon != ["display_common.slang", "presentation_common.slang", "caustica_bloom.slang", "caustica_bloom_types.slang", "caustica_fog.slang", "caustica_fog_types.slang", "caustica_fog_medium.slang"] as Set
                 || !rootDuplicates.empty || !rootCommonDuplicates.empty) {
             throw new GradleException("presentation resource ownership mismatch: pipelines=${actualPipelines}, "
                     + "common=${actualCommon}, rootPipelines=${rootDuplicates}, rootCommon=${rootCommonDuplicates}")
