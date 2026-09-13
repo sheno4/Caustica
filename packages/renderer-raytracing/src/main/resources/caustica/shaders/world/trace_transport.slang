@@ -283,6 +283,25 @@ public struct TraceSpatialMedium {
     public float scatteringDistance;
 };
 
+// Sorted normalized node/weight pairs; the order-N rule starts at index N-1.
+static const float2 SPATIAL_QUADRATURE[15] = {
+    float2(0.5, 1.0),
+    float2(0.2113248654051871, 0.5),
+    float2(0.7886751345948129, 0.5),
+    float2(0.0694318442029737, 0.1739274225687269),
+    float2(0.3300094782075719, 0.3260725774312731),
+    float2(0.6699905217924281, 0.3260725774312731),
+    float2(0.9305681557970263, 0.1739274225687269),
+    float2(0.0198550717512319, 0.0506142681451882),
+    float2(0.1016667612931867, 0.1111905172266873),
+    float2(0.2372337950418355, 0.1568533229389437),
+    float2(0.4082826787521751, 0.1813418916891810),
+    float2(0.5917173212478249, 0.1813418916891810),
+    float2(0.7627662049581645, 0.1568533229389437),
+    float2(0.8983332387068133, 0.1111905172266873),
+    float2(0.9801449282487681, 0.0506142681451882)
+};
+
 public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>(
         PackedPathSegment path, float distance, uint2 pixel, bool includeScattering) {
     TraceSpatialMedium result = { float3(1.0), float3(0.0), 0.0 };
@@ -292,7 +311,8 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
     NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
     float maximumDistance = 256.0 / state.metersPerSceneUnit;
     float length = min(distance, maximumDistance);
-    float stepLength = maximumDistance / 8.0;
+    float lengthMeters = length * state.metersPerSceneUnit;
+    uint sampleCount = lengthMeters <= 1.0 ? 1u : lengthMeters <= 4.0 ? 2u : lengthMeters <= 8.0 ? 4u : 8u;
     WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
     TComposition.Volumes volumes = {};
     SpatialMediumInput input = {};
@@ -306,11 +326,10 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
     float3 incidentLight = float3(0.0);
     bool sampledLight = false;
     float scatteringWeight = 0.0;
-    for (uint i = 0u; i < 8u; i++) {
-        float segmentStart = i * stepLength;
-        if (segmentStart >= length) break;
-        float segmentLength = min(stepLength, length - segmentStart);
-        float sampleDistance = segmentStart + 0.5 * segmentLength;
+    for (uint i = 0u; i < sampleCount; i++) {
+        float2 quadrature = SPATIAL_QUADRATURE[sampleCount - 1u + i];
+        float segmentLength = length * quadrature.y;
+        float sampleDistance = length * quadrature.x;
         float3 p = path.origin + path.direction * sampleDistance;
         input.position = p + float3(worldBindings.spatialMediumOriginX,
                 worldBindings.spatialMediumOriginY, worldBindings.spatialMediumOriginZ);
@@ -346,6 +365,7 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
                     medium.extinction.y > 0.0 ? (1.0 - segmentT.y) / medium.extinction.y : segmentLength,
                     medium.extinction.z > 0.0 ? (1.0 - segmentT.z) / medium.extinction.z : segmentLength);
             float3 scattering = result.transmittance * source * integral;
+            // Positive quadrature weights form ordered optical intervals for the source integration.
             result.scattering += scattering;
             float weight = traceLuminance(path.throughput * scattering);
             scatteringWeight += weight;
