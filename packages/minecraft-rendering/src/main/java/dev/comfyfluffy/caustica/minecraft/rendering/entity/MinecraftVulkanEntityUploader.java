@@ -64,8 +64,11 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         try {
             var materialIndices = new HashMap<MinecraftEntityMesh.Material, Integer>();
             for (var triangle : source.triangles()) {
-                materialIndices.computeIfAbsent(triangle.material(),
-                        material -> materials.resolveEntityOrFallback(materialKey(material)).materialIndex());
+                var material = triangle.material();
+                if (!materialIndices.containsKey(material)) {
+                    materialIndices.put(material,
+                            materials.resolveEntityOrFallback(materialKey(material)).materialIndex());
+                }
             }
             return new PackingJob(source, captured, Map.copyOf(materialIndices));
         } catch (RuntimeException | Error failure) {
@@ -221,9 +224,9 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         LinkedHashMap<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases = new LinkedHashMap<>();
         try {
             for (var triangle : source.triangles()) {
-                if (triangle.material().texture() != null) {
-                    leases.computeIfAbsent(triangle.material().texture(), texture ->
-                            Objects.requireNonNull(textures.resolve(texture), "resolved texture"));
+                var texture = triangle.material().texture();
+                if (texture != null && !leases.containsKey(texture)) {
+                    leases.put(texture, Objects.requireNonNull(textures.resolve(texture), "resolved texture"));
                 }
             }
         } catch (RuntimeException | Error failure) {

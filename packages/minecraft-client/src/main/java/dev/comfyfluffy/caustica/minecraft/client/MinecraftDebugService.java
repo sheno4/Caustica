@@ -54,6 +54,8 @@ public final class MinecraftDebugService implements AutoCloseable {
     private CompletableFuture<Object> passCapture;
     private List<Object> passTrace;
     private String passPhase;
+    private double turnDegreesPerSecond;
+    private long previousTurnNanos;
 
     private record FrameWait(long frames, long ticks, CompletableFuture<Object> future) { }
 
@@ -232,6 +234,10 @@ public final class MinecraftDebugService implements AutoCloseable {
             }
             case "input.set" -> {
                 requireWorld();
+                double turnSpeed = request.has("turnDegreesPerSecond")
+                        ? request.get("turnDegreesPerSecond").getAsDouble() : 0.0;
+                if (!Double.isFinite(turnSpeed) || Math.abs(turnSpeed) > 360.0)
+                    throw new IllegalArgumentException("turnDegreesPerSecond must be finite and between -360 and 360");
                 var abilities = client.player.getAbilities();
                 float previousFlyingSpeed = abilities.getFlyingSpeed();
                 if (request.has("flyingSpeed")) {
@@ -243,12 +249,15 @@ public final class MinecraftDebugService implements AutoCloseable {
                     abilities.setFlyingSpeed(flyingSpeed);
                 }
                 client.setScreenAndShow(null);
+                turnDegreesPerSecond = turnSpeed;
+                previousTurnNanos = System.nanoTime();
                 client.options.keyUp.setDown(request.has("forward") && request.get("forward").getAsBoolean());
                 client.options.keySprint.setDown(request.has("sprint") && request.get("sprint").getAsBoolean());
                 future.complete(Map.of("forward", client.options.keyUp.isDown(),
                         "sprint", client.options.keySprint.isDown(),
                         "previousFlyingSpeed", previousFlyingSpeed,
-                        "currentFlyingSpeed", abilities.getFlyingSpeed()));
+                        "currentFlyingSpeed", abilities.getFlyingSpeed(),
+                        "turnDegreesPerSecond", turnDegreesPerSecond));
             }
             case "command" -> command(request, future);
             case "resources.reload" -> client.reloadResourcePacks().whenComplete((result, error) -> {
@@ -511,6 +520,17 @@ public final class MinecraftDebugService implements AutoCloseable {
             }
             instance.passTrace.add(Map.of("phase", instance.passPhase, "label", descriptor.label().get(), "colors", colors));
         }
+    }
+
+    /** Apply continuous look input at render cadence through the same player operation as the mouse. */
+    public static void advanceCameraInput() {
+        if (instance == null || instance.turnDegreesPerSecond == 0.0) return;
+        long now = System.nanoTime();
+        long elapsed = now - instance.previousTurnNanos;
+        instance.previousTurnNanos = now;
+        if (instance.client.player == null || instance.client.isPaused()) return;
+        // Entity.turn converts mouse deltas to degrees with a factor of 0.15.
+        instance.client.player.turn(instance.turnDegreesPerSecond * (elapsed / 1e9) / 0.15, 0.0);
     }
 
     public static void tick() {

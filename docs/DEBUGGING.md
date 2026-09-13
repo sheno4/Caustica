@@ -61,6 +61,8 @@ Save the `previousFlyingSpeed` returned by the initial `input.set` call. In the 
 
 For RT lifecycle checks, save `status.runtime.requested`, call `runtime.set` with `enabled:false`, wait for ticks and `status.runtime.active:false`, and inspect vanilla terrain at the current camera. Restore the saved value afterward and wait for `active:true` when re-enabling RT. Perform toggles and image capture outside performance recordings. Omit a JVM `caustica.rt` override when the run needs this toggle.
 
+For continuous camera turns, `input.set` also accepts `turnDegreesPerSecond` between -360 and 360. It applies ordinary player look input each render frame, without issuing teleport commands or changing position. Omission stops the turn. Combine it with a low spectator `flyingSpeed` for a slow circular route; call `input.set` without held keys or turn speed in `finally`, restoring the saved flying speed. Paused frames do not accumulate a turn to apply on resume.
+
 After resource reload, successful composites do not imply that distant terrain preparation has finished. Keep the camera fixed and inspect both early and later captures before diagnosing missing geometry. A fixed frame or tick count is an observation interval, not a terrain-completion signal.
 
 Direct clients POST JSON `{ "op": "status" }` to the discovery `baseUrl` plus `/api`, with `Authorization: Bearer TOKEN`. Replies are `{ok:true,jobId}` or `{ok:true,result}`; poll `job` for asynchronous completion. Errors have `ok:false,error` or a failed job. Discovery includes `protocolVersion` and process ID.

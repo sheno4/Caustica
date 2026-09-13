@@ -128,21 +128,21 @@ final class ShaderRecordSource {
         padding
     }
 
-    private static void emitZeroRange(StringBuilder sb, int start, int end, String indent) {
+    private static void emitZeroRange(StringBuilder sb, int start, int end, String indent, String base = "0") {
         int cursor = start
         while (end - cursor >= Long.BYTES) {
-            sb << "${indent}dst.putLong(${cursor}, 0L);\n"
+            sb << "${indent}dst.putLong(${at(base, cursor)}, 0L);\n"
             cursor += Long.BYTES
         }
         if (end - cursor >= Integer.BYTES) {
-            sb << "${indent}dst.putInt(${cursor}, 0);\n"
+            sb << "${indent}dst.putInt(${at(base, cursor)}, 0);\n"
             cursor += Integer.BYTES
         }
         if (end - cursor >= Short.BYTES) {
-            sb << "${indent}dst.putShort(${cursor}, (short) 0);\n"
+            sb << "${indent}dst.putShort(${at(base, cursor)}, (short) 0);\n"
             cursor += Short.BYTES
         }
-        if (cursor < end) sb << "${indent}dst.put(${cursor}, (byte) 0);\n"
+        if (cursor < end) sb << "${indent}dst.put(${at(base, cursor)}, (byte) 0);\n"
     }
 
     private static void emitWrite(StringBuilder sb, Map type, Map binding, String expr, String base,
@@ -214,8 +214,12 @@ final class ShaderRecordSource {
         }
         sb << ") {\n"
         sb << "    public static final int BYTE_SIZE = ${byteSize};\n"
+        fields.each { field ->
+            sb << "    public static final int ${upperSnake(field.name)}_OFFSET = ${field.binding.offset ?: 0};\n"
+        }
         arrays.each { field ->
             sb << "    public static final int ${upperSnake(field.name)}_CAPACITY = ${field.type.elementCount};\n"
+            sb << "    public static final int ${upperSnake(field.name)}_STRIDE = ${field.type.uniformStride ?: field.binding.elementStride};\n"
         }
 
         def validatedFields = fields.findAll { it.type.kind in ["matrix", "struct", "array"] }
@@ -234,12 +238,16 @@ final class ShaderRecordSource {
             sb << "    }\n"
         }
 
+        sb << "\n    /** Clears reflected padding for a record starting at the absolute byte offset. */\n"
+        sb << "    public static void clearPadding(ByteBuffer dst, int offset) {\n"
+        paddingRanges(rootType, byteSize).each { range ->
+            emitZeroRange(sb, range[0], range[1], "        ", "offset")
+        }
+        sb << "    }\n"
         sb << "\n    public void write(ByteBuffer dst) {\n"
         sb << "        Objects.requireNonNull(dst, \"dst\");\n"
         sb << "        if (dst.capacity() < BYTE_SIZE) throw new IllegalArgumentException(\"${className} buffer is too small: \" + dst.capacity());\n"
-        paddingRanges(rootType, byteSize).each { range ->
-            emitZeroRange(sb, range[0], range[1], "        ")
-        }
+        sb << "        clearPadding(dst, 0);\n"
         arrays.each { field ->
             int offset = (field.binding.offset ?: 0) as int
             int stride = (field.type.uniformStride ?: field.binding.elementStride) as int

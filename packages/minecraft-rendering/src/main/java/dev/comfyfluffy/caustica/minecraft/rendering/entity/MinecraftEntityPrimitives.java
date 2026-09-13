@@ -8,6 +8,8 @@ import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.util.Map;
 
+import static dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData.*;
+
 /** Packs captured triangle shading data into the Minecraft primitive shader layout. */
 final class MinecraftEntityPrimitives {
     private static final int TEXTURE_PRESENT = 1;
@@ -18,24 +20,38 @@ final class MinecraftEntityPrimitives {
                       IntBuffer indices, FloatBuffer uvs, FloatBuffer colors,
                       Map<MinecraftEntityMesh.Texture, TextureBinding> textures,
                       Map<MinecraftEntityMesh.Material, Integer> materialIndices) {
+        bytes.order(ByteOrder.LITTLE_ENDIAN);
         for (int t = 0; t < source.triangleCount(); t++) {
             var triangle = source.triangles().get(t);
-            MinecraftPrimitiveData.Float2[] uv = new MinecraftPrimitiveData.Float2[3];
-            MinecraftPrimitiveData.Float4[] vertexColors = new MinecraftPrimitiveData.Float4[3];
+            int offset = t * BYTE_SIZE;
+            clearPadding(bytes, offset);
             for (int corner = 0; corner < 3; corner++) {
                 int vertex = indices.get(t * 3 + corner);
-                uv[corner] = new MinecraftPrimitiveData.Float2(
-                        uvs.get(vertex * 2), uvs.get(vertex * 2 + 1));
-                vertexColors[corner] = new MinecraftPrimitiveData.Float4(colors.get(vertex * 4),
-                        colors.get(vertex * 4 + 1), colors.get(vertex * 4 + 2), colors.get(vertex * 4 + 3));
+                int uv = offset + TEXTURE_COORDINATES_OFFSET + corner * TEXTURE_COORDINATES_STRIDE;
+                bytes.putFloat(uv, uvs.get(vertex * 2));
+                bytes.putFloat(uv + 4, uvs.get(vertex * 2 + 1));
+                int color = offset + VERTEX_COLORS_OFFSET + corner * VERTEX_COLORS_STRIDE;
+                for (int lane = 0; lane < 4; lane++) {
+                    bytes.putFloat(color + lane * 4, colors.get(vertex * 4 + lane));
+                }
             }
             TextureBinding binding = triangle.material().texture() == null
                     ? null : textures.get(triangle.material().texture());
             TangentBasis basis = tangentBasis(positions, indices, uvs, t);
-            var record = primitiveRecord(triangle, uv, vertexColors,
-                    materialIndices.get(triangle.material()),
-                    binding == null ? null : binding.image(), binding == null ? null : binding.sampler(), basis);
-            record.write(bytes.slice(t * MinecraftPrimitiveData.BYTE_SIZE, MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
+            bytes.putFloat(offset + TINT_OFFSET, 1);
+            bytes.putFloat(offset + TINT_OFFSET + 4, 1);
+            bytes.putFloat(offset + TINT_OFFSET + 8, 1);
+            bytes.putInt(offset + MATERIAL_INDEX_OFFSET, materialIndices.get(triangle.material()));
+            bytes.putInt(offset + BASE_TEXTURE_OFFSET, binding == null ? 0 : binding.image());
+            bytes.putInt(offset + BASE_SAMPLER_OFFSET, binding == null ? 0 : binding.sampler());
+            bytes.putInt(offset + TEXTURE_FLAGS_OFFSET, binding == null ? 0 : TEXTURE_PRESENT);
+            bytes.putFloat(offset + PRIMITIVE_EMISSION_OFFSET, triangle.emission());
+            bytes.putFloat(offset + TANGENT_OFFSET, basis.tangent().x());
+            bytes.putFloat(offset + TANGENT_OFFSET + 4, basis.tangent().y());
+            bytes.putFloat(offset + TANGENT_OFFSET + 8, basis.tangent().z());
+            bytes.putFloat(offset + BITANGENT_OFFSET, basis.bitangent().x());
+            bytes.putFloat(offset + BITANGENT_OFFSET + 4, basis.bitangent().y());
+            bytes.putFloat(offset + BITANGENT_OFFSET + 8, basis.bitangent().z());
         }
         bytes.position(source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE);
     }

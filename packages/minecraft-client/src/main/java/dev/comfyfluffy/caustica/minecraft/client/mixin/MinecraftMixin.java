@@ -87,6 +87,9 @@ public abstract class MinecraftMixin {
 	@Inject(method = "runTick",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;renderFrame(Z)V"))
 	private void caustica$reflexSimEnd(boolean advanceGameTime, CallbackInfo ci) {
+		try (var hostWork = MinecraftHostTelemetry.work("debug.cameraInput")) {
+			dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugService.advanceCameraInput();
+		}
 		try (var hostWork = MinecraftHostTelemetry.work("reflex.simEnd")) {
 			VulkanLowLatency lowLatency = caustica$lowLatency();
 			VulkanDevice device = caustica$reflexDevice();
