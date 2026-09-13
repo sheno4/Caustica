@@ -1,5 +1,9 @@
 # Volumetric fog checkpoint — 2026-09-13
 
+## Visual and performance target
+
+Outdoor fog should form a spatial medium with smooth biome and height transitions, stronger dawn/night density and lighter noon air. Nearby geometry should remain readable, fog should respect the first physical surface and material visibility, and reflected/transmitted continuation paths should receive their own medium transport. The reference performance target is at least 50 rendered frames per second on RTX 5070 Ti at 3840 × 2160, RR Performance, four bounces and 32 sections, with frame generation off. Measurements below establish the tested scenes and identify approximation limits rather than promising every possible world workload.
+
 ## Implementation
 
 The working slice renders a spatially varying outdoor medium before exposure metering. Minecraft supplies an immutable 33 × 13 × 33 lattice at 32-block spacing, with biome density, humidity, sky exposure, and terrain height. Capture visits 32 loaded columns per rendered frame without loading chunks and publishes a complete revision after 35 frames. The center snaps to the nearest 64 blocks. Daily density peaks near dawn, diminishes at noon, and increases overnight; time changes do not rebuild GPU field data by themselves.
@@ -124,3 +128,27 @@ The copied workbench captured air, glass and water twice at density multipliers 
 Two paired off/on JFR repeats used the natural lake at 4K, RR Performance, four bounces and 32 sections, with 180 warmup frames and 400 requested measured frames per condition. Fog-off cadence was 58.99/59.36 FPS; fog-on was 52.44/52.34 FPS. Mean trace time increased by 1.7906 ms, split approximately 0.3932 ms in build and 1.4068 ms in fill. Primary scene effects measured about 0.3826 ms enabled. The non-overlapping trace-plus-post difference was 2.1592 ms; nested scene-effects time is not added again. CPU fog preparation increased by 0.0210 ms. Maximum enabled frame-start intervals were 20.01/19.89 ms. The scene meets 50 FPS with limited headroom; it does not establish a general gameplay bound. Complete exports and `comparison.json` are in `tmp/fog/secondary-benchmark/`.
 
 Nsight captured three 4K frames in `tmp/fog/nsight-secondary/java_2026_09_13_20_57_30.ngfx-gputrace`. Build measured 4.657/4.338/4.635 ms, fill 11.635/11.593/11.813 ms and primary scene effects 0.4065/0.4068/0.4314 ms. These include all build/fill work, not isolated secondary-fog timings. Instrumented base-clock measurements corroborate that continuation tracing dominates this slice; paired JFR remains the performance comparison.
+
+## Controlled variation and motion validation
+
+Checkpoint `e3807029` was exercised without implementation changes. The copied flat workbench used a constant wall, bloom disabled, density multiplier 2, and frozen game time 2477998. Bounded `/fillbiome` edits supplied desert, swamp and a lateral desert/swamp boundary; cleanup restored plains. Every capture had zero outstanding terrain builds after waiting through multiple complete field publications. The common-wall ROI was X45–55%, Y47–50%, excluding the floor. Its physical depth agreed within 8.73e-11 across all nine conditions, so the comparisons isolate the intended input rather than a changed path length.
+
+| Controlled input | Mean primary transmittance | Mean optical depth |
+| --- | ---: | ---: |
+| Desert, time 1000, player Y68 | 0.996394 | 0.003612 |
+| Swamp, time 1000, player Y68 | 0.947856 | 0.053554 |
+| Swamp, dawn 23000 | 0.919993 | — |
+| Swamp, noon 6000 | 0.982672 | — |
+| Swamp, night 18000 | 0.940838 | — |
+| Swamp, time 1000, player Y90 | 0.983648 | 0.016488 |
+| Swamp, time 1000, player Y120 | 0.993879 | 0.006140 |
+
+Swamp optical depth was 14.83 times desert. Dawn and night were 4.77 and 3.49 times noon. Raising player Y68 to Y90/Y120 reduced optical depth by 69.2%/88.5%. Returning to the original swamp/time/height condition after the time cycle changed mean T by 2.31e-7, with maximum pixel difference one half-float step. All whole-frame T values were finite and in [0,1]. The sampled lateral boundary profile is smooth; it does not establish every biome transition. Raw captures, normal/T contacts and the profile plot are in `tmp/fog/variation/`.
+
+A fixed-position dawn yaw test at 1920 × 1080 captured 12 moving T/depth bundles and four stationary repeats, with density 2, divisor 4 and bloom disabled. It held game time at 4590203. T covered 9.56 degrees of yaw, while a separate normal-color sequence covered 12.11 degrees. The first normal sequence was rejected for insufficient exposure settling after diagnostic mode; the repeated sequence waited 1200 frames. Across 33,177,600 scalar T samples there were no nonfinite or out-of-range values; the observed range was [0.534668,0.975586]. Stationary mean absolute differences were 0.000126–0.000181, with p99 at most 0.001953. Larger differences above 0.01 affected 0.149–0.195% of pixels; more than 99.68% of those were near depth edges under the analysis mask. This associates the outliers with edges/jitter but does not prove their sole cause, since water animation continued. Reviewed contacts show coherent broad fog through the turn. Evidence is in `tmp/fog/motion-secondary-settled/`.
+
+A separate 16-bundle translation sequence covered 482.1 metres at player Y140, yaw47, maximum spectator speed, dawn and density2. All 33,177,600 T samples were finite within [0.694336,0.999023]. The reviewed sequence shows broad density changes and terrain silhouettes without an obvious hard slab seam. Time advanced by 118 ticks; these readbacks are sparse visual observations, not a performance test or proof of a particular TLAS rebase. Field/TLAS origins were not captured. Evidence is in `tmp/fog/translation-secondary/`.
+
+Before those readbacks, a separate 4K/RR Performance flight recorded 607 frame events over 8.235 seconds and approximately 717 scene units. Average cadence was 73.59 FPS, with p95/p99 intervals 16.60/19.89 ms and a maximum of 87.69 ms. Four intervals exceeded 25 ms, so this is not hitch-free rendering. Mean GPU world tracing was 8.1476 ms; primary fog scene effects were 0.4062 ms. CPU field capture/preparation averaged 0.1663/0.0519 ms. At the largest hitch, GPU tracing measured 7.42 ms, fog GPU 0.354 ms and CPU field capture 0.219 ms; these scopes do not explain the delay. Outstanding terrain builds rose from 1 to 62 during travel. This supports the average performance target in a moving workload, without a causal comparison to the stationary lake. Complete JFR exports and `benchmark-summary.json` are in the same directory.
+
+Offline quadrature comparison also quantified an existing secondary-quality limit. Eight uniform 32-metre midpoint steps underestimate a vertical exponential layer's integrated optical depth by 12.05% at an 18-metre scale and 62.76% at a 6-metre scale over 256 metres. Concentrating samples near the origin improves those cases but worsens distant biome ramps; eight-point Gauss–Legendre is more accurate in the sampled fields but moves all nodes with endpoint distance and increases short-path work. No sampling change was adopted without runtime quality/performance evidence. Scripts and dense-reference results are in `tmp/fog/quadrature-analysis.py` and `.json`.
