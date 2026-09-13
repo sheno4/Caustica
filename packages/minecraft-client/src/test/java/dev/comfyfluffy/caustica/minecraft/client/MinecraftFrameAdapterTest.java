@@ -2,6 +2,11 @@ package dev.comfyfluffy.caustica.minecraft.client;
 
 import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureInstaller;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCapturedFrame;
+import dev.comfyfluffy.caustica.api.view.SpatialMedium;
+import dev.comfyfluffy.caustica.api.view.ViewMedium;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.api.vulkan.OwnedGpuImage;
@@ -44,6 +49,49 @@ final class MinecraftFrameAdapterTest {
 
     @AfterEach
     void restoreSettings() { CausticaConfig.install(previousStore); }
+
+    @Test void capturesSpatialMediumWithTheSelectedFrameOriginAndUnits() {
+        var binding = ShaderDataType.create("spatial binding");
+        var instance = ShaderDataType.create("spatial instance");
+        try (var data = binding.data(11); var placement = instance.data(22)) {
+            var spatial = new SpatialMedium<>(new TestVolume<>(), data, placement);
+            var containing = new ViewMedium.Volume<>(new TestVolume<>(), data, placement);
+            var selection = new MinecraftFrameSelector.Selection(new TestScene(), containing);
+            var camera = new Camera(29_000_001.25, 70.5, -28_000_000.75,
+                    Camera.IDENTITY.clipFromView(), Camera.IDENTITY.viewFromSceneRotation());
+            var origin = new SceneOrigin(29_000_000, 64, -28_000_000);
+            int[] calls = {0};
+            MinecraftFrameCaptureInstaller.Sink sink = new MinecraftFrameCaptureInstaller.Sink() {
+                @Override public void update(MinecraftCapturedFrame frame) { }
+                @Override public SpatialMedium<?, ?> spatialMedium(Camera captured, double x, double y,
+                                                                   double z, double metersPerSceneUnit) {
+                    calls[0]++;
+                    assertSame(camera, captured);
+                    assertEquals(origin.x(), x);
+                    assertEquals(origin.y(), y);
+                    assertEquals(origin.z(), z);
+                    assertEquals(2.5, metersPerSceneUnit);
+                    return spatial;
+                }
+            };
+
+            var view = MinecraftFrameAdapter.sceneView(selection, camera, origin, sink, 2.5);
+
+            assertEquals(1, calls[0]);
+            assertSame(selection.scene(), view.entryScene());
+            assertSame(containing, view.medium());
+            assertSame(spatial, view.spatialMedium());
+            assertSame(camera, view.camera());
+        }
+    }
+
+    @Test void frameOnlySinkKeepsSpatialMediumOptional() {
+        MinecraftFrameCaptureInstaller.Sink sink = frame -> { };
+        var selection = new MinecraftFrameSelector.Selection(new TestScene(), ViewMedium.Vacuum.INSTANCE);
+        var view = MinecraftFrameAdapter.sceneView(selection, Camera.IDENTITY, SceneOrigin.ZERO, sink, 1);
+        assertNull(view.spatialMedium());
+        assertSame(ViewMedium.Vacuum.INSTANCE, view.medium());
+    }
 
     @Test
     void epochLeasePublishesAndRemovesOnlyItsOwnSelection() {

@@ -5,8 +5,11 @@ import caustica_fog_types;
 [shader("compute")]
 [numthreads(1,1,1)]
 void probeFogPush(uint3 id : SV_DispatchThreadID) {
-    if(id.x == 0xFFFFFFFFu) { float sink = fogPushProbe.medium.x; }
+    if(id.x == 0xFFFFFFFFu) { float sink = fogPushProbe.traceData.x; }
 }
+
+struct FogVolumeLayoutProbe { FogVolumeData values[2]; };
+[[vk::binding(1, 0)]] StructuredBuffer<FogVolumeLayoutProbe, Std430DataLayout> fogVolumeLayoutProbe;
 
 struct ExposureStateLayoutProbe { ExposureState values[2]; };
 [[vk::binding(0, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;

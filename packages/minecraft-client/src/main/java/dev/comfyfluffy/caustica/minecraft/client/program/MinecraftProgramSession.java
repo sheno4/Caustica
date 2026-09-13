@@ -26,6 +26,10 @@ import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.renderer.presentation.fog.FogPass;
+import dev.comfyfluffy.caustica.renderer.presentation.fog.FogVolume;
+import dev.comfyfluffy.caustica.api.view.Camera;
+import dev.comfyfluffy.caustica.api.view.SpatialMedium;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCapturedFrame;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftTerrainSession;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.entity.*;
@@ -48,7 +52,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final MinecraftMaterialEpochCompiler materialEpochs;
     private final MinecraftFrameSelectionInstaller frameSelections;
     private final MinecraftFrameCaptureState frames;
-    private final MinecraftFrameCaptureInstaller.Lease frameCapture;
+    private MinecraftFrameCaptureInstaller.Lease frameCapture;
+    private final FogVolume fogVolume;
+    private final MinecraftFogInputs fogInputs = new MinecraftFogInputs();
     private final MinecraftLightProvider lights;
     private final PassRegistration lightRegistration;
     private final PassRegistration overlayRegistration;
@@ -65,7 +71,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     MinecraftMaterialEpochCompiler materialEpochs,
                                     MinecraftFrameSelectionInstaller frameSelections,
                                     MinecraftFrameCaptureState frames,
-                                    MinecraftFrameCaptureInstaller.Lease frameCapture,
+                                    FogVolume fogVolume,
                                     MinecraftLightProvider lights, PassRegistration lightRegistration,
                                     PassRegistration overlayRegistration, PassRegistration fogRegistration,
                                     RtEntities entities,
@@ -76,7 +82,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         this.materialEpochs = materialEpochs;
         this.frameSelections = frameSelections;
         this.frames = frames;
-        this.frameCapture = frameCapture;
+        this.fogVolume = fogVolume;
         this.lights = lights;
         this.lightRegistration = lightRegistration;
         this.overlayRegistration = overlayRegistration;
@@ -113,9 +119,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         PassRegistration lightRegistration = null;
         PassRegistration overlayRegistration = null;
         PassRegistration fogRegistration = null;
+        FogVolume fogVolume = null;
         try {
-            frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames, calibration),
-                    "frame capture lease");
+            fogVolume = new FogVolume(context.renderSession().gpu(), context.renderSession().resources());
             lights = new MinecraftLightProvider(context.renderSession().scene(), context.scene(),
                     () -> celestialSettings(options.snapshot().options(MinecraftProvidersExtension.ID)),
                     frames::lightFrame);
@@ -124,28 +130,44 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     setup -> new LightUpdatePass(installedLights, instrumentation));
             overlayRegistration = context.renderSession().passes().addUiPass(
                     WorldOverlayPass.ID, setup -> new WorldOverlayPass(setup, entities, terrain, context.renderSession().resources()));
-            MinecraftFogInputs fogInputs = new MinecraftFogInputs();
             fogRegistration = context.renderSession().passes().addSceneEffectPass(FogPass.ID,
                     setup -> new FogPass(setup, context.renderSession().resources(),
-                            () -> options.snapshot().options(MinecraftProvidersExtension.ID),
-                            () -> fogInputs.capture(frames.fogFrame(),
-                                    options.snapshot().options(MinecraftProvidersExtension.ID))));
+                            () -> options.snapshot().options(MinecraftProvidersExtension.ID)));
             MinecraftProgramSession session = new MinecraftProgramSession(
-                    context, resources, materialEpochs, frameSelections, frames, frameCapture,
+                    context, resources, materialEpochs, frameSelections, frames, fogVolume,
                     lights, lightRegistration, overlayRegistration, fogRegistration, entities, entityTextures, terrain, options);
+            frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(new MinecraftFrameCaptureInstaller.Sink() {
+                @Override public void update(MinecraftCapturedFrame frame) { frames.update(frame); }
+
+                @Override public SpatialMedium<?, ?> spatialMedium(Camera camera, double originX, double originY,
+                                                                   double originZ, double metersPerSceneUnit) {
+                    return session.captureSpatialMedium(originX, originY, originZ, metersPerSceneUnit);
+                }
+            }, calibration), "frame capture lease");
+            session.frameCapture = frameCapture;
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
             var releases = new ArrayList<Runnable>();
+            if (frameCapture != null) releases.add(frameCapture::close);
             if (fogRegistration != null) releases.add(fogRegistration::close);
             if (overlayRegistration != null) releases.add(overlayRegistration::close);
             if (lightRegistration != null) releases.add(lightRegistration::close);
             if (lights != null) releases.add(lights::close);
-            if (frameCapture != null) releases.add(frameCapture::close);
+            if (fogVolume != null) releases.add(fogVolume::close);
             releases.add(resources::close);
             ResourceLifetime.closeAfterFailure(failure, releases.toArray(Runnable[]::new));
             throw failure;
         }
+    }
+
+    private synchronized SpatialMedium<?, ?> captureSpatialMedium(double originX, double originY,
+                                                                  double originZ, double metersPerSceneUnit) {
+        if (active == null) return null;
+        OptionValues capturedOptions = options();
+        return fogVolume.capture(active.registration.exports().fogVolume(),
+                fogInputs.capture(frames.fogFrame(), capturedOptions), capturedOptions,
+                originX, originY, originZ, metersPerSceneUnit);
     }
 
     @Override public synchronized void resourcePackChanged(ResourcePackEpoch epoch) {
@@ -226,8 +248,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     }
 
     private void activate(Pending request) {
-        ProgramRegistration<MinecraftPrograms> registration = request.registration;
-        MinecraftPrograms programs = registration.exports();
+        ProgramRegistration<Exports> registration = request.registration;
+        MinecraftPrograms programs = registration.exports().minecraft();
         Active displaced = active;
 
         MinecraftTerrainSession terrainSession = new MinecraftTerrainSession(
@@ -305,15 +327,15 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                 epoch.fallbackInstanceData());
     }
 
-    static ProgramRegistration<MinecraftPrograms> registerPrograms(ProgramChannel channel, Roots roots,
-                                                                  ResourceId dimension) {
+    static ProgramRegistration<Exports> registerPrograms(ProgramChannel channel, Roots roots,
+                                                          ResourceId dimension) {
         return channel.register(builder -> {
             var coverage = SHADERS.definition("caustica_minecraft_coverage", "MinecraftCoverage");
             var material = new SurfaceDefinition<>(
                     SHADERS.definition("caustica_minecraft_surface", "MinecraftSurface"),
                     coverage, roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                     MinecraftProgramTypes.INSTANCE_DATA);
-            return new MinecraftPrograms(builder.surface(material),
+            MinecraftPrograms minecraft = new MinecraftPrograms(builder.surface(material),
                     builder.surface(SurfaceDefinition.of(
                             SHADERS.definition("caustica_water_surface", "WaterSurface"),
                             coverage, roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
@@ -333,6 +355,10 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     ? SHADERS.definition("caustica_minecraft_dimension_skies", "MinecraftEndSky")
                                     : SHADERS.definition("caustica_minecraft_overworld_sky", "MinecraftOverworldSky"),
                             MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA)));
+            try (var implementation = FogVolume.BINDING_DATA.data(0L)) {
+                return new Exports(minecraft, builder.volume(new VolumeDefinition<>(FogVolume.definition(),
+                        implementation, FogVolume.BINDING_DATA, FogVolume.INSTANCE_DATA)));
+            }
         });
     }
 
@@ -360,10 +386,13 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                 lights::close,
                 () -> { if (cancelled != null) cancelled.close(); },
                 () -> { if (retiring != null) retiring.closePrograms(); },
+                fogVolume::close,
                 terrain::shutdown).close();
     }
 
     @Override public void close() { resources.close(); }
+
+    record Exports(MinecraftPrograms minecraft, VolumeId<FogVolume.Binding, FogVolume.Instance> fogVolume) { }
 
     record Roots(ShaderData<MinecraftProgramTypes.ImplementationData> implementation,
                  ShaderData<MinecraftProgramTypes.PrimitiveData> fallbackBinding,
@@ -382,7 +411,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         final long generation;
         final MinecraftMaterialLookup lookup;
         GpuComputeJob upload;
-        ProgramRegistration<MinecraftPrograms> registration;
+        ProgramRegistration<Exports> registration;
         MinecraftProgramResources.PreparedEpoch prepared;
         Pending(long generation, MinecraftMaterialLookup lookup) {
             this.generation = generation;
@@ -402,7 +431,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     private final class Active {
         final long generation;
-        final ProgramRegistration<MinecraftPrograms> registration;
+        final ProgramRegistration<Exports> registration;
         final MinecraftProgramResources.Epoch epoch;
         final MinecraftTerrainSession terrain;
         final MinecraftFrameSelector frameSelector;
@@ -412,7 +441,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         final PassRegistration sky;
         final ArrayList<RetiredPrograms> delayed;
         boolean producersStopped;
-        Active(long generation, ProgramRegistration<MinecraftPrograms> registration,
+        Active(long generation, ProgramRegistration<Exports> registration,
                MinecraftProgramResources.Epoch epoch,
                MinecraftTerrainSession terrain, MinecraftFrameSelector frameSelector,
                MinecraftFrameSelectionInstaller.Lease frameSelection,
@@ -448,7 +477,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         }
     }
 
-    private record RetiredPrograms(PassRegistration sky, ProgramRegistration<MinecraftPrograms> registration,
+    private record RetiredPrograms(PassRegistration sky, ProgramRegistration<Exports> registration,
                                    MinecraftProgramResources.Epoch epoch) {
         void close() {
             new ResourceLifetime(() -> { if (sky != null) sky.close(); },

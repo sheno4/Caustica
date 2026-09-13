@@ -463,6 +463,7 @@ final class PassSessionTest {
     };
 
     private static final PostEffectFrame POST_FRAME = new PostEffectFrame() {
+        @Override public boolean spatialMediumActive() { return false; }
         @Override public void traceVisibility(dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress rays,
                 dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress results, int width, int height) { }
         @Override public float[] traceJitter() { return new float[2]; }

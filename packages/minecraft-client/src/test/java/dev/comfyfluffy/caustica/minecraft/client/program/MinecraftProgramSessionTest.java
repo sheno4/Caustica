@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.client.program;
 
-import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.renderer.presentation.fog.FogVolume;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.scene.SceneEdit;
@@ -48,7 +48,7 @@ final class MinecraftProgramSessionTest {
             throw failure;
         };
         request.registration = new ProgramRegistration<>() {
-            @Override public MinecraftPrograms exports() { throw new AssertionError(); }
+            @Override public MinecraftProgramSession.Exports exports() { throw new AssertionError(); }
             @Override public void whenComplete(java.util.function.Consumer<? super Completion> callback) {
                 throw new AssertionError();
             }
@@ -87,14 +87,14 @@ final class MinecraftProgramSessionTest {
     }
 
     @Test
-    void declaresOneAtomicSetWithNonzeroRoots() {
+    void declaresOneAtomicSetWithMinecraftRootsAndInlineFogImplementation() {
         CapturingChannel channel = new CapturingChannel();
         var roots = new MinecraftProgramSession.Roots(
                 MinecraftProgramTypes.IMPLEMENTATION_DATA.data(11L),
                 MinecraftProgramTypes.PRIMITIVE_DATA.data(22L),
                 MinecraftProgramTypes.INSTANCE_DATA.data(33L));
 
-        ProgramRegistration<MinecraftPrograms> registration =
+        ProgramRegistration<MinecraftProgramSession.Exports> registration =
                 MinecraftProgramSession.registerPrograms(channel, roots, ResourceId.of("minecraft", "overworld"));
 
         assertEquals(1, channel.registrations);
@@ -103,9 +103,21 @@ final class MinecraftProgramSessionTest {
                 channel.surfaces.stream().map(value -> value.surface().module()).toList());
         assertTrue(channel.surfaces.stream().allMatch(value -> value.implementationData().bits() == 11L));
         assertEquals(11L, channel.volumes.getFirst().implementationData().bits());
+        assertSame(MinecraftProgramTypes.PRIMITIVE_DATA, channel.volumes.getFirst().bindingDataType());
+        assertSame(MinecraftProgramTypes.INSTANCE_DATA, channel.volumes.getFirst().instanceDataType());
+        assertEquals(2, channel.volumes.size());
+        var fogDefinition = channel.volumes.getLast().implementation();
+        assertEquals("caustica_fog_medium", fogDefinition.module());
+        assertEquals("FogVolumeModel", fogDefinition.type());
+        assertSame(FogVolume.class, fogDefinition.source().resourceAnchor());
+        assertEquals("/caustica/shaders/common", fogDefinition.source().classpathRoot());
+        assertEquals(0L, channel.volumes.getLast().implementationData().bits());
+        assertSame(FogVolume.BINDING_DATA, channel.volumes.getLast().bindingDataType());
+        assertSame(FogVolume.INSTANCE_DATA, channel.volumes.getLast().instanceDataType());
+        assertSame(registration.exports().fogVolume(), channel.volumeIds.getLast());
         assertEquals("caustica_minecraft_overworld_sky",
                 channel.environments.getFirst().implementation().module());
-        assertSame(registration.exports().environment(), channel.environmentId);
+        assertSame(registration.exports().minecraft().environment(), channel.environmentId);
     }
 
     @Test
@@ -122,7 +134,7 @@ final class MinecraftProgramSessionTest {
                     ResourceId.of("minecraft", dimensions.get(i)));
             assertEquals(1, channel.environments.size());
             assertEquals(types.get(i), channel.environments.getFirst().implementation().type());
-            assertSame(registration.exports().environment(), channel.environmentId);
+            assertSame(registration.exports().minecraft().environment(), channel.environmentId);
         }
     }
 
@@ -198,6 +210,7 @@ final class MinecraftProgramSessionTest {
     private static final class CapturingChannel implements ProgramChannel, ProgramBuilder {
         final List<SurfaceDefinition<?, ?>> surfaces = new ArrayList<>();
         final List<VolumeDefinition<?, ?>> volumes = new ArrayList<>();
+        final List<VolumeId<?, ?>> volumeIds = new ArrayList<>();
         final List<EnvironmentDefinition<?>> environments = new ArrayList<>();
         final EnvironmentId<?> environmentId = new EnvironmentId<>() { };
         int registrations;
@@ -219,7 +232,9 @@ final class MinecraftProgramSessionTest {
         }
         @Override public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             volumes.add(definition);
-            return new VolumeId<>() { };
+            VolumeId<B, N> id = new VolumeId<>() { };
+            volumeIds.add(id);
+            return id;
         }
         @SuppressWarnings("unchecked")
         @Override public <B> EnvironmentId<B> environment(EnvironmentDefinition<B> definition) {

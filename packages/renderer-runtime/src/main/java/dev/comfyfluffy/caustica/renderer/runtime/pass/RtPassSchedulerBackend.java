@@ -145,6 +145,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             float[] cameraTlasPosition,
             float[] traceJitter,
             float preExposure,
+            boolean spatialMediumActive,
             VisibilityRecorder visibilityRecorder,
             UiState ui) {
         public FrameState {
@@ -339,6 +340,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
                 state.visibilityRecorder().record(state.commandBuffer(), rays, results, width, height);
             }
             @Override public float preExposure() { requireLive(); return state.preExposure(); }
+            @Override public boolean spatialMediumActive() { requireLive(); return state.spatialMediumActive(); }
             @Override public GpuImage primaryDepth() { requireLive(); return state.primaryDepth(); }
             @Override public GpuImage depth() { requireLive(); return state.depth(); }
             @Override public float[] cameraRelativeFromClip() { requireLive(); return state.cameraRelativeFromClip().clone(); }

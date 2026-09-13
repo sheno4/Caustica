@@ -15,6 +15,31 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtFrameRendererWorldRootsTest {
     @Test
+    void spatialBindingWritesIndependentWordsAndClearsAnInactiveRevision() {
+        var type = ShaderDataType.<Object>create("spatial");
+        var spatial = new dev.comfyfluffy.caustica.api.view.SpatialMedium<>(
+                new VolumeId<Object, Object>() { }, type.data(123), type.data(456), 8, 16, -24);
+        ByteBuffer roots = roots((byte) 0x5a);
+        RtFrameRenderer.writeSpatialMediumRoots(roots, spatial, 9, new dev.comfyfluffy.caustica.engine.scene.SceneOrigin(32, 64, -96));
+        assertEquals(123, roots.getLong(RtBindings.WORLD_SPATIAL_MEDIUM_BINDING_DATA_OFFSET));
+        assertEquals(456, roots.getLong(RtBindings.WORLD_SPATIAL_MEDIUM_INSTANCE_DATA_OFFSET));
+        assertEquals(9, roots.getInt(RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET));
+        assertEquals(1, roots.getInt(RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET));
+        assertEquals(24, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET));
+        assertEquals(48, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET));
+        assertEquals(-72, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET));
+        assertEquals((byte) 0x5a, roots.get(RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET));
+        RtFrameRenderer.writeSpatialMediumRoots(roots, spatial, 0, dev.comfyfluffy.caustica.engine.scene.SceneOrigin.ZERO);
+        assertEquals(0, roots.getLong(RtBindings.WORLD_SPATIAL_MEDIUM_BINDING_DATA_OFFSET));
+        assertEquals(0, roots.getLong(RtBindings.WORLD_SPATIAL_MEDIUM_INSTANCE_DATA_OFFSET));
+        assertEquals(0, roots.getInt(RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET));
+        assertEquals(0, roots.getInt(RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET));
+        assertEquals(0, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET));
+        assertEquals(0, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET));
+        assertEquals(0, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET));
+    }
+
+    @Test
     void activeInitialVolumeWritesTypedImplementationAndData() {
         ShaderDataType<Object> binding = ShaderDataType.create("binding");
         ShaderDataType<Object> instance = ShaderDataType.create("instance");

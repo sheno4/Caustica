@@ -15,6 +15,7 @@ final class ViewContractTest {
         assertSame(scene, view.entryScene());
         assertSame(Camera.IDENTITY, view.camera());
         assertSame(ViewMedium.Vacuum.INSTANCE, view.medium());
+        org.junit.jupiter.api.Assertions.assertNull(view.spatialMedium());
     }
 
     @Test

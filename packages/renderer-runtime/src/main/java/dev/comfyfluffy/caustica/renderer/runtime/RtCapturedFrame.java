@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.runtime;
 
 import dev.comfyfluffy.caustica.api.view.SceneView;
+import dev.comfyfluffy.caustica.api.view.SpatialMedium;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
@@ -19,10 +20,13 @@ record RtCapturedFrame(FrameSnapshot inputs, ResourceOwners medium) implements A
     }
 
     private static FrameSnapshot retainedInputs(FrameSnapshot inputs, ResourceOwners resources) {
-        if (!(inputs.view().medium() instanceof ViewMedium.Volume<?, ?> volume)) return inputs;
         var view = inputs.view();
-        return new FrameSnapshot(new SceneView(view.entryScene(), view.camera(),
-                retainedMedium(volume, resources)), inputs.sceneOrigin(), inputs.proceduralSurfaceAnimationEnabled(),
+        ViewMedium containing = view.medium() instanceof ViewMedium.Volume<?, ?> volume
+                ? retainedMedium(volume, resources) : view.medium();
+        SpatialMedium<?, ?> spatial = view.spatialMedium() == null ? null
+                : retainedSpatialMedium(view.spatialMedium(), resources);
+        return new FrameSnapshot(new SceneView(view.entryScene(), view.camera(), containing, spatial),
+                inputs.sceneOrigin(), inputs.proceduralSurfaceAnimationEnabled(),
                 inputs.timeSeconds(), inputs.metersPerWorldUnit());
     }
 
@@ -30,6 +34,12 @@ record RtCapturedFrame(FrameSnapshot inputs, ResourceOwners medium) implements A
                                                                ResourceOwners resources) {
         return new ViewMedium.Volume<>(volume.implementation(), resources.data(volume.bindingData()),
                 resources.data(volume.instanceData()));
+    }
+
+    private static <B, N> SpatialMedium<B, N> retainedSpatialMedium(SpatialMedium<B, N> spatial,
+                                                                   ResourceOwners resources) {
+        return new SpatialMedium<>(spatial.implementation(), resources.data(spatial.bindingData()),
+                resources.data(spatial.instanceData()), spatial.originX(), spatial.originY(), spatial.originZ());
     }
 
     @Override public void close() { medium.close(); }

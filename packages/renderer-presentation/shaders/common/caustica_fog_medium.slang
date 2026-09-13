@@ -1,4 +1,8 @@
 module caustica_fog_medium;
+import caustica_fog_types;
+import caustica_volume;
+
+public struct FogVolumeModel : IVolumeModel {};
 
 /** Spatial medium evaluated in coordinates relative to the caller's origin. */
 public struct FogMedium {
@@ -16,6 +20,20 @@ public struct FogMedium {
     public float layerHeight;
     public float heightFalloff;
 };
+
+public FogMedium mediumFromFogVolume(FogVolumeData volume) {
+    FogMedium medium = {};
+    medium.fieldAddress = volume.fieldAddress;
+    medium.fieldOrigin = volume.fieldOrigin.xyz;
+    medium.spacing = volume.fieldOrigin.w;
+    medium.fieldSize = int3(volume.fieldSize.xyz);
+    medium.noiseOrigin = volume.noiseOrigin.xyz;
+    medium.windPhase = volume.noiseOrigin.w;
+    medium.densityScale = volume.profile.x;
+    medium.layerHeight = volume.profile.y;
+    medium.heightFalloff = volume.profile.z;
+    return medium;
+}
 
 float4 fogVoxel(FogMedium medium, int3 p) {
     int3 s = medium.fieldSize;

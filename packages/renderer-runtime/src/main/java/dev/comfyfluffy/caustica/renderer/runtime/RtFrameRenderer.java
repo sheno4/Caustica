@@ -18,6 +18,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
+import dev.comfyfluffy.caustica.api.view.SpatialMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.resource.ResourceOwners;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
@@ -736,7 +737,8 @@ public final class RtFrameRenderer {
                 new float[] { execution.frame.cameraOffset().x(), execution.frame.cameraOffset().y(),
                         execution.frame.cameraOffset().z() },
                 new float[] { execution.frame.jitterX(), execution.frame.jitterY() },
-                execution.frame.preExposure(), this::recordVisibility, ui);
+                execution.frame.preExposure(), spatialMediumImplementation(execution.frame.snapshot().view().spatialMedium(),
+                        execution.program) != 0, this::recordVisibility, ui);
     }
 
     private void recordVisibility(VkCommandBuffer commandBuffer, VulkanDeviceAddress rays,
@@ -798,6 +800,31 @@ public final class RtFrameRenderer {
         int implementation = medium instanceof ViewMedium.Volume<?, ?> volume
                 ? program.resolve(volume.implementation()) : 0;
         writeInitialVolumeRoots(roots, medium, implementation);
+        SpatialMedium<?, ?> spatial = snapshot.view().spatialMedium();
+        writeSpatialMediumRoots(roots, spatial, spatialMediumImplementation(spatial, program), snapshot.sceneOrigin());
+    }
+
+    private static int spatialMediumImplementation(SpatialMedium<?, ?> spatial, RtProgramBackend.Published program) {
+        return spatial == null ? 0 : program.resolve(spatial.implementation());
+    }
+
+    static void writeSpatialMediumRoots(ByteBuffer roots, SpatialMedium<?, ?> spatial, int implementation,
+                                       SceneOrigin traceOrigin) {
+        ByteBuffer target = roots.duplicate().order(ByteOrder.nativeOrder());
+        int base = roots.position();
+        boolean active = spatial != null && implementation != 0;
+        target.putLong(base + RtBindings.WORLD_SPATIAL_MEDIUM_BINDING_DATA_OFFSET,
+                active ? spatial.bindingData().bits() : 0L);
+        target.putLong(base + RtBindings.WORLD_SPATIAL_MEDIUM_INSTANCE_DATA_OFFSET,
+                active ? spatial.instanceData().bits() : 0L);
+        target.putInt(base + RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET, active ? implementation : 0);
+        target.putInt(base + RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET, active ? 1 : 0);
+        target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET,
+                active ? (float) (traceOrigin.x() - spatial.originX()) : 0);
+        target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET,
+                active ? (float) (traceOrigin.y() - spatial.originY()) : 0);
+        target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET,
+                active ? (float) (traceOrigin.z() - spatial.originZ()) : 0);
     }
 
     static void writeInitialVolumeRoots(ByteBuffer roots, ViewMedium medium,

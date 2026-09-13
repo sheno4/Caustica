@@ -104,7 +104,12 @@ public final class MinecraftFrameAdapter {
             if (selection == null) return null;
             RtTerrain currentTerrain = terrain.currentOrNull();
             SceneOrigin sceneOrigin = currentTerrain != null ? currentTerrain.sceneOrigin() : SceneOrigin.ZERO;
-            FrameSnapshot snapshot = new FrameSnapshot(new SceneView(selection.scene(), camera, selection.medium()), sceneOrigin,
+            SceneView view;
+            try (var fogScope = CausticaClientComposition.current().runtime().profileStage("host.fogPrepare")) {
+                view = sceneView(selection, camera, sceneOrigin,
+                        capture == null ? null : capture.sink, METERS_PER_WORLD_UNIT);
+            }
+            FrameSnapshot snapshot = new FrameSnapshot(view, sceneOrigin,
                     CausticaConfig.get(MinecraftOptions.Rt.Composite.WATER_WAVES),
                     System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);
             entities.submitFrame(snapshot.sceneOrigin(), camera.x(), camera.y(), camera.z(),
@@ -112,6 +117,13 @@ public final class MinecraftFrameAdapter {
                     renderedWorldFrameIndex++);
             return snapshot;
         }
+    }
+
+    static SceneView sceneView(MinecraftFrameSelector.Selection selection, Camera camera, SceneOrigin origin,
+                               MinecraftFrameCaptureInstaller.Sink sink, double metersPerSceneUnit) {
+        var spatial = sink == null ? null : sink.spatialMedium(camera,
+                origin.x(), origin.y(), origin.z(), metersPerSceneUnit);
+        return new SceneView(selection.scene(), camera, selection.medium(), spatial);
     }
 
     /**

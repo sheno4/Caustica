@@ -75,6 +75,64 @@ final class RtCapturedFrameTest {
         }
     }
 
+    @Test void spatialMediumSurvivesProducerClosureWhenCameraIsInVacuum() {
+        var destroyed = new AtomicInteger();
+        try (var resources = new dev.comfyfluffy.caustica.engine.resource.ResourceDirectory(failure -> fail(failure))) {
+            var dependency = resources.openFactory(new dev.comfyfluffy.caustica.engine.session.ContributionOwner(1))
+                    .create(destroyed::incrementAndGet);
+            var type = dev.comfyfluffy.caustica.api.program.ShaderDataType.<Object>create("spatial");
+            var binding = type.data(123, dependency);
+            var instance = type.data(456, dependency);
+            var spatial = new dev.comfyfluffy.caustica.api.view.SpatialMedium<>(
+                    new dev.comfyfluffy.caustica.api.program.VolumeId<Object, Object>() { }, binding, instance,
+                    30000000.25, 64.5, -30000000.75);
+            var view = new SceneView(new SceneId() { }, Camera.IDENTITY,
+                    dev.comfyfluffy.caustica.api.view.ViewMedium.Vacuum.INSTANCE, spatial);
+            var captured = RtCapturedFrame.capture(new FrameSnapshot(view, SceneOrigin.ZERO, false, 0, 1));
+            binding.close();
+            instance.close();
+            dependency.close();
+            assertThrows(IllegalStateException.class, binding::retain);
+            var retained = captured.inputs().view().spatialMedium();
+            assertEquals(30000000.25, retained.originX());
+            assertEquals(64.5, retained.originY());
+            assertEquals(-30000000.75, retained.originZ());
+            assertNotSame(binding, retained.bindingData());
+            assertNotSame(instance, retained.instanceData());
+            try (var reader = retained.instanceData().retain()) {
+                assertEquals(456, reader.bits());
+                assertEquals(123, retained.bindingData().bits());
+                captured.close();
+                resources.awaitRetirements();
+                assertEquals(0, destroyed.get());
+            }
+            resources.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
+
+    @Test void failedSpatialCaptureReleasesPreviouslyRetainedData() {
+        var destroyed = new AtomicInteger();
+        try (var resources = new dev.comfyfluffy.caustica.engine.resource.ResourceDirectory(failure -> fail(failure))) {
+            var dependency = resources.openFactory(new dev.comfyfluffy.caustica.engine.session.ContributionOwner(1))
+                    .create(destroyed::incrementAndGet);
+            var type = dev.comfyfluffy.caustica.api.program.ShaderDataType.<Object>create("spatial-failure");
+            var binding = type.data(123, dependency);
+            var instance = type.data(456, dependency);
+            var spatial = new dev.comfyfluffy.caustica.api.view.SpatialMedium<>(
+                    new dev.comfyfluffy.caustica.api.program.VolumeId<Object, Object>() { }, binding, instance);
+            instance.close();
+            var view = new SceneView(new SceneId() { }, Camera.IDENTITY,
+                    dev.comfyfluffy.caustica.api.view.ViewMedium.Vacuum.INSTANCE, spatial);
+            assertThrows(IllegalStateException.class,
+                    () -> RtCapturedFrame.capture(new FrameSnapshot(view, SceneOrigin.ZERO, false, 0, 1)));
+            binding.close();
+            dependency.close();
+            resources.awaitRetirements();
+            assertEquals(1, destroyed.get());
+        }
+    }
+
     @Test void publicationsAfterSceneCaptureWaitForTheNextFrame() {
         var telemetry = new RtTelemetryImpl();
         var visible = new java.util.ArrayList<String>();

@@ -56,6 +56,7 @@ final class RtPassSchedulerBackendTest {
         GpuImage fogged = scene.frame().acquireSceneColorOutput();
         assertSame(fixture.reconstruction, scene.frame().depth());
         assertSame(fixture.exposure, scene.frame().primaryDepth());
+        assertTrue(scene.frame().spatialMediumActive());
         assertEquals(16, scene.frame().cameraRelativeFromClip().length);
         scene.validateOutputChain();
         scene.submit(() -> { });
@@ -200,7 +201,7 @@ final class RtPassSchedulerBackendTest {
         RtPassSchedulerBackend.FrameState frameState() {
             return new RtPassSchedulerBackend.FrameState(
                     fakeCommandBuffer(), use, resources, 4L, view, 12.5, 0.5, 960, 540,
-                    reconstruction, exposure, postA, postB, reconstruction, exposure, new float[16], null, new float[3], new float[2], 1.0f, (command, rays, results, width, height) -> {
+                    reconstruction, exposure, postA, postB, reconstruction, exposure, new float[16], null, new float[3], new float[2], 1.0f, true, (command, rays, results, width, height) -> {
                         visibilityCalls++;
                         visibilityRays = rays;
                         visibilityResults = results;

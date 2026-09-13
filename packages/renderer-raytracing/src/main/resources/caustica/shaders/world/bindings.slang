@@ -52,6 +52,13 @@ public struct WorldBindingRoots {
     public uint64_t stablePlaneBufferAddress;
     public uint64_t visibilityRaysAddress;
     public uint64_t visibilityResultsAddress;
+    public uint64_t spatialMediumBindingData;
+    public uint64_t spatialMediumInstanceData;
+    public uint spatialMediumImplementation;
+    public uint spatialMediumActive;
+    public float spatialMediumOriginX;
+    public float spatialMediumOriginY;
+    public float spatialMediumOriginZ;
 };
 
 public RaytracingAccelerationStructure worldAccelerationStructure() {

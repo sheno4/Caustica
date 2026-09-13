@@ -48,6 +48,12 @@ def compilePresentationShaders = tasks.register("compilePresentationShaders", Co
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
 }
 sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compilePresentationShaders))
+tasks.named("processResources") {
+    from(file("shaders/common")) {
+        include "caustica_fog_medium.slang", "caustica_fog_types.slang"
+        into "caustica/shaders/common"
+    }
+}
 
 def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
 def preparePresentationReflectionSources = tasks.register("preparePresentationReflectionSources", Sync) {
@@ -56,6 +62,7 @@ def preparePresentationReflectionSources = tasks.register("preparePresentationRe
     into(reflectionRoot)
 }
 def presentationRecordSpecs = [
+        "buffer|fogVolumeLayoutProbe|FogVolumeData|dev.comfyfluffy.caustica.renderer.presentation.gen|FogVolumeData|false",
         "push|fogPushProbe|FogPush|dev.comfyfluffy.caustica.renderer.presentation.gen|FogPushData|false",
         "push|bloomPushProbe|BloomPush|dev.comfyfluffy.caustica.renderer.presentation.gen|BloomPushData|false",
         "buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureStateData|true",
@@ -129,7 +136,7 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
             while (entries.hasMoreElements()) names.add(entries.nextElement().name)
         }
         def generated = ["ExposureStateData", "ExposureHistPushData", "ExposureResolvePushData",
-                         "DisplayPushData", "DebugPresentPushData", "PresentPushData", "BloomPushData", "FogPushData"].collect {
+                         "DisplayPushData", "DebugPresentPushData", "PresentPushData", "BloomPushData", "FogPushData", "FogVolumeData"].collect {
             "dev/comfyfluffy/caustica/renderer/presentation/gen/" + it + ".class"
         } as Set
         def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/renderer/presentation/gen/")
@@ -143,7 +150,11 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
                 "GeneratedFrameQueue", "HdrPresentation", "SdrPqPresentation", "bloom/BloomPass", "bloom/BloomExtension"].collect {
             "dev/comfyfluffy/caustica/renderer/presentation/" + it + ".class"
         }
+        def fogModules = ["caustica_fog_medium.slang", "caustica_fog_types.slang"].collect {
+            "caustica/shaders/common/" + it
+        }
         if (!foreignClasses.empty || actualGenerated != generated || !names.containsAll(presentationClasses)
+                || !names.containsAll(fogModules)
                 || pipelines != expectedPipelines || colors.size() != 6) {
             throw new GradleException("presentation JAR mismatch: foreignClasses=${foreignClasses}, "
                     + "generated=${actualGenerated}, presentationClasses=${presentationClasses.findAll { !names.contains(it) }}, "

@@ -34,6 +34,9 @@ public interface PostEffectFrame extends PassFrame {
      */
     GpuImage acquireSceneColorOutput();
 
+    /** Whether this frame's captured program resolves the selected spatial-medium implementation. */
+    boolean spatialMediumActive();
+
     /** Physical first-hit Vulkan reverse depth at trace resolution; zero denotes environment. */
     GpuImage primaryDepth();
 

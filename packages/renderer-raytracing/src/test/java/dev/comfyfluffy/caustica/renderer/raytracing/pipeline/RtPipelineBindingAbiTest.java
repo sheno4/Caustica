@@ -43,7 +43,14 @@ final class RtPipelineBindingAbiTest {
         assertEquals(136, RtBindings.WORLD_STABLE_PLANE_BUFFER_ADDRESS_OFFSET);
         assertEquals(144, RtBindings.WORLD_VISIBILITY_RAYS_ADDRESS_OFFSET);
         assertEquals(152, RtBindings.WORLD_VISIBILITY_RESULTS_ADDRESS_OFFSET);
-        assertEquals(160, WORLD_PUSH_CONSTANT_SIZE);
+        assertEquals(160, RtBindings.WORLD_SPATIAL_MEDIUM_BINDING_DATA_OFFSET);
+        assertEquals(168, RtBindings.WORLD_SPATIAL_MEDIUM_INSTANCE_DATA_OFFSET);
+        assertEquals(176, RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET);
+        assertEquals(180, RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET);
+        assertEquals(184, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET);
+        assertEquals(188, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET);
+        assertEquals(192, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET);
+        assertEquals(200, WORLD_PUSH_CONSTANT_SIZE);
     }
 
     @Test

@@ -12,6 +12,7 @@ public final class MinecraftFrameMetrics {
             "runtime.frameSetup",
             "host.frameCapture",
             "host.fogCapture",
+            "host.fogPrepare",
             "host.worldBegin",
             "host.worldMaintenance",
             "host.textureRetire",

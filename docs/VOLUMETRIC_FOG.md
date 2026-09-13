@@ -83,6 +83,18 @@ A copied-workbench baseline places glass at Z=4100 between a camera near `(4096.
 
 The fixture was repeated after the shared-module extraction and remained finite and bounded. Its game time advanced from 2476127 to 2476606 between clients, changing the animated density phase, so those images are not an exact numerical equivalence comparison. Baseline and repeated raw metadata are retained in `tmp/fog/secondary/` and `tmp/fog/shared-medium/`.
 
+## Captured medium binding iteration
+
+`SceneView` now carries an optional typed `SpatialMedium` independently of the homogeneous medium containing the camera. `FogVolume` prepares immutable field and 128-byte frame-parameter buffers before frame capture. Each parameter owner retains its field revision; accepted frames retain their own binding and instance handles through GPU completion. Primary fog consumes this captured binding rather than invoking a fresh input supplier during post processing. The registered volume model still uses default volume methods: secondary integration is not implemented by this binding change.
+
+The binding stores its coordinate origin as doubles. Runtime may select an older completed TLAS revision with another origin, so density evaluation uses camera coordinates relative to the captured medium origin while visibility rays use the actual TLAS origin. World roots carry the corresponding origin delta for future spatial evaluation. Primary fog and roots share the same resolved-active check, preventing one from using a volume absent from the completed program. The world root ABI is now 200 bytes; the fog push block is 176 bytes. Shared shader modules are packaged for runtime composition, and explicit parameter padding makes physical-pointer and reflected buffer layouts agree.
+
+API, engine, runtime, presentation, ray-tracing and Minecraft tests/checks passed. Coverage includes producer-handle closure, partial-retention failure, captured-origin preservation, root clearing and offsets, shader-source availability, registration, and physical-unit packing. The live copied-world run completed stationary rendering, fast flight, resource reload and resize. A later reload capture restored terrain missing from the early image. These establish successful lifetime recovery, not full temporal-stability proof.
+
+JFR at 4K/RR Performance measured stationary GPU fog mean/p95 0.3945/0.6134 ms and flight 0.4149/0.5718 ms. The new `host.fogPrepare` scope measured 0.0553/0.0851 ms stationary and 0.0561/0.1189 ms in flight. Capture plus preparation averaged 0.1917 and 0.2412 ms respectively. Completed-frame cadence was 66.22 and 70.03 FPS; longest intervals were 120.93 and 45.53 ms, and fog scopes did not account for those delays. Different trace workloads prevent attributing overall FPS changes to this edit. The preparation scope had a 3.68 ms outlier; further stack attribution is needed before choosing an allocation-pooling change.
+
+Raw transmittance contained 8,294,400 finite pixels in [0,1], minimum 0.80664, median 0.97217 and maximum 0.99121. Conditions, raw captures, JFR exports and `summary.json` are under `tmp/fog/captured-medium/`. Nsight numbers in the preceding section apply to the prior visibility implementation; this binding iteration was measured with JFR.
+
 ## Remaining iteration targets
 
 - Replace the coarse integration/reconstruction with a froxel volume and explicit temporal reprojection if moving-camera captures justify it. Sparse visibility sampling can band, and thin silhouettes can exceed the current spatial resolution.
@@ -97,11 +109,11 @@ The broader fog goal remains active. This checkpoint provides a measured first i
 
 ## Planned secondary transport
 
-The following binding and transport changes are planned and are not part of this checkpoint.
+The following shader evaluation and transport changes are planned and are not part of this checkpoint.
 
-Add a captured `SpatialMedium<B, N>` binding to `SceneView`, separate from the homogeneous `ViewMedium` containing the camera. The proposed binding contains an existing `VolumeId<B, N>` plus typed binding and instance `ShaderData`. Extend the volume shader interfaces with spatial evaluation of extinction, scattering albedo, and anisotropy; existing homogeneous implementations use a default zero-scattering evaluation. This reuses program registration and resource ownership rather than adding a second material registry.
+Extend the volume shader interfaces with spatial evaluation of extinction, scattering albedo, and anisotropy; existing homogeneous implementations use a default zero-scattering evaluation. The captured `SpatialMedium` already reuses `VolumeId` registration and typed `ShaderData` ownership.
 
-Prepare immutable GPU field revisions before `MinecraftFrameAdapter` captures `FrameSnapshot`. Extend `RtCapturedFrame` to retain independent claims on both spatial-medium data handles, then forward the selected implementation and opaque words through world roots. Primary fog must consume this captured binding instead of sampling a fresh supplier during its post callback. A pretrace pass may prepare captured resources, but must not change a global selected medium: world roots are assembled before world-resource callbacks. The shared `caustica_fog_medium` module now contains the density definition; the proposed volume evaluator and primary integration should both import it.
+Use the captured binding and origin delta for the new volume evaluator. A pretrace pass may prepare captured resources, but must not change a global selected medium: world roots are assembled before world-resource callbacks. The shared `caustica_fog_medium` module contains the density definition; the volume evaluator and primary integration should both import it.
 
 Integrate secondary segments in `build_stable_planes.slang` before delta branches continue and in `runFillStablePlanes()` in `path_tracer.slang`. For each owned segment, add incoming throughput times segment scattering `S` to radiance, then multiply throughput by transmittance `T`. Depth-zero camera segments remain exclusively owned by post fog.
 
