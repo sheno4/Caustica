@@ -47,30 +47,35 @@ float density(float3 relative) {
     float noise = 0.65 + 0.35 * sin(n.x + sin(n.z)) * sin(n.z + n.y);
     return pc.medium.x * v.x * v.z * outdoor * (layer * 0.8 + ground * 0.2) * noise;
 }
-float shadow(float3 p) {
-    RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[pc.tlasIndex];
-    RayDesc ray;
-    ray.Origin = p + pc.tlasCamera.xyz;
-    ray.Direction = pc.lightDirection.xyz;
-    ray.TMin = 0.05;
-    ray.TMax = pc.medium.w;
-    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
-    query.TraceRayInline(tlas, RAY_FLAG_NONE, 0x01, ray);
-    while(query.Proceed()) {}
-    return query.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
-}
 public void runFog(uint3 id) {
     RWTexture2D<float4> output = ResourceDescriptorHeap[pc.destinationIndex];
     uint w,h; output.GetDimensions(w,h);
     if(any(id.xy >= uint2(w,h))) return;
     float2 uv = (float2(id.xy)+0.5)/float2(w,h);
     float distance = distanceAt(uv);
+    uint visibilityCount = (pc.steps+3)/4;
+    uint visibilityBase = (id.x+id.y*w)*visibilityCount;
+    if(pc.mode == 2) {
+        float3 direction = normalize(unproject(uv,0.0001));
+        float stepLength = pc.medium.w/pc.steps;
+        float4* rays = (float4*)pc.visibilityRaysAddress;
+        for(uint j=0;j<visibilityCount;j++) {
+            float start = j*4*stepLength;
+            float3 p = direction*(start+0.5*min(stepLength,max(0.0,distance-start)));
+            uint base = (visibilityBase+j)*3;
+            rays[base] = float4(p+pc.tlasCamera.xyz,0.05);
+            rays[base+1] = float4(pc.lightDirection.xyz,start < distance ? pc.medium.w : 0.0);
+            rays[base+2] = float4(0,0,0,1);
+        }
+        return;
+    }
     if(pc.mode == 0) {
         float3 direction = normalize(unproject(uv,0.0001));
         float stepLength = pc.medium.w / pc.steps;
         float transmittance = 1.0;
         float3 scattering = 0.0;
-        float visibility = 1.0;
+        float3 visibility = 1.0;
+        float4* visibilityResults = (float4*)pc.visibilityResultsAddress;
         float cosine = dot(direction,pc.lightDirection.xyz);
         float g = 0.45;
         float phase = (1.0-g*g)/(12.5663706*pow(1.0+g*g-2.0*g*cosine,1.5));
@@ -81,7 +86,7 @@ public void runFog(uint3 id) {
             // Surface depth changes only the final segment; preceding samples keep their distances.
             float3 p = direction*(segmentStart+0.5*segmentLength);
             float sigma = density(p);
-            if((i & 3) == 0) visibility = shadow(p);
+            if((i & 3) == 0) visibility = visibilityResults[visibilityBase+i/4].rgb;
             float segmentT = exp(-sigma*segmentLength);
             float3 source = pc.ambientRadiance.xyz + pc.lightRadiance.xyz * (phase*visibility);
             scattering += transmittance * (1.0-segmentT) * source * 0.95;

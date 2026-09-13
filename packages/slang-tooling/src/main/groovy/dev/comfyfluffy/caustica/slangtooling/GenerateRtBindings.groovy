@@ -46,6 +46,7 @@ abstract class GenerateRtBindings extends DefaultTask {
             addresses: [PUSH: "worldPushAddress", COMPOSITION_DATA: "compositionDataAddress",
                         GEOMETRY_TABLE: "geometryTableAddress", PATH_QUEUE: "pathQueueAddress",
                         STABLE_PLANE_BUFFER: "stablePlaneBufferAddress",
+                        VISIBILITY_RAYS: "visibilityRaysAddress", VISIBILITY_RESULTS: "visibilityResultsAddress",
                         NEE_AT_STATE: "neeAtStateAddress"],
             words: [INITIAL_VOLUME_BINDING: "initialVolumeBinding",
                     INITIAL_VOLUME_INSTANCE: "initialVolumeInstance"],

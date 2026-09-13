@@ -1,6 +1,8 @@
 module caustica_fog_types;
 public struct FogPush {
     public uint64_t fieldAddress;
+    public uint64_t visibilityRaysAddress;
+    public uint64_t visibilityResultsAddress;
     public uint destinationIndex;
     public uint sceneIndex;
     public uint depthIndex;

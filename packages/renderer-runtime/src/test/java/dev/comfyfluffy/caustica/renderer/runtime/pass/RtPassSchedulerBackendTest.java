@@ -30,6 +30,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtPassSchedulerBackendTest {
     @Test
+    void visibilityUsesCurrentFrameAndExpiresWithTheBorrow() {
+        Fixture fixture = new Fixture();
+        var invocation = fixture.backend.beginPostEffect(post(0));
+        var frame = invocation.frame();
+        var rays = new dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress(4096);
+        var results = new dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress(8192);
+        frame.traceVisibility(rays, results, 12, 7);
+        assertEquals(1, fixture.visibilityCalls);
+        assertEquals(rays, fixture.visibilityRays);
+        assertEquals(results, fixture.visibilityResults);
+        assertEquals(12, fixture.visibilityWidth);
+        assertEquals(7, fixture.visibilityHeight);
+        assertThrows(IllegalArgumentException.class, () -> frame.traceVisibility(rays, results, 0, 7));
+        invocation.validateOutputChain();
+        invocation.submit(() -> { });
+        assertThrows(IllegalStateException.class, () -> frame.traceVisibility(rays, results, 12, 7));
+        assertEquals(1, fixture.visibilityCalls);
+    }
+
+    @Test
     void sceneEffectOutputFeedsExposureAndContinuesPostChain() {
         Fixture fixture = new Fixture();
         var scene = fixture.backend.beginPostEffect(new PassKey(0, PassKey.Stage.SCENE_EFFECT));
@@ -170,6 +190,8 @@ final class RtPassSchedulerBackendTest {
         final RtPassSchedulerBackend backend = new RtPassSchedulerBackend(
                 new FakeGpu(), 97, 100, 37, commands);
         final AtomicBoolean firstDrained = new AtomicBoolean();
+        int visibilityCalls, visibilityWidth, visibilityHeight;
+        dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress visibilityRays, visibilityResults;
 
         Fixture() {
             backend.beginFrame(frameState());
@@ -178,7 +200,13 @@ final class RtPassSchedulerBackendTest {
         RtPassSchedulerBackend.FrameState frameState() {
             return new RtPassSchedulerBackend.FrameState(
                     fakeCommandBuffer(), use, resources, 4L, view, 12.5, 0.5, 960, 540,
-                    reconstruction, exposure, postA, postB, reconstruction, exposure, new float[16], null, new float[3], new float[2], 1.0f, null);
+                    reconstruction, exposure, postA, postB, reconstruction, exposure, new float[16], null, new float[3], new float[2], 1.0f, (command, rays, results, width, height) -> {
+                        visibilityCalls++;
+                        visibilityRays = rays;
+                        visibilityResults = results;
+                        visibilityWidth = width;
+                        visibilityHeight = height;
+                    }, null);
         }
     }
 

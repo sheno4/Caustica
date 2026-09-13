@@ -4,7 +4,7 @@
 
 The working slice renders a spatially varying outdoor medium before exposure metering. Minecraft supplies an immutable 33 × 13 × 33 lattice at 32-block spacing, with biome density, humidity, sky exposure, and terrain height. Capture visits 32 loaded columns per rendered frame without loading chunks and publishes a complete revision after 35 frames. The center snaps to the nearest 64 blocks. Daily density peaks near dawn, diminishes at noon, and increases overnight; time changes do not rebuild GPU field data by themselves.
 
-The generic renderer combines that field with altitude falloff, a weaker ground layer, and periodic world-anchored noise. It integrates single scattering over at most 48 fixed-distance segments, clips the final segment at the surface, and reuses directional visibility across groups of four samples before reconstructing against depth. Integer wind harmonics make the 65,536-second animation cycle continuous. The current implementation is a reduced-resolution raymarch, not a temporally reconstructed froxel volume. It uses the captured sun or moon and approximate ambient sky illumination. Density and lighting are kept separate.
+The generic renderer combines that field with altitude falloff, a weaker ground layer, and periodic world-anchored noise. It integrates single scattering over at most 48 fixed-distance segments, clips the final segment at the surface, and reuses directional RGB visibility across groups of four samples before reconstructing against depth. Visibility uses the composed world's material traversal, including alpha coverage and transmission. Integer wind harmonics make the 65,536-second animation cycle continuous. The current implementation is a reduced-resolution raymarch, not a temporally reconstructed froxel volume. It uses the captured sun or moon and approximate ambient sky illumination. Density and lighting are kept separate.
 
 `addSceneEffectPass` records before exposure; ordinary post effects follow metering. Both share the reconstructed image's pre-exposure scale. The fog pass uses camera-relative coordinates and the entry-scene TLAS origin. Its field and image revisions are retained until submitted work completes. Shared compute barriers include sampled-image reads.
 
@@ -61,10 +61,24 @@ The revised stationary lake run used the same 4K/RR Performance conditions for 4
 
 Resize and resource reload recovered successfully. The early reload screenshot lacked distant terrain; a later capture after 600 further frames restored the lake view. Raw transmittance after reload/resize contained 8,294,400 finite pixels in [0,1], with minimum 0.79834, median 0.97266, and maximum 0.99170. These captures verify recovery and bounded output; they do not establish temporal stability along an entire flight. An earlier pitched flight entered terrain and is retained in `tmp/fog/motion/` as exploratory evidence only. Nsight timings above apply to the preceding checkpoint; this revision was measured with JFR.
 
+## Material-aware visibility iteration
+
+`PostEffectFrame.traceVisibility()` records a generic GPU ray batch against the captured world. Each 48-byte input contains TLAS-relative origin/minimum distance, normalized direction/maximum distance, and initial absorption/IOR; each 16-byte output contains RGB transmission. Callers retain buffers, and the renderer supplies compute/RT barriers and the captured material/geometry roots. A third composed raygen invokes the same `traceVisibilityRay()` helper used by surface direct lighting. The world root ABI is 160 bytes. Position-based coverage seeds repeat over the renderer's procedural domain, independent of frame number and dispatch ordering.
+
+Fog prepares up to twelve rays per reduced-resolution pixel, traces the batch, then reads its results during integration. Inputs currently start in vacuum; exact interior occupancy remains a separate requirement. The ray and result allocations total about 23.7 MiB at 4K/RR Performance/divisor 8, or 94.9 MiB at divisor 4, excluding allocation overlap during resize. Visibility retains RGB material transmission rather than forcing every surface opaque.
+
+The copied flat workbench fixture places a backstop along the camera direction and an off-axis wall across morning sunlight. The wall avoids the fog field's sampled columns. Air, stone, glass and persistent oak leaves were compared with frozen ticks, density multiplier 2, and divisor 4 at 1920 × 1080 output. Central-crop raw transmittance differed by at most 0.0000216 on average and primary depth by at most 8.74e-11. After dividing scattering by capture pre-exposure and subtracting the stone baseline, glass retained 52.32% of the air sunlight contribution and leaves retained 3.92%. The repeated air reference drifted by at most 0.0061%. These are fixture-specific material results, not universal transmission constants. Evidence is in `tmp/fog/visibility/fixture/analysis.json`.
+
+A 400-frame requested lake benchmark at 4K/RR Performance measured GPU scene effects mean/median/p95 of 0.3872/0.3484/0.6121 ms. Completed-frame start cadence was 67.35 FPS, but the trace workload differed from previous runs, so total FPS is not a causal before/after comparison. The increased fog-stage cost is measured directly. CPU field capture mean/p95 was 0.1311/0.1975 ms; CPU scene effects was 0.1039/0.1816 ms. API, engine, runtime, presentation and ray-tracing checks passed, including actual visibility-shader compilation and SPIR-V validation. Local logs and JFR exports are in `tmp/fog/visibility/`.
+
+Nsight independently captured three 4K frames with GPU scene-effects intervals of 0.400896, 0.402816 and 0.395488 ms. The nested material-visibility dispatch measured 0.072063, 0.073343 and 0.066815 ms. The native capture and exports are in `tmp/fog/nsight-visibility/`. Its clock-locking instrumentation makes JFR the primary gameplay comparison.
+
+The JFR run contained seven frame-start intervals of 43–58 ms. Each overlapped a render-thread native sample in `vkQueuePresentKHR`; fog GPU time stayed at 0.341–0.358 ms and no GC pause or safepoint overlapped. This points to presentation-side waiting rather than fog execution spikes, but does not identify the driver/compositor cause. Detailed timestamps and sampled stacks are retained in `tmp/fog/visibility/hitch-analysis.json`. The long-frame behavior remains a performance limitation despite acceptable average cadence.
+
 ## Remaining iteration targets
 
 - Replace the coarse integration/reconstruction with a froxel volume and explicit temporal reprojection if moving-camera captures justify it. Sparse visibility sampling can band, and thin silhouettes can exceed the current spatial resolution.
-- Handle foliage alpha and transmissive visibility instead of treating shadow intersections as opaque. Local lights and accurate sky visibility are not integrated yet.
+- Validate foliage coverage during motion and more complex transmission stacks. Local lights and accurate sky visibility are not integrated yet.
 - Improve terrain and shelter coverage. A 32-block height/light lattice approximates slopes, overhangs, rooms, and biome boundaries. It cannot establish exact interior occupancy.
 - Integrate fog along reflected/refracted segments. First-hit composition correctly covers the air before glass/water, but does not fog the subsequent transport segments.
 - Extend high-speed travel and scene-rebasing validation with consecutive raw captures, night lighting, denser biome fixtures, and additional representative 32-section scenes. Reload/resize recovery and wind-wrap continuity have initial coverage.
@@ -73,13 +87,9 @@ Resize and resource reload recovered successfully. The early reload screenshot l
 The broader fog goal remains active. This checkpoint provides a measured first implementation, not completion of the full visual target.
 
 
-## Planned material visibility and secondary transport
+## Planned secondary transport
 
 The following changes are planned and are not part of this checkpoint.
-
-Material-aware sunlight visibility should reuse `traceShadowQuery<TComposition>()` in `trace_transport.slang`. It already evaluates coverage, certified opaque blockers, thin transmission, and volume boundaries. Extract the ray traversal loop from `traceVisibility()` into a shared helper taking a ray, initial absorption/IOR, and random seed. Surface lighting supplies its normal-offset origin; fog supplies its sample position. Preserve RGB transmission, the secondary-geometry mask, and scene-relative coordinates.
-
-The standalone fog compute shader does not have the composed coverage/surface/volume dispatch or retained geometry roots. Add a fog-lighting raygen through `WorldShaderCompiler` and `RtPipeline`, with sample inputs and RGB visibility outputs retained by the captured frame. Fog integration and composition can remain compute passes. Keep material interpretation inside the renderer; do not duplicate Minecraft alpha sampling in the fog pass. Measure traversal cost and foliage stability before selecting lighting resolution and temporal update frequency.
 
 Secondary fog needs a generic retained spatial-medium binding in the world frame roots. Evaluate segment scattering and transmittance in `build_stable_planes.slang` before delta branches continue, and in `runFillStablePlanes()` in `path_tracer.slang` for later traced segments. Add incoming throughput times segment scattering to radiance, then multiply throughput by segment transmittance.
 

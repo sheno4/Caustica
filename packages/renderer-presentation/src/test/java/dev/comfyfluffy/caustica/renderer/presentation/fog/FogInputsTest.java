@@ -29,7 +29,7 @@ class FogInputsTest {
     @Test
     void reflectedPushRecordPreservesAddressMatricesAndPadding() {
         var v = new Float4(1, 2, 3, 4);
-        var record = new FogPushData(0x123456789abcdef0L, 1, 2, 3, 4, 5, 6, 0, 48,
+        var record = new FogPushData(0x123456789abcdef0L, 0x1230L, 0x4560L, 1, 2, 3, 4, 5, 6, 0, 48,
                 v, v, v, v, v, v, v, v, v, v, v, v);
         ByteBuffer buffer = ByteBuffer.allocate(FogPushData.BYTE_SIZE).order(ByteOrder.nativeOrder());
         for (int i = 0; i < buffer.capacity(); i++) buffer.put(i, (byte) 0xff);
@@ -37,7 +37,9 @@ class FogInputsTest {
         assertTrue(FogPushData.BYTE_SIZE <= 256);
         assertEquals(0x123456789abcdef0L, buffer.getLong(FogPushData.FIELD_ADDRESS_OFFSET));
         assertEquals(48, buffer.getInt(FogPushData.STEPS_OFFSET));
-        assertEquals(0, buffer.getLong(40));
+        assertEquals(0x1230L, buffer.getLong(FogPushData.VISIBILITY_RAYS_ADDRESS_OFFSET));
+        assertEquals(0x4560L, buffer.getLong(FogPushData.VISIBILITY_RESULTS_ADDRESS_OFFSET));
+        assertEquals(0, buffer.getLong(56));
         assertEquals(4, buffer.getFloat(FogPushData.CLIP_W_OFFSET + 12));
         assertEquals(3, buffer.getFloat(FogPushData.TLAS_CAMERA_OFFSET + 8));
     }

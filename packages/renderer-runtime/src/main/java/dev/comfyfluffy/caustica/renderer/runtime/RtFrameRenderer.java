@@ -106,6 +106,8 @@ public final class RtFrameRenderer {
         final ResourceOwners resources = new ResourceOwners();
         RtFrameInput frame;
         RtRetainedSceneBackend.PreparedTrace trace;
+        RtProgramBackend.Published program;
+        VulkanDeviceAddress worldPushAddress;
 
         FrameExecution(GraphicsUse graphicsUse) {
             this.graphicsUse = graphicsUse;
@@ -596,6 +598,8 @@ public final class RtFrameRenderer {
                 trace = scenes.finishTrace(entryScene, graphicsUse, lighting);
             }
             execution.trace = trace;
+            execution.program = program;
+            execution.worldPushAddress = pushBuf.deviceAddress();
             ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
             writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, pathScratch, program);
             program.writeCompositionDataAddress(roots);
@@ -732,7 +736,24 @@ public final class RtFrameRenderer {
                 new float[] { execution.frame.cameraOffset().x(), execution.frame.cameraOffset().y(),
                         execution.frame.cameraOffset().z() },
                 new float[] { execution.frame.jitterX(), execution.frame.jitterY() },
-                execution.frame.preExposure(), ui);
+                execution.frame.preExposure(), this::recordVisibility, ui);
+    }
+
+    private void recordVisibility(VkCommandBuffer commandBuffer, VulkanDeviceAddress rays,
+                                  VulkanDeviceAddress results, int width, int height) {
+        try (MemoryStack stack = MemoryStack.stackPush();
+             var ignored = RtDebugLabels.scope(context, commandBuffer, "material visibility")) {
+            ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
+            writeFrameRoots(roots, execution.worldPushAddress, execution.frame.snapshot(),
+                    traceResources().pathScratchBuffer(), execution.program);
+            execution.program.writeCompositionDataAddress(roots);
+            execution.trace.writeWorldRoots(roots);
+            roots.putLong(RtBindings.WORLD_VISIBILITY_RAYS_ADDRESS_OFFSET, rays.value());
+            roots.putLong(RtBindings.WORLD_VISIBILITY_RESULTS_ADDRESS_OFFSET, results.value());
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
+            execution.program.pipeline().trace(commandBuffer, width, height, roots, RtProgramBackend.VISIBILITY_RAYGEN_INDEX, execution.trace.hitTable());
+            VulkanBarriers.memoryBarrier(commandBuffer, stack);
+        }
     }
 
     private void writeFrameRoots(ByteBuffer roots, VulkanDeviceAddress worldPushAddress, FrameSnapshot snapshot,

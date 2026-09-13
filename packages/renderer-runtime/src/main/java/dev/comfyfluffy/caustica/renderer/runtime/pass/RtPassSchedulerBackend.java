@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.renderer.runtime.pass;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
@@ -144,6 +145,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             float[] cameraTlasPosition,
             float[] traceJitter,
             float preExposure,
+            VisibilityRecorder visibilityRecorder,
             UiState ui) {
         public FrameState {
             Objects.requireNonNull(commandBuffer, "commandBuffer");
@@ -163,6 +165,12 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             Objects.requireNonNull(postColorB, "postColorB");
             if (postColorA == postColorB) throw new IllegalArgumentException("post targets must be distinct");
         }
+    }
+
+    @FunctionalInterface
+    public interface VisibilityRecorder {
+        void record(VkCommandBuffer commandBuffer, VulkanDeviceAddress rays, VulkanDeviceAddress results,
+                    int width, int height);
     }
 
     public record UiState(
@@ -322,6 +330,14 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             }
 
             @Override public float[] traceJitter() { requireLive(); return state.traceJitter().clone(); }
+            @Override public void traceVisibility(VulkanDeviceAddress rays, VulkanDeviceAddress results,
+                                                  int width, int height) {
+                requireLive();
+                Objects.requireNonNull(rays, "rays");
+                Objects.requireNonNull(results, "results");
+                if (width <= 0 || height <= 0) throw new IllegalArgumentException("visibility extent must be positive");
+                state.visibilityRecorder().record(state.commandBuffer(), rays, results, width, height);
+            }
             @Override public float preExposure() { requireLive(); return state.preExposure(); }
             @Override public GpuImage primaryDepth() { requireLive(); return state.primaryDepth(); }
             @Override public GpuImage depth() { requireLive(); return state.depth(); }

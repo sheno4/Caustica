@@ -59,6 +59,22 @@ public interface PostEffectFrame extends PassFrame {
     /** Camera XYZ relative to the entry-scene acceleration structure's origin, in scene units. */
     float[] cameraTlasPosition();
 
+    /**
+     * Trace material-aware straight-line visibility through this frame's captured entry scene.
+     * Rays and results contain width * height records, with X varying fastest. Each ray is 48 bytes:
+     * float4(origin XYZ, minimum distance), float4(normalized direction XYZ, maximum distance), then
+     * float4(initial absorption RGB per scene unit, initial IOR). Origins are TLAS-relative and distances
+     * use scene units. A ray with maximum distance no greater than its minimum returns full visibility.
+     * Each 16-byte result is float4(RGB transmittance, 1), without exposure scaling.
+     *
+     * <p>The caller retains both addressable buffers for this frame and records their input writes before
+     * calling. This method orders earlier GPU writes before tracing and makes results ready for subsequent
+     * compute reads. Buffers must not overlap. Width and height are positive.
+     */
+    void traceVisibility(dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress rays,
+                         dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress results,
+                         int width, int height);
+
     /** Current scalar exposure, available only to ordinary post effects after exposure metering. */
     GpuImage exposureImage();
 }

@@ -247,29 +247,34 @@ public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
     return shadow;
 }
 
+public float3 traceVisibilityRay<TComposition : IComposition>(RayDesc ray, float3 absorption,
+        float ior, inout uint seed) {
+    float3 visibility = float3(1.0);
+    while (ray.TMax > ray.TMin) {
+        retainedLightRandom(seed);
+        ShadowPayload shadow = traceShadowQuery<TComposition>(ray, seed, absorption, ior);
+        if (shadow.hitDistance < 0.0) break;
+        visibility *= exp(-absorption * shadow.hitDistance) * shadow.transmission;
+        if (!any(visibility > 0.0)) return float3(0.0);
+        absorption = shadow.volumeAbsorption;
+        ior = shadow.volumeIor;
+        float advance = min(traceEpsilon(), ray.TMax - shadow.hitDistance);
+        visibility *= exp(-absorption * advance);
+        ray.Origin += ray.Direction * (shadow.hitDistance + advance);
+        ray.TMax -= shadow.hitDistance + advance;
+    }
+    return visibility * exp(-absorption * ray.TMax);
+}
+
 public float3 traceVisibility<TComposition : IComposition>(PackedPathSegment path, WorldHit hit,
         DirectLightSample selected, inout uint seed) {
-    float3 visibility = float3(1.0);
     RayDesc ray;
     ray.Origin = hit.position + hit.geometricNormal
             * (dot(hit.geometricNormal, selected.direction) >= 0.0 ? 2.0 : -2.0) * traceEpsilon();
     ray.Direction = selected.direction;
     ray.TMin = traceEpsilon();
     ray.TMax = selected.maximumDistance;
-    while (ray.TMax > ray.TMin) {
-        retainedLightRandom(seed);
-        ShadowPayload shadow = traceShadowQuery<TComposition>(ray, seed, path.absorption, path.ior);
-        if (shadow.hitDistance < 0.0) break;
-        visibility *= exp(-path.absorption * shadow.hitDistance) * shadow.transmission;
-        if (!any(visibility > 0.0)) return float3(0.0);
-        path.absorption = shadow.volumeAbsorption;
-        path.ior = shadow.volumeIor;
-        float advance = min(traceEpsilon(), ray.TMax - shadow.hitDistance);
-        visibility *= exp(-path.absorption * advance);
-        ray.Origin += ray.Direction * (shadow.hitDistance + advance);
-        ray.TMax -= shadow.hitDistance + advance;
-    }
-    return visibility * exp(-path.absorption * ray.TMax);
+    return traceVisibilityRay<TComposition>(ray, path.absorption, path.ior, seed);
 }
 
 public struct TraceDirect {

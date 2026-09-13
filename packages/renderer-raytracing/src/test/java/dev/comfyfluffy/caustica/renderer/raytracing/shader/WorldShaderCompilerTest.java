@@ -114,6 +114,10 @@ final class WorldShaderCompilerTest {
             assertVulkan14(cache.resolve("fill-stable-planes-ser.spv"), reordered);
             assertShadowTraceRouting(ordinary);
             assertShadowTraceRouting(reordered);
+            byte[] visibility = compiler.compileVisibilityRays();
+            assertSpirv(visibility);
+            assertVulkan14(cache.resolve("visibility-rays.spv"), visibility);
+            assertShadowTraceRouting(visibility);
         }
     }
 

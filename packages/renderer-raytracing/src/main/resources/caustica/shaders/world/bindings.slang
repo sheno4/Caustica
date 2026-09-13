@@ -50,6 +50,8 @@ public struct WorldBindingRoots {
     public uint nrdSignalEncoding;
     public float reconstructionMicroJitterScale;
     public uint64_t stablePlaneBufferAddress;
+    public uint64_t visibilityRaysAddress;
+    public uint64_t visibilityResultsAddress;
 };
 
 public RaytracingAccelerationStructure worldAccelerationStructure() {

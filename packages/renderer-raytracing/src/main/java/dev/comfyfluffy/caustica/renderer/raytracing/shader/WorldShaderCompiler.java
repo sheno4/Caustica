@@ -38,6 +38,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     public static final String CLOSEST_HIT_MODULE = "closest_hit";
     public static final String SHADOW_CLOSEST_HIT_MODULE = "shadow_closest_hit";
     public static final String BUILD_STABLE_PLANES_MODULE = "build_stable_planes";
+    public static final String VISIBILITY_RAYS_MODULE = "visibility_rays";
     public static final String FILL_STABLE_PLANES_MODULE = "fill_stable_planes";
     public static final String FILL_STABLE_PLANES_SER_MODULE = "fill_stable_planes_ser";
     public static final String RADIANCE_ANY_HIT_MODULE = "radiance_any_hit_rahit";
@@ -58,7 +59,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang", "guide.rmiss.slang",
             "shadow_closest_hit.slang", "shadow.rmiss.slang", "shadow_blocker.slang",
             "retained_lights.slang", "surface_bsdf.slang", "path_queue_types.slang",
-            "trace_transport.slang", "path_tracer.slang", "retained_trace_policy.slang",
+            "trace_transport.slang", "visibility_rays.slang", "path_tracer.slang", "retained_trace_policy.slang",
             "retained_trace_ordinary.slang", "retained_trace_reordered.slang", "stable_planes.slang",
             "stable_plane_types.slang", "nrd_signals.slang");
     private static final List<String> API_MODULES = List.of(
@@ -170,6 +171,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     public byte[] compileRadianceAnyHit() { return compileSpecialized(RADIANCE_ANY_HIT_MODULE, ENTRY_POINT); }
     public byte[] compileShadowAnyHit() { return compileSpecialized(SHADOW_ANY_HIT_MODULE, ENTRY_POINT); }
     public byte[] compileBuildStablePlanes() { return compileSpecialized(BUILD_STABLE_PLANES_MODULE, ENTRY_POINT); }
+    public byte[] compileVisibilityRays() { return compileSpecialized(VISIBILITY_RAYS_MODULE, ENTRY_POINT); }
     public byte[] compileFillStablePlanes(boolean reordered) {
         return compileSpecialized(reordered ? FILL_STABLE_PLANES_SER_MODULE : FILL_STABLE_PLANES_MODULE, ENTRY_POINT);
     }

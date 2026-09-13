@@ -36,6 +36,8 @@ public final class FogPass implements Pass<PostEffectFrame> {
             Option.range("fog.resolution-divisor", 4.0f, 8.0f, 8.0f).inGroup(GROUP).step(4.0);
     public static final Option<Float> DEBUG = Option.range("fog.debug", 0.0f, 2.0f, 0.0f).inGroup(GROUP).step(1.0);
     public static final List<Option<?>> OPTIONS = List.of(ENABLED, DENSITY, RESOLUTION_DIVISOR, DEBUG);
+    private static final int STEPS = 48;
+    private static final int VISIBILITY_SAMPLES = (STEPS + 3) / 4;
 
     private final GpuDevice gpu;
     private final ResourceFactory resources;
@@ -47,6 +49,8 @@ public final class FogPass implements Pass<PostEffectFrame> {
     private ResourceOwner fieldOwner;
     private VmaImage2D fog;
     private VmaImage2D distance;
+    private VmaMappedBuffer visibilityRays;
+    private VmaMappedBuffer visibilityResults;
     private ResourceOwner imagesOwner;
 
     public FogPass(PostEffectSetup setup, ResourceFactory resources, Supplier<OptionValues> options,
@@ -76,6 +80,10 @@ public final class FogPass implements Pass<PostEffectFrame> {
         if (rebuilt) ComputeSynchronization.initializeImages(frame.commandBuffer(), List.of(fog, distance));
         GpuImage scene = frame.sceneColor();
         GpuImage target = frame.acquireSceneColorOutput();
+        dispatch(frame, medium, values.get(DENSITY), values.get(DEBUG), scene,
+                fog.storageIndex().value(), fog.width(), fog.height(), 2);
+        frame.traceVisibility(visibilityRays.deviceAddressAt(0), visibilityResults.deviceAddressAt(0),
+                width * VISIBILITY_SAMPLES, height);
         dispatch(frame, medium, values.get(DENSITY), values.get(DEBUG), scene,
                 fog.storageIndex().value(), fog.width(), fog.height(), 0);
         ComputeSynchronization.betweenDispatches(frame.commandBuffer());
@@ -116,9 +124,21 @@ public final class FogPass implements Pass<PostEffectFrame> {
             throw failure;
         }
         ResourceOwner owner;
+        VmaMappedBuffer rays = null;
+        VmaMappedBuffer results = null;
         try {
-            owner = resources.create(() -> new ResourceLifetime(replacement::close, replacementDistance::close).close());
+            long rayCount = (long) width * height * VISIBILITY_SAMPLES;
+            rays = VmaMappedBuffer.create(gpu, rayCount * 48, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    "Fog visibility rays");
+            results = VmaMappedBuffer.create(gpu, rayCount * 16, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    "Fog visibility results");
+            var rayOwner = rays;
+            var resultOwner = results;
+            owner = resources.create(() -> new ResourceLifetime(replacement::close, replacementDistance::close,
+                    rayOwner::close, resultOwner::close).close());
         } catch (RuntimeException | Error failure) {
+            if (rays != null) rays.close();
+            if (results != null) results.close();
             new ResourceLifetime(replacement::close, replacementDistance::close).close();
             throw failure;
         }
@@ -126,6 +146,8 @@ public final class FogPass implements Pass<PostEffectFrame> {
         imagesOwner = owner;
         fog = replacement;
         distance = replacementDistance;
+        visibilityRays = rays;
+        visibilityResults = results;
         return true;
     }
 
@@ -141,11 +163,12 @@ public final class FogPass implements Pass<PostEffectFrame> {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var push = stack.malloc(FogPushData.BYTE_SIZE).order(ByteOrder.nativeOrder());
             new FogPushData(fieldBuffer.deviceAddressAt(0).value(),
+                    visibilityRays.deviceAddressAt(0).value(), visibilityResults.deviceAddressAt(0).value(),
                     targetIndex,
                     scene.descriptor(GpuImageDescriptorKind.SAMPLED).index().value(),
                     frame.primaryDepth().descriptor(GpuImageDescriptorKind.SAMPLED).index().value(),
                     fog.sampledIndex().value(), mode == 0 ? distance.storageIndex().value() : distance.sampledIndex().value(),
-                    frame.entrySceneTlasDescriptor().index().value(), mode, 48,
+                    frame.entrySceneTlasDescriptor().index().value(), mode, STEPS,
                     column(matrix, 0), column(matrix, 4), column(matrix, 8), column(matrix, 12),
                     new Float4(wrapped(camera.x()), wrapped(camera.y()), wrapped(camera.z()), medium.windPhase()),
                     new Float4((float) (field.originX() - camera.x()), (float) (field.originY() - camera.y()),
