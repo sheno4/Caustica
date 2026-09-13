@@ -147,7 +147,7 @@ public final class FogPass implements Pass<PostEffectFrame> {
                     fog.sampledIndex().value(), mode == 0 ? distance.storageIndex().value() : distance.sampledIndex().value(),
                     frame.entrySceneTlasDescriptor().index().value(), mode, 48,
                     column(matrix, 0), column(matrix, 4), column(matrix, 8), column(matrix, 12),
-                    new Float4(wrapped(camera.x()), wrapped(camera.y()), wrapped(camera.z()), medium.windTime()),
+                    new Float4(wrapped(camera.x()), wrapped(camera.y()), wrapped(camera.z()), medium.windPhase()),
                     new Float4((float) (field.originX() - camera.x()), (float) (field.originY() - camera.y()),
                             (float) (field.originZ() - camera.z()), field.spacing()),
                     new Float4(field.sizeX(), field.sizeY(), field.sizeZ(), jitter[0]),

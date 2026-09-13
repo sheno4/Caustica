@@ -5,9 +5,10 @@ package dev.comfyfluffy.caustica.renderer.presentation.fog;
  * {@code lightRadiance} carries integrated distant illuminance in lux, multiplied by the scattering
  * phase function in inverse steradians; {@code ambientRadiance} carries ambient luminance in cd/m².
  * {@code lightDirection} is a unit vector pointing toward the distant light.
+ * {@code windPhase} is a periodic animation phase in radians, used with integer noise harmonics.
  */
 public record FogFrame(FogField field, float timeDensity, float layerHeight, float heightFalloff,
-                       float windTime, float[] lightDirection, float[] lightRadiance, float[] ambientRadiance) {
+                       float windPhase, float[] lightDirection, float[] lightRadiance, float[] ambientRadiance) {
     public FogFrame {
         lightDirection = lightDirection.clone();
         lightRadiance = lightRadiance.clone();

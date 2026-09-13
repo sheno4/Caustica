@@ -13,9 +13,11 @@ import net.minecraft.world.level.levelgen.Heightmap;
 
 /** Captures a bounded number of loaded columns per render frame and publishes only complete grids. */
 final class MinecraftFogCapture {
-    private static final int WIDTH = 17;
-    private static final int SPACING = 32;
-    private static final int COLUMNS_PER_FRAME = 8;
+    static final int WIDTH = 33;
+    static final int SPACING = 32;
+    static final int RADIUS = (WIDTH - 1) * SPACING / 2;
+    static final int COLUMNS_PER_FRAME = 32;
+    private static final int CENTER_SPACING = SPACING * 2;
     private ClientLevel level;
     private MinecraftFogFrame.Grid published;
     private int originX;
@@ -31,11 +33,9 @@ final class MinecraftFogCapture {
             clear();
             level = current;
         }
-        int nextX = (int) Math.floor(cameraX / 64.0) * 64 - 256;
-        int nextZ = (int) Math.floor(cameraZ / 64.0) * 64 - 256;
         if (coefficients == null) {
-            originX = nextX;
-            originZ = nextZ;
+            originX = captureOrigin(cameraX);
+            originZ = captureOrigin(cameraZ);
             originY = level.getMinY();
             height = (level.getHeight() + SPACING - 1) / SPACING + 1;
             coefficients = new float[WIDTH * WIDTH * height * MinecraftFogFrame.Grid.COMPONENTS];
@@ -51,6 +51,11 @@ final class MinecraftFogCapture {
             terrainHeights = null;
         }
         return published;
+    }
+
+    /** Nearest aligned center bounds the initial camera offset to half the center spacing. */
+    static int captureOrigin(double cameraCoordinate) {
+        return (int) (Math.round(cameraCoordinate / CENTER_SPACING) * CENTER_SPACING) - RADIUS;
     }
 
     void clear() {

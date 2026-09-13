@@ -36,7 +36,13 @@ final class MinecraftFogInputs {
         float sky = celestial.lighting().sunIlluminanceLux() * daylight * 0.015f
                 + celestial.lighting().nightAirglowLuminanceCdM2();
         return new FogFrame(field, frame.dailyDensity(), celestial.seaLevel() + 6, 18,
-                (float) (frame.animationSeconds() % 65536.0), direction, illuminance,
+                windPhase(frame.animationSeconds()), direction, illuminance,
                 new float[]{sky * 0.7f, sky * 0.85f, sky});
+    }
+
+    /** Radians in a 65,536-second cycle; integer shader harmonics stay continuous at the wrap. */
+    static float windPhase(double animationSeconds) {
+        double cycles = animationSeconds / 65536.0;
+        return (float) ((cycles - Math.floor(cycles)) * (2.0 * Math.PI));
     }
 }

@@ -41,10 +41,9 @@ float density(float3 relative) {
     float ground = exp(-max(aboveGround,0.0) / lerp(6.0,18.0,saturate(v.y)));
     // The coarse outdoor field excludes points below its terrain surface.
     float outdoor = smoothstep(-2.0,2.0,aboveGround);
-    // Periodic harmonics keep world-anchored noise continuous when the camera origin wraps.
-    float3 n = (relative + pc.camera.xyz) * (6.28318530718 / 4096.0)
-             + float3(pc.camera.w * 0.0008,0,pc.camera.w * 0.0004);
-    n *= 23.0;
+    // Integer spatial and wind-phase harmonics remain periodic across both coordinate wraps.
+    float3 n = (relative + pc.camera.xyz) * (23.0 * 6.28318530718 / 4096.0)
+             + float3(pc.camera.w * 192.0,0,pc.camera.w * 96.0);
     float noise = 0.65 + 0.35 * sin(n.x + sin(n.z)) * sin(n.z + n.y);
     return pc.medium.x * v.x * v.z * outdoor * (layer * 0.8 + ground * 0.2) * noise;
 }
@@ -68,7 +67,7 @@ public void runFog(uint3 id) {
     float distance = distanceAt(uv);
     if(pc.mode == 0) {
         float3 direction = normalize(unproject(uv,0.0001));
-        float stepLength = distance / pc.steps;
+        float stepLength = pc.medium.w / pc.steps;
         float transmittance = 1.0;
         float3 scattering = 0.0;
         float visibility = 1.0;
@@ -76,10 +75,14 @@ public void runFog(uint3 id) {
         float g = 0.45;
         float phase = (1.0-g*g)/(12.5663706*pow(1.0+g*g-2.0*g*cosine,1.5));
         for(uint i=0;i<pc.steps;i++) {
-            float3 p = direction*((i+0.5)*stepLength);
+            float segmentStart = i*stepLength;
+            if(segmentStart >= distance) break;
+            float segmentLength = min(stepLength,distance-segmentStart);
+            // Surface depth changes only the final segment; preceding samples keep their distances.
+            float3 p = direction*(segmentStart+0.5*segmentLength);
             float sigma = density(p);
             if((i & 3) == 0) visibility = shadow(p);
-            float segmentT = exp(-sigma*stepLength);
+            float segmentT = exp(-sigma*segmentLength);
             float3 source = pc.ambientRadiance.xyz + pc.lightRadiance.xyz * (phase*visibility);
             scattering += transmittance * (1.0-segmentT) * source * 0.95;
             transmittance *= segmentT;
