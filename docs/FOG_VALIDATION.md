@@ -1,12 +1,14 @@
 # Fog validation — 2026-09-14
 
-The user reports unresolved planes and poor performance with the 96-sample result. The earlier narrow-shaft mean-placement and zero-hole checks were insufficient and must not be read as visual acceptance. Path-volume mode is being removed at the user's request. The measurements below are historical evidence for the tested binaries, including the removed mode; they do not establish that the current post fog solves the reported problem.
+The user reports unresolved planes and poor performance with the 96-sample result. The earlier narrow-shaft mean-placement and zero-hole checks were insufficient and must not be read as visual acceptance. Path-volume mode has been removed at the user's request. Historical measurements below retain their tested binaries and modes; they do not establish that the current post fog solves every reported problem.
+
+The current post pass stores cumulative scattering and transmittance at depth-cell boundaries. Each output pixel evaluates neighboring cumulative rays at its own surface distance, avoiding rescaling a neighboring surface's already integrated fog. It reprojects local light visibility across frames, clamps history to current neighboring visibility, and recomputes four-point cell-average density each frame. The default is 64 quadratic depth cells; `fog.samples` exposes denser comparisons. Empty cells skip visibility-history filtering. See [FOG_VISUAL_TESTS.md](FOG_VISUAL_TESTS.md) for the reference comparison, remaining placement failure, and sparse 4K motion observations.
 
 The transparent-shadow continuation fix eliminated repeated same-triangle traversal in the four recorded instrumented routes. That bounded improvement does not explain or resolve all remaining fog cost and appearance failures.
 
 ## Active reproduction
 
-Use `fog.enabled` for off/post comparisons, with `fog.density`, `fog.resolution-divisor` and `fog.debug`. Debug1 is dimensionless transmittance; debug2 is scattering times pre-exposure. There is no active path-mode recipe. See [FOG_VISUAL_TESTS.md](FOG_VISUAL_TESTS.md) and [FOG_SHAFT_TEST.md](FOG_SHAFT_TEST.md), including the stronger continuous-motion and banding requirements.
+Use `fog.enabled` for off/post comparisons, with `fog.density`, `fog.resolution-divisor`, `fog.samples` and `fog.debug`. Debug 1 is dimensionless transmittance; debug 2 is scattering times pre-exposure. There is no active path-mode recipe. See [FOG_VISUAL_TESTS.md](FOG_VISUAL_TESTS.md) and [FOG_SHAFT_TEST.md](FOG_SHAFT_TEST.md), including the stronger continuous-motion and banding requirements.
 
 Record timing separately from image readbacks. Raw bundles contain same-frame guides, radiance and captured projection; separate PNGs are different frames. Historical tables preserve their original modes and configuration for attribution.
 
@@ -148,3 +150,49 @@ Both integrators pass the within-run T and lit/dark mean-placement controls. The
 | 96 quadratic steps | 0 / 326,678 (0%) | 0 / 343,712 (0%) |
 
 A false-dark pixel has signed mean-RGB open-minus-closed scattering below 1% of that view's mean lit response. This measures holes separately from average placement. Inspected candidate diagnostic previews retain discrete intensity bands, despite eliminating holes by this definition. Baseline and candidate froze different procedural game times: each roof pair isolates visibility, but their brightness difference cannot be attributed solely to integration. These two poses do not establish perfect shaft reconstruction, flicker-free motion, or path-mode direct-scattering placement. See [FOG_SHAFT_TEST.md](FOG_SHAFT_TEST.md) for the reusable protocol and limitations. Final candidate performance is measured separately.
+
+
+### Rework timeline capture: incomplete counters, no reproduced hitch
+
+The later `tmp/fog-review/nsight-rework-timeline/` attempt used explicit HES 0 and RTSP false configuration. Its native trace exists, but Nsight reported dropped periodic sampling data and timestamp exhaustion (1,037,089 timestamps needed against the one-million allocation). The return teleport timed out; the companion JFR was stopped in cleanup. The large regimes export was not loaded into memory or used for conclusions. The export process (ngfx PID 21648) was stopped at approximately 12:55:40 JST after its working set reached 16 GB. The first four final normal-flight intervals overlapped export and are excluded from clean performance comparisons; both modes of the first two heading pairs were repeated after export stopped.
+
+The completed companion JFR has 914 GPU frames. Fill averages 4.542 ms, p99 7.345 ms and maximum 7.850 ms; build maximum is 3.829 ms, world tracing maximum 10.991 ms and reconstruction maximum 5.770 ms. Scene effects remain below 0.006 ms with fog off. This attempt did not reproduce the earlier 55–70 ms fill spikes.
+
+Selected small BASE exports contain 500 columns, with 398 positive build/fill durations and 102 zero placeholders. The largest exported fill duration is 5.942 ms, but its corresponding SM, DRAM and L2 throughput values are all unavailable. Only 99 of 500 columns have finite values for these throughput metrics; 401 are nonfinite. They therefore cannot explain the worst exported fill interval, let alone an uncaptured hitch. Ready-mesh scope durations also include an anomalous value growing to 6,123.71 ms; timestamp loss prevents treating that as a physical acceleration-structure build duration. Per-column scope durations provide no reliable start/end overlap evidence here.
+
+No causal claim about asynchronous builds, GPU throughput saturation, or driver stalls follows from this incomplete capture. The compact `credible-evidence.json`, `partial-export-analysis.json` and completed JFR summary in the attempt directory preserve the observed coverage and limits. The separate normal and diagnostic flight recordings remain the performance evidence.
+
+### Temporal fog checkpoint: clean 4K flights before four-point density integration
+
+The authoritative union is `tmp/fog-review/temporal-final-flight4k/clean-union-summary.json`: the final four routes from that directory plus four repeated routes from `temporal-final-flight4k-clean-repeat/`. The first four original intervals are excluded because the offline Nsight exporter overlapped them; their raw recordings remain available. Both source manifests completed with shader diagnostics disabled. All 11,983 GPU frames in the clean union are retained, including flight, settling and return; none were filtered by duration. Per-route raw exports, full mean/p95/p99/max statistics and the three worst frames with all GPU scopes accompany each summary.
+
+| Route and game time | GPU frames | Fill mean / p99 / max (ms) | World max (ms) | Scene effects mean / p99 / max (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Off, yaw 47.52295, 1000 | 1,534 | 6.283 / 11.352 / 13.308 | 17.211 | 0.001 / 0.002 / 0.125 |
+| Post, yaw 47.52295, 1000 | 1,399 | 6.985 / 12.513 / 14.154 | 18.150 | 2.368 / 3.037 / 3.305 |
+| Off, yaw −43, 1000 | 1,545 | 6.211 / 10.967 / 11.525 | 16.080 | 0.001 / 0.002 / 0.003 |
+| Post, yaw −43, 1000 | 1,424 | 6.975 / 12.306 / 13.002 | 16.738 | 2.331 / 2.932 / 3.226 |
+| Off, yaw 137, 12000 | 1,562 | 6.063 / 10.879 / 11.724 | 16.137 | 0.001 / 0.002 / 0.139 |
+| Post, yaw 137, 12000 | 1,434 | 6.549 / 11.804 / 12.904 | 17.381 | 2.399 / 3.007 / 3.238 |
+| Off, yaw −137, 12000 | 1,607 | 5.582 / 10.059 / 11.243 | 14.098 | 0.001 / 0.002 / 0.037 |
+| Post, yaw −137, 12000 | 1,478 | 5.849 / 10.893 / 11.624 | 15.209 | 2.408 / 3.042 / 3.607 |
+
+Against the same commanded routes in `prefix-flight4k/`, temporal post scene-effects means increase by 0.948, 0.894, 0.957 and 0.947 ms respectively. The measurements include all streaming activity, and matching poses do not imply matching terrain workloads. World, post/display and scene-effects scopes must not be added indiscriminately: nested scopes overlap. The largest clean fill interval is 14.154 ms; no 55–70 ms or hundred-millisecond fill interval occurred in this final union. Earlier uninstrumented 55–70 ms observations remain real evidence of occasional stalls, so these finite recordings do not prove that every performance problem is eliminated.
+
+Temporal history filters local directional-light visibility, not density or cumulative radiance. Four neighboring prefixes still interpolate spatially, and a 64-cell quadratic grid has distant cells up to 7.94 m deep. Its deterministic density midpoint can miss a narrow occupied region; the independent `test_fog_density_quadrature.py` counterexample measures a true integral of 1.5, midpoint zero and four-point Gauss 1.6475, with 74% lower RMS error over translated bands. This establishes a sampling limitation, not the cause of any particular screenshot artifact. These timing measurements used midpoint density; the subsequent overhead comparison motivated four-point integration in the current implementation. Neighborhood clamping limits stale shadow history, but mixed visibility boundaries and coarse spatial sampling can still soften shafts or leave motion artifacts. Visual acceptance therefore remains separate from the absence of large spikes in this benchmark.
+
+
+### Final four-point density build: clean 4K flights
+
+`tmp/fog-review/gauss-density-flight4k/` contains the final eight off/post flight, turn and overhead-return recordings. All 11,903 source GPU frames are retained, with no exclusions, image readbacks or Nsight activity during recording. Every route verifies an actual 3840 x 2160 framebuffer before flight. The manifest and full summaries retain settings, terrain conditions and all source-frame scopes. Times are GPU milliseconds, not displayed frame cadence.
+
+| Post route yaw / daytime | Fog mean | Fog p99 | Fog max | Mean change from midpoint checkpoint |
+| --- | ---: | ---: | ---: | ---: |
+| 47.52295 / 1000 | 2.519 | 3.116 | 3.451 | +0.151 |
+| -43 / 1000 | 2.549 | 3.168 | 3.510 | +0.218 |
+| 137 / 12000 | 2.561 | 3.156 | 3.356 | +0.162 |
+| -137 / 12000 | 2.561 | 3.212 | 3.720 | +0.154 |
+
+Across all eight routes, fill maximum is 12.711 ms, world/resources/trace maximum 16.862 ms, build maximum 3.979 ms and DLSS reconstruction maximum 5.326 ms. No earlier 55-70 ms fill spike recurred in this run. This is bounded evidence, not proof that every intermittent stall is eliminated. Matching commanded routes do not imply identical streamed workloads, and nested GPU scopes must not be added twice. `report.md`, `summary.json`, complete raw event exports and per-source-frame maps preserve the full results.
+
+The density change passes renderer-presentation checks, shader compilation/reflection and 75 Python tests. Source review verified the temporary density/prefix alias, per-batch bounds, GPU memory barriers and physical units. Final shaft and overhead results, remaining approximation limits and the final sparse motion capture are recorded in [FOG_VISUAL_TESTS.md](FOG_VISUAL_TESTS.md). Original test settings, copied-world pose and clock were restored, inputs released and the client stopped gracefully.

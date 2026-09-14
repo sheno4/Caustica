@@ -55,29 +55,57 @@ Transmittance diagnostics require post mode, bloom disabled and `fog.debug=1`; c
 
 ## Paired 4K flying performance
 
-`check_fog_flight.py` records eight routes: off/post at each of four headings and times. It defaults to the initial player position; an explicit origin makes repeated runs comparable. Each route requires a3840x2160 framebuffer and drained terrain before recording, flies200 ticks at spectator speed0.2 while turning8degrees/second, waits120frames, returns to its origin at pitch65, and records600moreframes. These intervals contain no image readbacks. Inspect actual elapsed distance/camera poses and newly queued terrain in the manifest; the initial drain does not imply flight streaming is absent.
+`check_fog_flight.py` records eight routes: off/post at each of four headings and times. It defaults to the initial player position; an explicit origin makes repeated runs comparable. Each route requires a 3840 x 2160 framebuffer and drained terrain before recording, flies 200 ticks at spectator speed 0.2 while turning 8 degrees/second, waits 120 frames, returns to its origin at pitch 65, and records 600 more frames. These intervals contain no image readbacks. Inspect actual elapsed distance/camera poses and newly queued terrain in the manifest; the initial drain does not imply flight streaming is absent.
 
 ```powershell
 uv run python tools/debug/check_fog_flight.py --copied-world YOUR_DISPOSABLE_SAVE --output tmp/fog-review/flight4k --origin -1632.065859 180 -6503.652155 --headings 47.52295 -43 137 -137 --times 1000 1000 12000 12000
 ```
 
-The earlier eight-route artifacts `tmp/fog-review/prefix-flight4k/` and `tmp/fog-review/temporal-flight4k-diagnostics/` use that explicit origin (approximately-1632,180,-6503), headings and times. The first is the uninstrumented prefix baseline; the second uses shadow traversal diagnostics. They are different instrumentation conditions and must not be compared as equal-cost performance measurements. For a separately instrumented binary add `--diagnostics`; that flag selects the extra JFR event, not shader instrumentation itself.
+The earlier eight-route artifacts `tmp/fog-review/prefix-flight4k/` and `tmp/fog-review/temporal-flight4k-diagnostics/` use that explicit origin (approximately -1632, 180, -6503), headings and times. The first is the uninstrumented prefix baseline; the second uses shadow traversal diagnostics. They are different instrumentation conditions and must not be compared as equal-cost performance measurements. For a separately instrumented binary add `--diagnostics`; that flag selects the extra JFR event, not shader instrumentation itself.
 
 The tool restores original input speed, pose, world time/progression, fog settings, window size and game mode in `finally`; failed flight capture still stops JFR. Begin with unfrozen ticks and no held keys. The manifest records completion separately from restoration success. Framebuffer dimensions are verified before every flight, while reconstruction and frame-generation settings remain recorded conditions from status.
 
 ## Temporal visibility pair: measured limits
 
-`tmp/fog-review/temporal-prefix-pair/` completed48 bundles with successful restoration and constant game time4692729. Candidate64 and reference512 samples share that frozen field, geometry, light and camera settings. All four count/view combinations have finite signals, zero false-dark pixels, median T0.992676 and open/closed T p99 difference0.
+`tmp/fog-review/temporal-prefix-pair/` completed 48 bundles with successful restoration and constant game time 4692729. The 64-sample candidate and 512-sample reference share that frozen field, geometry, light and camera settings. All four count/view combinations have finite signals, zero false-dark pixels, median T 0.992676 and open/closed T p99 difference 0.
 
-The64-sample first view **fails the unchanged strict dark-region placement test**: mean delta0.009478, standard error0.001693, or5.60SE against a5SE limit. The mean leakage is0.0627% of the lit response, but that small magnitude does not turn the failed criterion into a pass. The lateral64 view and both512 views pass the mean-placement test.
+The 64-sample first view **fails the unchanged strict dark-region placement test**: mean delta 0.009478, standard error 0.001693, or 5.60 SE against a 5 SE limit. The mean leakage is 0.0627% of the lit response, but that small magnitude does not turn the failed criterion into a pass. The lateral 64-sample view and both 512-sample views pass the mean-placement test.
 
-| Same-field64 versus512 comparison | First view | Lateral view |
+| Same-field 64 versus 512 comparison | First view | Lateral view |
 | --- | ---: | ---: |
 | Lit normalized mean absolute error | 4.710% | 4.568% |
 | Lit normalized p99 absolute error | 18.019% | 16.807% |
 | Lit normalized p99 residual curvature | 1.305% | 1.245% |
 | Lit normalized signed mean error | -0.328% | -0.667% |
 
-Inspected64-sample diagnostic previews show less fine grain than the earlier static-prefix previews; mild cloudy spatial noise remains, while512 is smoother. The earlier static-prefix pair measured13.678-14.895% lit mean absolute error against its own512 reference. However, the static and temporal experiments froze different procedural fields, so their difference does not isolate temporal accumulation as the cause. Each64/512 pair supports only its own same-field comparison.
+Inspected 64-sample diagnostic previews show less fine grain than the earlier static-prefix previews; mild cloudy spatial noise remains, while 512 is smoother. The earlier static-prefix pair measured 13.678-14.895% lit mean absolute error against its own 512-sample reference. However, the static and temporal experiments froze different procedural fields, so their difference does not isolate temporal accumulation as the cause. Each 64/512 pair supports only its own same-field comparison.
 
-The512 result is a denser stochastic reference, not proven converged truth. Neither low reference error nor zero holes establishes absolute radiance accuracy, absence of motion trails, or flicker-free flying. Three repeated captures yield a limited standard-error estimate; their temporal history can correlate samples. Keep the failed placement result, denser-reference limitations and separate continuous-motion/performance requirements alongside the apparent visual improvement.
+The 512-sample result is a denser stochastic reference, not proven converged truth. Neither low reference error nor zero holes establishes absolute radiance accuracy, absence of motion trails, or flicker-free flying. Three repeated captures yield a limited standard-error estimate; their temporal history can correlate samples. Keep the failed placement result, denser-reference limitations and separate continuous-motion/performance requirements alongside the apparent visual improvement.
+
+## Sparse 4K motion observations
+
+`tmp/fog-review/temporal-motion/` contains 16 completed same-frame depth/scattering bundles: a settled start, 12 moving observations and 3 after release. Captured camera positions travel 4.459 m by the final moving sample and 4.752 m by release; final yaw is 38.699 degrees. Raw source-frame gaps between moving samples are 10-17 frames. All inspected scattering components are finite. Contact and 1600-pixel previews show the shaft following the changed view without an obvious repeated 96-step band pattern in those images; mild mottled grain remains. These sparse observations cannot establish uninterrupted motion quality, absent trails, or flicker-free output.
+
+The stored `releaseSourceFrame=16893` came from stale `latestFrame` telemetry, while raw captures use source frames 47932-48234. Its recorded release offsets are invalid. The status frame count is a different counter and is not a replacement baseline. Labels `released-1`, `released-8` and `released-60` are requested minimum targets, not verified ages after release.
+
+The first and last released captures have identical captured camera positions and inverse projection matrices, with an actual raw source-frame gap of 98. After explicitly reducing 4K scattering by 2 x 2 area averaging to native 1920 x 1080 depth, 501319 stable physical-depth pixels give mean absolute difference 0.685834, or 0.4572% of reference mean radiance 149.999. Absolute p99 is 3.25; large edge outliers remain. This is a same-pose 98-frame comparison, not proof of 1-to-60-frame convergence or settling latency. Artifacts are `scattering-contact.png`, per-sample scattering previews and `motion-analysis.json` in that directory.
+
+
+## Overhead density integration and final shaft controls
+
+The 18 captures in `tmp/fog-review/overhead-prefix-pair/` compare 64 and 512 samples at the reported overhead pose, in 3840 x 2160, with constant procedural time. Transmittance previews expose distant bands in the midpoint-density candidate that are reduced in the dense reference. That observation motivated four-point Gauss density integration inside each cell. The cell's averaged density is computed once during ray preparation, stored temporarily in its forthcoming prefix slot, and consumed before that slot becomes cumulative transport. Shadow-ray count is unchanged.
+
+`tmp/fog-review/gauss-overhead-prefix-pair/` repeats the 18 captures with the density fix. All 746,496,000 inspected scalar components are finite. RGB is explicitly reduced by 2 x 2 area averaging to the native depth grid; a common 0.1% reverse-Z tolerance and depth-discontinuity exclusion retain 1,083,545 pixels. Default 64 versus dense 512 samples yield:
+
+| Signal | Mean absolute difference / reference scale | p99 absolute difference / reference scale |
+| --- | ---: | ---: |
+| Optical depth, `-log(T)` | 0.531% | Not computed |
+| Scattering | 0.843% | 11.097% |
+| Final scene | 1.776% | 12.921% |
+
+Mean absolute transmittance difference is about 0.000046. Scattering and scene comparisons remove captured pre-exposure; transmittance is dimensionless. Scene differences also include stochastic surface rendering and reconstruction. Inspected previews show reduced distant density bands, with residual coarse shadow differences. The midpoint and Gauss experiments use different frozen procedural fields, so their aggregate error difference is not an isolated causal accuracy measurement. Each candidate/reference pair shares its own field; neither 512-sample reference is proven converged. Partial-cell reconstruction still assumes homogeneous density, so sharp transitions remain an approximation limit.
+
+The final 64-sample roof controls in `tmp/fog-review/gauss-roof/` complete all 24 bundles with restoration. Both views pass the existing placement and non-vacuum controls, have median T 0.991211, open/closed T p99 difference zero, and zero false-dark pixels. Dark-region mean differences are 0.008617 and 0.004059, with standard errors 0.002993 and 0.001600. Mild grain remains in the diagnostic previews. Three potentially correlated repeats and two poses do not prove universal placement accuracy or flicker-free movement; the earlier failed view remains documented above.
+
+
+The final density build also repeats the sparse 4K movement capture in `tmp/fog-review/gauss-motion/`: 16 bundles, successful restoration, finite scattering and inspected contact previews without obvious repeated parallel bands in those views. Mild grain remains. The first and last released bundles have identical camera and inverse projection, separated by 80 actual source frames; 518,020 stable native-depth pixels give a mean scattering difference of 0.1908% of reference radiance (absolute p99 4.25). The capture helper uses minimum relative waits and reports actual raw gaps; it does not infer release age from stale telemetry. This remains sparse evidence, not a consecutive-frame flicker or motion-trailing guarantee.
