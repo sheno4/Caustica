@@ -116,7 +116,7 @@ public final class FogPass implements Pass<PostEffectFrame> {
         for (int firstStep = 0; firstStep < steps; firstStep += VISIBILITY_SAMPLES) {
             dispatch(frame, binding, values.get(DEBUG), scene,
                     fog.storageIndex().value(), fog.width(), fog.height(), 2, firstStep);
-            frame.traceVisibility(visibilityRays.deviceAddressAt(0), visibilityResults.deviceAddressAt(0),
+            frame.sampleVolumeLighting(visibilityRays.deviceAddressAt(0), visibilityResults.deviceAddressAt(0),
                     width * VISIBILITY_SAMPLES, height);
             dispatch(frame, binding, values.get(DEBUG), scene,
                     fog.storageIndex().value(), fog.width(), fog.height(), 0, firstStep);

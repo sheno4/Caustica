@@ -119,6 +119,10 @@ final class WorldShaderCompilerTest {
             assertSpirv(visibility);
             assertVulkan14(cache.resolve("visibility-rays.spv"), visibility);
             assertShadowTraceRouting(visibility);
+            byte[] volumeLighting = compiler.compileVolumeLighting();
+            assertSpirv(volumeLighting);
+            assertVulkan14(cache.resolve("volume-lighting.spv"), volumeLighting);
+            assertShadowTraceRouting(volumeLighting);
         }
     }
 

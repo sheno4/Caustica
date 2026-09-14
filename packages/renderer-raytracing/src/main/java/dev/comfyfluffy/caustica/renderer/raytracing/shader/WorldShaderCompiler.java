@@ -178,6 +178,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     public byte[] compileShadowAnyHit() { return compileSpecialized(SHADOW_ANY_HIT_MODULE, ENTRY_POINT); }
     public byte[] compileBuildStablePlanes() { return compileSpecialized(BUILD_STABLE_PLANES_MODULE, ENTRY_POINT); }
     public byte[] compileVisibilityRays() { return compileSpecialized(VISIBILITY_RAYS_MODULE, ENTRY_POINT); }
+    public byte[] compileVolumeLighting() { return compileSpecialized(VISIBILITY_RAYS_MODULE, "volumeLighting"); }
     public byte[] compileFillStablePlanes(boolean reordered) {
         return compileSpecialized(reordered ? FILL_STABLE_PLANES_SER_MODULE : FILL_STABLE_PLANES_MODULE, ENTRY_POINT);
     }

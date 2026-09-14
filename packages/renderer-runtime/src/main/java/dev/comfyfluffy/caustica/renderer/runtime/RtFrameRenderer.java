@@ -783,9 +783,10 @@ public final class RtFrameRenderer {
     }
 
     private void recordVisibility(VkCommandBuffer commandBuffer, VulkanDeviceAddress rays,
-                                  VulkanDeviceAddress results, int width, int height) {
+                                  VulkanDeviceAddress results, int width, int height, boolean volumeLighting) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             var ignored = RtDebugLabels.scope(context, commandBuffer, "material visibility")) {
+             var ignored = RtDebugLabels.scope(context, commandBuffer,
+                     volumeLighting ? "volume direct lighting" : "material visibility")) {
             ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
             writeFrameRoots(roots, execution.worldPushAddress, execution.frame.snapshot(),
                     traceResources().pathScratchBuffer(), execution.program);
@@ -797,10 +798,12 @@ public final class RtFrameRenderer {
             RtShadowDiagnostics.Reservation shadowCounters = null;
             if (RtShadowDiagnostics.ENABLED) {
                 shadowCounters = shadowDiagnostics.begin(context, commandBuffer, stack, execution.graphicsUse,
-                        telemetry.frameSerial(), "material visibility");
+                        telemetry.frameSerial(), volumeLighting ? "volume direct lighting" : "material visibility");
                 roots.putLong(RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET, shadowCounters.address().value());
             }
-            execution.program.pipeline().trace(commandBuffer, width, height, roots, RtProgramBackend.VISIBILITY_RAYGEN_INDEX, execution.trace.hitTable());
+            execution.program.pipeline().trace(commandBuffer, width, height, roots,
+                    volumeLighting ? RtProgramBackend.VOLUME_LIGHTING_RAYGEN_INDEX : RtProgramBackend.VISIBILITY_RAYGEN_INDEX,
+                    execution.trace.hitTable());
             if (shadowCounters != null) shadowCounters.copy(commandBuffer, stack, execution.graphicsUse);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
         }

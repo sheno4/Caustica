@@ -71,7 +71,7 @@ float4 fogPrefixAt(uint2 pixel, uint2 extent, float distance, float maximumDista
     float scatteringFraction = 1.0 - segmentT > 1e-5 ? (1.0 - partialT) / (1.0 - segmentT) : fraction;
     return float4(lerp(before.rgb, after.rgb, scatteringFraction), before.a * partialT);
 }
-float4 previousVisibility(float3 center, uint2 extent, float maximumDistance, float3 lightDirection) {
+float4 previousLighting(float3 center, uint2 extent, float maximumDistance, float3 lightDirection) {
     float4 q = pc.previousClipX * center.x + pc.previousClipY * center.y
              + pc.previousClipZ * center.z + pc.previousClipW;
     if (q.w <= 0.0) return 0.0;
@@ -124,8 +124,9 @@ public void runFog(uint3 id) {
             if (step < pc.steps) prefix[prefixBase+(step+1u)*w*h] = float4(0,0,0,sigma);
             uint base = (visibilityBase+j)*3;
             rays[base] = float4(p+pc.tlasCamera.xyz,pc.tlasCamera.w);
-            rays[base+1] = float4(medium.lightDirection.xyz,sigma > 0.0 ? medium.profile.w : 0.0);
-            rays[base+2] = float4(0,0,0,1);
+            rays[base+1] = float4(direction, 0.45);
+            uint seed = (id.x + id.y*w) * 0x9e3779b9u ^ step * 0x85ebca6bu ^ asuint(pc.mediumCamera.w) * 0xc2b2ae35u;
+            rays[base+2] = float4(uv, asfloat(seed), sigma > 0.0 ? 1.0 : 0.0);
         }
         return;
     }
@@ -142,11 +143,8 @@ public void runFog(uint3 id) {
         }
         uint prefixBase = id.x + id.y * w;
         if (firstStep == 0u) prefix[prefixBase] = accumulated;
-        float3 visibility = 1.0;
+        float3 lighting = 0.0;
         float4* visibilityResults = (float4*)pc.visibilityResultsAddress;
-        float cosine = dot(direction,medium.lightDirection.xyz);
-        float g = 0.45;
-        float phase = (1.0-g*g)/(12.5663706*pow(1.0+g*g-2.0*g*cosine,1.5));
         for(uint i=firstStep;i<min(firstStep+visibilityCount,pc.steps);i++) {
             float2 interval = fogInterval(i, medium.profile.w);
             float segmentLength = interval.y;
@@ -157,25 +155,25 @@ public void runFog(uint3 id) {
                 prefix[prefixBase+(i+1u)*w*h] = float4(scattering,transmittance);
                 continue;
             }
-            visibility = visibilityResults[visibilityBase+i-firstStep].rgb;
-            float4 previous = previousVisibility(p, uint2(w,h), medium.profile.w, medium.lightDirection.xyz);
-            float3 minimumVisibility = visibility, maximumVisibility = visibility;
+            lighting = visibilityResults[visibilityBase+i-firstStep].rgb;
+            float4 previous = previousLighting(p, uint2(w,h), medium.profile.w, medium.lightDirection.xyz);
+            float3 minimumLighting = lighting, maximumLighting = lighting;
             float4* rays = (float4*)pc.visibilityRaysAddress;
             for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
                 uint2 neighbor = uint2(clamp(int2(id.xy) + int2(x,y), int2(0), int2(w-1,h-1)));
                 uint sampleIndex = (neighbor.x + neighbor.y * w) * visibilityCount + i - firstStep;
-                if (rays[sampleIndex * 3u + 1u].w <= rays[sampleIndex * 3u].w) continue;
-                float3 currentVisibility = visibilityResults[sampleIndex].rgb;
-                minimumVisibility = min(minimumVisibility, currentVisibility);
-                maximumVisibility = max(maximumVisibility, currentVisibility);
+                if (rays[sampleIndex * 3u + 2u].w == 0.0) continue;
+                float3 currentLighting = visibilityResults[sampleIndex].rgb;
+                minimumLighting = min(minimumLighting, currentLighting);
+                maximumLighting = max(maximumLighting, currentLighting);
             }
-            // Current local visibility bounds retire stale shadows when an occluder changes.
-            previous.rgb = clamp(previous.rgb, minimumVisibility, maximumVisibility);
+            // Current local lighting bounds retire stale radiance when lights or occluders change.
+            previous.rgb = clamp(previous.rgb, minimumLighting, maximumLighting);
             float confidence = min(previous.a + 1.0, 8.0);
-            visibility = lerp(previous.rgb, visibility, 1.0 / confidence);
-            history[5u + id.x + id.y * w + i*w*h] = float4(visibility, confidence);
+            lighting = lerp(previous.rgb, lighting, 1.0 / confidence);
+            history[5u + id.x + id.y * w + i*w*h] = float4(lighting, confidence);
             float segmentT = exp(-sigma*segmentLength);
-            float3 source = (medium.ambientRadiance.xyz + medium.lightRadiance.xyz * (phase*visibility)) * pc.traceData.z;
+            float3 source = (medium.ambientRadiance.xyz + lighting) * pc.traceData.z;
             scattering += transmittance * (1.0-segmentT) * source * 0.95;
             transmittance *= segmentT;
             prefix[prefixBase+(i+1u)*w*h] = float4(scattering,transmittance);

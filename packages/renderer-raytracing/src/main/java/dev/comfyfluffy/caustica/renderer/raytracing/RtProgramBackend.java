@@ -33,6 +33,7 @@ import java.util.function.Consumer;
 /** Compiles engine program compositions and publishes complete descriptor-heap RT programs. */
 public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
     public static final int VISIBILITY_RAYGEN_INDEX = 2;
+    public static final int VOLUME_LIGHTING_RAYGEN_INDEX = 3;
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
 
     private final VulkanDeviceContext context;
@@ -159,7 +160,8 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             RtShaderCode shadowBlocker = new RtShaderCode("shadow-blocker",
                     shaderCompiler.compilePlain("shadow_blocker.slang", WorldShaderCompiler.ENTRY_POINT));
             RtShaderCode visibility = new RtShaderCode("visibility-rays", shaderCompiler.compileVisibilityRays());
-            pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill, visibility},
+            RtShaderCode volumeLighting = new RtShaderCode("volume-lighting", shaderCompiler.compileVolumeLighting());
+            pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill, visibility, volumeLighting},
                     new RtShaderCode[]{environment, shadowMiss}, closest, radiance, shadow, shadowClosest, shadowBlocker);
             return new Candidate(composition, shaderCompiler, table, pipeline);
         } catch (IOException | RuntimeException | Error failure) {

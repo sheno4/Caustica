@@ -466,6 +466,8 @@ final class PassSessionTest {
         @Override public boolean spatialMediumActive() { return false; }
         @Override public void traceVisibility(dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress rays,
                 dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress results, int width, int height) { }
+        @Override public void sampleVolumeLighting(dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress samples,
+                dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress results, int width, int height) { }
         @Override public float[] traceJitter() { return new float[2]; }
         @Override public float preExposure() { return 1.0f; }
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage primaryDepth() { return null; }

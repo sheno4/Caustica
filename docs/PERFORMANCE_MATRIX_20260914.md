@@ -4,7 +4,7 @@ The target is at least 50 FPS in most representative scenes with default setting
 
 ## Evidence and current limits
 
-Checkpoint `f9afcfb0` contains the preceding glass and contiguous fog-storage work. The next retained-light fog changes are not yet visually validated.
+Checkpoint `f9afcfb0` contains the preceding glass and contiguous fog-storage work. Checkpoint `3febf549` reduces terrain material storage and adds allocation captures.
 
 The last opened world is `caustica-glass-20260914`, a copy of New World (2). The recovered jungle position is approximately `(-2097.274, 125, -5657.979)`. Exact initial and pre-profiler camera states are retained in `tmp/jungle-initial.json` and `tmp/fog-local/pre-nsight-status.json`.
 
@@ -23,6 +23,14 @@ The third launch produced `tmp/fog-local/jungle-candidate-4k.ngfx-gputrace`, cop
 The reported leaf/vine-edge fog flashing requires comparison of primary depth, reconstructed color, fog transmittance, and fog scattering. The current post-reconstruction composite samples jittered primary depth; inconsistent foreground/background selection is a hypothesis. Final color alone cannot establish it.
 
 ## Workloads
+
+### Block-light fog validation
+
+The retained-light fog path samples the scene light distribution, evaluates the volume phase function and applies material-aware shadow transport. The controlled room in the copied world occupies `(-2106,90,-5650)` through `(-2088,101,-5624)`. The light panel is 35 glowstone blocks at z=-5625; a full stone wall at z=-5626 is the occlusion control. The camera faces the panel from approximately `(-2096.5,94,-5645.5)`.
+
+At 1600x900, fog density 4, divisor 4, 64 depth samples, manual exposure -10 EV and bloom disabled, same-frame raw bundles include diagnostic fog scattering, primary depth and reconstructed radiance. The night sequence is dark → lit → blocked → lit → dark, with three captures per condition. After undoing pre-exposure, central-ROI mean ACEScg luminance is 0 for both dark runs and the blocked run, 0.10731–0.10764 for the first lit run, and 0.11766–0.11834 for the repeated lit run. No nonfinite values were captured. The procedural medium continues animating, so these runs establish lighting response and occlusion, not a frozen-medium temporal convergence comparison.
+
+Evidence is in `tmp/fog-block-light-night/manifest.json`, `analysis.json` and `comparison.jpg`. Daylight controls in `tmp/fog-block-light-fixed` also show the response but expose the existing strong indoor ambient-fog term; that term still needs visual review. The first overexposed preview in `tmp/fog-block-light` is excluded from visual assessment. The original clock time, advance-time rule, camera, exposure, bloom and fog settings were restored. The room remains as a repeatable fixture in the disposable copy.
 
 ### Allocation investigation and compact material checkpoint
 

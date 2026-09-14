@@ -483,7 +483,7 @@ public TraceDirect traceDirect<TComposition : IComposition>(PackedPathSegment pa
 
 // Deterministic optical quadrature supplies stable attenuation and reconstruction guides.
 // The finite integration domain matches the prepared outdoor field's useful range.
-float tracePhase(float cosine, float g) {
+public float tracePhase(float cosine, float g) {
     return (1.0 - g * g) / (12.5663706144 * pow(1.0 + g * g - 2.0 * g * cosine, 1.5));
 }
 

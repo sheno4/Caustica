@@ -42,10 +42,31 @@ final class RtPassSchedulerBackendTest {
         assertEquals(results, fixture.visibilityResults);
         assertEquals(12, fixture.visibilityWidth);
         assertEquals(7, fixture.visibilityHeight);
+        assertEquals(false, fixture.volumeLighting);
         assertThrows(IllegalArgumentException.class, () -> frame.traceVisibility(rays, results, 0, 7));
         invocation.validateOutputChain();
         invocation.submit(() -> { });
         assertThrows(IllegalStateException.class, () -> frame.traceVisibility(rays, results, 12, 7));
+        assertEquals(1, fixture.visibilityCalls);
+    }
+
+    @Test
+    void volumeLightingUsesCurrentFrameAndExpiresWithTheBorrow() {
+        Fixture fixture = new Fixture();
+        var invocation = fixture.backend.beginPostEffect(post(0));
+        var frame = invocation.frame();
+        var samples = new dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress(4096);
+        var results = new dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress(8192);
+        frame.sampleVolumeLighting(samples, results, 12, 7);
+        assertEquals(1, fixture.visibilityCalls);
+        assertEquals(samples, fixture.visibilityRays);
+        assertEquals(results, fixture.visibilityResults);
+        assertEquals(12, fixture.visibilityWidth);
+        assertEquals(7, fixture.visibilityHeight);
+        assertTrue(fixture.volumeLighting);
+        invocation.validateOutputChain();
+        invocation.submit(() -> { });
+        assertThrows(IllegalStateException.class, () -> frame.sampleVolumeLighting(samples, results, 12, 7));
         assertEquals(1, fixture.visibilityCalls);
     }
 
@@ -192,6 +213,7 @@ final class RtPassSchedulerBackendTest {
                 new FakeGpu(), 97, 100, 37, commands);
         final AtomicBoolean firstDrained = new AtomicBoolean();
         int visibilityCalls, visibilityWidth, visibilityHeight;
+        boolean volumeLighting;
         dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress visibilityRays, visibilityResults;
 
         Fixture() {
@@ -201,12 +223,13 @@ final class RtPassSchedulerBackendTest {
         RtPassSchedulerBackend.FrameState frameState() {
             return new RtPassSchedulerBackend.FrameState(
                     fakeCommandBuffer(), use, resources, 4L, view, 12.5, 0.5, 960, 540,
-                    reconstruction, exposure, postA, postB, reconstruction, exposure, new float[16], null, new float[3], new float[2], 1.0f, true, (command, rays, results, width, height) -> {
+                    reconstruction, exposure, postA, postB, reconstruction, exposure, new float[16], null, new float[3], new float[2], 1.0f, true, (command, rays, results, width, height, volumeLighting) -> {
                         visibilityCalls++;
                         visibilityRays = rays;
                         visibilityResults = results;
                         visibilityWidth = width;
                         visibilityHeight = height;
+                        this.volumeLighting = volumeLighting;
                     }, null);
         }
     }

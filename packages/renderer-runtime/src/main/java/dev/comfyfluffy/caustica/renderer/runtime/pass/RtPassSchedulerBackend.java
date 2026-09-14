@@ -171,7 +171,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     @FunctionalInterface
     public interface VisibilityRecorder {
         void record(VkCommandBuffer commandBuffer, VulkanDeviceAddress rays, VulkanDeviceAddress results,
-                    int width, int height);
+                    int width, int height, boolean volumeLighting);
     }
 
     public record UiState(
@@ -333,11 +333,19 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             @Override public float[] traceJitter() { requireLive(); return state.traceJitter().clone(); }
             @Override public void traceVisibility(VulkanDeviceAddress rays, VulkanDeviceAddress results,
                                                   int width, int height) {
+                traceScene(rays, results, width, height, false);
+            }
+            @Override public void sampleVolumeLighting(VulkanDeviceAddress samples, VulkanDeviceAddress results,
+                                                       int width, int height) {
+                traceScene(samples, results, width, height, true);
+            }
+            private void traceScene(VulkanDeviceAddress rays, VulkanDeviceAddress results,
+                                    int width, int height, boolean volumeLighting) {
                 requireLive();
                 Objects.requireNonNull(rays, "rays");
                 Objects.requireNonNull(results, "results");
                 if (width <= 0 || height <= 0) throw new IllegalArgumentException("visibility extent must be positive");
-                state.visibilityRecorder().record(state.commandBuffer(), rays, results, width, height);
+                state.visibilityRecorder().record(state.commandBuffer(), rays, results, width, height, volumeLighting);
             }
             @Override public float preExposure() { requireLive(); return state.preExposure(); }
             @Override public boolean spatialMediumActive() { requireLive(); return state.spatialMediumActive(); }

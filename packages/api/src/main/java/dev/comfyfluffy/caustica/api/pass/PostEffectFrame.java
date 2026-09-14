@@ -78,6 +78,19 @@ public interface PostEffectFrame extends PassFrame {
                          dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress results,
                          int width, int height);
 
+    /**
+     * Sample phase-weighted direct lighting from this frame's retained lights, including material-aware shadows.
+     * Each 48-byte input contains float4(TLAS-relative position, minimum shadow distance),
+     * float4(normalized camera-to-sample direction, Henyey-Greenstein anisotropy), and
+     * float4(normalized screen UV, random-seed bits, active flag). A zero active flag returns zero radiance.
+     * Each float4 result contains unexposed ACEScg incident radiance integrated against the phase function,
+     * with alpha one. The caller applies scattering coefficients and integrates along the view ray.
+     * Buffer ownership, extents and write/read ordering follow traceVisibility.
+     */
+    void sampleVolumeLighting(dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress samples,
+                              dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress results,
+                              int width, int height);
+
     /** Current scalar exposure, available only to ordinary post effects after exposure metering. */
     GpuImage exposureImage();
 }
