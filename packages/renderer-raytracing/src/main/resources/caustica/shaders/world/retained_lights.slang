@@ -321,7 +321,7 @@ public DirectLightSample sampleRetainedLight(RetainedLightSamplingContext contex
     return sample;
 }
 
-public void neeAtWriteFeedback(WorldBindingRoots roots, uint2 pixel, uint lightIndex,
+public void neeAtAccumulateFeedback(inout uint2 event, WorldBindingRoots roots, uint2 pixel, uint lightIndex,
                                float contribution, bool coherent) {
     NeeAtState state = neeAtState(roots.neeAtStateAddress)[0];
     if (lightIndex >= state.lightCount || pixel.x >= state.extentWidth || pixel.y >= state.extentHeight) return;
@@ -335,17 +335,11 @@ public void neeAtWriteFeedback(WorldBindingRoots roots, uint2 pixel, uint lightI
     weight = min(weight, NEE_AT_MAX_FEEDBACK_WEIGHT);
 
     uint pixelIndex = pixel.y * state.extentWidth + pixel.x;
-    DevicePtr<uint2> pixelFeedback = (DevicePtr<uint2>)state.pixelFeedbackAddress;
-    // Weighted reservoir sampling over the vertices that lit this pixel. One ray-generation thread
-    // owns each pixel and the tracing passes that reach this are separated by a barrier, so the
-    // read-modify-write needs no atomics. `.y` carries the running weight as raw float bits, which a
-    // zero-filled buffer reads back as 0.0.
-    uint2 event = pixelFeedback[pixelIndex];
+    // Each path owns its reservoir; resolve merges the completed planes after a barrier.
     float total = min(asfloat(event.y) + weight, NEE_AT_MAX_FEEDBACK_WEIGHT);
     uint selectionSeed = neeAtHash(pixelIndex ^ state.frameIndex ^ lightIndex ^ event.y) | 1u;
     if (retainedLightRandom(selectionSeed) * total <= weight) {
         event.x = lightIndex | (coherent ? NEE_AT_FEEDBACK_COHERENT : 0u);
     }
     event.y = asuint(total);
-    pixelFeedback[pixelIndex] = event;
 }

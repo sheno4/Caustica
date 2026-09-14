@@ -34,6 +34,7 @@ import java.util.function.Consumer;
 public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
     public static final int VISIBILITY_RAYGEN_INDEX = 2;
     public static final int VOLUME_LIGHTING_RAYGEN_INDEX = 3;
+    public static final int RESOLVE_STABLE_PLANES_RAYGEN_INDEX = 4;
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
 
     private final VulkanDeviceContext context;
@@ -161,7 +162,9 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
                     shaderCompiler.compilePlain("shadow_blocker.slang", WorldShaderCompiler.ENTRY_POINT));
             RtShaderCode visibility = new RtShaderCode("visibility-rays", shaderCompiler.compileVisibilityRays());
             RtShaderCode volumeLighting = new RtShaderCode("volume-lighting", shaderCompiler.compileVolumeLighting());
-            pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill, visibility, volumeLighting},
+            RtShaderCode resolve = new RtShaderCode("resolve-stable-planes", shaderCompiler.compilePlain(
+                    "resolve_stable_planes.slang", WorldShaderCompiler.ENTRY_POINT));
+            pipeline = RtPipeline.create(context, new RtShaderCode[]{build, fill, visibility, volumeLighting, resolve},
                     new RtShaderCode[]{environment, shadowMiss}, closest, radiance, shadow, shadowClosest, shadowBlocker);
             return new Candidate(composition, shaderCompiler, table, pipeline);
         } catch (IOException | RuntimeException | Error failure) {

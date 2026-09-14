@@ -65,6 +65,12 @@ public struct PathSegmentStorage {
         storeWord(index, 14u, asuint(value.z));
     }
     public uint loadFlags(uint index) { return loadWord(index, 15u); }
+    // Fill consumes the restart before replacing its origin words with the completed feedback reservoir.
+    public uint2 loadFeedback(uint index) { return uint2(loadWord(index, 0u), loadWord(index, 1u)); }
+    public void storeFeedback(uint index, uint2 value) {
+        storeWord(index, 0u, value.x);
+        storeWord(index, 1u, value.y);
+    }
     public void storeFlags(uint index, uint value) {
         storeWord(index, 15u, value);
     }

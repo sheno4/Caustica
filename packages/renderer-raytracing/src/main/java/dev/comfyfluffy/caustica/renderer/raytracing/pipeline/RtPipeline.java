@@ -190,6 +190,11 @@ public final class RtPipeline {
     /** Dispatches with a scene-specific hit table while retaining the pipeline-owned raygen and miss tables. */
     public void trace(VkCommandBuffer commandBuffer, int width, int height, ByteBuffer roots,
                       int raygenIndex, HitTable retainedHits) {
+        trace(commandBuffer, width, height, 1, roots, raygenIndex, retainedHits);
+    }
+
+    public void trace(VkCommandBuffer commandBuffer, int width, int height, int depth, ByteBuffer roots,
+                      int raygenIndex, HitTable retainedHits) {
         if (destroyed) throw new IllegalStateException("pipeline is destroyed");
         if (raygenIndex < 0 || raygenIndex >= raygenCount) throw new IllegalArgumentException("raygen index out of range");
         if (roots.remaining() != RtBindings.WORLD_PUSH_CONSTANT_SIZE) {
@@ -208,7 +213,7 @@ public final class RtPipeline {
                     stride, (long) missCount * stride);
             VkStridedDeviceAddressRegionKHR hit = hitRegion(stack, retainedHits);
             vkCmdTraceRaysKHR(commandBuffer, rgen, rmiss, hit,
-                    VkStridedDeviceAddressRegionKHR.calloc(stack), width, height, 1);
+                    VkStridedDeviceAddressRegionKHR.calloc(stack), width, height, depth);
         }
     }
 

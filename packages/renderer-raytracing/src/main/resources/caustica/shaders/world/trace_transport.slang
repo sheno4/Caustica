@@ -453,7 +453,7 @@ TraceLightSelection traceSelectLight(WorldHit hit, float3 outgoingDirection,
 }
 
 public TraceDirect traceDirect<TComposition : IComposition>(PackedPathSegment path, WorldHit hit, TraceLobes lobes,
-        uint2 pixel, bool coherent, inout uint seed) {
+        uint2 pixel, bool coherent, inout uint seed, inout uint2 feedback) {
     TraceDirect result = {};
     if (lobes.continuousProbability == 0.0) return result;
     TraceLightSelection selection = traceSelectLight(hit, -path.direction, pixel, coherent, seed);
@@ -476,7 +476,7 @@ public TraceDirect traceDirect<TComposition : IComposition>(PackedPathSegment pa
         result.specular *= pdf / (pdf + evaluation.specularPdf * lobes.continuousProbability);
     }
     result.distance = selected.signalDistance;
-    neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex,
+    neeAtAccumulateFeedback(feedback, worldBindings, pixel, selected.lightIndex,
             traceLuminance(path.throughput * (result.diffuse + result.specular)), coherent);
     return result;
 }

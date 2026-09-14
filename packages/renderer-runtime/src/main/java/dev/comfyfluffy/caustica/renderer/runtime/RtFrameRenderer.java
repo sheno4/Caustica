@@ -668,7 +668,13 @@ public final class RtFrameRenderer {
                  var ignored = RtDebugLabels.scope(ctx, cmd, "fill stable planes");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.fillStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
-                        roots, 1, trace.hitTable());
+                        RtDenoiserState.PLANE_COUNT, roots, 1, trace.hitTable());
+            }
+            try (var gpu = commands.time("resolve stable planes");
+                 var ignored = RtDebugLabels.scope(ctx, cmd, "resolve stable planes")) {
+                VulkanBarriers.memoryBarrier(cmd, stack);
+                program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
+                        roots, RtProgramBackend.RESOLVE_STABLE_PLANES_RAYGEN_INDEX, trace.hitTable());
             }
             if (shadowCounters != null) {
                 shadowCounters.copy(cmd, stack, graphicsUse);

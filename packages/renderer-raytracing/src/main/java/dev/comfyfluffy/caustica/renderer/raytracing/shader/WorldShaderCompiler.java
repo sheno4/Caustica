@@ -55,7 +55,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
 
     private static final List<String> WORLD_MODULES = List.of(
             "bindings.slang", "world_common.slang", "world_minimal.slang", "build_stable_planes.slang",
-            "fill_stable_planes.slang", "fill_stable_planes_ser.slang", "closest_hit.slang", "environment_miss.slang",
+            "fill_stable_planes.slang", "fill_stable_planes_ser.slang", "resolve_stable_planes.slang", "closest_hit.slang", "environment_miss.slang",
             "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang", "guide.rmiss.slang",
             "shadow_closest_hit.slang", "shadow.rmiss.slang", "shadow_blocker.slang",
             "retained_lights.slang", "surface_bsdf.slang", "path_queue_types.slang",

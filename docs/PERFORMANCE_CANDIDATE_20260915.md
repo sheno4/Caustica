@@ -225,3 +225,30 @@ The retained control has no frames above 33.3 ms; its largest frame is 27.447 ms
 All twelve saved scene-color, normal/roughness and primary-depth buffers across the two builds contain no nonfinite values. Dome color previews were inspected and are visually consistent, but different jitter and temporal history prevent an exact image equivalence claim. Slang v2026.14.1's `HitObject.GetRayDesc()` implementation lowers `TMax` to `OpHitObjectGetRayTMaxNV` or its EXT counterpart; no hit-distance error was established by this investigation. Timing summaries, captures and finite-value checks are in `tmp/build-ser-performance` and `tmp/build-ser-control`.
 
 Earlier sequential comparisons in this document allowed time of day to advance. Their measured values remain valid observations, but changing sun direction is an additional workload confound, including for the material-lifetime comparison. Those percentage differences should not be read as fully isolated effects. Future paired benchmarks freeze time of day as in this control.
+
+## History-cost diagnostic
+
+A temporary diagnostic disables reconstruction-anchor history in `resolveWorldHit` and uses the current hit position as its previous position. This is deliberately unsuitable for production motion guides. It estimates the available benefit before investing in a separate GPU history-preparation pass. The same fixed-time dome-to-jungle sequence averages **24.617/20.995/24.731 ms** in the dome and **19.975/16.737/19.976 ms** in the jungle for default/off/default-repeat, with no frames above 33.3 ms. Against the retained fixed-time control, the dome difference is only approximately 0.15–0.29 ms, and jungle default-fog timings are essentially unchanged. GPU clocks are not locked, so these small differences do not isolate a precise history cost.
+
+This result does not justify building a history-preparation pass as the next performance intervention. Correct history is restored. The diagnostic patch, recording manifest and timing summary are in `tmp/history-ablation`; the client restored its settings and exited normally.
+
+## Independent stable-plane fill
+
+Fill now dispatches one ray-generation invocation per pixel and plane instead of tracing every plane serially in a pixel invocation. A subsequent resolve dispatch combines the plane signals after a memory barrier. Build, ray seeds, path budgets, and the radiance sampling equations remain unchanged. The change adds a dispatch and allows independent paths to be scheduled separately.
+
+Light feedback requires explicit ownership: each path accumulates its own weighted reservoir, stores it in the consumed restart's first two words, and resolve merges the plane reservoirs before writing the per-pixel feedback. Invalid restart records are not read. The restart flags stay intact until the next build. This reuses existing scratch and introduces no additional allocation. The merge changes feedback random choices and aggregation order; it is not bitwise equivalent to the serial feedback stream. An exact rational oracle verifies the unsaturated reservoir distribution in 4,096 cases, including empty planes and zero weights. It does not verify GPU storage or saturated-weight behavior.
+
+A fixed-time candidate and nearby restored-source control repeat the 36,296-section dome and 37,539-section jungle route, with 600 RT frames in each interval. Means:
+
+| Scene/configuration | Serial control | Independent planes |
+| --- | ---: | ---: |
+| Dome, default fog | 24.787 ms | 21.866 ms |
+| Dome, fog off | 21.159 ms | 18.238 ms |
+| Dome, default fog repeat | 24.839 ms | 21.885 ms |
+| Jungle, default fog | 19.978 ms | 19.047 ms |
+| Jungle, fog off | 16.895 ms | 15.502 ms |
+| Jungle, default fog repeat | 20.009 ms | 19.083 ms |
+
+All twelve intervals have no frame above 33.3 ms. The candidate's maximum is 22.622 ms. This pair supports approximately 12% lower dome frame time and 5% lower jungle frame time with fog. The dome reaches approximately 55 FPS without fog and 46 FPS with fog; the jungle reaches approximately 52 FPS with fog. The dome still misses the default-fog target. These are ordinary JFR HostLoop measurements, not GPU stage timings; Nsight follow-up is still required to attribute the GPU change.
+
+Candidate scene-color, normal/roughness and primary-depth captures contain no nonfinite values. Dome and jungle previews were inspected and are visually consistent with the control scenes; dynamic guide stability and the broader scene matrix remain to be repeated. Renderer-raytracing and renderer-runtime checks pass. Both benchmark clients restored their camera, time, fog and window settings and exited normally. Artifacts, the complete candidate patch and the feedback oracle are in `tmp/parallel-plane-performance`; nearby control recordings and summary are in `tmp/parallel-plane-control`.

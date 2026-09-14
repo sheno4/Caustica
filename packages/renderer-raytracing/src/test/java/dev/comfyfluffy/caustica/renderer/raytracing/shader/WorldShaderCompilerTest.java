@@ -107,6 +107,9 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileEnvironmentMiss());
             assertSpirv(compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
             assertSpirv(compiler.compileBuildStablePlanes());
+            byte[] resolve = compiler.compilePlain("resolve_stable_planes.slang", WorldShaderCompiler.ENTRY_POINT);
+            assertSpirv(resolve);
+            assertVulkan14(cache.resolve("resolve-stable-planes.spv"), resolve);
             byte[] ordinary = compiler.compileFillStablePlanes(false);
             byte[] reordered = compiler.compileFillStablePlanes(true);
             assertSpirv(ordinary);
