@@ -114,15 +114,8 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             RayDesc ray = traceRay(branch.path);
             uint mask = branch.path.depth == 0u ? WORLD_RAY_MASK_PRIMARY : WORLD_RAY_MASK_SECONDARY;
             TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, mask, 0u, 2u, 0u, ray, intersection);
-            WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, 0.0);
-            bool environment = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
-            if (plane == 0u && step == 0u) {
-                // Camera-segment media stop at the physical boundary, before delta branches continue.
-                float4 clip = mul(frame.curViewProj, float4(hit.position - frame.camOffset, 1.0));
-                worldFloatStorageImage(worldBindings.resources.primaryDepth)[pixel] =
-                        !environment && clip.w > 0.0 ? saturate(clip.z / clip.w) : 0.0;
-            }
-            float distance = environment ? TRACE_MAX_DISTANCE : hit.hitDistance;
+            bool environment = (intersection.pathFlags & WORLD_PATH_MISS) != 0u;
+            float distance = environment ? TRACE_MAX_DISTANCE : intersection.hitDistance;
             float3 transmission = exp(-branch.path.absorption * distance);
             // Restart stores incoming throughput; fill applies the endpoint segment's attenuation once.
             PackedPathSegment restart = branch.path;
@@ -131,6 +124,14 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             volumeEstimate += branch.path.throughput * (1.0 - spatial.transmittance);
             branch.path.throughput *= transmission * spatial.transmittance;
             branch.length += distance;
+            // Material closures need not remain live across medium sampling and its shadow traversal.
+            WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, 0.0);
+            if (plane == 0u && step == 0u) {
+                // Camera-segment media stop at the physical boundary, before delta branches continue.
+                float4 clip = mul(frame.curViewProj, float4(hit.position - frame.camOffset, 1.0));
+                worldFloatStorageImage(worldBindings.resources.primaryDepth)[pixel] =
+                        !environment && clip.w > 0.0 ? saturate(clip.z / clip.w) : 0.0;
+            }
             stableRadiance += branch.path.throughput * (environment ? hit.radiance : hit.surface.emissionRadiance);
             TraceLobes lobes = {};
             if (!environment) lobes = traceLobes(branch.path, hit);

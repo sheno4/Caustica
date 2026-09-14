@@ -47,9 +47,8 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
             } else {
                 tracer.trace(intersection, ray, path.depth > frame.maxBounces ? 1u : 0u);
             }
-            WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, previousPdf);
-            bool missed = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
-            float distance = missed ? TRACE_MAX_DISTANCE : hit.hitDistance;
+            bool missed = (intersection.pathFlags & WORLD_PATH_MISS) != 0u;
+            float distance = missed ? TRACE_MAX_DISTANCE : intersection.hitDistance;
             TraceSpatialMedium spatial = traceSpatialMediumSegment<TComposition>(path, distance, pixel, !first);
             float3 segmentScattering = path.throughput * spatial.scattering;
             path.throughput *= exp(-path.absorption * distance) * spatial.transmittance;
@@ -67,6 +66,8 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
                 }
             }
             if (!first && !missed) signalDistance += distance;
+            // Keep the material closure out of the medium integration's live state.
+            WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, previousPdf);
             float3 emission = float3(0.0);
             if (!first) {
                 emission = missed ? hit.radiance : hit.surface.emissionRadiance;

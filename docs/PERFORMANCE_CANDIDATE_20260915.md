@@ -135,3 +135,34 @@ Fog now bounds each column using the greatest depth distance over its full bilin
 The repeated room sequence averages **19.767 / 19.658 / 19.735 ms**, and the dome **27.058 / 25.677 / 27.092 ms** (`tmp/depth-bounded-matrix`). The approximately 0.7–1.0 ms improvement is useful but does not bring the dome below 20 ms.
 
 An initial comparison with an older jitter-matched capture showed transmittance differences, but did not match the animated wind phase or the terrain field after fixture construction. A temporary diagnostic then integrated full-range and bounded transmittance in the same frame, writing them to separate channels. All 16 raw captures across jungle, room, dome and cave have exactly equal transmittance and no nonfinite pixels at 1600×900, density 4, divisor 4, 64 samples. The diagnostic and manifests remain in `tmp/fog-bounds-same-frame`; production shaders contain no diagnostic changes. This checks transmittance, not stochastic lighting history equivalence. Renderer-presentation `check` passes after restoring production code (`tmp/fog-local/depth-bounded-final-check.log`).
+
+## Nsight after source-density sampling and depth bounding
+
+Three additional traces were collected through the Nsight Graphics UI with the same Top-Level Triage configuration, real-time shader sampling, one-frame limit and base-clock setting. Source-density sampling and the cutout certificate remained present. Trace files and settings/readiness metadata are in `tmp/source-bounded-nsight`.
+
+| Scene | Whole frame | Build stable planes | Fill stable planes | NGX command buffer |
+| --- | ---: | ---: | ---: | ---: |
+| Jungle, fog off | 18.68 ms | 2.86 ms | 9.90 ms | 4.16 ms |
+| Dome, default fog | 32.59 ms | 10.61 ms | 12.82 ms | 4.18 ms |
+| Dome, fog off | 25.84 ms | 8.32 ms | 11.74 ms | approximately 4.2 ms |
+
+The jungle has 36,796 geometry sections and the dome 37,187; the additional fixture geometry makes the jungle population slightly different from earlier captures. Other GPU contexts interrupt the fog-on dome build and scene-effects intervals. These are individual profiled frames, not ordinary frame-time averages, and their differences do not isolate fog execution cost. No new event-loss warning appears; the output pane retains warnings from earlier captures. The client was stopped and its original settings and pose restored afterward.
+
+The fog-on dome build's dependency attribution is 41.61% global loads, 37.99% local loads, 11.58% ray tracing and 3.27% local stores. Hotspots include the acceleration-structure access, shadow traversal, material evaluation, fog-field sampling and stable-plane path state. The dome's large build cost persists without fog. A follow-up candidate delays material closure evaluation until after segment-medium integration, avoiding a large live closure across that integration and its shadow traversal. This is a dataflow hypothesis pending ordinary timing measurements; it is not yet a demonstrated fix.
+
+## Material lifetime across medium integration
+
+Build and fill now retain the small intersection record through segment-medium integration and resolve the full material closure afterward. Intersection distance and miss flags already provide everything integration needs. Surface evaluation and branch/lighting operations retain their original inputs; a material closure no longer needs to survive the integration's shadow traversal.
+
+The candidate and a subsequent restored-source control used the same cold-start route, settings, camera poses, and settled populations: 36,296 geometry sections in the dome and 37,539 in the jungle. Each interval records 600 RT frames through JFR HostLoop. This route produces a different population from the earlier scene matrix; use this pair for attribution.
+
+| Scene/configuration | Previous shader mean | New shader mean |
+| --- | ---: | ---: |
+| Dome, default fog | 28.717 ms | 25.477 ms |
+| Dome, fog off | 24.906 ms | 22.022 ms |
+| Dome, default fog repeat | 28.895 ms | 25.803 ms |
+| Jungle, default fog | 20.585 ms | 19.592 ms |
+| Jungle, fog off | 17.570 ms | 16.633 ms |
+| Jungle, default fog repeat | 20.587 ms | 19.512 ms |
+
+This pair supports approximately 11% lower dome frame time and 5% lower jungle frame time. Captured scene color, normal/roughness and primary depth contain no nonfinite values in either candidate scene. Source review verifies the reordered material evaluation consumes the same immutable frame/intersection inputs. Renderer-raytracing checks pass. Artifacts are in `tmp/material-liveness-performance` and `tmp/material-liveness-baseline`, including the candidate patch and original JFR references. The candidate is retained; its register/spill changes have not yet been measured in a follow-up Nsight trace. The dome remains above the 20 ms target.
