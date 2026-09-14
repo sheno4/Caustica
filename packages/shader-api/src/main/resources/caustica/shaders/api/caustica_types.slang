@@ -214,6 +214,9 @@ public struct SurfaceInput {
     public uint primitiveIndex;
     /** Weights for triangle vertices one and two; vertex zero has weight `1 - x - y`. */
     public float2 barycentrics;
+    /** Triangle position1 - position0 and position2 - position0 in object coordinates. */
+    public float3 objectEdgeU;
+    public float3 objectEdgeV;
     /** Current object-to-scene transform for positions and tangent vectors. */
     public AffineTransform objectToScene;
     /** Previous-frame object-to-scene transform, equal to current when no history exists. */

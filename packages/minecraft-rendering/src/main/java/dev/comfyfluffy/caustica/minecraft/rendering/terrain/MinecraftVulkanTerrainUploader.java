@@ -35,6 +35,7 @@ import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure
 /** Host-mapped VMA upload owner for retained Minecraft terrain buffers. */
 public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUploader {
     private static final int TEXTURE_PRESENT = 1;
+    private static final int FLIP_BITANGENT = 8;
     private final GpuDevice gpu;
     private final MinecraftPrograms programs;
     private final SharedResource<SharedAtlas> atlas;
@@ -202,7 +203,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     new MinecraftPrimitiveData.Float2(uvs[uv + 4], uvs[uv + 5])};
             boolean textured = primitive[data + MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] != 0.0f;
             int textureFlags = textured ? TEXTURE_PRESENT : 0;
-            TangentBasis basis = tangentBasis(positions, indices, uvs, triangle,
+            textureFlags |= tangentOrientation(positions, indices, uvs, triangle,
                     primitive[data], primitive[data + 1], primitive[data + 2]);
             var record = new MinecraftPrimitiveData(uvValues, 0,
                     new MinecraftPrimitiveData.Float3(primitive[data + 4], primitive[data + 5], primitive[data + 6]),
@@ -210,16 +211,16 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     new MinecraftPrimitiveData.SampledTexture2DIndex(textured ? atlasDescriptor : 0),
                     new MinecraftPrimitiveData.SamplerIndex(textured ? atlasSamplerDescriptor : 0),
                     textureFlags,
-                    primitive[data + 3],
-                    basis.tangent(), basis.bitangent());
+                    primitive[data + 3]);
             record.write(bytes.slice(triangle * MinecraftPrimitiveData.BYTE_SIZE,
                     MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
         }
         bytes.position(triangles * MinecraftPrimitiveData.BYTE_SIZE);
     }
 
-    static TangentBasis tangentBasis(float[] positions, int[] indices, float[] uvs, int triangle,
-                                     float normalX, float normalY, float normalZ) {
+    /** Flips the UV-derived bitangent when its basis normal opposes the source's outward normal. */
+    static int tangentOrientation(float[] positions, int[] indices, float[] uvs, int triangle,
+                                  float normalX, float normalY, float normalZ) {
         int indexOffset = triangle * 3;
         int uvOffset = triangle * 6;
         int p0 = indices[indexOffset] * 3;
@@ -235,27 +236,11 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         float v1 = uvs[uvOffset + 3] - uvs[uvOffset + 1];
         float u2 = uvs[uvOffset + 4] - uvs[uvOffset];
         float v2 = uvs[uvOffset + 5] - uvs[uvOffset + 1];
-        float inverse = 1.0f / (u1 * v2 - u2 * v1);
-        MinecraftPrimitiveData.Float3 tangent = normalized((x1 * v2 - x2 * v1) * inverse,
-                (y1 * v2 - y2 * v1) * inverse, (z1 * v2 - z2 * v1) * inverse);
-        MinecraftPrimitiveData.Float3 bitangent = normalized((x2 * u1 - x1 * u2) * inverse,
-                (y2 * u1 - y1 * u2) * inverse, (z2 * u1 - z1 * u2) * inverse);
-        float basisNormalX = tangent.y() * bitangent.z() - tangent.z() * bitangent.y();
-        float basisNormalY = tangent.z() * bitangent.x() - tangent.x() * bitangent.z();
-        float basisNormalZ = tangent.x() * bitangent.y() - tangent.y() * bitangent.x();
-        if (basisNormalX * normalX + basisNormalY * normalY + basisNormalZ * normalZ < 0.0f) {
-            bitangent = new MinecraftPrimitiveData.Float3(
-                    -bitangent.x(), -bitangent.y(), -bitangent.z());
-        }
-        return new TangentBasis(tangent, bitangent);
+        float determinant = u1 * v2 - u2 * v1;
+        float orientation = (y1 * z2 - z1 * y2) * normalX
+                + (z1 * x2 - x1 * z2) * normalY + (x1 * y2 - y1 * x2) * normalZ;
+        return determinant * orientation < 0.0f ? FLIP_BITANGENT : 0;
     }
-
-    private static MinecraftPrimitiveData.Float3 normalized(float x, float y, float z) {
-        float inverseLength = 1.0f / (float) Math.sqrt(x * x + y * y + z * z);
-        return new MinecraftPrimitiveData.Float3(x * inverseLength, y * inverseLength, z * inverseLength);
-    }
-
-    record TangentBasis(MinecraftPrimitiveData.Float3 tangent, MinecraftPrimitiveData.Float3 bitangent) { }
 
     private VmaMappedBuffer create(long size, int extraUsage, Writer writer) {
         return create(size, extraUsage, writer, false);

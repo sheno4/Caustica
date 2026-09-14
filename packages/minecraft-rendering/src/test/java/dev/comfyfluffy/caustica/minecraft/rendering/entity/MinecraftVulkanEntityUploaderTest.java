@@ -140,14 +140,14 @@ final class MinecraftVulkanEntityUploaderTest {
                 new MinecraftPrimitiveData.Float2(1, 0), new MinecraftPrimitiveData.Float2(0, 1)};
 
         MinecraftPrimitiveData record = MinecraftEntityPrimitives.primitiveRecord(
-                triangle, uv, 96, 17, 23, 29, MinecraftEntityPrimitives.TangentBasis.ZERO);
+                triangle, uv, 64, 17, 23, 29);
 
         assertEquals(17, record.materialIndex());
         assertEquals(23, record.baseTexture().value());
         assertEquals(29, record.baseSampler().value());
         assertEquals(1, record.textureFlags());
         assertEquals(2.5f, record.primitiveEmission());
-        assertEquals(96, record.vertexColorsOffset());
+        assertEquals(64, record.vertexColorsOffset());
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE)
                 .order(ByteOrder.LITTLE_ENDIAN);
         record.write(bytes);
@@ -204,20 +204,6 @@ final class MinecraftVulkanEntityUploaderTest {
                 if (failure != null) throw failure;
             }
         };
-    }
-
-    @Test void tangentBasisUsesIndexedPositionAndUvGradients() {
-        var positions = java.nio.FloatBuffer.wrap(new float[]{0, 0, 0, 2, 0, 0, 0, 3, 0}).asReadOnlyBuffer();
-        var indices = java.nio.IntBuffer.wrap(new int[]{0, 1, 2}).asReadOnlyBuffer();
-        var uvs = java.nio.FloatBuffer.wrap(new float[]{0, 0, 1, 0, 0, 1}).asReadOnlyBuffer();
-        positions.position(positions.limit());
-        indices.position(indices.limit());
-        var basis = MinecraftEntityPrimitives.tangentBasis(positions, indices, uvs, 0);
-        assertEquals(1, basis.tangent().x());
-        assertEquals(1, basis.bitangent().y());
-        assertEquals(positions.limit(), positions.position());
-        assertEquals(indices.limit(), indices.position());
-        assertEquals(0, uvs.position());
     }
 
     @Test void adjacentCutoutTrianglesWithTheSameProgramShareOneRange() {

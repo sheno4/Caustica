@@ -8,6 +8,7 @@ import caustica_volume;
 public static const uint MINECRAFT_TEXTURE_PRESENT = 1u;
 public static const uint MINECRAFT_TEXTURE_LINEAR = 2u;
 public static const uint MINECRAFT_DAMAGE_PRESENT = 4u;
+public static const uint MINECRAFT_FLIP_BITANGENT = 8u;
 public static const uint MINECRAFT_MATERIAL_SPEC = 1u;
 public static const uint MINECRAFT_MATERIAL_NORMAL = 2u;
 public static const uint MINECRAFT_MATERIAL_EMISSION_MASK = 4u;
@@ -50,8 +51,6 @@ public struct MinecraftPrimitiveData {
     public SamplerIndex baseSampler;
     public uint textureFlags;
     public float primitiveEmission;
-    public float3 tangent;
-    public float3 bitangent;
 };
 
 public struct MinecraftInstanceData {
@@ -175,9 +174,17 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
     if ((data.features & MINECRAFT_MATERIAL_NORMAL) != 0u) {
         float2 encoded = minecraftSampleMaterial(hit, data.normalTexture, pageUv, pageLod).xy * 2.0 - 1.0;
         float z = sqrt(max(0.0, 1.0 - dot(encoded, encoded)));
-        float3 objectNormal = normalize(hit.primitive.tangent * encoded.x
-                + hit.primitive.bitangent * encoded.y
-                + cross(hit.primitive.tangent, hit.primitive.bitangent) * z);
+        float2 uvU = hit.primitive.textureCoordinates[1] - hit.primitive.textureCoordinates[0];
+        float2 uvV = hit.primitive.textureCoordinates[2] - hit.primitive.textureCoordinates[0];
+        float determinant = uvU.x * uvV.y - uvU.y * uvV.x;
+        float3 tangent = 0.0, bitangent = 0.0;
+        if (determinant != 0.0) {
+            tangent = normalize((input.objectEdgeU * uvV.y - input.objectEdgeV * uvU.y) / determinant);
+            bitangent = normalize((input.objectEdgeV * uvU.x - input.objectEdgeU * uvV.x) / determinant);
+        }
+        if ((hit.primitive.textureFlags & MINECRAFT_FLIP_BITANGENT) != 0u) bitangent = -bitangent;
+        float3 objectNormal = normalize(tangent * encoded.x + bitangent * encoded.y
+                + cross(tangent, bitangent) * z);
         material.geometry_normal = normalize(transformNormal(input.normalToScene, objectNormal));
         if ((input.evaluationFlags & SURFACE_RECONSTRUCTION_ANCHOR) != 0u) {
             material.previous_geometry_normal = normalize(

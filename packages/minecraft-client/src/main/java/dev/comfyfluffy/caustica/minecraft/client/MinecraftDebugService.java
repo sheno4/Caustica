@@ -163,7 +163,7 @@ public final class MinecraftDebugService implements AutoCloseable {
         switch (op) {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", debugImageNames(),
-                    "operations", List.of("schema", "status", "memory.capture", "passes.capture",
+                    "operations", List.of("schema", "status", "terrain.status", "memory.capture", "passes.capture",
                     "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "nsight.status", "nsight.start", "client.stop", "job")));
             case "nsight.status", "nsight.start" -> future.complete(NsightDebug.execute(op.equals("nsight.start"),
                     CausticaClientComposition.current().runtime().telemetry().frameSerial()));
@@ -173,6 +173,11 @@ public final class MinecraftDebugService implements AutoCloseable {
                 passCapture = future;
             }
             case "status" -> future.complete(status());
+            case "terrain.status" -> CausticaClientComposition.current().terrain().readiness()
+                    .whenComplete((value, failure) -> {
+                        if (failure != null) future.completeExceptionally(failure);
+                        else future.complete(value);
+                    });
             case "memory.capture" -> {
                 Path output = directory.resolve("memory-" + UUID.randomUUID() + ".json");
                 Files.writeString(output, VulkanDiagnostics.memoryStatistics());

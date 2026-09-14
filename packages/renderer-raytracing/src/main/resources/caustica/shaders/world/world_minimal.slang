@@ -215,6 +215,8 @@ public SurfaceInput worldSurfaceInput(float2 barycentrics, uint primitiveIndex, 
     input.instanceData = history.current.instanceData;
     input.primitiveIndex = primitiveIndex;
     input.barycentrics = barycentrics;
+    input.objectEdgeU = objectEdgeU;
+    input.objectEdgeV = objectEdgeV;
     input.objectToScene = worldCurrentTransform(history.current);
     input.previousObjectToScene = input.objectToScene;
     input.normalToScene = worldNormalTransform(input.objectToScene);

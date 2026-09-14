@@ -383,7 +383,7 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
-    void primitiveUploadCarriesUvTintEmissionAndAnOutwardTangentBasis() {
+    void primitiveUploadCarriesUvTintEmissionAndTangentOrientation() {
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
         float[] primitive = new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS];
         primitive[3] = 0.75f;
@@ -407,16 +407,27 @@ final class MinecraftTerrainGeometryTest {
         assertEquals(19, bytes.getInt(MinecraftPrimitiveData.MATERIAL_INDEX_OFFSET));
         assertEquals(37, bytes.getInt(MinecraftPrimitiveData.BASE_TEXTURE_OFFSET));
         assertEquals(41, bytes.getInt(MinecraftPrimitiveData.BASE_SAMPLER_OFFSET));
-        assertEquals(1, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET));
+        assertEquals(1, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET) & 1);
         assertEquals(0.75f, bytes.getFloat(MinecraftPrimitiveData.PRIMITIVE_EMISSION_OFFSET));
-        assertEquals(1f, bytes.getFloat(MinecraftPrimitiveData.TANGENT_OFFSET));
-        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.TANGENT_OFFSET + 4));
-        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.TANGENT_OFFSET + 8));
-        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.BITANGENT_OFFSET));
-        assertEquals(1f, bytes.getFloat(MinecraftPrimitiveData.BITANGENT_OFFSET + 4));
-        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.BITANGENT_OFFSET + 8));
+        assertEquals(8, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET) & 8);
         assertEquals(2L * MinecraftPrimitiveData.BYTE_SIZE,
                 MinecraftVulkanTerrainUploader.primitiveRecordOffset(6));
+    }
+
+    @Test
+    void tangentOrientationAccountsForMirroredUvsAndSourceNormal() {
+        float[] positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+        int[] indices = {0, 1, 2};
+        float[] regular = {0, 0, 1, 0, 0, 1};
+        float[] mirrored = {0, 0, 1, 0, 0, -1};
+        assertEquals(0, MinecraftVulkanTerrainUploader.tangentOrientation(
+                positions, indices, regular, 0, 0, 0, 1));
+        assertEquals(8, MinecraftVulkanTerrainUploader.tangentOrientation(
+                positions, indices, mirrored, 0, 0, 0, 1));
+        assertEquals(8, MinecraftVulkanTerrainUploader.tangentOrientation(
+                positions, indices, regular, 0, 0, 0, -1));
+        assertEquals(0, MinecraftVulkanTerrainUploader.tangentOrientation(
+                positions, indices, mirrored, 0, 0, 0, -1));
     }
 
     @Test
@@ -431,7 +442,7 @@ final class MinecraftTerrainGeometryTest {
 
         assertEquals(37, bytes.getInt(MinecraftPrimitiveData.BASE_TEXTURE_OFFSET));
         assertEquals(41, bytes.getInt(MinecraftPrimitiveData.BASE_SAMPLER_OFFSET));
-        assertEquals(1, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET));
+        assertEquals(1, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET) & 1);
     }
 
     @Test

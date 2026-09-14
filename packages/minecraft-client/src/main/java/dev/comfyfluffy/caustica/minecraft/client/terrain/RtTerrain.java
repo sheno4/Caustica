@@ -118,6 +118,20 @@ public final class RtTerrain {
         return outstandingBuilds.get();
     }
 
+    /** Collects a coherent readiness snapshot on the coordinator, without waiting on the render thread. */
+    public java.util.concurrent.CompletableFuture<java.util.Map<String, Integer>> readiness() {
+        var result = new java.util.concurrent.CompletableFuture<java.util.Map<String, Integer>>();
+        coordinate(() -> {
+            var counts = StateCounts.capture(updates, window, geometry);
+            result.complete(java.util.Map.of(
+                    "loadedWindowColumns", counts.columns(), "residentGeometrySections", counts.geometry(),
+                    "publishedSections", counts.published(), "wantedSections", counts.wanted(),
+                    "requests", counts.requests(), "pendingRequests", counts.pending(),
+                    "neighborBlockedRequests", counts.blocked(), "dispatchedRequests", counts.dispatched()));
+        }, () -> result.completeExceptionally(new IllegalStateException("Terrain coordinator was reset")));
+        return result;
+    }
+
     /** Border culling and fluid heights depend on the block immediately across a section boundary. */
     public void markBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
         var keys = new ArrayList<Long>();

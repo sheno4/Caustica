@@ -114,7 +114,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 write(positions, (long) positionValues.capacity() * 4, bytes -> bytes.asFloatBuffer().put(positionValues));
                 write(indices, (long) indexValues.capacity() * 4, bytes -> bytes.asIntBuffer().put(indexValues));
                 write(primitive, MinecraftEntityPrimitives.byteSize(source.triangleCount()),
-                        bytes -> MinecraftEntityPrimitives.write(bytes, source, positionValues, indexValues, source.uvs(),
+                        bytes -> MinecraftEntityPrimitives.write(bytes, source, indexValues, source.uvs(),
                                 source.vertexColors(), textures.bindings, materialIndices));
                 write(instance, MinecraftInstanceData.BYTE_SIZE,
                         bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1, 1, 1), 0,

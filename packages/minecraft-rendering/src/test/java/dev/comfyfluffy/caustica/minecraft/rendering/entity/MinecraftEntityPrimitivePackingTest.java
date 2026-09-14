@@ -48,7 +48,7 @@ final class MinecraftEntityPrimitivePackingTest {
             Arrays.fill(expectedStorage, (byte) 0x5a);
             var actual = ByteBuffer.wrap(actualStorage);
             var expected = ByteBuffer.wrap(expectedStorage);
-            MinecraftEntityPrimitives.write(actual, mesh, positions, indices, uvs, colors, bindings, materials);
+            MinecraftEntityPrimitives.write(actual, mesh, indices, uvs, colors, bindings, materials);
 
             for (int t = 0; t < triangles.size(); t++) {
                 var triangle = triangles.get(t);
@@ -63,13 +63,12 @@ final class MinecraftEntityPrimitivePackingTest {
                     }
                 }
                 var binding = triangle.material().texture() == null ? null : bindings.get(triangle.material().texture());
-                var basis = MinecraftEntityPrimitives.tangentBasis(positions, indices, uvs, t);
                 new MinecraftPrimitiveData(coordinates, colorOffset - t * MinecraftPrimitiveData.BYTE_SIZE,
                         new MinecraftPrimitiveData.Float3(1, 1, 1),
                         materials.get(triangle.material()),
                         new MinecraftPrimitiveData.SampledTexture2DIndex(binding == null ? 0 : binding.image()),
                         new MinecraftPrimitiveData.SamplerIndex(binding == null ? 0 : binding.sampler()),
-                        binding == null ? 0 : 1, triangle.emission(), basis.tangent(), basis.bitangent())
+                        binding == null ? 0 : 1, triangle.emission())
                         .write(expected.slice(t * MinecraftPrimitiveData.BYTE_SIZE, MinecraftPrimitiveData.BYTE_SIZE)
                                 .order(ByteOrder.LITTLE_ENDIAN));
             }
