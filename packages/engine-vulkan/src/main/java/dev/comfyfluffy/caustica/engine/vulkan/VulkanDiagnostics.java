@@ -82,6 +82,22 @@ public final class VulkanDiagnostics {
         allocator = vmaAllocator;
     }
 
+    /** Copies VMA's detailed allocation inventory while the renderer allocator is alive. */
+    public static String memoryStatistics() {
+        long liveAllocator = allocator;
+        if (liveAllocator == 0L) throw new IllegalStateException("Renderer allocator is not active");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            PointerBuffer output = stack.mallocPointer(1);
+            Vma.vmaBuildStatsString(liveAllocator, output, true);
+            long text = output.get(0);
+            try {
+                return MemoryUtil.memUTF8(text);
+            } finally {
+                Vma.nvmaFreeStatsString(liveAllocator, text);
+            }
+        }
+    }
+
     /** Log loader-visible layers and the explicit layer list passed to {@code vkCreateInstance}. */
     public static synchronized void logInstanceLayers(VkInstanceCreateInfo createInfo) {
         if (instanceLayersLogged) {

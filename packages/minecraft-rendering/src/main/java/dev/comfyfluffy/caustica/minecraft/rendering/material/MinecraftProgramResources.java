@@ -154,7 +154,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
                             new MinecraftImplementationData.SamplerIndex(sampler.firstIndex().value()), 0).write(bytes));
             releases.add(implementation::close);
             var primitive = create(MinecraftPrimitiveData.BYTE_SIZE, bytes -> new MinecraftPrimitiveData(
-                    new MinecraftPrimitiveData.Float2[0], new MinecraftPrimitiveData.Float4[0],
+                    new MinecraftPrimitiveData.Float2[0], 0,
                     new MinecraftPrimitiveData.Float3(1.0f, 1.0f, 1.0f), 0,
                     new MinecraftPrimitiveData.SampledTexture2DIndex(0),
                     new MinecraftPrimitiveData.SamplerIndex(sampler.firstIndex().value()), 0, 0.0f,

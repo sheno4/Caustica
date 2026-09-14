@@ -399,21 +399,22 @@ final class MinecraftTerrainGeometryTest {
                 new float[]{0, 1, 1, 1, 0, 0}, primitive, 37, 41);
 
         assertEquals(MinecraftPrimitiveData.BYTE_SIZE, bytes.position());
+        assertEquals(0, bytes.getInt(MinecraftPrimitiveData.VERTEX_COLORS_OFFSET_OFFSET));
         assertEquals(1f, bytes.getFloat(8));
-        assertEquals(0.25f, bytes.getFloat(80));
-        assertEquals(0.5f, bytes.getFloat(84));
-        assertEquals(1f, bytes.getFloat(88));
-        assertEquals(19, bytes.getInt(92));
-        assertEquals(37, bytes.getInt(96));
-        assertEquals(41, bytes.getInt(100));
-        assertEquals(1, bytes.getInt(104));
-        assertEquals(0.75f, bytes.getFloat(108));
-        assertEquals(1f, bytes.getFloat(112));
-        assertEquals(0f, bytes.getFloat(116));
-        assertEquals(0f, bytes.getFloat(120));
-        assertEquals(0f, bytes.getFloat(128));
-        assertEquals(1f, bytes.getFloat(132));
-        assertEquals(0f, bytes.getFloat(136));
+        assertEquals(0.25f, bytes.getFloat(MinecraftPrimitiveData.TINT_OFFSET));
+        assertEquals(0.5f, bytes.getFloat(MinecraftPrimitiveData.TINT_OFFSET + 4));
+        assertEquals(1f, bytes.getFloat(MinecraftPrimitiveData.TINT_OFFSET + 8));
+        assertEquals(19, bytes.getInt(MinecraftPrimitiveData.MATERIAL_INDEX_OFFSET));
+        assertEquals(37, bytes.getInt(MinecraftPrimitiveData.BASE_TEXTURE_OFFSET));
+        assertEquals(41, bytes.getInt(MinecraftPrimitiveData.BASE_SAMPLER_OFFSET));
+        assertEquals(1, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET));
+        assertEquals(0.75f, bytes.getFloat(MinecraftPrimitiveData.PRIMITIVE_EMISSION_OFFSET));
+        assertEquals(1f, bytes.getFloat(MinecraftPrimitiveData.TANGENT_OFFSET));
+        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.TANGENT_OFFSET + 4));
+        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.TANGENT_OFFSET + 8));
+        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.BITANGENT_OFFSET));
+        assertEquals(1f, bytes.getFloat(MinecraftPrimitiveData.BITANGENT_OFFSET + 4));
+        assertEquals(0f, bytes.getFloat(MinecraftPrimitiveData.BITANGENT_OFFSET + 8));
         assertEquals(2L * MinecraftPrimitiveData.BYTE_SIZE,
                 MinecraftVulkanTerrainUploader.primitiveRecordOffset(6));
     }
@@ -428,9 +429,9 @@ final class MinecraftTerrainGeometryTest {
                 new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 new float[]{0, 0, 1, 0, 0, 1}, primitive, 37, 41);
 
-        assertEquals(37, bytes.getInt(96));
-        assertEquals(41, bytes.getInt(100));
-        assertEquals(1, bytes.getInt(104));
+        assertEquals(37, bytes.getInt(MinecraftPrimitiveData.BASE_TEXTURE_OFFSET));
+        assertEquals(41, bytes.getInt(MinecraftPrimitiveData.BASE_SAMPLER_OFFSET));
+        assertEquals(1, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET));
     }
 
     @Test
@@ -440,9 +441,9 @@ final class MinecraftTerrainGeometryTest {
                 new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 new float[]{0, 0, 1, 0, 0, 1}, new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS], 37, 41);
 
-        assertEquals(0, bytes.getInt(96));
-        assertEquals(0, bytes.getInt(100));
-        assertEquals(0, bytes.getInt(104));
+        assertEquals(0, bytes.getInt(MinecraftPrimitiveData.BASE_TEXTURE_OFFSET));
+        assertEquals(0, bytes.getInt(MinecraftPrimitiveData.BASE_SAMPLER_OFFSET));
+        assertEquals(0, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET));
     }
 
     @Test

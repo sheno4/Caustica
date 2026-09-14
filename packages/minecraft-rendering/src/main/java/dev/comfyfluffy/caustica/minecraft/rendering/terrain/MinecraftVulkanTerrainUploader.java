@@ -200,12 +200,11 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     new MinecraftPrimitiveData.Float2(uvs[uv], uvs[uv + 1]),
                     new MinecraftPrimitiveData.Float2(uvs[uv + 2], uvs[uv + 3]),
                     new MinecraftPrimitiveData.Float2(uvs[uv + 4], uvs[uv + 5])};
-            var white = new MinecraftPrimitiveData.Float4(1f, 1f, 1f, 1f);
             boolean textured = primitive[data + MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] != 0.0f;
             int textureFlags = textured ? TEXTURE_PRESENT : 0;
             TangentBasis basis = tangentBasis(positions, indices, uvs, triangle,
                     primitive[data], primitive[data + 1], primitive[data + 2]);
-            var record = new MinecraftPrimitiveData(uvValues, new MinecraftPrimitiveData.Float4[]{white, white, white},
+            var record = new MinecraftPrimitiveData(uvValues, 0,
                     new MinecraftPrimitiveData.Float3(primitive[data + 4], primitive[data + 5], primitive[data + 6]),
                     (int) primitive[data + 8],
                     new MinecraftPrimitiveData.SampledTexture2DIndex(textured ? atlasDescriptor : 0),

@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 import dev.comfyfluffy.caustica.minecraft.client.config.CausticaConfig;
 import dev.comfyfluffy.caustica.renderer.runtime.RendererOptions;
 import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
@@ -162,7 +163,7 @@ public final class MinecraftDebugService implements AutoCloseable {
         switch (op) {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", debugImageNames(),
-                    "operations", List.of("schema", "status", "passes.capture",
+                    "operations", List.of("schema", "status", "memory.capture", "passes.capture",
                     "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "nsight.status", "nsight.start", "client.stop", "job")));
             case "nsight.status", "nsight.start" -> future.complete(NsightDebug.execute(op.equals("nsight.start"),
                     CausticaClientComposition.current().runtime().telemetry().frameSerial()));
@@ -172,6 +173,11 @@ public final class MinecraftDebugService implements AutoCloseable {
                 passCapture = future;
             }
             case "status" -> future.complete(status());
+            case "memory.capture" -> {
+                Path output = directory.resolve("memory-" + UUID.randomUUID() + ".json");
+                Files.writeString(output, VulkanDiagnostics.memoryStatistics());
+                future.complete(Map.of("path", output.toAbsolutePath().toString()));
+            }
             case "window.resize" -> {
                 int width = request.get("width").getAsInt();
                 int height = request.get("height").getAsInt();

@@ -42,7 +42,7 @@ final class MinecraftEntityPrimitivePackingTest {
         for (boolean hasBinding : List.of(false, true)) {
             Map<MinecraftEntityMesh.Texture, MinecraftEntityPrimitives.TextureBinding> bindings = hasBinding
                     ? Map.of(texture, new MinecraftEntityPrimitives.TextureBinding(1234, 5678)) : Map.of();
-            int size = triangles.size() * MinecraftPrimitiveData.BYTE_SIZE;
+            int size = triangles.size() * (MinecraftPrimitiveData.BYTE_SIZE + 48);
             byte[] actualStorage = new byte[size + 16], expectedStorage = new byte[size + 16];
             Arrays.fill(actualStorage, (byte) 0x5a);
             Arrays.fill(expectedStorage, (byte) 0x5a);
@@ -53,16 +53,19 @@ final class MinecraftEntityPrimitivePackingTest {
             for (int t = 0; t < triangles.size(); t++) {
                 var triangle = triangles.get(t);
                 var coordinates = new MinecraftPrimitiveData.Float2[3];
-                var vertexColors = new MinecraftPrimitiveData.Float4[3];
+                int colorOffset = triangles.size() * MinecraftPrimitiveData.BYTE_SIZE + t * 48;
+                expected.order(ByteOrder.LITTLE_ENDIAN);
                 for (int corner = 0; corner < 3; corner++) {
                     int vertex = indices.get(t * 3 + corner);
                     coordinates[corner] = new MinecraftPrimitiveData.Float2(uvs.get(vertex * 2), uvs.get(vertex * 2 + 1));
-                    vertexColors[corner] = new MinecraftPrimitiveData.Float4(colors.get(vertex * 4),
-                            colors.get(vertex * 4 + 1), colors.get(vertex * 4 + 2), colors.get(vertex * 4 + 3));
+                    for (int lane = 0; lane < 4; lane++) {
+                        expected.putFloat(colorOffset + corner * 16 + lane * 4, colors.get(vertex * 4 + lane));
+                    }
                 }
                 var binding = triangle.material().texture() == null ? null : bindings.get(triangle.material().texture());
                 var basis = MinecraftEntityPrimitives.tangentBasis(positions, indices, uvs, t);
-                new MinecraftPrimitiveData(coordinates, vertexColors, new MinecraftPrimitiveData.Float3(1, 1, 1),
+                new MinecraftPrimitiveData(coordinates, colorOffset - t * MinecraftPrimitiveData.BYTE_SIZE,
+                        new MinecraftPrimitiveData.Float3(1, 1, 1),
                         materials.get(triangle.material()),
                         new MinecraftPrimitiveData.SampledTexture2DIndex(binding == null ? 0 : binding.image()),
                         new MinecraftPrimitiveData.SamplerIndex(binding == null ? 0 : binding.sampler()),

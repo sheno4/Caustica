@@ -138,31 +138,24 @@ final class MinecraftVulkanEntityUploaderTest {
                 MinecraftEntityMesh.Coverage.CUTOUT);
         var uv = new MinecraftPrimitiveData.Float2[]{new MinecraftPrimitiveData.Float2(0, 0),
                 new MinecraftPrimitiveData.Float2(1, 0), new MinecraftPrimitiveData.Float2(0, 1)};
-        var colors = new MinecraftPrimitiveData.Float4[]{
-                new MinecraftPrimitiveData.Float4(.1f, .2f, .3f, .25f),
-                new MinecraftPrimitiveData.Float4(.2f, .3f, .4f, .5f),
-                new MinecraftPrimitiveData.Float4(.3f, .4f, .5f, .75f)};
 
         MinecraftPrimitiveData record = MinecraftEntityPrimitives.primitiveRecord(
-                triangle, uv, colors, 17, 23, 29, MinecraftEntityPrimitives.TangentBasis.ZERO);
+                triangle, uv, 96, 17, 23, 29, MinecraftEntityPrimitives.TangentBasis.ZERO);
 
         assertEquals(17, record.materialIndex());
         assertEquals(23, record.baseTexture().value());
         assertEquals(29, record.baseSampler().value());
         assertEquals(1, record.textureFlags());
         assertEquals(2.5f, record.primitiveEmission());
-        assertEquals(.3f, record.vertexColors()[2].x());
-        assertEquals(.25f, record.vertexColors()[0].w());
-        assertEquals(.5f, record.vertexColors()[1].w());
-        assertEquals(.75f, record.vertexColors()[2].w());
+        assertEquals(96, record.vertexColorsOffset());
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE)
                 .order(ByteOrder.LITTLE_ENDIAN);
         record.write(bytes);
-        assertEquals(17, bytes.getInt(92));
-        assertEquals(23, bytes.getInt(96));
-        assertEquals(29, bytes.getInt(100));
-        assertEquals(1, bytes.getInt(104));
-        assertEquals(2.5f, bytes.getFloat(108));
+        assertEquals(17, bytes.getInt(MinecraftPrimitiveData.MATERIAL_INDEX_OFFSET));
+        assertEquals(23, bytes.getInt(MinecraftPrimitiveData.BASE_TEXTURE_OFFSET));
+        assertEquals(29, bytes.getInt(MinecraftPrimitiveData.BASE_SAMPLER_OFFSET));
+        assertEquals(1, bytes.getInt(MinecraftPrimitiveData.TEXTURE_FLAGS_OFFSET));
+        assertEquals(2.5f, bytes.getFloat(MinecraftPrimitiveData.PRIMITIVE_EMISSION_OFFSET));
     }
 
     @Test void textureSetDestroysDescriptorThenAllLeasesAndAggregatesFailures() {

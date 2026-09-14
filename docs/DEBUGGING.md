@@ -26,6 +26,8 @@ If shell JSON quoting is awkward, use `--json-file args.json`. Operations comple
 
 ## Script control
 
+`memory.capture` saves the active renderer allocator's detailed VMA JSON inventory and returns its path. It includes memory types, heaps, blocks and individual allocations, but excludes allocations owned by Minecraft, NGX or profiling tools. Run it outside measured intervals.
+
 Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`. The CLI and imports use the same protocol; no test runner is required.
 
 | Operation | Arguments / result |

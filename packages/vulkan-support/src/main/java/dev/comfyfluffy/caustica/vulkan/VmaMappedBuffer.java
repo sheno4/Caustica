@@ -102,6 +102,7 @@ public final class VmaMappedBuffer implements AutoCloseable {
             VulkanChecks.check(result, allocationAlignment == 0L
                     ? "vmaCreateBuffer(" + label + ")"
                     : "vmaCreateBufferWithAlignment(" + label + ")");
+            Vma.vmaSetAllocationName(gpu.vmaAllocator(), allocation, label);
 
             long address = VK12.vkGetBufferDeviceAddress(gpu.vk(),
                     VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));

@@ -103,7 +103,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 indices = VmaMappedBuffer.createAsync(gpu, (long) source.triangleCount() * 12,
                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "Minecraft entity indices");
                 releases.add(indices::close);
-                primitive = VmaMappedBuffer.create(gpu, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
+                primitive = VmaMappedBuffer.create(gpu, MinecraftEntityPrimitives.byteSize(source.triangleCount()),
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft entity primitives");
                 releases.add(primitive::close);
                 instance = VmaMappedBuffer.create(gpu, MinecraftInstanceData.BYTE_SIZE,
@@ -113,7 +113,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 var indexValues = source.indices();
                 write(positions, (long) positionValues.capacity() * 4, bytes -> bytes.asFloatBuffer().put(positionValues));
                 write(indices, (long) indexValues.capacity() * 4, bytes -> bytes.asIntBuffer().put(indexValues));
-                write(primitive, (long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
+                write(primitive, MinecraftEntityPrimitives.byteSize(source.triangleCount()),
                         bytes -> MinecraftEntityPrimitives.write(bytes, source, positionValues, indexValues, source.uvs(),
                                 source.vertexColors(), textures.bindings, materialIndices));
                 write(instance, MinecraftInstanceData.BYTE_SIZE,

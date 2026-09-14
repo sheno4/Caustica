@@ -42,7 +42,8 @@ public struct MinecraftMaterialRecord {
 
 public struct MinecraftPrimitiveData {
     public float2 textureCoordinates[3];
-    public float4 vertexColors[3];
+    // Byte offset from this record to three float4 colors; zero denotes uniform white.
+    public uint vertexColorsOffset;
     public float3 tint;
     public uint materialIndex;
     public SampledTexture2DIndex baseTexture;
@@ -94,9 +95,14 @@ public MinecraftHitData minecraftHitData(uint64_t implementationData, uint64_t b
     hit.textureCoordinate = hit.primitive.textureCoordinates[0] * weights.x
             + hit.primitive.textureCoordinates[1] * weights.y
             + hit.primitive.textureCoordinates[2] * weights.z;
-    hit.vertexColor = hit.primitive.vertexColors[0] * weights.x
-            + hit.primitive.vertexColors[1] * weights.y
-            + hit.primitive.vertexColors[2] * weights.z;
+    hit.vertexColor = 1.0;
+    if (hit.primitive.vertexColorsOffset != 0u) {
+        uint64_t colorsAddress = bindingData + uint64_t(primitiveIndex) * sizeof(MinecraftPrimitiveData)
+                + hit.primitive.vertexColorsOffset;
+        hit.vertexColor = ShaderDataPtr<float4>(colorsAddress)[0] * weights.x
+                + ShaderDataPtr<float4>(colorsAddress)[1] * weights.y
+                + ShaderDataPtr<float4>(colorsAddress)[2] * weights.z;
+    }
     return hit;
 }
 
