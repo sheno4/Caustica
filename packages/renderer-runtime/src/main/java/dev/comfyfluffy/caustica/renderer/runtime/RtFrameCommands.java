@@ -20,6 +20,7 @@ final class RtFrameCommands implements AutoCloseable {
     private final RtGpuTiming gpuTiming;
     private final GraphicsUse graphicsUse;
     private final long frameId;
+    private final RtTelemetry.Frame telemetry;
 
     private static final class Stage {
         final OwnedCommandBuffer commands;
@@ -29,11 +30,13 @@ final class RtFrameCommands implements AutoCloseable {
         Stage(OwnedCommandBuffer commands) { this.commands = commands; }
     }
 
-    RtFrameCommands(VulkanDeviceContext context, RtGpuTiming gpuTiming, GraphicsUse graphicsUse, long frameId) {
+    RtFrameCommands(VulkanDeviceContext context, RtGpuTiming gpuTiming, GraphicsUse graphicsUse, long frameId,
+                    RtTelemetry.Frame telemetry) {
         this.context = context;
         this.gpuTiming = gpuTiming;
         this.graphicsUse = graphicsUse;
         this.frameId = frameId;
+        this.telemetry = telemetry;
     }
 
     VkCommandBuffer heap(String label) {
@@ -60,7 +63,10 @@ final class RtFrameCommands implements AutoCloseable {
 
     private VkCommandBuffer begin(String label, boolean heaps) {
         if (!stages.isEmpty()) endLastStage();
-        Stage stage = new Stage(context.beginGraphicsCommands(label, heaps));
+        Stage stage;
+        try (var ignored = telemetry.stage("frame.acquireCommands")) {
+            stage = new Stage(context.beginGraphicsCommands(label, heaps));
+        }
         stages.add(stage);
         stage.checkpoint = checkpoint(stage.commands.commandBuffer(), label);
         // Queue order alone does not make writes visible across command buffers.
@@ -77,7 +83,9 @@ final class RtFrameCommands implements AutoCloseable {
         Stage stage = stages.getLast();
         if (stage.timing != null) stage.timing.close();
         stage.checkpoint.close();
-        stage.commands.end();
+        try (var ignored = telemetry.stage("frame.endCommands")) {
+            stage.commands.end();
+        }
     }
 
     void submit(GraphicsSubmission submission) {

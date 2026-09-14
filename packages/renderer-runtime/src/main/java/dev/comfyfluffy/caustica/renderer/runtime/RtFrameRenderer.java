@@ -371,7 +371,8 @@ public final class RtFrameRenderer {
             if (execution == null || execution.trace == null || frameSnapshot == null) {
                 throw new IllegalStateException("no retained frame is available for UI recording");
             }
-            try (RtFrameCommands commands = new RtFrameCommands(context, gpuTiming, execution.graphicsUse, telemetry.frameSerial())) {
+            try (RtFrameCommands commands = new RtFrameCommands(context, gpuTiming, execution.graphicsUse,
+                    telemetry.frameSerial(), telemetry.frame())) {
                 execution.graphicsUse.keepAlive(uiLayer.retain());
                 VkCommandBuffer commandBuffer = commands.heap("UI extensions");
                 passes.beginFrame(passFrame(commandBuffer, execution.graphicsUse,
@@ -419,7 +420,9 @@ public final class RtFrameRenderer {
         }
         FrameSnapshot snapshot = captured.get().inputs();
         try {
-            ensurePresentationResources(width, height);
+            try (var ignored = telemetry.frame().stage("frame.ensurePresentation")) {
+                ensurePresentationResources(width, height);
+            }
             if (frameScenes == null || frameScenes.get().traceScenes() == null) return false;
             var traceRevision = frameScenes.get().traceScenes().get();
             if (!traceRevision.contains(snapshot.view().entryScene())) return false;
@@ -499,7 +502,10 @@ public final class RtFrameRenderer {
                              SharedResource<RtSceneRevision> revision,
                              long nativeColorImage,
                              FrameSnapshot snapshot) {
-        GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
+        GraphicsSubmission submission;
+        try (var ignored = telemetry.frame().stage("frame.createSubmission")) {
+            submission = ctx.backend().createGraphicsSubmission();
+        }
         GraphicsQueue graphics = ctx.graphics();
         GraphicsUse graphicsUse = graphics.beginGraphicsUse();
         execution = new FrameExecution(graphicsUse);
@@ -517,16 +523,26 @@ public final class RtFrameRenderer {
         }
         if (!execution.frame.historyContinuous()) reconstruction.resetHistory();
         int debugView = settings.debugView();
-        try (RtFrameCommands commands = new RtFrameCommands(ctx, gpuTiming, graphicsUse, telemetry.frameSerial());
+        try (RtFrameCommands commands = new RtFrameCommands(ctx, gpuTiming, graphicsUse,
+                telemetry.frameSerial(), telemetry.frame());
              MemoryStack stack = MemoryStack.stackPush()) {
-            VkCommandBuffer cmd = commands.heap("world resources and trace");
+            VkCommandBuffer cmd;
+            try (var ignored = telemetry.frame().stage("frame.beginTraceCommands")) {
+                cmd = commands.heap("world resources and trace");
+            }
             recordTrace(ctx, cmd, stack, graphicsUse, program, execution.frame, commands,
                     revision.get().publicationCutoff());
             var output = reconstruction.record(commands, stack, graphicsUse, execution.frame,
                     traceResources());
-            recordPostProcessing(ctx, commands, commands.heap("post processing and display"), stack,
+            VkCommandBuffer postCommands;
+            try (var ignored = telemetry.frame().stage("frame.beginPostCommands")) {
+                postCommands = commands.heap("post processing and display");
+            }
+            recordPostProcessing(ctx, commands, postCommands, stack,
                     graphicsUse, output, nativeColorImage, debugView);
-            commands.submit(submission);
+            try (var ignored = telemetry.frame().stage("frame.submitCommands")) {
+                commands.submit(submission);
+            }
             debugCaptureFrameSerial = telemetry.frameSerial();
             debugCapturePreExposure = execution.frame.preExposure();
             debugCaptureDenoising = reconstruction.settings();

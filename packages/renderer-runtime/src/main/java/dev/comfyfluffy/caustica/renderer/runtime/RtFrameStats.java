@@ -22,6 +22,13 @@ public final class RtFrameStats {
     private static final MetricSchema RENDERER_FRAME_METRICS = new MetricSchema(List.of(
             "frame.capture",
             "frame.composite",
+            "frame.ensurePresentation",
+            "frame.createSubmission",
+            "frame.beginTraceCommands",
+            "frame.beginPostCommands",
+            "frame.submitCommands",
+            "frame.acquireCommands",
+            "frame.endCommands",
             "frame.recordUi",
             "frame.finishGraphicsUse",
             "geometry.providerCollect",
