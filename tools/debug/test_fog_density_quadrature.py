@@ -15,6 +15,11 @@ def gauss4_integral(function, width):
 
 
 class FogDensityQuadratureTest(unittest.TestCase):
+    def test_four_nodes_preserve_constant_and_polynomial_optical_depth(self):
+        for power in range(8):
+            actual = gauss4_integral(lambda position: position ** power, 2.0)
+            self.assertAlmostEqual(actual, 2.0 ** (power + 1) / (power + 1), places=12)
+
     def test_midpoint_misses_smooth_occupied_band_in_distant_cell(self):
         # The farthest cell of a 64-cell quadratic grid is almost eight metres wide.
         width = 256 * (1 - (63 / 64) ** 2)

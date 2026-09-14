@@ -36,6 +36,17 @@ float2 fogInterval(uint step, float maximumDistance) {
     float2 bounds = maximumDistance * t * t;
     return float2(bounds.x, bounds.y - bounds.x);
 }
+float intervalDensity(FogVolumeData medium, float3 direction, float2 interval) {
+    // Four-point Gauss integration resolves density variation inside distant, wide cells.
+    const float4 nodes = float4(0.0694318442, 0.3300094782, 0.6699905218, 0.9305681558);
+    const float4 weights = float4(0.1739274226, 0.3260725774, 0.3260725774, 0.1739274226);
+    float density = 0.0;
+    for (uint i = 0; i < 4; i++) {
+        float3 p = direction * (interval.x + nodes[i] * interval.y) + pc.mediumCamera.xyz;
+        density += weights[i] * fogDensity(mediumFromFogVolume(medium), p);
+    }
+    return density;
+}
 float fogSamplePhase(uint2 pixel, uint step) {
     uint hash = pixel.x * 0x9e3779b9u ^ pixel.y * 0x85ebca6bu ^ step * 0xc2b2ae35u
               ^ asuint(pc.mediumCamera.w) * 0x27d4eb2du;
@@ -100,11 +111,15 @@ public void runFog(uint3 id) {
     if(pc.mode == 2) {
         float3 direction = normalize(unproject(uv,0.0001));
         float4* rays = (float4*)pc.visibilityRaysAddress;
+        float4* prefix = (float4*)pc.prefixAddress;
+        uint prefixBase = (id.x + id.y * w) * (pc.steps + 1u);
         for(uint j=0;j<visibilityCount;j++) {
-            float2 interval = fogInterval(firstStep+j, medium.profile.w);
-            float3 p = direction*(interval.x+fogSamplePhase(id.xy,firstStep+j)*interval.y);
-            float3 center = direction * (interval.x + 0.5 * interval.y);
-            float sigma = fogDensity(mediumFromFogVolume(medium), center+pc.mediumCamera.xyz);
+            uint step = firstStep+j;
+            float2 interval = fogInterval(step, medium.profile.w);
+            float3 p = direction*(interval.x+fogSamplePhase(id.xy,step)*interval.y);
+            float sigma = step < pc.steps ? intervalDensity(medium, direction, interval) : 0.0;
+            // The integration dispatch consumes this density before replacing it with cumulative transport.
+            if (step < pc.steps) prefix[prefixBase+step+1u] = float4(0,0,0,sigma);
             uint base = (visibilityBase+j)*3;
             rays[base] = float4(p+pc.tlasCamera.xyz,pc.tlasCamera.w);
             rays[base+1] = float4(medium.lightDirection.xyz,sigma > 0.0 ? medium.profile.w : 0.0);
@@ -134,7 +149,7 @@ public void runFog(uint3 id) {
             float2 interval = fogInterval(i, medium.profile.w);
             float segmentLength = interval.y;
             float3 p = direction*(interval.x+0.5*segmentLength);
-            float sigma = fogDensity(mediumFromFogVolume(medium), p+pc.mediumCamera.xyz);
+            float sigma = prefix[prefixBase+i+1u].a;
             if (sigma == 0.0) {
                 history[5u + (id.x + id.y * w) * pc.steps + i] = 0.0;
                 prefix[prefixBase+i+1u] = float4(scattering,transmittance);
