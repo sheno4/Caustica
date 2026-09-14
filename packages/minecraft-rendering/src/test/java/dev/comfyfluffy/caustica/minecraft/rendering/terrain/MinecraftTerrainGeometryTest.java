@@ -419,18 +419,18 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
-    void translucentTerrainCarriesAlphaTransmissionAlongsideItsAtlasBinding() {
+    void dielectricTerrainKeepsItsAtlasWithoutAlphaTransmission() {
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
         float[] primitive = new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS];
         primitive[MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] = 1f;
-        primitive[MinecraftTerrainMesh.PRIMITIVE_TRANSMISSION_ALPHA_OFFSET] = 1f;
+        primitive[MinecraftTerrainMesh.PRIMITIVE_MEDIUM_BOUNDARY_OFFSET] = 1f;
         MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,
                 new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 new float[]{0, 0, 1, 0, 0, 1}, primitive, 37, 41);
 
         assertEquals(37, bytes.getInt(96));
         assertEquals(41, bytes.getInt(100));
-        assertEquals(9, bytes.getInt(104));
+        assertEquals(1, bytes.getInt(104));
     }
 
     @Test
@@ -473,9 +473,11 @@ final class MinecraftTerrainGeometryTest {
                 MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null, true);
         var second = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.WATER,
                 MinecraftTerrainMesh.Coverage.OPAQUE, 3, 3, 0.5f);
+        var third = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.DIELECTRIC,
+                MinecraftTerrainMesh.Coverage.OPAQUE, 6, 3, 0.5f);
         var source = new MinecraftTerrainMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
-                new int[]{0, 1, 2, 0, 2, 1}, new float[12],
-                new float[2 * MinecraftTerrainMesh.PRIMITIVE_FLOATS], List.of(first, second), 0L);
+                new int[]{0, 1, 2, 0, 2, 1, 0, 1, 2}, new float[18],
+                new float[3 * MinecraftTerrainMesh.PRIMITIVE_FLOATS], List.of(first, second, third), 0L);
         var materialSurface = new dev.comfyfluffy.caustica.api.program.SurfaceId<
                 MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { };
         var waterSurface = new dev.comfyfluffy.caustica.api.program.SurfaceId<
@@ -486,7 +488,7 @@ final class MinecraftTerrainGeometryTest {
                 MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { };
         var environment = new dev.comfyfluffy.caustica.api.program.EnvironmentId<
                 MinecraftProgramTypes.EnvironmentBindingData>() { };
-        var programs = new MinecraftPrograms(materialSurface, waterSurface, portalSurface, waterVolume, environment);
+        var programs = new MinecraftPrograms(materialSurface, waterSurface, portalSurface, waterVolume, waterVolume, environment);
         var releases = new java.util.concurrent.atomic.AtomicInteger();
         try (var owner = dev.comfyfluffy.caustica.minecraft.rendering.TestResource.create(releases::incrementAndGet)) {
             var bindingResource = owner;
@@ -494,7 +496,13 @@ final class MinecraftTerrainGeometryTest {
             var geometries = MinecraftVulkanTerrainUploader.geometries(
                     source, programs, new VulkanDeviceAddress(0x4000L), bindingResource);
 
-            assertEquals(2, geometries.size());
+            assertEquals(3, geometries.size());
+            assertSame(materialSurface, geometries.get(2).surface().surface());
+            assertSame(programs.dielectricVolume(), geometries.get(2).volume().volume());
+            assertInstanceOf(MeshBuild.CoveragePolicy.Opaque.class, geometries.get(2).surface().coverage());
+            assertEquals(MeshBuild.ShadowPolicy.EVALUATE_SURFACE, geometries.get(2).surface().shadow());
+            assertEquals(0x4000L + 2L * MinecraftPrimitiveData.BYTE_SIZE,
+                    geometries.get(2).volume().bindingData().bits());
             assertSame(materialSurface, geometries.get(0).surface().surface());
             assertEquals(MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER, geometries.get(0).surface().shadow());
             assertEquals(MeshBuild.ShadowPolicy.EVALUATE_SURFACE, geometries.get(1).surface().shadow());

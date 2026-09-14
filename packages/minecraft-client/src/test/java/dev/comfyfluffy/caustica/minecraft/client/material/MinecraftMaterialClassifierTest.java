@@ -35,7 +35,7 @@ final class MinecraftMaterialClassifierTest {
 
     @Test
     void unknownDielectricsUseTheNeutralTransmissiveDefault() {
-        assertEquals(OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR,
+        assertEquals(MinecraftMaterialClassifier.GLASS_IOR,
                 MinecraftMaterialClassifier.dielectricIor(ResourceId.parse("minecraft:block/glass")),
                 1.0e-6f);
         assertEquals(OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR,
@@ -66,5 +66,22 @@ final class MinecraftMaterialClassifierTest {
         assertTrue(MinecraftMaterialClassifier.ICE_IOR < MinecraftMaterialClassifier.WATER_IOR);
         assertEquals(MinecraftMaterialClassifier.WATER_IOR,
                 OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR, 1.0e-6f);
+    }
+
+    @Test
+    void glassCoverageFollowsBlockSemanticsRatherThanRasterLayers() {
+        for (var block : List.of(Blocks.GLASS, Blocks.GLASS_PANE, Blocks.TINTED_GLASS)) {
+            assertTrue(MinecraftMaterialClassifier.isGlass(block.defaultBlockState()));
+        }
+        var stained = net.minecraft.core.registries.BuiltInRegistries.BLOCK.stream()
+                .filter(block -> block instanceof net.minecraft.world.level.block.StainedGlassBlock
+                        || block instanceof net.minecraft.world.level.block.StainedGlassPaneBlock).toList();
+        assertFalse(stained.isEmpty());
+        for (var block : stained) assertTrue(MinecraftMaterialClassifier.isGlass(block.defaultBlockState()));
+        for (var block : List.of(Blocks.IRON_BARS, Blocks.OAK_LEAVES, Blocks.SEA_LANTERN)) {
+            assertFalse(MinecraftMaterialClassifier.isGlass(block.defaultBlockState()));
+        }
+        assertEquals(1.5f, MinecraftMaterialClassifier.dielectricIor(
+                ResourceId.parse("minecraft:block/red_stained_glass_pane_top")));
     }
 }

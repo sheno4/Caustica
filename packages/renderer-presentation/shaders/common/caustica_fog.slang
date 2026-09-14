@@ -53,14 +53,15 @@ float fogSamplePhase(uint2 pixel, uint step) {
     hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15; hash *= 0x846ca68bu; hash ^= hash >> 16;
     return (float(hash >> 8) + 0.5) / 16777216.0;
 }
-float4 fogPrefixAt(uint2 pixel, uint width, float distance, float maximumDistance) {
+float4 fogPrefixAt(uint2 pixel, uint2 extent, float distance, float maximumDistance) {
     float cell = sqrt(saturate(distance / maximumDistance)) * float(pc.steps);
     uint step = min(uint(cell), pc.steps - 1u);
     float2 interval = fogInterval(step, maximumDistance);
     float fraction = saturate((distance - interval.x) / interval.y);
     float4* prefix = (float4*)pc.prefixAddress;
-    uint base = (pixel.x + pixel.y * width) * (pc.steps + 1u) + step;
-    float4 before = prefix[base], after = prefix[base + 1u];
+    uint planeSize = extent.x * extent.y;
+    uint base = pixel.x + pixel.y * extent.x + step * planeSize;
+    float4 before = prefix[base], after = prefix[base + planeSize];
     if (fraction <= 0.0) return before;
     if (fraction >= 1.0) return after;
     // Integrate the partial cell with the same homogeneous coefficients as its stored endpoints.
@@ -92,7 +93,7 @@ float4 previousVisibility(float3 center, uint2 extent, float maximumDistance, fl
         int3 cell = clamp(base + int3(x,y,z), int3(0), int3(extent - 1u, pc.steps - 1u));
         float weight = (x == 0 ? 1.0-blend.x : blend.x) * (y == 0 ? 1.0-blend.y : blend.y)
                      * (z == 0 ? 1.0-blend.z : blend.z);
-        float4 sample = history[5u + (uint(cell.x) + uint(cell.y) * extent.x) * pc.steps + uint(cell.z)];
+        float4 sample = history[5u + uint(cell.x) + uint(cell.y) * extent.x + uint(cell.z) * extent.x * extent.y];
         result.rgb += sample.rgb * (sample.a * weight);
         result.a += sample.a * weight;
     }
@@ -112,14 +113,15 @@ public void runFog(uint3 id) {
         float3 direction = normalize(unproject(uv,0.0001));
         float4* rays = (float4*)pc.visibilityRaysAddress;
         float4* prefix = (float4*)pc.prefixAddress;
-        uint prefixBase = (id.x + id.y * w) * (pc.steps + 1u);
+        // Each depth plane is contiguous so neighboring invocations access neighboring transport values.
+        uint prefixBase = id.x + id.y * w;
         for(uint j=0;j<visibilityCount;j++) {
             uint step = firstStep+j;
             float2 interval = fogInterval(step, medium.profile.w);
             float3 p = direction*(interval.x+fogSamplePhase(id.xy,step)*interval.y);
             float sigma = step < pc.steps ? intervalDensity(medium, direction, interval) : 0.0;
             // The integration dispatch consumes this density before replacing it with cumulative transport.
-            if (step < pc.steps) prefix[prefixBase+step+1u] = float4(0,0,0,sigma);
+            if (step < pc.steps) prefix[prefixBase+(step+1u)*w*h] = float4(0,0,0,sigma);
             uint base = (visibilityBase+j)*3;
             rays[base] = float4(p+pc.tlasCamera.xyz,pc.tlasCamera.w);
             rays[base+1] = float4(medium.lightDirection.xyz,sigma > 0.0 ? medium.profile.w : 0.0);
@@ -138,7 +140,7 @@ public void runFog(uint3 id) {
             history[0] = float4(medium.lightDirection.xyz, pc.mediumCamera.w);
             history[1] = pc.clipX; history[2] = pc.clipY; history[3] = pc.clipZ; history[4] = pc.clipW;
         }
-        uint prefixBase = (id.x + id.y * w) * (pc.steps + 1u);
+        uint prefixBase = id.x + id.y * w;
         if (firstStep == 0u) prefix[prefixBase] = accumulated;
         float3 visibility = 1.0;
         float4* visibilityResults = (float4*)pc.visibilityResultsAddress;
@@ -149,10 +151,10 @@ public void runFog(uint3 id) {
             float2 interval = fogInterval(i, medium.profile.w);
             float segmentLength = interval.y;
             float3 p = direction*(interval.x+0.5*segmentLength);
-            float sigma = prefix[prefixBase+i+1u].a;
+            float sigma = prefix[prefixBase+(i+1u)*w*h].a;
             if (sigma == 0.0) {
-                history[5u + (id.x + id.y * w) * pc.steps + i] = 0.0;
-                prefix[prefixBase+i+1u] = float4(scattering,transmittance);
+                history[5u + id.x + id.y * w + i*w*h] = 0.0;
+                prefix[prefixBase+(i+1u)*w*h] = float4(scattering,transmittance);
                 continue;
             }
             visibility = visibilityResults[visibilityBase+i-firstStep].rgb;
@@ -171,12 +173,12 @@ public void runFog(uint3 id) {
             previous.rgb = clamp(previous.rgb, minimumVisibility, maximumVisibility);
             float confidence = min(previous.a + 1.0, 8.0);
             visibility = lerp(previous.rgb, visibility, 1.0 / confidence);
-            history[5u + (id.x + id.y * w) * pc.steps + i] = float4(visibility, confidence);
+            history[5u + id.x + id.y * w + i*w*h] = float4(visibility, confidence);
             float segmentT = exp(-sigma*segmentLength);
             float3 source = (medium.ambientRadiance.xyz + medium.lightRadiance.xyz * (phase*visibility)) * pc.traceData.z;
             scattering += transmittance * (1.0-segmentT) * source * 0.95;
             transmittance *= segmentT;
-            prefix[prefixBase+i+1u] = float4(scattering,transmittance);
+            prefix[prefixBase+(i+1u)*w*h] = float4(scattering,transmittance);
         }
         output[id.xy] = float4(scattering,transmittance);
     } else {
@@ -190,7 +192,7 @@ public void runFog(uint3 id) {
         for(int y=0;y<2;y++) for(int x=0;x<2;x++) {
             int2 p = clamp(base+int2(x,y),int2(0),int2(fw-1,fh-1));
             float spatial = (x == 0 ? 1-frac.x : frac.x)*(y == 0 ? 1-frac.y : frac.y);
-            volume += fogPrefixAt(uint2(p), fw, distance, medium.profile.w) * spatial;
+            volume += fogPrefixAt(uint2(p), uint2(fw,fh), distance, medium.profile.w) * spatial;
         }
         if(pc.debug == 1) { output[id.xy] = float4(volume.aaa,1.0); return; }
         if(pc.debug == 2) { output[id.xy] = float4(volume.rgb,1.0); return; }

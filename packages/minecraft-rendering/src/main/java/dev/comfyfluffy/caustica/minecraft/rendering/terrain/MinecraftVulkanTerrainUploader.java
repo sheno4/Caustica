@@ -35,7 +35,6 @@ import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure
 /** Host-mapped VMA upload owner for retained Minecraft terrain buffers. */
 public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUploader {
     private static final int TEXTURE_PRESENT = 1;
-    private static final int TRANSMISSION_ALPHA = 8;
     private final GpuDevice gpu;
     private final MinecraftPrograms programs;
     private final SharedResource<SharedAtlas> atlas;
@@ -120,14 +119,17 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                 claims.add(binding::close);
                 MeshBuild.CoveragePolicy policy = coveragePolicy(geometry);
                 var surface = switch (geometry.program()) {
-                    case MATERIAL -> new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy,
+                    case MATERIAL, DIELECTRIC -> new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy,
                             geometry.guaranteedShadowBlocker() ? MeshBuild.ShadowPolicy.GUARANTEED_BLOCKER
                                     : MeshBuild.ShadowPolicy.EVALUATE_SURFACE);
                     case WATER -> new MeshBuild.SurfaceSlot<>(programs.waterSurface(), binding, policy);
                     case PORTAL -> new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy);
                 };
-                var volume = geometry.program() == MinecraftTerrainMesh.ProgramCategory.WATER
-                        ? new MeshBuild.VolumeSlot<>(programs.waterVolume(), binding) : null;
+                var volume = switch (geometry.program()) {
+                    case WATER -> new MeshBuild.VolumeSlot<>(programs.waterVolume(), binding);
+                    case DIELECTRIC -> new MeshBuild.VolumeSlot<>(programs.dielectricVolume(), binding);
+                    default -> null;
+                };
                 geometries.add(new MeshBuild.Geometry<>(surface, volume, geometry.firstIndex(), geometry.indexCount(),
                         opacitySamplingCompatible ? geometry.opacityMicromap() : null));
             }
@@ -201,9 +203,6 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             var white = new MinecraftPrimitiveData.Float4(1f, 1f, 1f, 1f);
             boolean textured = primitive[data + MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] != 0.0f;
             int textureFlags = textured ? TEXTURE_PRESENT : 0;
-            if (primitive[data + MinecraftTerrainMesh.PRIMITIVE_TRANSMISSION_ALPHA_OFFSET] != 0.0f) {
-                textureFlags |= TRANSMISSION_ALPHA;
-            }
             TangentBasis basis = tangentBasis(positions, indices, uvs, triangle,
                     primitive[data], primitive[data + 1], primitive[data + 2]);
             var record = new MinecraftPrimitiveData(uvValues, new MinecraftPrimitiveData.Float4[]{white, white, white},

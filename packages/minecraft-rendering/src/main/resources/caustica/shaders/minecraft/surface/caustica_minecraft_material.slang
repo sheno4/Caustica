@@ -3,11 +3,11 @@ module caustica_minecraft_material;
 import caustica_color;
 import caustica_resources;
 import caustica_types;
+import caustica_volume;
 
 public static const uint MINECRAFT_TEXTURE_PRESENT = 1u;
 public static const uint MINECRAFT_TEXTURE_LINEAR = 2u;
 public static const uint MINECRAFT_DAMAGE_PRESENT = 4u;
-public static const uint MINECRAFT_TRANSMISSION_ALPHA = 8u;
 public static const uint MINECRAFT_MATERIAL_SPEC = 1u;
 public static const uint MINECRAFT_MATERIAL_NORMAL = 2u;
 public static const uint MINECRAFT_MATERIAL_EMISSION_MASK = 4u;
@@ -128,10 +128,6 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
         material.base_color *= geometryTint;
     } else {
         float4 texel = minecraftSampleBase(hit, hit.textureCoordinate, 0.0);
-        // Translucent terrain has full coverage; base alpha weights its optical transmission.
-        if ((hit.primitive.textureFlags & MINECRAFT_TRANSMISSION_ALPHA) != 0u) {
-            material.transmission_weight *= 1.0 - clamp(texel.a, 0.0, 1.0);
-        }
         float3 sampled = (hit.primitive.textureFlags & MINECRAFT_TEXTURE_LINEAR) != 0u
                 ? texel.rgb : srgbToLinear(texel.rgb);
         sampled = bt709ToAcesCg(sampled);
@@ -188,5 +184,19 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
         material.base_color = lerp(material.base_color, material.base_color * 0.18, damage);
         material.specular_roughness = lerp(material.specular_roughness, 0.92, damage);
     }
+    // Minecraft's base texture supplies the dielectric tint; its alpha does not select an optical lobe.
+    material.transmission_color = material.base_color;
     return material;
 }
+
+/** A fully covered dielectric boundary uses its material's IOR and carries no additional absorption. */
+public struct MinecraftDielectricVolume : IVolumeModel {
+    public override VolumeProperties evaluateVolume(VolumeInput input) {
+        MinecraftImplementationData implementation = ShaderDataPtr<MinecraftImplementationData>(input.implementationData)[0];
+        MinecraftPrimitiveData primitive = ShaderDataPtr<MinecraftPrimitiveData>(input.bindingData)[input.primitiveIndex];
+        MinecraftMaterialRecord material = ShaderDataPtr<MinecraftMaterialRecord>(implementation.materialsAddress)[primitive.materialIndex];
+        VolumeProperties properties = {};
+        properties.indexOfRefraction = material.specularIor;
+        return properties;
+    }
+};

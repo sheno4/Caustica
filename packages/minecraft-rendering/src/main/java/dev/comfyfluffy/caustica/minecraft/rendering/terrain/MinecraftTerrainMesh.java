@@ -8,7 +8,7 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
                                    long indexRevision) {
     public static final int PRIMITIVE_FLOATS = 12;
     static final int PRIMITIVE_ATLAS_PRESENT_OFFSET = 9;
-    static final int PRIMITIVE_TRANSMISSION_ALPHA_OFFSET = 10;
+    public static final int PRIMITIVE_MEDIUM_BOUNDARY_OFFSET = 10;
 
     public MinecraftTerrainMesh {
         positions = positions.clone();
@@ -65,7 +65,7 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
     }
 
     /** Shader implementation selected for a contiguous triangle range. */
-    public enum ProgramCategory { MATERIAL, WATER, PORTAL }
+    public enum ProgramCategory { MATERIAL, DIELECTRIC, WATER, PORTAL }
 
     /** Traversal category remains separate from optical transmission. */
     public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }

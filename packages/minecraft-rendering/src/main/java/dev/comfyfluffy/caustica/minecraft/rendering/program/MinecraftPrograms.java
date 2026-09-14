@@ -11,4 +11,5 @@ public record MinecraftPrograms(
         SurfaceId<MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData> waterSurface,
         SurfaceId<MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData> portalSurface,
         VolumeId<MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData> waterVolume,
+        VolumeId<MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData> dielectricVolume,
         EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment) { }

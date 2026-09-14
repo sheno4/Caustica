@@ -15,6 +15,7 @@ public VolumeInput volumeInput(SurfaceInput surface, uint64_t bindingData, uint 
     query.shaderRoot = surface.shaderRoot;
     query.bindingData = bindingData;
     query.instanceData = surface.instanceData;
+    query.primitiveIndex = surface.primitiveIndex;
     query.boundaryPosition = surface.position;
     query.proceduralPosition = surface.proceduralPosition;
     query.metersPerSceneUnit = surface.metersPerSceneUnit;

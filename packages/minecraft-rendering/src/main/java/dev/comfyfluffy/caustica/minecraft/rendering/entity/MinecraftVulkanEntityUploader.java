@@ -165,7 +165,9 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                 var surface = triangle.material().program() == MinecraftEntityMesh.Program.PORTAL
                         ? new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy)
                         : new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
-                geometries.add(new MeshBuild.Geometry<>(surface, null, first * 3, (end - first) * 3));
+                var volume = triangle.material().mediumBoundary()
+                        ? new MeshBuild.VolumeSlot<>(programs.dielectricVolume(), binding) : null;
+                geometries.add(new MeshBuild.Geometry<>(surface, volume, first * 3, (end - first) * 3));
             }
             MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
                     new MeshBuild.Stream(positions.deviceRange(), 12, positionGeneration),
@@ -211,7 +213,8 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
 
     private static boolean compatible(MinecraftEntityMesh.Triangle a, MinecraftEntityMesh.Triangle b) {
-        return a.material().program() == b.material().program() && a.coverage() == b.coverage();
+        return a.material().program() == b.material().program() && a.coverage() == b.coverage()
+                && a.material().mediumBoundary() == b.material().mediumBoundary();
     }
 
     static MinecraftMaterialKey materialKey(MinecraftEntityMesh.Material material) {

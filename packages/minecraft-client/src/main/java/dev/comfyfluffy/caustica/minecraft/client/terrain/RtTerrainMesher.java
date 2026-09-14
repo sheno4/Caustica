@@ -108,7 +108,9 @@ final class RtTerrainMesher {
             TerrainSurface surface = geom.surfaces.get(triangle);
             var program = surface.material().material().equals(MinecraftMaterialIds.WATER)
                     ? MinecraftTerrainMesh.ProgramCategory.WATER
-                    : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
+                    : geom.prim.getFloat(triangle * MinecraftTerrainMesh.PRIMITIVE_FLOATS
+                            + MinecraftTerrainMesh.PRIMITIVE_MEDIUM_BOUNDARY_OFFSET) != 0f
+                    ? MinecraftTerrainMesh.ProgramCategory.DIELECTRIC : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
             boolean blocker = program == MinecraftTerrainMesh.ProgramCategory.MATERIAL
                     && surface.coverage() == Coverage.OPAQUE
                     && materials.guaranteesZeroShadowTransmission(surface.material().materialIndex());
@@ -404,8 +406,8 @@ final class RtTerrainMesher {
             q.nx = nx; q.ny = ny; q.nz = nz;
 
             ChunkSectionLayer layer = quad.materialInfo().layer();
-            q.cutout = layer != ChunkSectionLayer.SOLID;
-            q.translucent = layer == ChunkSectionLayer.TRANSLUCENT;
+            q.translucent = layer == ChunkSectionLayer.TRANSLUCENT || MinecraftMaterialClassifier.isGlass(state);
+            q.cutout = !q.translucent && layer != ChunkSectionLayer.SOLID;
 
             float tr = 1f;
             float tg = 1f;
@@ -585,7 +587,7 @@ final class RtTerrainMesher {
                 prim.add(0f);
                 prim.add(q.material.materialIndex());
                 prim.add(q.material.textured() ? 1f : 0f);
-                prim.add(q.translucent ? 1f : 0f); // base alpha controls transmission
+                prim.add(q.translucent ? 1f : 0f); // closed dielectric boundary
                 prim.add(0f); // aux1
                 g.lightSprites.add(q.sprite);
                 g.materialEmissions.add(q.materialEmission);
@@ -600,7 +602,7 @@ final class RtTerrainMesher {
         final long[] uv = new long[4];
         float nx, ny, nz;
         boolean cutout; // non-SOLID render layer (alpha-tested) — also an overlay candidate
-        boolean translucent; // TRANSLUCENT layer (stained glass / ice): colored-transmission dielectric
+        boolean translucent; // fully covered dielectric boundary, independent of the raster layer
         boolean tinted; // tintIndex >= 0 — the tinted member of a base+overlay pair
         float tr, tg, tb, emission;
         MinecraftMaterialEmission materialEmission;

@@ -251,17 +251,16 @@ abstract class RtEntityCollectorBase implements SubmitNodeCollector {
     /** Capture one baked quad with its atlas texture and source-level surface selector. */
     private void addQuad(Matrix4f pose, BakedQuad q, int[] tintLayers) {
         TextureAtlasSprite sprite = q.materialInfo().sprite();
-        // Baked item quads retain the block model's material layer. Mirror terrain's classification so
-        // dropped and held translucent block items (glass, ice, etc.) use the thin-dielectric variant
-        // instead of the opaque DEFAULT variant. No BlockState reaches submitItem, so the layer is the
-        // authoritative semantic available here; glass-model roughness/IOR are profile-independent.
+        // Baked items retain raster layers and sprite identities, including cutout-layer clear glass.
         ChunkSectionLayer layer = q.materialInfo().layer();
-        boolean transmissive = layer == ChunkSectionLayer.TRANSLUCENT;
+        boolean transmissive = layer == ChunkSectionLayer.TRANSLUCENT
+                || dev.comfyfluffy.caustica.minecraft.client.material.MinecraftMaterialClassifier
+                        .isGlassMaterial(MinecraftResourceIds.material(sprite));
         boolean cutout = !transmissive && layer != ChunkSectionLayer.SOLID;
         capture.currentMaterial = spriteMaterial(sprite, transmissive ? MinecraftMaterialProfile.SMOOTH_DIELECTRIC
                         : MinecraftMaterialProfile.ROUGH_DIELECTRIC,
                 transmissive);
-        capture.currentCoverage = transmissive ? MinecraftEntityMesh.Coverage.STOCHASTIC
+        capture.currentCoverage = transmissive ? MinecraftEntityMesh.Coverage.OPAQUE
                 : cutout ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers));

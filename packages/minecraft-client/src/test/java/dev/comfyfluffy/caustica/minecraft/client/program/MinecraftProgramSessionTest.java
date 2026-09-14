@@ -105,7 +105,10 @@ final class MinecraftProgramSessionTest {
         assertEquals(11L, channel.volumes.getFirst().implementationData().bits());
         assertSame(MinecraftProgramTypes.PRIMITIVE_DATA, channel.volumes.getFirst().bindingDataType());
         assertSame(MinecraftProgramTypes.INSTANCE_DATA, channel.volumes.getFirst().instanceDataType());
-        assertEquals(2, channel.volumes.size());
+        assertEquals(3, channel.volumes.size());
+        assertEquals("MinecraftDielectricVolume", channel.volumes.get(1).implementation().type());
+        assertEquals(11L, channel.volumes.get(1).implementationData().bits());
+        assertSame(registration.exports().minecraft().dielectricVolume(), channel.volumeIds.get(1));
         var fogDefinition = channel.volumes.getLast().implementation();
         assertEquals("caustica_fog_medium", fogDefinition.module());
         assertEquals("FogVolumeModel", fogDefinition.type());

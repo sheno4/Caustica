@@ -8,6 +8,8 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SoundType;
+import net.minecraft.world.level.block.StainedGlassBlock;
+import net.minecraft.world.level.block.StainedGlassPaneBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.Set;
@@ -16,6 +18,7 @@ import java.util.Set;
 public final class MinecraftMaterialClassifier {
     public static final float ICE_IOR = 1.309f;
     public static final float WATER_IOR = 1.333f;
+    public static final float GLASS_IOR = 1.5f;
 
     private static final Set<ResourceId> ICE_MATERIALS = Set.of(
             ResourceId.of("minecraft", "block/ice"),
@@ -55,7 +58,22 @@ public final class MinecraftMaterialClassifier {
 
     public static float dielectricIor(ResourceId material) {
         if (material == null) return OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR;
+        if (isGlassMaterial(material)) return GLASS_IOR;
         return ICE_MATERIALS.contains(material) ? ICE_IOR : OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR;
+    }
+
+    public static boolean isGlass(BlockState state) {
+        return state != null && (state.is(Blocks.GLASS) || state.is(Blocks.GLASS_PANE)
+                || state.is(Blocks.TINTED_GLASS) || state.getBlock() instanceof StainedGlassBlock
+                || state.getBlock() instanceof StainedGlassPaneBlock);
+    }
+
+    public static boolean isGlassMaterial(ResourceId material) {
+        if (material == null || !material.namespace().equals("minecraft")) return false;
+        String path = material.path();
+        return path.equals("block/glass") || path.equals("block/glass_pane_top")
+                || path.equals("block/tinted_glass") || path.endsWith("_stained_glass")
+                || path.endsWith("_stained_glass_pane_top");
     }
 
     private static boolean isMetal(SoundType sound) {

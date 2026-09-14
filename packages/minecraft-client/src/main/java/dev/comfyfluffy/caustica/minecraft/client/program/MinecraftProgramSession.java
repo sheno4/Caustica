@@ -348,6 +348,10 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                             SHADERS.definition("caustica_water_surface", "WaterVolume"),
                             roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                             MinecraftProgramTypes.INSTANCE_DATA)),
+                    builder.volume(new VolumeDefinition<>(
+                            SHADERS.definition("caustica_minecraft_material", "MinecraftDielectricVolume"),
+                            roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
+                            MinecraftProgramTypes.INSTANCE_DATA)),
                     builder.environment(new EnvironmentDefinition<>(
                             dimension.equals(NETHER)
                                     ? SHADERS.definition("caustica_minecraft_dimension_skies", "MinecraftNetherSky")

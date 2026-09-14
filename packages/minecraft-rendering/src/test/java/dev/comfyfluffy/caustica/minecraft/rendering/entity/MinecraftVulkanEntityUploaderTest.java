@@ -100,7 +100,7 @@ final class MinecraftVulkanEntityUploaderTest {
         var materials = MinecraftMaterialLookup.compile(new ResourcePackEpoch(1), List.of(), List.of(),
                 MinecraftMaterialPageCompiler.compile(List.of()));
         return new MinecraftVulkanEntityUploader(gpu, materials,
-                new MinecraftPrograms(null, null, null, null, null), resolver,
+                new MinecraftPrograms(null, null, null, null, null, null), resolver,
                 retired -> { throw new AssertionError("resource ownership requires a completed upload"); });
     }
 
@@ -260,6 +260,16 @@ final class MinecraftVulkanEntityUploaderTest {
                 key.profile());
         assertEquals(dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTopology.MEDIUM_BOUNDARY,
                 key.topology());
+    }
+
+    @Test void fullyCoveredGlassAndOpaqueSurfacesKeepSeparateVolumeRanges() {
+        var glass = new MinecraftEntityMesh.Material(ResourceId.of("test", "glass"), null,
+                MinecraftEntityMesh.Program.MATERIAL,
+                dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile.SMOOTH_DIELECTRIC, true);
+        var opaque = material("opaque", MinecraftEntityMesh.Program.MATERIAL);
+        var source = mesh(List.of(triangle(glass, MinecraftEntityMesh.Coverage.OPAQUE),
+                triangle(opaque, MinecraftEntityMesh.Coverage.OPAQUE)));
+        assertEquals(2, MinecraftVulkanEntityUploader.geometryRanges(source).size());
     }
 
     @Test void cleanupContinuesAndAggregatesFailures() {

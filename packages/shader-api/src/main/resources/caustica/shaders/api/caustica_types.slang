@@ -276,6 +276,8 @@ public struct VolumeInput {
     /** This volume slot's binding word; the placement word follows it. */
     public uint64_t bindingData;
     public uint64_t instanceData;
+    /** Boundary triangle within its geometry; zero for an initial view-medium evaluation. */
+    public uint primitiveIndex;
     /** Boundary position in the current scene-origin coordinate system. */
     public float3 boundaryPosition;
     /** Precision-safe boundary position which compensates for scene-origin rebases. */
