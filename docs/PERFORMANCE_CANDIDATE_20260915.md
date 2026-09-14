@@ -204,3 +204,24 @@ An endpoint-reuse candidate writes a 16-byte geometry/primitive/barycentric hit 
 The first candidate run averages 26.959/23.346/26.723 ms in the dome and 20.900/17.645/21.088 ms in the jungle, for default/off/default-repeat. It is slower and more variable than the prior retained-build sequence. A nearby restored-source control is required before attributing that difference. Exact same-frame cached-hit validation is prepared but deferred until the performance comparison justifies retaining the approach.
 
 The nearby control in `tmp/endpoint-reuse-control` averages **26.142/22.067/26.256 ms** in the dome and **21.018/17.602/20.859 ms** in the jungle. Both runs have the same settled populations and no frame above 33.3 ms. A control GPU observation reports 2910 MHz graphics, 16001 MHz memory, 66°C and 277 W. The control also has wider frame-time variation than the earlier retained run, so that variation is not established as a candidate effect. Endpoint reuse offers no clear jungle benefit and costs approximately 0.47–1.28 ms in the dome across these intervals. The candidate is discarded; the added memory and build live state are not justified by this result. Its prepared correctness diagnostic was not run because the performance criterion failed. The retained source is restored and both clients exited normally.
+
+## Fixed-time control and reordered build tracing
+
+A further candidate applies the existing fill pass's hit-object tracing/reordering policy to build, passing the primary or secondary visibility mask explicitly. Its complete patch, including the new build entry point, is archived in `tmp/build-ser-performance/candidate.patch`. Renderer-raytracing checks pass (`tmp/fog-local/build-ser-check.log`). It is not retained.
+
+Both candidate and restored-source control freeze time at 1000 with `minecraft:advance_time` disabled, run the same dome-to-jungle route at 4K Performance RR, and record 600 RT frames per interval after geometry settles. The original time, advance-time rule, camera, fog and window settings are restored afterward. Both clients exit normally. Means in milliseconds:
+
+| Scene/configuration | Retained control | Reordered build |
+| --- | ---: | ---: |
+| Dome, default fog | 24.902 | 43.483 |
+| Dome, fog off | 21.145 | 39.663 |
+| Dome, default fog repeat | 24.961 | 43.477 |
+| Jungle, default fog | 19.973 | 21.894 |
+| Jungle, fog off | 16.808 | 18.743 |
+| Jungle, default fog repeat | 19.990 | 21.893 |
+
+The retained control has no frames above 33.3 ms; its largest frame is 27.447 ms. The candidate's dome frames all exceed 33.3 ms, but none exceed 50 ms. Candidate GPU observations outside timing windows report approximately 2910–2940 MHz graphics and 16001 MHz memory. This is a clear regression, especially for the glass dome; ordinary timing does not establish whether register spilling, reordering overhead or another GPU effect causes it. The retained jungle is approximately 50 FPS and the dome approximately 40 FPS with default fog, leaving the dome below target.
+
+All twelve saved scene-color, normal/roughness and primary-depth buffers across the two builds contain no nonfinite values. Dome color previews were inspected and are visually consistent, but different jitter and temporal history prevent an exact image equivalence claim. Slang v2026.14.1's `HitObject.GetRayDesc()` implementation lowers `TMax` to `OpHitObjectGetRayTMaxNV` or its EXT counterpart; no hit-distance error was established by this investigation. Timing summaries, captures and finite-value checks are in `tmp/build-ser-performance` and `tmp/build-ser-control`.
+
+Earlier sequential comparisons in this document allowed time of day to advance. Their measured values remain valid observations, but changing sun direction is an additional workload confound, including for the material-lifetime comparison. Those percentage differences should not be read as fully isolated effects. Future paired benchmarks freeze time of day as in this control.
