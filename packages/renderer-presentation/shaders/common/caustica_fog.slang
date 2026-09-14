@@ -8,28 +8,23 @@ float3 unproject(float2 uv, float depth) {
              + pc.clipZ * depth + pc.clipW;
     return q.xyz / q.w;
 }
-float distanceAt(float2 uv, float maximumDistance) {
+float4 depthFootprint(float2 uv, out float4 weights, out bool continuous) {
     Texture2D<float> depth = ResourceDescriptorHeap[pc.depthIndex];
     uint w, h; depth.GetDimensions(w, h);
     // The depth samples include trace jitter, whereas the post image uses an unjittered grid.
     float2 pixel = uv * float2(w,h) - 0.5 - pc.traceData.xy;
     int2 base = int2(floor(pixel));
     float2 blend = pixel - floor(pixel);
-    int2 nearest = clamp(int2(floor(pixel+0.5)),int2(0),int2(w-1,h-1));
-    float reference = depth.Load(int3(nearest,0));
-    float sum = 0.0;
-    float weight = 0.0;
+    float4 depths;
     for(int y=0;y<2;y++) for(int x=0;x<2;x++) {
         int2 p = clamp(base+int2(x,y),int2(0),int2(w-1,h-1));
-        float d = depth.Load(int3(p,0));
-        // Projected depth is affine on a plane; reject depth discontinuities before interpolation.
-        if(abs(d-reference) > max(reference*0.05,1e-8)) continue;
-        float k = (x == 0 ? 1-blend.x : blend.x)*(y == 0 ? 1-blend.y : blend.y);
-        sum += d*k;
-        weight += k;
+        depths[y*2+x] = depth.Load(int3(p,0));
+        weights[y*2+x] = (x == 0 ? 1-blend.x : blend.x)*(y == 0 ? 1-blend.y : blend.y);
     }
-    float d = sum/weight;
-    return d <= 0.0 ? maximumDistance : min(length(unproject(uv,d)), maximumDistance);
+    float maximum = max(max(depths.x, depths.y), max(depths.z, depths.w));
+    float minimum = min(min(depths.x, depths.y), min(depths.z, depths.w));
+    continuous = maximum - minimum <= max(maximum * 0.05, 1e-8);
+    return depths;
 }
 float2 fogInterval(uint step, float maximumDistance) {
     float2 t = float2(step, step + 1u) / float(pc.steps);
@@ -70,6 +65,19 @@ float4 fogPrefixAt(uint2 pixel, uint2 extent, float distance, float maximumDista
     float partialT = pow(segmentT, fraction);
     float scatteringFraction = 1.0 - segmentT > 1e-5 ? (1.0 - partialT) / (1.0 - segmentT) : fraction;
     return float4(lerp(before.rgb, after.rgb, scatteringFraction), before.a * partialT);
+}
+float4 fogTransportAt(float2 uv, float depth, uint2 extent, float maximumDistance) {
+    float distance = depth <= 0.0 ? maximumDistance : min(length(unproject(uv, depth)), maximumDistance);
+    float2 grid = uv * float2(extent) - 0.5;
+    int2 base = int2(floor(grid));
+    float2 blend = grid - floor(grid);
+    float4 volume = 0.0;
+    for (int y=0;y<2;y++) for (int x=0;x<2;x++) {
+        int2 p = clamp(base+int2(x,y), int2(0), int2(extent-1));
+        float weight = (x == 0 ? 1-blend.x : blend.x)*(y == 0 ? 1-blend.y : blend.y);
+        volume += fogPrefixAt(uint2(p), extent, distance, maximumDistance) * weight;
+    }
+    return volume;
 }
 float4 previousLighting(float3 center, uint2 extent, float maximumDistance, float3 lightDirection) {
     float4 q = pc.previousClipX * center.x + pc.previousClipY * center.y
@@ -182,15 +190,18 @@ public void runFog(uint3 id) {
     } else {
         Texture2D<float4> fog = ResourceDescriptorHeap[pc.fogIndex];
         uint fw,fh; fog.GetDimensions(fw,fh);
-        float2 f = uv*float2(fw,fh)-0.5;
-        int2 base = int2(floor(f));
-        float2 frac = f-floor(f);
-        float distance = distanceAt(uv, medium.profile.w);
-        float4 volume = 0.0;
-        for(int y=0;y<2;y++) for(int x=0;x<2;x++) {
-            int2 p = clamp(base+int2(x,y),int2(0),int2(fw-1,fh-1));
-            float spatial = (x == 0 ? 1-frac.x : frac.x)*(y == 0 ? 1-frac.y : frac.y);
-            volume += fogPrefixAt(uint2(p), uint2(fw,fh), distance, medium.profile.w) * spatial;
+        float4 weights;
+        bool continuous;
+        float4 depths = depthFootprint(uv, weights, continuous);
+        float4 volume;
+        if (continuous) {
+            // Projected depth is affine on a continuous surface.
+            volume = fogTransportAt(uv, dot(depths, weights), uint2(fw,fh), medium.profile.w);
+        } else {
+            // Coverage mixes transport, not depth: foreground and background retain their own fog lengths.
+            volume = 0.0;
+            for (uint i=0;i<4;i++) volume += weights[i]
+                    * fogTransportAt(uv, depths[i], uint2(fw,fh), medium.profile.w);
         }
         if(pc.debug == 1) { output[id.xy] = float4(volume.aaa,1.0); return; }
         if(pc.debug == 2) { output[id.xy] = float4(volume.rgb,1.0); return; }
