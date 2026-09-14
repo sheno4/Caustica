@@ -252,3 +252,33 @@ A fixed-time candidate and nearby restored-source control repeat the 36,296-sect
 All twelve intervals have no frame above 33.3 ms. The candidate's maximum is 22.622 ms. This pair supports approximately 12% lower dome frame time and 5% lower jungle frame time with fog. The dome reaches approximately 55 FPS without fog and 46 FPS with fog; the jungle reaches approximately 52 FPS with fog. The dome still misses the default-fog target. These are ordinary JFR HostLoop measurements, not GPU stage timings; Nsight follow-up is still required to attribute the GPU change.
 
 Candidate scene-color, normal/roughness and primary-depth captures contain no nonfinite values. Dome and jungle previews were inspected and are visually consistent with the control scenes; dynamic guide stability and the broader scene matrix remain to be repeated. Renderer-raytracing and renderer-runtime checks pass. Both benchmark clients restored their camera, time, fog and window settings and exited normally. Artifacts, the complete candidate patch and the feedback oracle are in `tmp/parallel-plane-performance`; nearby control recordings and summary are in `tmp/parallel-plane-control`.
+
+Nsight Graphics UI captures of retained revision `11729255` use the same settled dome at frozen time 1000, Top-Level Triage, real-time shader profiling, and a 2280 MHz base graphics clock. Files and observations are in `tmp/parallel-plane-nsight`.
+
+| Dome configuration | Whole frame | Build | Fill | Resolve |
+| --- | ---: | ---: | ---: | ---: |
+| Fog off | 20.96 ms | 6.36 ms | 7.37 ms | 1.19 ms |
+| Default fog | 27.13 ms | 7.02 ms | 9.66 ms | 1.21 ms |
+
+The fog-off fill plus resolve takes 8.56 ms, compared with 11.74 ms for the earlier serial fill including export. Active threads per warp in fill increase from 18.8 to 22.4, and predicated threads from 17.7 to 21.0. This supports improved scheduling; it does not prove reduced register spilling. Full-stage Flame Graph dependency percentages are global-load/ray-tracing/local-load 45.06/29.76/16.17 for the earlier serial fill and 34.88/37.00/21.43 for independent fill. Work moved into resolve, so these scopes are not identical. The earlier trace also allowed time to advance and includes GPU-context interruptions.
+
+The default-fog capture includes approximately one-millisecond interruptions from another GPU context during fill and reconstruction. Its whole-frame duration is not an ordinary-client mean or an isolated fog-cost measurement. Fill reports 22.4 active threads per warp and dependency percentages of 37.75 global load, 38.81 ray tracing and 16.56 local load. No new event-loss warning was observed. The profiler client restored its initial camera/fog/window and the verified prior time baseline (1417000, advance-time enabled), then exited. The startup time itself was not saved for this profiler run.
+
+A subsequent ordinary-client maximum-speed jungle flight uses spectator speed 0.2 with sprint, level camera, fixed time 1000 and default fog at 4K. It starts with 36,796 resident geometry sections. The 20-second flight averages **15.322 ms**, p99 **22.147 ms**, maximum **71.957 ms**, with two frames above 33.3 ms and one above 50 ms. The 30-second rest averages **14.237 ms**, p99 **16.168 ms**, maximum **88.444 ms**, with one frame above 33.3 ms. Neither interval contains a frame above 100 ms. At flight end 11,135 geometry sections are resident and 54,625 requests pending; after rest 30,958 are resident and all 3,720 remaining requests are neighbor-blocked. This run recovered its streaming backlog. It is not a matched performance comparison with the earlier advancing-time flight.
+
+JFR attributes 66.434 ms of flight loop 869 / frame 20245's 71.957 ms to `world.compositeAndUi`. Nested `frame.composite` takes 66.289 ms, including 13.123 ms in the host-side `vkCmdCopyImage2` recording scope and 2.337 ms in scene effects. The remaining composite time is not covered by enough nested scopes to attribute it. These elapsed CPU scopes include possible driver waits and scheduling; they do not measure GPU copy execution. Recorded GC pauses are only 0.012 and 0.011 ms. The worst rest loop has 4.556 ms in outer mod callbacks; its remaining time is unattributed. Original JFRs, manifest, summaries and scope reports are retained under `tmp/parallel-plane-flight`. The client restored camera, fog, time, speed and window settings and exited normally.
+
+The retained build also repeats six scenes at 4K Performance RR with default fog and fixed time 1000. Each scene settles before a screenshot and three JFR intervals: 15 seconds static, 20 seconds of continuous turning/forward movement, and 15 seconds rest. Means in milliseconds:
+
+| Scene | Static | Turning | Rest |
+| --- | ---: | ---: | ---: |
+| Lake | 18.35 | 18.93 | 18.54 |
+| Cave | 18.61 | 18.50 | 18.62 |
+| Indoor room | 18.76 | 18.65 | 18.59 |
+| Glass dome | 23.23 | 22.04 | 23.17 |
+| Underwater fixture | 16.79 | 17.02 | 16.74 |
+| Nether cavern | 19.03 | 19.60 | 19.20 |
+
+Five scenes average above 50 FPS in all three intervals; the dome remains approximately 43–45 FPS. The two frames above 33.3 ms are indoor turning (66.936 ms, 1.843 ms in outer mod callbacks) and indoor rest (38.963 ms, 2.576 ms in outer callbacks). No frame exceeds 100 ms. Other intervals' maxima range from 20.25 to 27.78 ms. These are absolute retained-build observations across this route, not paired controls for a specific change. The dome's different route/population and uncontrolled boost clocks also preclude treating its difference from the earlier two-scene benchmark as a regression.
+
+The six captured views were inspected and match their fixtures. The underwater case is a small controlled basin. Fog being enabled does not establish a substantial fog workload in every scene: the captured density coverage uses skylight, and the medium also excludes positions below its coarse terrain height. Nether fog presence is not established by this benchmark. The indoor view still shows the previously identified ambient fog lighting issue; a static screenshot does not validate temporal foliage-edge stability. Settings, time, window and camera were restored, the client returned to the Overworld, and it exited normally. Artifacts are in `tmp/parallel-plane-matrix`.
