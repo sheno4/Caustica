@@ -13,6 +13,36 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class TerrainDispatchPlannerTest {
+    @Test void columnRankingPreservesFullSectionOrderAcrossHorizontalTiesAndVerticalMovement() {
+        var fixture = new Fixture();
+        for (int x = -6; x <= 6; x++) for (int z = -6; z <= 6; z++) {
+            fixture.planner.column(RtTerrain.columnKey(x, z), true);
+        }
+        var keys = new ArrayList<Long>();
+        for (int x = -5; x <= 5; x++) for (int z = -5; z <= 5; z++) for (int y = -4; y < 20; y++) {
+            keys.add(RtTerrain.sectionKey(x, y, z));
+        }
+        java.util.Collections.shuffle(keys, new Random(47));
+        keys.forEach(fixture.updates::want);
+        var replaced = keys.subList(0, 90);
+        for (long key : replaced) fixture.updates.complete(fixture.updates.sections.get(key).request, "visible");
+        fixture.updates.published(fixture.updates.ready());
+        fixture.updates.dirty(replaced);
+        var random = new Random(23);
+        for (int pass = 0; pass < 12; pass++) {
+            for (int removed = 0; removed < 10; removed++) fixture.updates.remove(keys.removeFirst());
+            int x = pass < 6 ? 0 : random.nextInt(11) - 5;
+            int y = random.nextInt(24) - 4, z = pass < 6 ? 0 : random.nextInt(11) - 5;
+            var expected = keys.stream().sorted(java.util.Comparator
+                    .comparingInt((Long key) -> fixture.updates.sections.get(key).ready ? 0 : 1)
+                    .thenComparingLong(key -> RtTerrain.distance(key, x, y, z))
+                    .thenComparingLong(Long::longValue)).limit(128).toList();
+            fixture.planner.request(new TerrainDispatchPlanner.Context(fixture.epoch, x, y, z, -4, 19, 128), true);
+            fixture.run();
+            assertEquals(expected, fixture.planner.poll().candidates().stream().map(TerrainDispatchPlanner.Candidate::key).toList());
+        }
+    }
+
     @Test void pendingDeltasRetainPrioritiesAcrossCameraChangesAndVisibleReplacement() {
         var fixture = new Fixture();
         fixture.load(-1, 9);

@@ -18,19 +18,26 @@ final class TerrainDispatchPlanner<T> {
     record Context(long epoch, int x, int y, int z, int minY, int maxY, int batchSize) { }
     record Candidate<T>(long key, TerrainUpdates.Request<T> request, boolean replacesVisible) { }
     record Plan<T>(long epoch, List<Candidate<T>> candidates) { }
-    private record Ranked<T>(Candidate<T> candidate, long distance) { }
+    private record Ranked<T>(long key, Column<T> column, long distance) { }
+    private static final class Column<T> {
+        final Long2ObjectOpenHashMap<Candidate<T>> candidates = new Long2ObjectOpenHashMap<>();
+        Ranked<T> rank;
+        boolean available;
+        int replacements;
+    }
     private record Input<T>(long generation, Context context,
                             Long2ObjectOpenHashMap<Candidate<T>> changes,
                             Long2BooleanOpenHashMap columns, Retained<T> retained) { }
 
     private static final class Retained<T> {
-        final Long2ObjectOpenHashMap<Ranked<T>> candidates = new Long2ObjectOpenHashMap<>();
+        final Long2ObjectOpenHashMap<Candidate<T>> candidates = new Long2ObjectOpenHashMap<>();
+        final Long2ObjectOpenHashMap<Column<T>> columns = new Long2ObjectOpenHashMap<>();
         final LongOpenHashSet loaded = new LongOpenHashSet();
         final TreeSet<Ranked<T>> eligible = new TreeSet<>(Comparator
-                .comparingInt((Ranked<T> item) -> item.candidate.replacesVisible ? 0 : 1)
-                .thenComparingLong(Ranked::distance)
-                .thenComparingLong(item -> item.candidate.key));
+                .comparingLong((Ranked<T> item) -> item.distance)
+                .thenComparingLong(Ranked::key));
         Context context;
+        int replacements;
     }
 
     private final BiConsumer<Runnable, Runnable> executor;
@@ -139,8 +146,7 @@ final class TerrainDispatchPlanner<T> {
     private static <T> Plan<T> prepare(Input<T> input) {
         Context context = input.context;
         Retained<T> state = input.retained;
-        boolean rerank = state.context == null || context.x != state.context.x
-                || context.y != state.context.y || context.z != state.context.z;
+        boolean rerank = state.context == null || context.x != state.context.x || context.z != state.context.z;
         var affectedColumns = new LongOpenHashSet();
         for (var entry : input.columns.long2BooleanEntrySet()) {
             long column = entry.getLongKey();
@@ -152,49 +158,93 @@ final class TerrainDispatchPlanner<T> {
             }
         }
         for (var entry : input.changes.long2ObjectEntrySet()) {
-            Ranked<T> previous = state.candidates.remove(entry.getLongKey());
-            if (previous != null) state.eligible.remove(previous);
+            long key = entry.getLongKey();
+            long columnKey = RtTerrain.columnKey(RtTerrain.sectionX(key), RtTerrain.sectionZ(key));
+            Column<T> column = state.columns.get(columnKey);
+            Candidate<T> previous = state.candidates.remove(key);
+            if (column != null) {
+                column.candidates.remove(key);
+                if (previous != null && previous.replacesVisible) {
+                    column.replacements--;
+                    state.replacements--;
+                }
+            }
             Candidate<T> candidate = entry.getValue();
             if (candidate != null) {
-                Ranked<T> next = rank(candidate, context);
-                state.candidates.put(candidate.key, next);
-                if (!rerank && available(state, candidate.key)) state.eligible.add(next);
+                state.candidates.put(key, candidate);
+                if (column == null) {
+                    column = new Column<>();
+                    column.rank = rank(columnKey, column, context);
+                    state.columns.put(columnKey, column);
+                    affectedColumns.add(columnKey);
+                }
+                column.candidates.put(key, candidate);
+                if (candidate.replacesVisible) {
+                    column.replacements++;
+                    state.replacements++;
+                }
+            } else if (column != null && column.candidates.isEmpty()) {
+                state.eligible.remove(column.rank);
+                state.columns.remove(columnKey);
+            }
+        }
+        for (long key : affectedColumns) {
+            Column<T> column = state.columns.get(key);
+            if (column == null) continue;
+            column.available = neighborsLoaded(state, (int) (key >> 32), (int) key);
+            if (!rerank) {
+                if (column.available) state.eligible.add(column.rank);
+                else state.eligible.remove(column.rank);
             }
         }
         if (rerank) {
             state.eligible.clear();
-            for (var entry : state.candidates.long2ObjectEntrySet()) {
-                Ranked<T> next = rank(entry.getValue().candidate, context);
-                entry.setValue(next);
-                if (available(state, next.candidate.key)) state.eligible.add(next);
-            }
-        } else {
-            for (long column : affectedColumns) {
-                int x = (int) (column >> 32), z = (int) column;
-                boolean available = neighborsLoaded(state, x, z);
-                for (int y = context.minY; y <= context.maxY; y++) {
-                    Ranked<T> candidate = state.candidates.get(RtTerrain.sectionKey(x, y, z));
-                    if (candidate == null) continue;
-                    if (available) state.eligible.add(candidate);
-                    else state.eligible.remove(candidate);
-                }
+            for (var entry : state.columns.long2ObjectEntrySet()) {
+                Column<T> column = entry.getValue();
+                column.rank = rank(entry.getLongKey(), column, context);
+                if (column.available) state.eligible.add(column.rank);
             }
         }
         state.context = context;
-        var selected = new ArrayList<Candidate<T>>(Math.min(context.batchSize, state.eligible.size()));
-        for (Ranked<T> candidate : state.eligible) {
-            if (selected.size() == context.batchSize) break;
-            selected.add(candidate.candidate);
-        }
+        var selected = new ArrayList<Candidate<T>>(context.batchSize);
+        if (state.replacements != 0) select(state, context, true, selected);
+        if (selected.size() < context.batchSize) select(state, context, false, selected);
         return new Plan<>(context.epoch, List.copyOf(selected));
     }
 
-    private static <T> Ranked<T> rank(Candidate<T> candidate, Context context) {
-        return new Ranked<>(candidate, RtTerrain.distance(candidate.key, context.x, context.y, context.z));
+    /** Equal horizontal distances share vertical and identity tie-breaking across columns. */
+    private static <T> void select(Retained<T> state, Context context, boolean replacesVisible,
+                                   ArrayList<Candidate<T>> selected) {
+        var ring = new ArrayList<Candidate<T>>();
+        long distance = -1;
+        for (Ranked<T> rank : state.eligible) {
+            int count = replacesVisible ? rank.column.replacements
+                    : rank.column.candidates.size() - rank.column.replacements;
+            if (count == 0) continue;
+            if (rank.distance != distance) {
+                append(ring, context, selected);
+                if (selected.size() == context.batchSize) return;
+                distance = rank.distance;
+            }
+            for (Candidate<T> candidate : rank.column.candidates.values()) {
+                if (candidate.replacesVisible == replacesVisible) ring.add(candidate);
+            }
+        }
+        append(ring, context, selected);
     }
 
-    private static boolean available(Retained<?> state, long key) {
-        return neighborsLoaded(state, RtTerrain.sectionX(key), RtTerrain.sectionZ(key));
+    private static <T> void append(ArrayList<Candidate<T>> ring, Context context,
+                                   ArrayList<Candidate<T>> selected) {
+        ring.sort(Comparator.comparingLong((Candidate<T> candidate) ->
+                RtTerrain.distance(candidate.key, context.x, context.y, context.z)).thenComparingLong(Candidate::key));
+        int count = Math.min(ring.size(), context.batchSize - selected.size());
+        for (int i = 0; i < count; i++) selected.add(ring.get(i));
+        ring.clear();
+    }
+
+    private static <T> Ranked<T> rank(long key, Column<T> column, Context context) {
+        long dx = (int) (key >> 32) - context.x, dz = (int) key - context.z;
+        return new Ranked<>(key, column, dx * dx + dz * dz);
     }
 
     private static boolean neighborsLoaded(Retained<?> state, int x, int z) {
