@@ -26,6 +26,31 @@ float4 depthFootprint(float2 uv, out float4 weights, out bool continuous) {
     continuous = maximum - minimum <= max(maximum * 0.05, 1e-8);
     return depths;
 }
+float fogDepthLimit(uint2 pixel, uint2 extent, float maximumDistance) {
+    Texture2D<float> depth = ResourceDescriptorHeap[pc.depthIndex];
+    uint w,h; depth.GetDimensions(w,h);
+    // A fog texel contributes across its full bilinear support. Include every jittered depth
+    // footprint that composition can read there, including the adjacent depth sample.
+    float2 lowUv = max(float2(pixel) - 0.5, 0.0) / float2(extent);
+    float2 highUv = min(float2(pixel) + 1.5, float2(extent)) / float2(extent);
+    int2 low = clamp(int2(floor(lowUv * float2(w,h) - 0.5 - pc.traceData.xy)), int2(0), int2(w-1,h-1));
+    int2 high = clamp(int2(floor(highUv * float2(w,h) - 0.5 - pc.traceData.xy)) + 1, int2(0), int2(w-1,h-1));
+    float minimumDepth = 1.0, maximumDepth = 0.0;
+    for (int y=low.y;y<=high.y;y++) for (int x=low.x;x<=high.x;x++) {
+        float value = depth.Load(int3(x,y,0));
+        if (value <= 0.0) return maximumDistance;
+        minimumDepth = min(minimumDepth,value);
+        maximumDepth = max(maximumDepth,value);
+    }
+    // The clipped view frustum is convex; its greatest distance is at a corner.
+    float limit = 0.0;
+    for (uint y=0;y<2;y++) for (uint x=0;x<2;x++) {
+        float2 uv = float2(x == 0 ? lowUv.x : highUv.x, y == 0 ? lowUv.y : highUv.y);
+        limit = max(limit, length(unproject(uv,minimumDepth)));
+        limit = max(limit, length(unproject(uv,maximumDepth)));
+    }
+    return min(maximumDistance, limit + max(1e-4,limit*1e-4));
+}
 float2 fogInterval(uint step, float maximumDistance) {
     float2 t = float2(step, step + 1u) / float(pc.steps);
     float2 bounds = maximumDistance * t * t;
@@ -123,11 +148,16 @@ public void runFog(uint3 id) {
         float4* prefix = (float4*)pc.prefixAddress;
         // Each depth plane is contiguous so neighboring invocations access neighboring transport values.
         uint prefixBase = id.x + id.y * w;
+        // The extra plane retains the conservative limit across all eight-sample batches.
+        uint limitIndex = prefixBase + (pc.steps+1u)*w*h;
+        if (firstStep == 0u) prefix[limitIndex] = float4(fogDepthLimit(id.xy,uint2(w,h),medium.profile.w),0,0,0);
+        float depthLimit = prefix[limitIndex].x;
         for(uint j=0;j<visibilityCount;j++) {
             uint step = firstStep+j;
             float2 interval = fogInterval(step, medium.profile.w);
             float3 p = direction*(interval.x+fogSamplePhase(id.xy,step)*interval.y);
-            float sigma = step < pc.steps ? intervalDensity(medium, direction, interval) : 0.0;
+            float sigma = step < pc.steps && interval.x <= depthLimit
+                    ? intervalDensity(medium, direction, interval) : 0.0;
             // The integration dispatch consumes this density before replacing it with cumulative transport.
             if (step < pc.steps) prefix[prefixBase+(step+1u)*w*h] = float4(0,0,0,sigma);
             uint base = (visibilityBase+j)*3;
