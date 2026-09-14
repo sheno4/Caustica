@@ -52,3 +52,32 @@ The fifth fixture is an open sandstone basin with an exposed water-to-air surfac
 | Reconstruction routes | RR and NRD/SR at the same trace/output dimensions | Finite guides; motion stabilizes after stopping; fog does not change physical depth/normal meaning |
 
 Transmittance diagnostics require post mode, bloom disabled and `fog.debug=1`; capture `scene-color` without dividing by pre-exposure and check finite values within [0,1]. Restore normal fog/debug/bloom and allow exposure to settle before beauty images or timing. A handful of moving stills cannot establish flicker-free video; use repeated short sequences at the reported motion speed, with a separate readback-free performance interval.
+
+## Paired 4K flying performance
+
+`check_fog_flight.py` records eight routes: off/post at each of four headings and times. It defaults to the initial player position; an explicit origin makes repeated runs comparable. Each route requires a3840x2160 framebuffer and drained terrain before recording, flies200 ticks at spectator speed0.2 while turning8degrees/second, waits120frames, returns to its origin at pitch65, and records600moreframes. These intervals contain no image readbacks. Inspect actual elapsed distance/camera poses and newly queued terrain in the manifest; the initial drain does not imply flight streaming is absent.
+
+```powershell
+uv run python tools/debug/check_fog_flight.py --copied-world YOUR_DISPOSABLE_SAVE --output tmp/fog-review/flight4k --origin -1632.065859 180 -6503.652155 --headings 47.52295 -43 137 -137 --times 1000 1000 12000 12000
+```
+
+The earlier eight-route artifacts `tmp/fog-review/prefix-flight4k/` and `tmp/fog-review/temporal-flight4k-diagnostics/` use that explicit origin (approximately-1632,180,-6503), headings and times. The first is the uninstrumented prefix baseline; the second uses shadow traversal diagnostics. They are different instrumentation conditions and must not be compared as equal-cost performance measurements. For a separately instrumented binary add `--diagnostics`; that flag selects the extra JFR event, not shader instrumentation itself.
+
+The tool restores original input speed, pose, world time/progression, fog settings, window size and game mode in `finally`; failed flight capture still stops JFR. Begin with unfrozen ticks and no held keys. The manifest records completion separately from restoration success. Framebuffer dimensions are verified before every flight, while reconstruction and frame-generation settings remain recorded conditions from status.
+
+## Temporal visibility pair: measured limits
+
+`tmp/fog-review/temporal-prefix-pair/` completed48 bundles with successful restoration and constant game time4692729. Candidate64 and reference512 samples share that frozen field, geometry, light and camera settings. All four count/view combinations have finite signals, zero false-dark pixels, median T0.992676 and open/closed T p99 difference0.
+
+The64-sample first view **fails the unchanged strict dark-region placement test**: mean delta0.009478, standard error0.001693, or5.60SE against a5SE limit. The mean leakage is0.0627% of the lit response, but that small magnitude does not turn the failed criterion into a pass. The lateral64 view and both512 views pass the mean-placement test.
+
+| Same-field64 versus512 comparison | First view | Lateral view |
+| --- | ---: | ---: |
+| Lit normalized mean absolute error | 4.710% | 4.568% |
+| Lit normalized p99 absolute error | 18.019% | 16.807% |
+| Lit normalized p99 residual curvature | 1.305% | 1.245% |
+| Lit normalized signed mean error | -0.328% | -0.667% |
+
+Inspected64-sample diagnostic previews show less fine grain than the earlier static-prefix previews; mild cloudy spatial noise remains, while512 is smoother. The earlier static-prefix pair measured13.678-14.895% lit mean absolute error against its own512 reference. However, the static and temporal experiments froze different procedural fields, so their difference does not isolate temporal accumulation as the cause. Each64/512 pair supports only its own same-field comparison.
+
+The512 result is a denser stochastic reference, not proven converged truth. Neither low reference error nor zero holes establishes absolute radiance accuracy, absence of motion trails, or flicker-free flying. Three repeated captures yield a limited standard-error estimate; their temporal history can correlate samples. Keep the failed placement result, denser-reference limitations and separate continuous-motion/performance requirements alongside the apparent visual improvement.
