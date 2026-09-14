@@ -50,9 +50,10 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
         }
         bool missed = (intersection.pathFlags & WORLD_PATH_MISS) != 0u;
         float distance = missed ? TRACE_MAX_DISTANCE : intersection.hitDistance;
-        TraceSpatialMedium spatial = traceSpatialMediumSegment<TComposition>(path, distance, pixel, !first);
+        TraceSpatialMedium spatial = { float3(1.0), float3(0.0), 0.0 };
+        if (!first) spatial = traceSpatialMediumSegment<TComposition>(path, distance, pixel, true);
         float3 segmentScattering = path.throughput * spatial.scattering;
-        path.throughput *= exp(-path.absorption * distance) * spatial.transmittance;
+        if (!first) path.throughput *= exp(-path.absorption * distance) * spatial.transmittance;
         // Build owns restart scattering. Later scattering has a finite guide even on a sky miss.
         if (!first && any(segmentScattering > 0.0)) {
             float scatteringDistance = signalDistance + spatial.scatteringDistance;

@@ -12,7 +12,7 @@ The parent removes each delegated delta lobe from both its sampling mixture and 
 
 For original mixture probabilities `pC`, `pR`, and `pT`, delegating transmission leaves mass `q = pC + pR`. The parent samples probabilities `pC/q` and `pR/q`; its physical RGB lobe values stay unchanged. The residual sampler's continuous PDF, including its new mixture probability, is also used by direct-light MIS and the next segment's emitter MIS. Multiplying that PDF by `q` again would be incorrect: the parent runs a separate sample of the entire residual, rather than being selected with probability `q`.
 
-Build consumes emission on its explored prefixes. Fill skips emission at each restart endpoint and samples emission on undelegated continuations. Incoming segment absorption is applied once during each pass's evaluation; the stored restart throughput is before that segment's attenuation.
+Build consumes emission on its explored prefixes and stores restart throughput after incoming-segment absorption and spatial-medium attenuation. Fill resumes at the endpoint without repeating that integration, skips emission already owned by Build, and samples emission and medium transport on undelegated continuations.
 
 ## Dominance
 

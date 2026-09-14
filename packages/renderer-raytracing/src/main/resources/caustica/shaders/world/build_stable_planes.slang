@@ -117,12 +117,13 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             bool environment = (intersection.pathFlags & WORLD_PATH_MISS) != 0u;
             float distance = environment ? TRACE_MAX_DISTANCE : intersection.hitDistance;
             float3 transmission = exp(-branch.path.absorption * distance);
-            // Restart stores incoming throughput; fill applies the endpoint segment's attenuation once.
+            // Restart retains endpoint attenuation so fill resumes at the surface.
             PackedPathSegment restart = branch.path;
             TraceSpatialMedium spatial = traceSpatialMediumSegment<TComposition>(branch.path, distance, pixel, true);
             volumeRadiance += branch.path.throughput * spatial.scattering;
             volumeEstimate += branch.path.throughput * (1.0 - spatial.transmittance);
             branch.path.throughput *= transmission * spatial.transmittance;
+            restart.throughput = branch.path.throughput;
             branch.length += distance;
             // Material closures need not remain live across medium sampling and its shadow traversal.
             WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, 0.0);

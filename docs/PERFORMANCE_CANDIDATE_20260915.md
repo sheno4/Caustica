@@ -313,3 +313,26 @@ The first SDK-trigger attempt returned success but produced no trace because thi
 The complete timeline shows regular graphics submissions and concurrent terrain compute across the captured second, with brief other-context intervals. It does not capture a clearly isolated long GPU frame that explains the rare ordinary-client hitches. Whole-trace throughput is 43.3% VidL2, 26.4% L1TEX, 25.8% SM and 18.9% VRAM total bandwidth; these averages span mixed graphics and compute workloads and must not be read as stage-specific bottleneck measurements.
 
 The accompanying JFR contains a **7,605.900 ms** host loop with repeated native samples in `vkQueueSubmit2KHR` during profiler collection/transfer. This is a profiler-disturbed interval, not a reproduction of the reported resize failure or an ordinary-client performance sample. No speedup claim is based on these JFR timings. The profiler clients restored camera, fog, speed, time and window settings and exited normally. The persistent below-1-FPS resize issue remains unreproduced; rare driver/graphics-completion hitches and the default-fog dome budget remain unresolved.
+
+## Reuse endpoint attenuation
+
+Build now stores restart throughput after the endpoint segment's homogeneous absorption and spatial-medium attenuation. Fill reuses that throughput and skips integrating the same segment again. Build still owns its scattering and emission; later fill segments retain their existing transport. This changes no buffer layout, sample count or storage allocation. It is distinct from the rejected hit-record cache, which added per-pixel storage.
+
+The candidate passes renderer-raytracing and renderer-runtime checks. Two candidate runs capture finite color, normal/roughness and primary-depth buffers in both scenes; previews were inspected. These are finite-value and visual checks, not pixel-exact equivalence or a complete dynamic glass validation.
+
+The initial control launch failed before measurement with native allocation failure (`run/hs_err_pid27412.log`): system physical memory had 608 MB free and available page-file/commit capacity was 127 MB. The system drive had less than 1 GB free. Closing the saved Nsight session and removing two regenerable JSON exports (5.9 GB total, after verifying their original JFRs) recovered resources. Both raw JFRs and text summaries were kept. This failure is not a GPU hang or proof of the reported resize problem, but motivates correlating future flight hitches with system memory pressure.
+
+The successful control and subsequent candidate repeat use frozen time 1000, settled matching poses, 4K Performance RR and default fog. Each interval contains at least 600 host frames:
+
+| Scene / fog | Control mean | Candidate repeat mean |
+| --- | ---: | ---: |
+| Dome / default | 22.110 ms | 21.699 ms |
+| Dome / off | 18.329 ms | 18.194 ms |
+| Dome / default repeat | 22.155 ms | 21.604 ms |
+| Jungle / default | 18.937 ms | 19.040 ms |
+| Jungle / off | 15.409 ms | 15.405 ms |
+| Jungle / default repeat | 19.006 ms | 19.042 ms |
+
+No interval exceeds 33.3 ms. The pair supports about 2% lower dome frame time with fog; jungle performance is effectively unchanged. The initial candidate before resource recovery measured dome 21.499/18.077/21.453 ms and jungle 18.872/15.346/18.921 ms, but background conditions changed, so it is not the primary comparison. There is no new GPU-stage attribution or hitch-reduction claim for this change. The dome still misses 50 FPS with default fog.
+
+Artifacts are under `tmp/restart-attenuation-performance`, `tmp/restart-attenuation-control` and `tmp/restart-attenuation-repeat`. All surviving benchmark clients exited normally. The final repeat restores the camera, fog, window, speed, time and advance-time setting saved before the failed launch, rather than preserving the failed control's temporary frozen-time state.
