@@ -17,11 +17,11 @@ public struct FogPush {
     public uint64_t volumeAddress;
     public uint64_t visibilityRaysAddress;
     public uint64_t visibilityResultsAddress;
+    public uint64_t prefixAddress;
     public uint destinationIndex;
     public uint sceneIndex;
     public uint depthIndex;
     public uint fogIndex;
-    public uint distanceIndex;
     public uint mode;
     public uint steps;
     public uint debug;
@@ -32,4 +32,10 @@ public struct FogPush {
     public float4 tlasCamera;
     public float4 mediumCamera;
     public float4 traceData;
+    public uint64_t historyAddress;
+    public uint64_t previousHistoryAddress;
+    public float4 previousClipX;
+    public float4 previousClipY;
+    public float4 previousClipZ;
+    public float4 previousClipW;
 };

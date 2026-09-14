@@ -121,8 +121,10 @@
 	"caustica.option.caustica.minecraft.fog.density": "Fog Density",
 	"caustica.option.caustica.minecraft.fog.density.tooltip": "Scale the thickness of the mist. Higher values reduce visibility.",
 	"caustica.option.caustica.minecraft.fog.resolution-divisor": "Fog Resolution Divisor",
-	"caustica.option.caustica.minecraft.fog.resolution-divisor.tooltip": "Post Process mode: lower values sharpen fog around terrain and trees at a higher GPU cost.",
+	"caustica.option.caustica.minecraft.fog.resolution-divisor.tooltip": "Lower values sharpen fog around terrain and trees at a higher GPU cost.",
+	"caustica.option.caustica.minecraft.fog.samples": "Fog Samples",
+	"caustica.option.caustica.minecraft.fog.samples.tooltip": "Higher values reduce integration noise at a higher GPU cost.",
 	"caustica.option.caustica.minecraft.fog.debug": "Fog Debug View",
-	"caustica.option.caustica.minecraft.fog.debug.tooltip": "Post Process mode: 0: Normal image. 1: Fog transmittance. 2: Scattered light.",
+	"caustica.option.caustica.minecraft.fog.debug.tooltip": "0: Normal image. 1: Fog transmittance. 2: Scattered light.",
 	"item.caustica.spotlight_helmet": "Spotlight Helmet"
 }
