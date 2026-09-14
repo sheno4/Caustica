@@ -1,4 +1,5 @@
 import nrd_compose_types;
+import trace_diagnostics_types;
 import world_common;
 import path_queue_types;
 import stable_plane_types;
@@ -61,5 +62,17 @@ void probeNrdPlaneFrame(uint3 id : SV_DispatchThreadID) {
 void probeNeeAtBakePush(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
         uint sink = neeAtBakePushProbe.phase + neeAtBakePushProbe.currentIdentityLookupMask;
+    }
+}
+
+struct ShadowDiagnosticsLayoutProbe { ShadowDiagnostics values[2]; };
+[[vk::binding(8, 0)]] StructuredBuffer<ShadowDiagnosticsLayoutProbe, Std430DataLayout> shadowDiagnosticsLayoutProbe;
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeShadowDiagnostics(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        uint sink = shadowDiagnosticsLayoutProbe[0].values[0].maxShadowRestartsAbove32
+                + shadowDiagnosticsLayoutProbe[0].values[1].firstAnomalyFlags;
     }
 }

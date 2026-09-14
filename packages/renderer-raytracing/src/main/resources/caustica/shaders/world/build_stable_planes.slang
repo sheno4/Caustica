@@ -99,12 +99,18 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
     branch.imageTransform = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
     branch.identity = 1u;
     float3 cameraDirection = branch.path.direction;
+    bool pathTracedVolume = worldBindings.spatialMediumActive == 2u
+            && (branch.path.flags & PATH_ENDPOINT_VOLUME) == 0u;
+    uint surfacePlaneCount = pathTracedVolume ? STABLE_PLANE_COUNT - 1u : STABLE_PLANE_COUNT;
+    StablePlaneRecord volumeRecord = {};
     uint count = 1u;
     float3 stableRadiance = float3(0.0);
     [unroll]
     for (uint plane = 0u; plane < STABLE_PLANE_COUNT; plane++) {
         if (plane >= count) break;
         if (plane > 0u) branch = branchDequeue(pixel, extent, plane);
+        float3 volumeRadiance = float3(0.0);
+        float3 volumeEstimate = float3(0.0);
         for (uint step = 0u; step <= STABLE_PLANE_MAX_DELTA_SEGMENTS; step++) {
             WorldPayload intersection = {};
             intersection.seed = traceSeed(pixel, frame.frameIndex, plane);
@@ -125,7 +131,22 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             // Restart stores incoming throughput; fill applies the endpoint segment's attenuation once.
             PackedPathSegment restart = branch.path;
             TraceSpatialMedium spatial = traceSpatialMediumSegment<TComposition>(branch.path, distance, pixel, true);
-            stableRadiance += branch.path.throughput * spatial.scattering;
+            if (worldBindings.spatialMediumActive == 2u) {
+                if (pathTracedVolume && branch.path.depth == 0u) {
+                    volumeRecord.branchId = 0x40000000u;
+                    volumeRecord.flags = STABLE_PLANE_FLAG_VALID;
+                    volumeRecord.currentVirtualPosition = frame.camOffset + cameraDirection * max(spatial.scatteringDistance, traceEpsilon());
+                    volumeRecord.previousVirtualPosition = volumeRecord.currentVirtualPosition;
+                    volumeRecord.normal = -cameraDirection;
+                    volumeRecord.roughness = 1.0;
+                    volumeRecord.throughputLuminance = traceLuminance(1.0 - spatial.transmittance);
+                    volumeRecord.diffuseBsdfEstimate = 1.0 - spatial.transmittance;
+                    volumeRecord.diffuseHitDistance = spatial.scatteringDistance;
+                    volumeRecord.noisyDiffuseRadiance = branch.path.throughput * spatial.scattering;
+                } else volumeRadiance += branch.path.throughput * spatial.scattering;
+            } else volumeRadiance += branch.path.throughput * spatial.scattering;
+            if (!pathTracedVolume || branch.path.depth > 0u)
+                volumeEstimate += branch.path.throughput * (1.0 - spatial.transmittance);
             branch.path.throughput *= transmission * spatial.transmittance;
             branch.length += distance;
             stableRadiance += branch.path.throughput * (environment ? hit.radiance : hit.surface.emissionRadiance);
@@ -136,7 +157,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             bool continuous = lobes.continuousProbability > 0.0;
             uint deltaCount = uint(reflectDelta) + uint(transmitDelta);
             uint extra = continuous ? 1u : deltaCount > 0u ? deltaCount - 1u : 0u;
-            bool split = !environment && deltaCount > 0u && count + extra <= STABLE_PLANE_COUNT
+            bool split = !environment && deltaCount > 0u && count + extra <= surfacePlaneCount
                     && branch.path.depth < STABLE_PLANE_MAX_DELTA_SEGMENTS && branch.path.depth <= frame.maxBounces;
             if (split) {
                 if (continuous) {
@@ -184,6 +205,15 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
                     endpoints.store(address, restart);
                 }
             }
+            record.noisyDiffuseRadiance = volumeRadiance;
+            record.diffuseBsdfEstimate += volumeEstimate;
+            if (environment && any(volumeEstimate > 0.0)) {
+                record.flags = (record.flags & ~STABLE_PLANE_FLAG_ENVIRONMENT) | STABLE_PLANE_FLAG_VALID;
+                float mediumDistance = branch.length - distance + max(spatial.scatteringDistance, traceEpsilon());
+                record.currentVirtualPosition = frame.camOffset + cameraDirection * mediumDistance;
+                record.previousVirtualPosition = record.currentVirtualPosition + branch.motion;
+                record.diffuseHitDistance = spatial.scatteringDistance;
+            }
             stablePlaneStoreRecord(pixel, extent, plane, record);
             break;
         }
@@ -193,6 +223,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
         stablePlaneRecords(extent).storeBranchId(address, STABLE_PLANE_INVALID_BRANCH);
         stablePlaneRecords(extent).storeFlags(address, 0u);
     }
+    if (pathTracedVolume) stablePlaneStoreRecord(pixel, extent, STABLE_PLANE_COUNT - 1u, volumeRecord);
     worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance)[pixel] = float4(stableRadiance, 1.0);
     stablePlaneExportGuides(pixel, extent, frame);
 }

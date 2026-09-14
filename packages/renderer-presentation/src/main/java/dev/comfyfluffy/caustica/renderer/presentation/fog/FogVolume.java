@@ -22,10 +22,12 @@ public final class FogVolume implements AutoCloseable {
     public interface Binding { }
     public interface Instance { }
     public static final ShaderDataType<Binding> BINDING_DATA = ShaderDataType.create("fog spatial binding");
+    /** Instance bit zero selects traced sky lighting instead of the ambient approximation. */
     public static final ShaderDataType<Instance> INSTANCE_DATA = ShaderDataType.create("fog spatial instance");
     private final GpuDevice gpu;
     private final ResourceFactory resources;
     private FogField uploaded;
+    private float fieldMajorant;
     private VmaMappedBuffer fieldBuffer;
     private ResourceOwner fieldOwner;
     private SpatialMedium<Binding, Instance> current;
@@ -65,8 +67,11 @@ public final class FogVolume implements AutoCloseable {
         SpatialMedium<Binding, Instance> replacement;
         try (owner) {
             replacement = new SpatialMedium<>(implementation,
-                    BINDING_DATA.data(parameters.deviceAddressAt(0).value(), owner), INSTANCE_DATA.data(0),
-                    originX, originY, originZ);
+                    BINDING_DATA.data(parameters.deviceAddressAt(0).value(), owner),
+                    INSTANCE_DATA.data(options.get(FogPass.MODE) == SpatialMedium.Transport.PATH_TRACED ? 1 : 0),
+                    originX, originY, originZ, options.get(FogPass.MODE),
+                    Math.nextUp(0.003f * options.get(FogPass.DENSITY) * frame.timeDensity()
+                            * (float) metersPerSceneUnit * fieldMajorant));
         }
         releaseCurrent();
         current = replacement;
@@ -87,8 +92,19 @@ public final class FogVolume implements AutoCloseable {
                 vector(frame.lightDirection()), vector(frame.lightRadiance()), vector(frame.ambientRadiance()));
     }
 
+    /** Trilinear density and coverage interpolate independently, so their maxima multiply. */
+    static float densityCoverageMajorant(float[] voxels) {
+        float density = 0, coverage = 0;
+        for (int i = 0; i < voxels.length; i += 4) {
+            density = Math.max(density, voxels[i]);
+            coverage = Math.max(coverage, voxels[i + 2]);
+        }
+        return density * coverage;
+    }
+
     private void upload(FogField field) {
         float[] voxels = field.voxels();
+        fieldMajorant = densityCoverageMajorant(voxels);
         for (int i = 3; i < voxels.length; i += 4) voxels[i] = (float) (voxels[i] - field.originY());
         VmaMappedBuffer replacement = VmaMappedBuffer.create(gpu, (long) voxels.length * Float.BYTES,
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Fog spatial field");

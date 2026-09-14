@@ -8,6 +8,18 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class ViewContractTest {
     @Test
+    void spatialMajorantMustBeFiniteAndNonnegative() {
+        var type = dev.comfyfluffy.caustica.api.program.ShaderDataType.<Object>create("spatial");
+        var volume = new dev.comfyfluffy.caustica.api.program.VolumeId<Object, Object>() { };
+        for (float value : new float[]{-1, Float.NaN, Float.POSITIVE_INFINITY}) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> new SpatialMedium<>(volume, type.data(0), type.data(0), 0, 0, 0,
+                            SpatialMedium.Transport.PATH_TRACED, value));
+        }
+        assertEquals(0, new SpatialMedium<>(volume, type.data(0), type.data(0)).extinctionMajorant());
+    }
+
+    @Test
     void sceneViewAssociatesCameraWithSelectedScene() {
         SceneId scene = new SceneId() { };
         SceneView view = new SceneView(scene, Camera.IDENTITY);

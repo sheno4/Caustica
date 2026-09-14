@@ -20,6 +20,23 @@ final class RtFrameHistoryTest {
     private static final DenoiserRoute ROUTE = DenoiserRoute.TEMPORAL_DENOISER;
 
     @Test
+    void debugProjectionRetainsSubmittedTransformAndCamera() {
+        var projection = new Matrix4f().perspective(1.1f, 16f / 9f, .05f, 500f, true);
+        var rotation = new Matrix4f().rotateY(.7f).rotateX(.2f);
+        var frame = capture(new RtFrameHistory(), snapshot(SCENE, new SceneOrigin(512, 0, 0),
+                523.25, 3, 2, false, projection, rotation), 0);
+        var metadata = RtFrameRenderer.DebugProjection.capture(frame);
+        var expected = new Matrix4f(projection).mul(rotation).invert().get(new float[16]);
+        for (int i = 0; i < 16; i++) assertEquals(expected[i], metadata.inverseProjectionView().get(i), 1e-6f);
+        assertEquals(java.util.List.of(523.25, 0.0, 0.0), metadata.cameraWorld());
+        assertEquals(1280, metadata.renderWidth());
+        assertEquals(720, metadata.renderHeight());
+        assertEquals(java.util.List.of(frame.jitterX(), frame.jitterY()), metadata.jitterPixels());
+        assertEquals(2, metadata.metersPerWorldUnit());
+        assertThrows(UnsupportedOperationException.class, () -> metadata.inverseProjectionView().set(0, 0f));
+    }
+
+    @Test
     void captureDoesNotPublishCameraOrAdvanceJitter() {
         var history = new RtFrameHistory();
         capture(history, snapshot(7, 1), 0);

@@ -15,6 +15,20 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class FogInputsTest {
     @Test
+    void majorantBoundsIndependentlyInterpolatedDensityAndCoverage() {
+        float[] voxels = {4, 0.5f, 0, 64, 0, 0.5f, 1, 64};
+        float bound = FogVolume.densityCoverageMajorant(voxels);
+        assertEquals(4, bound);
+        for (int i = 0; i <= 100; i++) {
+            float blend = i / 100.0f;
+            float interpolatedDensity = 4 * (1 - blend);
+            float interpolatedCoverage = blend;
+            assertTrue(interpolatedDensity * interpolatedCoverage <= bound);
+        }
+        assertEquals(0, FogVolume.densityCoverageMajorant(new float[]{0, 0, 1, 64}));
+    }
+
+    @Test
     void registeredVolumeModulesResolveThroughTheirResourceAnchor() throws Exception {
         var source = FogVolume.definition().source();
         try (var medium = source.openModule("caustica_fog_medium");

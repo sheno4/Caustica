@@ -76,7 +76,9 @@ public struct FogVolumeModel : IVolumeModel {
         SpatialMediumProperties properties = {};
         properties.extinction = float3(sigma);
         properties.scatteringAlbedo = float3(0.95);
-        properties.ambientSource = sigma * 0.95 * volume.ambientRadiance.xyz;
+        // The random walk samples the actual environment; the post mode uses an ambient approximation.
+        properties.ambientSource = (input.instanceData & 1u) == 0u
+                ? sigma * 0.95 * volume.ambientRadiance.xyz : float3(0.0);
         properties.anisotropy = 0.45;
         return properties;
     }

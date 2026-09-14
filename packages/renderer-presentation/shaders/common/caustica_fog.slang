@@ -11,10 +11,31 @@ float3 unproject(float2 uv, float depth) {
 float distanceAt(float2 uv, float maximumDistance) {
     Texture2D<float> depth = ResourceDescriptorHeap[pc.depthIndex];
     uint w, h; depth.GetDimensions(w, h);
-    uint2 pixel = min(uint2(uv * float2(w,h)),uint2(w-1,h-1));
-    float d = depth.Load(int3(pixel,0));
-    float2 traceUv = (float2(pixel)+0.5+pc.traceData.xy)/float2(w,h);
-    return d <= 0.0 ? maximumDistance : min(length(unproject(traceUv,d)), maximumDistance);
+    // The depth samples include trace jitter, whereas the post image uses an unjittered grid.
+    float2 pixel = uv * float2(w,h) - 0.5 - pc.traceData.xy;
+    int2 base = int2(floor(pixel));
+    float2 blend = pixel - floor(pixel);
+    int2 nearest = clamp(int2(floor(pixel+0.5)),int2(0),int2(w-1,h-1));
+    float reference = depth.Load(int3(nearest,0));
+    float sum = 0.0;
+    float weight = 0.0;
+    for(int y=0;y<2;y++) for(int x=0;x<2;x++) {
+        int2 p = clamp(base+int2(x,y),int2(0),int2(w-1,h-1));
+        float d = depth.Load(int3(p,0));
+        // Projected depth is affine on a plane; reject depth discontinuities before interpolation.
+        if(abs(d-reference) > max(reference*0.05,1e-8)) continue;
+        float k = (x == 0 ? 1-blend.x : blend.x)*(y == 0 ? 1-blend.y : blend.y);
+        sum += d*k;
+        weight += k;
+    }
+    float d = sum/weight;
+    return d <= 0.0 ? maximumDistance : min(length(unproject(uv,d)), maximumDistance);
+}
+float2 fogInterval(uint step, float maximumDistance, float surfaceDistance) {
+    float2 t = float2(step, step + 1u) / float(pc.steps);
+    float2 bounds = maximumDistance * t * t;
+    // The distance grid is camera-relative; only the terminal interval depends on surface depth.
+    return float2(bounds.x, max(0.0, min(bounds.y, surfaceDistance) - bounds.x));
 }
 public void runFog(uint3 id) {
     RWTexture2D<float4> output = ResourceDescriptorHeap[pc.destinationIndex];
@@ -23,40 +44,40 @@ public void runFog(uint3 id) {
     float2 uv = (float2(id.xy)+0.5)/float2(w,h);
     FogVolumeData medium = ((FogVolumeData*)pc.volumeAddress)[0];
     float distance = distanceAt(uv, medium.profile.w);
-    uint visibilityCount = (pc.steps+3)/4;
+    uint visibilityCount = 8;
+    uint firstStep = uint(pc.traceData.w);
     uint visibilityBase = (id.x+id.y*w)*visibilityCount;
     if(pc.mode == 2) {
         float3 direction = normalize(unproject(uv,0.0001));
-        float stepLength = medium.profile.w/pc.steps;
         float4* rays = (float4*)pc.visibilityRaysAddress;
         for(uint j=0;j<visibilityCount;j++) {
-            float start = j*4*stepLength;
-            float3 p = direction*(start+0.5*min(stepLength,max(0.0,distance-start)));
+            float2 interval = fogInterval(firstStep+j, medium.profile.w, distance);
+            float3 p = direction*(interval.x+0.5*interval.y);
+            float sigma = interval.y > 0.0 ? fogDensity(mediumFromFogVolume(medium), p+pc.mediumCamera.xyz) : 0.0;
             uint base = (visibilityBase+j)*3;
             rays[base] = float4(p+pc.tlasCamera.xyz,0.05);
-            rays[base+1] = float4(medium.lightDirection.xyz,start < distance ? medium.profile.w : 0.0);
+            rays[base+1] = float4(medium.lightDirection.xyz,sigma > 0.0 ? medium.profile.w : 0.0);
             rays[base+2] = float4(0,0,0,1);
         }
         return;
     }
     if(pc.mode == 0) {
         float3 direction = normalize(unproject(uv,0.0001));
-        float stepLength = medium.profile.w / pc.steps;
-        float transmittance = 1.0;
-        float3 scattering = 0.0;
+        float4 accumulated = firstStep == 0 ? float4(0,0,0,1) : output[id.xy];
+        float transmittance = accumulated.a;
+        float3 scattering = accumulated.rgb;
         float3 visibility = 1.0;
         float4* visibilityResults = (float4*)pc.visibilityResultsAddress;
         float cosine = dot(direction,medium.lightDirection.xyz);
         float g = 0.45;
         float phase = (1.0-g*g)/(12.5663706*pow(1.0+g*g-2.0*g*cosine,1.5));
-        for(uint i=0;i<pc.steps;i++) {
-            float segmentStart = i*stepLength;
-            if(segmentStart >= distance) break;
-            float segmentLength = min(stepLength,distance-segmentStart);
-            // Surface depth changes only the final segment; preceding samples keep their distances.
-            float3 p = direction*(segmentStart+0.5*segmentLength);
+        for(uint i=firstStep;i<min(firstStep+visibilityCount,pc.steps);i++) {
+            float2 interval = fogInterval(i, medium.profile.w, distance);
+            if(interval.y <= 0.0) break;
+            float segmentLength = interval.y;
+            float3 p = direction*(interval.x+0.5*segmentLength);
             float sigma = fogDensity(mediumFromFogVolume(medium), p+pc.mediumCamera.xyz);
-            if((i & 3) == 0) visibility = visibilityResults[visibilityBase+i/4].rgb;
+            visibility = visibilityResults[visibilityBase+i-firstStep].rgb;
             float segmentT = exp(-sigma*segmentLength);
             float3 source = (medium.ambientRadiance.xyz + medium.lightRadiance.xyz * (phase*visibility)) * pc.traceData.z;
             scattering += transmittance * (1.0-segmentT) * source * 0.95;

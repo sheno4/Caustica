@@ -39,7 +39,8 @@ record RtCapturedFrame(FrameSnapshot inputs, ResourceOwners medium) implements A
     private static <B, N> SpatialMedium<B, N> retainedSpatialMedium(SpatialMedium<B, N> spatial,
                                                                    ResourceOwners resources) {
         return new SpatialMedium<>(spatial.implementation(), resources.data(spatial.bindingData()),
-                resources.data(spatial.instanceData()), spatial.originX(), spatial.originY(), spatial.originZ());
+                resources.data(spatial.instanceData()), spatial.originX(), spatial.originY(), spatial.originZ(),
+                spatial.transport(), spatial.extinctionMajorant());
     }
 
     @Override public void close() { medium.close(); }

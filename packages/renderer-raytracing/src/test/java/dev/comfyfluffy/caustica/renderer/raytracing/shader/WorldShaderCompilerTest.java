@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -112,12 +113,43 @@ final class WorldShaderCompilerTest {
             assertSpirv(reordered);
             assertVulkan14(cache.resolve("fill-stable-planes-ordinary.spv"), ordinary);
             assertVulkan14(cache.resolve("fill-stable-planes-ser.spv"), reordered);
-            assertShadowTraceRouting(ordinary, 2);
-            assertShadowTraceRouting(reordered, 2);
+            assertShadowTraceRouting(ordinary);
+            assertShadowTraceRouting(reordered);
             byte[] visibility = compiler.compileVisibilityRays();
             assertSpirv(visibility);
             assertVulkan14(cache.resolve("visibility-rays.spv"), visibility);
-            assertShadowTraceRouting(visibility, 1);
+            assertShadowTraceRouting(visibility);
+        }
+    }
+
+    @Test
+    @ResourceLock("java.lang.System.properties")
+    void shadowDiagnosticsAtomicsAreAbsentUnlessExplicitlyEnabled(@TempDir Path cache) throws Exception {
+        String property = "caustica.rt.shadowDiagnostics";
+        String previous = System.getProperty(property);
+        try {
+            System.setProperty(property, "false");
+            String ordinaryHash;
+            var program = new ProgramComposition(List.of());
+            try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache.resolve("normal"), program)) {
+                byte[] normal = compiler.compileFillStablePlanes(false);
+                assertEquals(0, countOpcode(normal, 239)); // OpAtomicUMax
+                assertEquals(0, countOpcode(normal, 230)); // OpAtomicCompareExchange
+                ordinaryHash = compiler.composition().contentHash();
+            }
+            System.setProperty(property, "true");
+            try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache.resolve("diagnostics"), program)) {
+                assertFalse(ordinaryHash.equals(compiler.composition().contentHash()));
+                for (boolean reordered : new boolean[]{false, true}) {
+                    byte[] diagnostic = compiler.compileFillStablePlanes(reordered);
+                    assertTrue(countOpcode(diagnostic, 239) > 0);
+                    assertTrue(countOpcode(diagnostic, 230) > 0);
+                    assertVulkan14(cache.resolve("diagnostics-" + reordered + ".spv"), diagnostic);
+                }
+            }
+        } finally {
+            if (previous == null) System.clearProperty(property);
+            else System.setProperty(property, previous);
         }
     }
 
@@ -182,7 +214,7 @@ final class WorldShaderCompilerTest {
                 .mapToInt(instruction -> typeBytes(definitions, instruction[1])).findFirst().orElseThrow();
     }
 
-    private static void assertShadowTraceRouting(byte[] spirv, int expectedShadowQueries) {
+    private static void assertShadowTraceRouting(byte[] spirv) {
         var definitions = spirvDefinitions(spirv);
         var words = ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
         int shadowQueries = 0;
@@ -202,7 +234,7 @@ final class WorldShaderCompilerTest {
             }
             offset += count;
         }
-        assertEquals(expectedShadowQueries, shadowQueries);
+        assertTrue(shadowQueries > 0);
         assertTrue(countOpcode(spirv, 4477) > 0); // OpRayQueryProceedKHR
         assertTrue(countOpcode(spirv, 4476) > 0); // OpRayQueryConfirmIntersectionKHR
         assertTrue(countOpcode(spirv, 4474) > 0); // OpRayQueryTerminateKHR

@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.resource.ResourceOwner;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
+import dev.comfyfluffy.caustica.api.view.SpatialMedium;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
@@ -31,13 +32,15 @@ public final class FogPass implements Pass<PostEffectFrame> {
     public static final PassId ID = new PassId("caustica", "fog");
     public static final String GROUP = "fog";
     public static final Option<Boolean> ENABLED = Option.bool("fog.enabled", true).inGroupAsHeader(GROUP);
+    public static final Option<SpatialMedium.Transport> MODE = Option.enumOf("fog.mode",
+            SpatialMedium.Transport.POST_PROCESS, List.of(SpatialMedium.Transport.values())).inGroup(GROUP);
     public static final Option<Float> DENSITY = Option.range("fog.density", 0.0f, 4.0f, 1.0f).inGroup(GROUP);
     public static final Option<Float> RESOLUTION_DIVISOR =
             Option.range("fog.resolution-divisor", 4.0f, 8.0f, 8.0f).inGroup(GROUP).step(4.0);
     public static final Option<Float> DEBUG = Option.range("fog.debug", 0.0f, 2.0f, 0.0f).inGroup(GROUP).step(1.0);
-    public static final List<Option<?>> OPTIONS = List.of(ENABLED, DENSITY, RESOLUTION_DIVISOR, DEBUG);
-    private static final int STEPS = 48;
-    private static final int VISIBILITY_SAMPLES = (STEPS + 3) / 4;
+    public static final List<Option<?>> OPTIONS = List.of(ENABLED, MODE, DENSITY, RESOLUTION_DIVISOR, DEBUG);
+    private static final int STEPS = 96;
+    private static final int VISIBILITY_SAMPLES = 8;
 
     private final GpuDevice gpu;
     private final ResourceFactory resources;
@@ -64,6 +67,7 @@ public final class FogPass implements Pass<PostEffectFrame> {
         var medium = frame.view().spatialMedium();
         if (medium == null || medium.bindingData().type() != FogVolume.BINDING_DATA
                 || !frame.spatialMediumActive()) return;
+        if (medium.transport() == SpatialMedium.Transport.PATH_TRACED) return;
         long binding = medium.bindingData().bits();
         int divisor = Math.round(values.get(RESOLUTION_DIVISOR));
         int width = Math.max(1, (frame.renderWidth() + divisor - 1) / divisor);
@@ -73,20 +77,23 @@ public final class FogPass implements Pass<PostEffectFrame> {
         if (rebuilt) ComputeSynchronization.initializeImages(frame.commandBuffer(), List.of(fog, distance));
         GpuImage scene = frame.sceneColor();
         GpuImage target = frame.acquireSceneColorOutput();
+        // Reuse a small ray batch while accumulating front-to-back transport in the fog image.
+        for (int firstStep = 0; firstStep < STEPS; firstStep += VISIBILITY_SAMPLES) {
+            dispatch(frame, binding, values.get(DEBUG), scene,
+                    fog.storageIndex().value(), fog.width(), fog.height(), 2, firstStep);
+            frame.traceVisibility(visibilityRays.deviceAddressAt(0), visibilityResults.deviceAddressAt(0),
+                    width * VISIBILITY_SAMPLES, height);
+            dispatch(frame, binding, values.get(DEBUG), scene,
+                    fog.storageIndex().value(), fog.width(), fog.height(), 0, firstStep);
+            ComputeSynchronization.betweenDispatches(frame.commandBuffer());
+        }
         dispatch(frame, binding, values.get(DEBUG), scene,
-                fog.storageIndex().value(), fog.width(), fog.height(), 2);
-        frame.traceVisibility(visibilityRays.deviceAddressAt(0), visibilityResults.deviceAddressAt(0),
-                width * VISIBILITY_SAMPLES, height);
-        dispatch(frame, binding, values.get(DEBUG), scene,
-                fog.storageIndex().value(), fog.width(), fog.height(), 0);
-        ComputeSynchronization.betweenDispatches(frame.commandBuffer());
-        dispatch(frame, binding, values.get(DEBUG), scene,
-                target.descriptor(GpuImageDescriptorKind.STORAGE).index().value(), target.width(), target.height(), 1);
+                target.descriptor(GpuImageDescriptorKind.STORAGE).index().value(), target.width(), target.height(), 1, 0);
     }
 
     private boolean ensureImages(int width, int height) {
         if (fog != null && fog.width() == width && fog.height() == height) return false;
-        VmaImage2D replacement = VmaImage2D.create(gpu, width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+        VmaImage2D replacement = VmaImage2D.create(gpu, width, height, VK10.VK_FORMAT_R32G32B32A32_SFLOAT,
                 "Fog scattering and transmittance");
         VmaImage2D replacementDistance;
         try {
@@ -125,7 +132,7 @@ public final class FogPass implements Pass<PostEffectFrame> {
     }
 
     private void dispatch(PostEffectFrame frame, long binding, float debug, GpuImage scene,
-                          int targetIndex, int targetWidth, int targetHeight, int mode) {
+                          int targetIndex, int targetWidth, int targetHeight, int mode, int firstStep) {
         float[] matrix = frame.cameraRelativeFromClip();
         float[] jitter = frame.traceJitter();
         float[] tlasCamera = frame.cameraTlasPosition();
@@ -144,7 +151,7 @@ public final class FogPass implements Pass<PostEffectFrame> {
                     new Float4(tlasCamera[0], tlasCamera[1], tlasCamera[2], 0),
                     new Float4((float) (camera.x() - spatial.originX()), (float) (camera.y() - spatial.originY()),
                             (float) (camera.z() - spatial.originZ()), 0),
-                    new Float4(jitter[0], jitter[1], frame.preExposure(), 0)).write(push);
+                    new Float4(jitter[0], jitter[1], frame.preExposure(), firstStep)).write(push);
             shader.dispatch(frame.commandBuffer(), push, (targetWidth + 7) / 8, (targetHeight + 7) / 8, 1);
         }
     }

@@ -60,6 +60,7 @@ def worldShaderNames = [
         "fill_stable_planes.slang", "fill_stable_planes_ser.slang", "nee_at_bake.slang", "path_queue_types.slang",
         "build_stable_planes.slang", "radiance_any_hit.rahit.slang",
         "path_tracer.slang", "retained_lights.slang", "trace_transport.slang", "visibility_rays.slang",
+        "trace_diagnostics.slang", "trace_diagnostics_types.slang", "trace_diagnostics_config.slang",
         "retained_trace_ordinary.slang", "retained_trace_policy.slang",
         "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "environment_miss.slang",
         "shadow_closest_hit.slang", "shadow.rmiss.slang", "shadow_blocker.slang",
@@ -89,6 +90,7 @@ def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflec
 }
 
 def rayTracingRecordSpecs = [
+        "buffer|shadowDiagnosticsLayoutProbe|ShadowDiagnostics|dev.comfyfluffy.caustica.renderer.raytracing.gen|ShadowDiagnosticsData|true",
         "push|neeAtBakePushProbe|NeeAtBakePush|dev.comfyfluffy.caustica.renderer.raytracing.gen|NeeAtBakePushData|false",
         "buffer|worldPushLayoutProbe|WorldPush|dev.comfyfluffy.caustica.renderer.raytracing.gen|WorldPushData|false",
         "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedGeometryRecordData|false",
@@ -263,7 +265,7 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
         } as Set
         def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData", "RetainedInstanceRecordData",
                 "RetainedLightRecordData", "NeeAtStateData", "NeeAtBakePushData", "PackedPathSegmentData",
-                "StablePlaneRecordData", "NrdComposePushData", "NrdPlaneFrameData"].collect {
+                "StablePlaneRecordData", "NrdComposePushData", "NrdPlaneFrameData", "ShadowDiagnosticsData"].collect {
             "${generatedRecordClassRoot}${it}.class"
         } as Set
         def packagedShaders = names.findAll {

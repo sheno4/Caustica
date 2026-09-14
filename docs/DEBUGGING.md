@@ -31,7 +31,7 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | Operation | Arguments / result |
 | --- | --- |
 | `schema` | Available operations, named views and raw image names |
-| `status` | World/player/camera, renderer state, settings and latest recorded counters. `window.width/height` are framebuffer pixels; `window.screenWidth/screenHeight` are window dimensions, with `window.fullscreen` reporting its mode. `screen` is the current screen class name, or an empty string during gameplay. The player includes `currentFlyingSpeed`, `flying`, and `sprinting`. |
+| `status` | World/player/camera, renderer state, settings and latest recorded counters. For integrated worlds, `world.directory` identifies the save directory independently of its display name; use it to guard disposable-world experiments. `window.width/height` are framebuffer pixels; `window.screenWidth/screenHeight` are window dimensions, with `window.fullscreen` reporting its mode. `screen` is the current screen class name, or an empty string during gameplay. The player includes `currentFlyingSpeed`, `flying`, and `sprinting`. |
 | `settings.get` | Setting IDs, encoded values and whether JVM overrides apply. Optional `feature` selects a registered feature, such as `caustica:minecraft` for fog and sky; omission selects the renderer. Unset optional strings use an empty string; returned values can be passed to `settings.set`. |
 | `settings.set` | `values` mapping setting IDs to primitive values; optional `feature` as above. JVM overrides cannot be changed. |
 | `runtime.set` | Required `enabled` boolean applies the normal Minecraft RT toggle. Returns `requested`, `active`, `frameActive`, and `overridden`; the next client tick starts the lifecycle transition. JVM overrides cannot be changed. `status.runtime` reports the same fields. |
@@ -49,6 +49,8 @@ Add `tools/debug` to Python's import path and use `Client.call(op, **arguments)`
 | `jfr.start` | Start a raw recording with JVM profile events and Caustica events; optional `events` array selects Caustica names such as `Frame`, `GpuStage`, `TerrainState` |
 | `jfr.dump` | Save current recording without stopping |
 | `jfr.stop` | Stop/save recording and return its path |
+| `nsight.status` | No arguments. Report whether Windows Nsight GPU Trace is already injected, numeric `status` (0–4), readable `state` (`inactive`, `active`, `tracing`, `draining`, `errored`) and SDK `result` (0 on success) |
+| `nsight.start` | No arguments. Trigger an active Vulkan GPU Trace through the injected SDK; return observed state, renderer frame ID and trigger wall time in milliseconds |
 | `job` | `jobId`; returns pending/completed/failed state |
 | `client.stop` | Stop the debug client gracefully after returning acknowledgement |
 | `passes.capture` | Records the next GameRenderer frame's host render-pass labels, coarse phases and color attachment identities/dimensions. Phase is `world` initially, then the most recently visited capture boundary (`after-world`, `after-hand`, `before-ui`). `main` identifies the current main texture by object identity. Includes host render passes only, not external renderer commands, transfers or clears. No image readback or GPU wait is added. |
@@ -85,6 +87,10 @@ Before contacting the client, `measure.py` reads the revision and working-tree s
 
 For JVM hotspot attribution, export with `jfr print --json --stack-depth 64 --events jdk.ExecutionSample,jdk.ObjectAllocationSample RECORDING.jfr`.
 The command's default stack display depth is five frames and can hide application callers even when the recording contains deeper stacks.
+
+For a GPU trace synchronized to gameplay, launch the client through Nsight Graphics with `--start-with-ngfx-sdk` and a bounded frame/duration limit. Poll `nsight.status` until `status` is 1, establish the intended movement, then call `nsight.start` and retain its trigger metadata with the JFR recording. These operations use the installed SDK 0.9.2 ABI through an already injected `WarpVizTarget.dll`; they do not load or inject a profiler. They require Windows and the opt-in debug service. Launch-time delays do not provide a verified capture boundary because profiler initialization precedes data-collection readiness.
+
+For shadow-traversal diagnosis without Nsight, add `-PshadowDiagnostics=true` to `runClient` (direct JVM equivalent: `-Dcaustica.rt.shadowDiagnostics=true`) and include `ShadowTraversal` with `GpuStage` in `jfr.start.events`. This compiles an instrumented shader; restart without the flag for normal performance measurements. Completed events identify the source GPU frame, not the later callback frame. Only the fill pass writes counters. Maxima are recorded only above 32 transparent-ray restarts, 256 candidate `RayQuery.Proceed` iterations per query, or 512 candidates per visibility call; zero means no exceedance, not no traversal. Unchanged ray origins and consecutive hits of the same accepted geometry record/primitive are counted separately, with one anomaly's pixel and geometry IDs. Candidate counts do not count hardware BVH node visits. Counter storage and asynchronous readback are owned through graphics completion; ordinary shaders compile out the instrumentation.
 
 If `jfr.stop` fails while saving its file, the service retains the stopped recording. Correct the storage problem and retry `jfr.stop` to save and close it before starting another recording. It collects no further events while stopped; shutting down the client discards an unsaved recording.
 

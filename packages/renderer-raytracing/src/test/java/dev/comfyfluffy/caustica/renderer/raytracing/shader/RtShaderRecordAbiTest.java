@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.renderer.raytracing.gen.NeeAtBakePushData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedInstanceRecordData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedLightRecordData;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.WorldPushData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.ShadowDiagnosticsData;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
@@ -140,7 +141,7 @@ final class RtShaderRecordAbiTest {
     @Test
     void worldPushRootsRetainTheirDescriptorHeapAbi() {
         assertArrayEquals(new int[]{0, 8, 16, 24, 32, 40, 56, 68, 72, 76, 80, 84, 88, 92,
-                        96, 100, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 180, 184, 188, 192, 200},
+                        96, 100, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 180, 184, 188, 192, 196, 200, 208},
                 new int[]{RtBindings.WORLD_PUSH_ADDRESS_OFFSET, RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET,
                         RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET, RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
                         RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, RtBindings.WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET,
@@ -158,7 +159,19 @@ final class RtShaderRecordAbiTest {
                         RtBindings.WORLD_SPATIAL_MEDIUM_INSTANCE_DATA_OFFSET,
                         RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET, RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET,
                         RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET,
-                        RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET, RtBindings.WORLD_PUSH_CONSTANT_SIZE});
+                        RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET,
+                        RtBindings.WORLD_SPATIAL_MEDIUM_EXTINCTION_MAJORANT_OFFSET,
+                        RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET, RtBindings.WORLD_PUSH_CONSTANT_SIZE});
+    }
+
+    @Test
+    void shadowDiagnosticsReadbackPreservesCounterWords() {
+        var value = new ShadowDiagnosticsData(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+        ByteBuffer bytes = storage(ShadowDiagnosticsData.BYTE_SIZE);
+        value.write(bytes);
+        assertEquals(48, bytes.capacity());
+        for (int word = 0; word < 12; word++) assertEquals(word + 1, bytes.getInt(word * 4));
+        assertEquals(value, ShadowDiagnosticsData.read(bytes));
     }
 
     private static ByteBuffer storage(int size) {

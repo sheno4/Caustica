@@ -86,6 +86,7 @@ public final class RtFrameRenderer {
     private final RtReconstruction reconstruction;
     private final RtTelemetry telemetry;
     private final RtGpuTiming gpuTiming;
+    private final RtShadowDiagnostics shadowDiagnostics = new RtShadowDiagnostics();
     private final RtFrameResources frameResources;
     private RtRenderSettings settings;
     private final RtFrameHistory history = new RtFrameHistory();
@@ -101,6 +102,7 @@ public final class RtFrameRenderer {
     private GpuImage debugCaptureSceneColor;
     private float debugCapturePreExposure;
     private RtDenoisingSettings debugCaptureDenoising;
+    private DebugProjection debugCaptureProjection;
 
     private static final class FrameExecution {
         final GraphicsUse graphicsUse;
@@ -195,7 +197,35 @@ public final class RtFrameRenderer {
 
     public record DebugImageCapture(String name, long frameSerial, int width, int height,
                                     int vulkanFormat, String encoding, float preExposure,
-                                    String denoiserRoute, String signalEncoding) { }
+                                    String denoiserRoute, String signalEncoding, DebugProjection projection) { }
+
+    /** Submitted camera-relative transform; exported image rows run opposite to Vulkan image rows. */
+    public record DebugProjection(List<Float> inverseProjectionView, List<Double> cameraWorld,
+                                  int renderWidth, int renderHeight, List<Float> jitterPixels,
+                                  double metersPerWorldUnit, String convention) {
+        String json() {
+            return "{\"inverseProjectionView\":" + inverseProjectionView
+                    + ",\"cameraWorld\":" + cameraWorld + ",\"renderWidth\":" + renderWidth
+                    + ",\"renderHeight\":" + renderHeight + ",\"jitterPixels\":" + jitterPixels
+                    + ",\"metersPerWorldUnit\":" + metersPerWorldUnit
+                    + ",\"convention\":\"" + convention + "\"}";
+        }
+
+        static DebugProjection capture(RtFrameInput frame) {
+            float[] values = new Matrix4f(frame.projectionView()).invert().get(new float[16]);
+            var matrix = new java.util.ArrayList<Float>(16);
+            for (float value : values) matrix.add(value);
+            var snapshot = frame.snapshot();
+            return new DebugProjection(List.copyOf(matrix),
+                    List.of(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ()),
+                    frame.extent().renderWidth(), frame.extent().renderHeight(),
+                    List.of(frame.jitterX(), frame.jitterY()), snapshot.metersPerWorldUnit(),
+                    "Column-major inverse unjittered projection * view rotation; camera-relative world units. "
+                    + "Top-down post UV=((x+0.5)/W,1-(y+0.5)/H); primary-depth UV="
+                    + "((x+0.5+jitterX)/renderWidth,1-(y+0.5-jitterY)/renderHeight). "
+                    + "q=M*(2*UV-1,reverseZ,1); world=cameraWorld+q.xyz/q.w; zero depth is environment.");
+        }
+    }
 
     public static List<String> debugImageNames() {
         return List.of("display-color", "scene-color", "reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
@@ -253,14 +283,15 @@ public final class RtFrameRenderer {
         }
         DebugImageCapture result = new DebugImageCapture(name, debugCaptureFrameSerial,
                 image.width(), image.height(), image.format(), encoding, debugCapturePreExposure,
-                debugCaptureDenoising.route().name(), debugCaptureDenoising.signalEncoding().name());
+                debugCaptureDenoising.route().name(), debugCaptureDenoising.signalEncoding().name(), debugCaptureProjection);
         RtFrameCapture.exportRaw(context, BorrowedImage.of(image), output, java.util.Map.of(
                 "causticaBuffer", name, "causticaFrame", Long.toString(result.frameSerial()),
                 "causticaEncoding", encoding, "causticaVulkanFormat", Integer.toString(image.format()),
                 "causticaPreExposure", Float.toString(result.preExposure()),
                 "causticaDenoiserRoute", result.denoiserRoute(), "causticaSignalEncoding", result.signalEncoding(),
                 "causticaChannels", "Native components in RGBA; absent G/B = 0, absent A = 1",
-                "causticaOrientation", "Top row first; vertically flipped from Vulkan image rows"));
+                "causticaOrientation", "Top row first; vertically flipped from Vulkan image rows",
+                "causticaProjection", result.projection().json()));
         return result;
     }
 
@@ -499,6 +530,7 @@ public final class RtFrameRenderer {
             debugCaptureFrameSerial = telemetry.frameSerial();
             debugCapturePreExposure = execution.frame.preExposure();
             debugCaptureDenoising = reconstruction.settings();
+            debugCaptureProjection = DebugProjection.capture(execution.frame);
             history.submitted(execution.frame);
             submittedScenes.submitted(revision);
             reconstruction.submitted(execution.frame);
@@ -627,11 +659,20 @@ public final class RtFrameRenderer {
                 scenes.bakeLocal(lighting, cmd,
                         storageIndex(traceImages().nrdViewZ()), storageIndex(traceImages().motion()));
             }
+            RtShadowDiagnostics.Reservation shadowCounters = null;
+            if (RtShadowDiagnostics.ENABLED) {
+                shadowCounters = shadowDiagnostics.begin(ctx, cmd, stack, graphicsUse, telemetry.frameSerial());
+                roots.putLong(RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET, shadowCounters.address().value());
+            }
             try (var gpu = commands.time("fill stable planes");
                  var ignored = RtDebugLabels.scope(ctx, cmd, "fill stable planes");
                  RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.fillStablePlanes")) {
                 program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                         roots, 1, trace.hitTable());
+            }
+            if (shadowCounters != null) {
+                shadowCounters.copy(cmd, stack, graphicsUse);
+                roots.putLong(RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET, 0L);
             }
             try (var checkpoint = commands.checkpoint(cmd, "post-fill memory barrier")) {
                 VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to reconstruction reads
@@ -818,7 +859,10 @@ public final class RtFrameRenderer {
         target.putLong(base + RtBindings.WORLD_SPATIAL_MEDIUM_INSTANCE_DATA_OFFSET,
                 active ? spatial.instanceData().bits() : 0L);
         target.putInt(base + RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET, active ? implementation : 0);
-        target.putInt(base + RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET, active ? 1 : 0);
+        target.putInt(base + RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET,
+                active ? spatial.transport() == SpatialMedium.Transport.PATH_TRACED ? 2 : 1 : 0);
+        target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_EXTINCTION_MAJORANT_OFFSET,
+                active ? spatial.extinctionMajorant() : 0);
         target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET,
                 active ? (float) (traceOrigin.x() - spatial.originX()) : 0);
         target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET,
@@ -874,6 +918,7 @@ public final class RtFrameRenderer {
         scenePublication.close();
         scenes.releaseView(this);
         gpuTiming.close();
+        shadowDiagnostics.close();
         reconstruction.close();
         presenter.invalidateRenderedFrame();
         frameResources.destroy();

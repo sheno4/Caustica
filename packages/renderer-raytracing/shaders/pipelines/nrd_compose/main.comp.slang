@@ -131,8 +131,9 @@ void merge(uint2 pixel, uint2 extent, StablePlaneStorage records, NrdPlaneFrame 
             : outputImage[pixel].rgb;
     StablePlaneRecord r = loadPlane(records, recordIndex(pixel, extent, pc.planeIndex));
     if (validSurface(r)) {
-        float3 diffuse = unpackRadiance(denoisedDiffuse[pixel].rgb) * r.diffuseBsdfEstimate;
-        float3 specular = unpackRadiance(denoisedSpecular[pixel].rgb) * r.specularBsdfEstimate;
+        // Remodulation uses the same floor as prepare, including radiance from spatial scattering.
+        float3 diffuse = unpackRadiance(denoisedDiffuse[pixel].rgb) * max(r.diffuseBsdfEstimate, float3(1.0e-4));
+        float3 specular = unpackRadiance(denoisedSpecular[pixel].rgb) * max(r.specularBsdfEstimate, float3(1.0e-4));
         accumulated += max(diffuse + specular, float3(0.0))
                 * (frame.preExposure / frame.radianceScale);
     } else if (r.branchId != STABLE_PLANE_INVALID_BRANCH

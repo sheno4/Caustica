@@ -59,6 +59,8 @@ public struct WorldBindingRoots {
     public float spatialMediumOriginX;
     public float spatialMediumOriginY;
     public float spatialMediumOriginZ;
+    public float spatialMediumExtinctionMajorant;
+    public uint64_t shadowDiagnosticsAddress;
 };
 
 public RaytracingAccelerationStructure worldAccelerationStructure() {

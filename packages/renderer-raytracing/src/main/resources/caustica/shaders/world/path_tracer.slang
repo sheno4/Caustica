@@ -24,7 +24,8 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
         uint address = stablePlaneRecordIndex(pixel, extent, plane);
         if ((endpoints.loadFlags(address) & PATH_ENDPOINT_VALID) == 0u) continue;
         PackedPathSegment path = endpoints.load(address);
-        float3 noisyDiffuseRadiance = float3(0.0), noisySpecularRadiance = float3(0.0);
+        float3 noisyDiffuseRadiance = stablePlaneRecords(extent).loadNoisyDiffuseRadiance(address);
+        float3 noisySpecularRadiance = float3(0.0);
         float specularHitDistance = 0.0;
         bool first = true, diffusePath = false, coherent = true;
         bool previousCoherent = true;

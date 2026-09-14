@@ -10,6 +10,7 @@ import surface_bsdf;
 import path_queue_types;
 import closest_hit;
 import caustica_coverage;
+import trace_diagnostics;
 
 public static const float TRACE_MAX_DISTANCE = 10000.0;
 
@@ -160,7 +161,8 @@ public bool traceScatter(inout PackedPathSegment path, WorldHit hit, TraceLobes 
 }
 
 public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
-        uint seed, float3 absorption, float ior) {
+        uint seed, float3 absorption, float ior, inout bool insideVolume, inout ShadowDiagnosticTrace diagnostics, out float3 geometricNormal) {
+    geometricNormal = float3(0.0);
     ShadowPayload shadow = {};
     shadow.seed = seed;
     shadow.volumeAbsorption = absorption;
@@ -168,7 +170,9 @@ public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
     RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> query;
     query.TraceRayInline(worldAccelerationStructure(), RAY_FLAG_NONE,
             WORLD_RAY_MASK_SECONDARY, ray);
+    uint proceedCount = 0u;
     while (query.Proceed()) {
+        if (shadowDiagnosticsActive()) proceedCount++;
         uint instanceBase = query.CandidateInstanceID();
         uint geometryIndex = query.CandidateGeometryIndex();
         uint primitiveIndex = query.CandidatePrimitiveIndex();
@@ -178,6 +182,7 @@ public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
         if ((record.flags & RETAINED_GEOMETRY_GUARANTEED_SHADOW_BLOCKER) != 0u) {
             shadow.hitDistance = query.CandidateTriangleRayT();
             query.Abort();
+            shadowDiagnosticQuery(diagnostics, proceedCount, true, uint2(instanceBase + geometryIndex, primitiveIndex));
             return shadow;
         }
         if ((record.flags & RETAINED_GEOMETRY_HAS_VOLUME) == 0u) {
@@ -198,11 +203,14 @@ public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
     }
     if (query.CommittedStatus() == COMMITTED_NOTHING) {
         shadow.hitDistance = -1.0;
+        shadowDiagnosticQuery(diagnostics, proceedCount, false, uint2(0u));
         return shadow;
     }
     RetainedGeometryRecord record = ((ConstPtr<RetainedGeometryRecord>)worldBindings.geometryTableAddress)
             [query.CommittedInstanceID() + query.CommittedGeometryIndex()];
     uint primitiveIndex = query.CommittedPrimitiveIndex();
+    shadowDiagnosticQuery(diagnostics, proceedCount, true,
+            uint2(query.CommittedInstanceID() + query.CommittedGeometryIndex(), primitiveIndex));
     shadow.hitDistance = query.CommittedRayT();
     WorldInstanceHistory history = worldInstanceHistory(record, false);
     uint3 indices = worldTriangleIndices(record, primitiveIndex);
@@ -212,6 +220,7 @@ public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
     SurfaceInput input = worldSurfaceInput(query.CommittedTriangleBarycentrics(), primitiveIndex,
             ray.Origin + ray.Direction * shadow.hitDistance, ray.Direction, edgeU, edgeV,
             record, history, false);
+    geometricNormal = input.geometricNormal;
     bool volume = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u;
     TComposition.Surfaces surfaces = {};
     OpenPbrSurface material = surfaces.evaluateSurface(record.surfaceImplementation, input);
@@ -231,7 +240,8 @@ public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
     TComposition.Volumes volumes = {};
     VolumeInput volumeQuery = volumeInput(input, record.volumeBinding,
             input.evaluationFlags & EVALUATION_ANIMATION_ENABLED);
-    if (dot(worldTriangleNormal(input.objectToScene, edgeU, edgeV), ray.Direction) < 0.0) {
+    insideVolume = dot(worldTriangleNormal(input.objectToScene, edgeU, edgeV), ray.Direction) < 0.0;
+    if (insideVolume) {
         VolumeProperties properties = volumes.evaluateVolume(record.volumeImplementation, volumeQuery);
         shadow.volumeAbsorption = max(properties.absorptionCoefficient, float3(0.0));
         shadow.volumeIor = max(properties.indexOfRefraction, 1.0);
@@ -248,21 +258,45 @@ public ShadowPayload traceShadowQuery<TComposition : IComposition>(RayDesc ray,
 }
 
 public float3 traceVisibilityRay<TComposition : IComposition>(RayDesc ray, float3 absorption,
-        float ior, inout uint seed) {
+        float ior, inout uint seed, bool spatialTransport = false, bool insideVolume = false) {
     float3 visibility = float3(1.0);
+    ShadowDiagnosticTrace diagnostics = {};
+    float mediumBudget = 256.0 / neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit;
     while (ray.TMax > ray.TMin) {
         retainedLightRandom(seed);
-        ShadowPayload shadow = traceShadowQuery<TComposition>(ray, seed, absorption, ior);
+        bool intervalInsideVolume = insideVolume;
+        float3 geometricNormal;
+        ShadowPayload shadow = traceShadowQuery<TComposition>(ray, seed, absorption, ior, insideVolume, diagnostics, geometricNormal);
         if (shadow.hitDistance < 0.0) break;
         visibility *= exp(-absorption * shadow.hitDistance) * shadow.transmission;
-        if (!any(visibility > 0.0)) return float3(0.0);
+        if (!any(visibility > 0.0)) {
+            shadowDiagnosticReport(diagnostics);
+            return float3(0.0);
+        }
+        // Boundary classification, not IOR or absorption, decides which medium owns this interval.
+        if (spatialTransport && !intervalInsideVolume && mediumBudget > 0.0)
+            visibility *= traceMediumShadowTransmittance<TComposition>(ray.Origin, ray.Direction,
+                    min(shadow.hitDistance, mediumBudget), seed);
         absorption = shadow.volumeAbsorption;
         ior = shadow.volumeIor;
-        float advance = min(traceEpsilon(), ray.TMax - shadow.hitDistance);
+        float remainingDistance = ray.TMax - shadow.hitDistance;
+        float3 hitPosition = ray.Origin + ray.Direction * shadow.hitDistance;
+        float3 previousOrigin = ray.Origin;
+        // Normal clearance survives grazing directions whose along-ray epsilon rounds back onto the plane.
+        ray.Origin = hitPosition + geometricNormal
+                * (dot(geometricNormal, ray.Direction) >= 0.0 ? 1.0 : -1.0)
+                * min(2.0 * traceEpsilon(), remainingDistance);
+        // The offset is lateral as well as longitudinal; only its forward projection consumes ray range.
+        float advance = clamp(dot(ray.Origin - hitPosition, ray.Direction), 0.0, remainingDistance);
         visibility *= exp(-absorption * advance);
-        ray.Origin += ray.Direction * (shadow.hitDistance + advance);
-        ray.TMax -= shadow.hitDistance + advance;
+        mediumBudget -= shadow.hitDistance + advance;
+        shadowDiagnosticAdvance(diagnostics, previousOrigin, ray.Origin);
+        ray.TMax = remainingDistance - advance;
     }
+    if (spatialTransport && !insideVolume && mediumBudget > 0.0 && any(visibility > 0.0))
+        visibility *= traceMediumShadowTransmittance<TComposition>(ray.Origin, ray.Direction,
+                min(ray.TMax, mediumBudget), seed);
+    shadowDiagnosticReport(diagnostics);
     return visibility * exp(-absorption * ray.TMax);
 }
 
@@ -274,7 +308,8 @@ public float3 traceVisibility<TComposition : IComposition>(PackedPathSegment pat
     ray.Direction = selected.direction;
     ray.TMin = traceEpsilon();
     ray.TMax = selected.maximumDistance;
-    return traceVisibilityRay<TComposition>(ray, path.absorption, path.ior, seed);
+    return traceVisibilityRay<TComposition>(ray, path.absorption, path.ior, seed,
+            worldBindings.spatialMediumActive == 2u, (path.flags & PATH_ENDPOINT_VOLUME) != 0u);
 }
 
 public struct TraceSpatialMedium {
@@ -305,9 +340,16 @@ static const float2 SPATIAL_QUADRATURE[15] = {
 public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>(
         PackedPathSegment path, float distance, uint2 pixel, bool includeScattering) {
     TraceSpatialMedium result = { float3(1.0), float3(0.0), 0.0 };
-    // Camera transport belongs to the post pass; explicit interiors replace the outdoor medium.
-    if (worldBindings.spatialMediumActive == 0u || path.depth == 0u
+    // Explicit interiors replace the outdoor medium; camera ownership is selected by the view.
+    if (worldBindings.spatialMediumActive == 0u
+            || (path.depth == 0u && worldBindings.spatialMediumActive != 2u)
             || (path.flags & PATH_ENDPOINT_VOLUME) != 0u) return result;
+    if (worldBindings.spatialMediumActive == 2u) {
+        result.transmittance = traceMediumTransmittanceAndDistance<TComposition>(path.origin, path.direction, distance, result.scatteringDistance);
+        float sampledDistance;
+        if (includeScattering) result.scattering = traceVolumeScattering<TComposition>(path, distance, pixel, sampledDistance);
+        return result;
+    }
     NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
     float maximumDistance = 256.0 / state.metersPerSceneUnit;
     float length = min(distance, maximumDistance);
@@ -321,10 +363,12 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
     input.instanceData = worldBindings.spatialMediumInstanceData;
     input.metersPerSceneUnit = state.metersPerSceneUnit;
     input.time = frame.time;
-    float3 midpoint = path.origin + path.direction * (length * 0.5);
-    DirectLightSample light = invalidDirectLight();
-    float3 incidentLight = float3(0.0);
-    bool sampledLight = false;
+    uint seed = traceSeed(pixel, frame.frameIndex, path.depth + 149u);
+    float totalWeight = 0.0;
+    float selectedDistance = 0.0;
+    float3 selectedCoefficient = float3(0.0);
+    float selectedAnisotropy = 0.0;
+    float selectedWeight = 0.0;
     float scatteringWeight = 0.0;
     for (uint i = 0u; i < sampleCount; i++) {
         float2 quadrature = SPATIAL_QUADRATURE[sampleCount - 1u + i];
@@ -335,43 +379,47 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
                 worldBindings.spatialMediumOriginY, worldBindings.spatialMediumOriginZ);
         input.proceduralPosition = p + frame.proceduralDomainOffset;
         SpatialMediumProperties medium = volumes.evaluateSpatialMedium(worldBindings.spatialMediumImplementation, input);
-        if (includeScattering && !sampledLight && any(medium.extinction * medium.scatteringAlbedo > 0.0)) {
-            sampledLight = true;
-            // Build radiance bypasses temporal reconstruction, so selection must not vary by frame.
-            int3 position = int3(floor((midpoint + frame.proceduralDomainOffset) * 16.0)) & int3(65535);
-            uint seed = neeAtHash(asuint(position.x) ^ (asuint(position.y) * 0x9e3779b9u)
-                    ^ (asuint(position.z) * 0x85ebca6bu)) | 1u;
-            RetainedLightSamplingContext context = retainedLightSamplingContext(state, pixel, 1u, false);
-            light = sampleRetainedLight(context, midpoint, 0u, seed);
-            if (light.valid) {
-                RayDesc visibilityRay;
-                visibilityRay.Origin = midpoint;
-                visibilityRay.Direction = light.direction;
-                visibilityRay.TMin = traceEpsilon();
-                visibilityRay.TMax = min(light.maximumDistance, maximumDistance);
-                float3 visibility = traceVisibilityRay<TComposition>(visibilityRay, float3(0.0), 1.0, seed);
-                incidentLight = visibility * light.radianceOverShapePdf / light.proposalPdf;
-            }
-        }
         float3 segmentT = exp(-medium.extinction * segmentLength);
         if (includeScattering) {
-            float g = medium.anisotropy;
-            float cosine = light.valid ? dot(path.direction, light.direction) : 0.0;
-            float phase = (1.0 - g * g) / (12.5663706 * pow(1.0 + g * g - 2.0 * g * cosine, 1.5));
-            float3 source = medium.ambientSource
-                    + medium.extinction * medium.scatteringAlbedo * incidentLight * phase;
             float3 integral = float3(
                     medium.extinction.x > 0.0 ? (1.0 - segmentT.x) / medium.extinction.x : segmentLength,
                     medium.extinction.y > 0.0 ? (1.0 - segmentT.y) / medium.extinction.y : segmentLength,
                     medium.extinction.z > 0.0 ? (1.0 - segmentT.z) / medium.extinction.z : segmentLength);
-            float3 scattering = result.transmittance * source * integral;
-            // Positive quadrature weights form ordered optical intervals for the source integration.
+            float3 coefficient = result.transmittance * medium.extinction * medium.scatteringAlbedo * integral;
+            float weight = traceLuminance(coefficient);
+            totalWeight += weight;
+            if (weight > 0.0 && retainedLightRandom(seed) * totalWeight < weight) {
+                selectedDistance = sampleDistance;
+                selectedCoefficient = coefficient;
+                selectedAnisotropy = medium.anisotropy;
+                selectedWeight = weight;
+            }
+            float3 scattering = result.transmittance * medium.ambientSource * integral;
             result.scattering += scattering;
-            float weight = traceLuminance(path.throughput * scattering);
             scatteringWeight += weight;
             result.scatteringDistance += sampleDistance * weight;
         }
         result.transmittance *= segmentT;
+    }
+    // Thin segments rarely need a shadow ray. Survival compensation preserves their mean lighting.
+    float shadowProbability = min(totalWeight * 16.0, 1.0);
+    if (includeScattering && shadowProbability > 0.0 && retainedLightRandom(seed) < shadowProbability) {
+        float3 position = path.origin + path.direction * selectedDistance;
+        RetainedLightSamplingContext context = retainedLightSamplingContext(state, pixel, 1u, false);
+        DirectLightSample light = sampleRetainedLight(context, position, 0u, seed);
+        if (light.valid) {
+            RayDesc shadow;
+            shadow.Origin = position;
+            shadow.Direction = light.direction;
+            shadow.TMin = traceEpsilon();
+            shadow.TMax = min(light.maximumDistance, maximumDistance);
+            float3 visibility = traceVisibilityRay<TComposition>(shadow, float3(0.0), 1.0, seed);
+            float phase = tracePhase(dot(path.direction, light.direction), selectedAnisotropy);
+            float3 scattering = selectedCoefficient * visibility * light.radianceOverShapePdf
+                    * (phase * totalWeight / (selectedWeight * shadowProbability * light.proposalPdf));
+            result.scattering += scattering;
+
+        }
     }
     result.scatteringDistance = scatteringWeight > 0.0 ? result.scatteringDistance / scatteringWeight : 0.0;
     return result;
@@ -448,6 +496,205 @@ public TraceDirect traceDirect<TComposition : IComposition>(PackedPathSegment pa
     neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex,
             traceLuminance(path.throughput * (result.diffuse + result.specular)), coherent);
     return result;
+}
+
+// Deterministic optical quadrature supplies stable attenuation and reconstruction guides.
+// The finite integration domain matches the prepared outdoor field's useful range.
+SpatialMediumProperties traceMediumAt<TComposition : IComposition>(float3 p) {
+    WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
+    SpatialMediumInput input = {};
+    input.shaderRoot = worldShaderRoot();
+    input.bindingData = worldBindings.spatialMediumBindingData;
+    input.instanceData = worldBindings.spatialMediumInstanceData;
+    input.position = p + float3(worldBindings.spatialMediumOriginX,
+            worldBindings.spatialMediumOriginY, worldBindings.spatialMediumOriginZ);
+    input.proceduralPosition = p + frame.proceduralDomainOffset;
+    input.metersPerSceneUnit = neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit;
+    input.time = frame.time;
+    TComposition.Volumes volumes = {};
+    return volumes.evaluateSpatialMedium(worldBindings.spatialMediumImplementation, input);
+}
+
+float3 traceMediumTransmittanceAndDistance<TComposition : IComposition>(float3 origin, float3 direction, float distance, out float guideDistance) {
+    float units = neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit;
+    float length = min(distance, 256.0 / units);
+    float meters = length * units;
+    uint count = meters <= 1.0 ? 1u : meters <= 4.0 ? 2u : meters <= 8.0 ? 4u : 8u;
+    float3 transmittance = float3(1.0);
+    float sum = 0.0, moment = 0.0;
+    for (uint i = 0u; i < count; i++) {
+        float2 node = SPATIAL_QUADRATURE[count - 1u + i];
+        float midpoint = length * node.x;
+        float3 segment = exp(-traceMediumAt<TComposition>(origin + direction * midpoint).extinction * (length * node.y));
+        float weight = traceLuminance(transmittance * (1.0 - segment));
+        sum += weight;
+        moment += weight * midpoint;
+        transmittance *= segment;
+    }
+    guideDistance = sum > 0.0 ? moment / sum : length * 0.5;
+    return transmittance;
+}
+
+float3 traceMediumShadowTransmittance<TComposition : IComposition>(float3 origin, float3 direction,
+        float distance, inout uint seed) {
+    float majorant = worldBindings.spatialMediumExtinctionMajorant;
+    if (majorant == 0.0) {
+        float guideDistance;
+        return traceMediumTransmittanceAndDistance<TComposition>(origin, direction, distance, guideDistance);
+    }
+    float length = min(distance, 256.0 / neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit);
+    float travel = 0.0;
+    float3 transmittance = float3(1.0);
+    while (true) {
+        travel += -log(max(1.0 - retainedLightRandom(seed), 1.0e-7)) / majorant;
+        if (travel >= length) break;
+        transmittance *= 1.0 - traceMediumAt<TComposition>(origin + direction * travel).extinction / majorant;
+    }
+    return transmittance;
+}
+
+float tracePhase(float cosine, float g) {
+    return (1.0 - g * g) / (12.5663706144 * pow(1.0 + g * g - 2.0 * g * cosine, 1.5));
+}
+
+float3 tracePhaseDirection(float3 direction, float g, inout uint seed, out float pdf) {
+    float u = retainedLightRandom(seed);
+    float cosine;
+    if (abs(g) < 0.001) cosine = 2.0 * u - 1.0;
+    else {
+        float ratio = (1.0 - g * g) / (1.0 - g + 2.0 * g * u);
+        cosine = clamp((1.0 + g * g - ratio * ratio) / (2.0 * g), -1.0, 1.0);
+    }
+    float3 tangent = normalize(cross(abs(direction.y) < 0.99 ? float3(0,1,0) : float3(1,0,0), direction));
+    float3 bitangent = cross(direction, tangent);
+    float phi = 6.28318530718 * retainedLightRandom(seed);
+    pdf = tracePhase(cosine, g);
+    return normalize(direction * cosine + sqrt(max(0.0, 1.0 - cosine * cosine))
+            * (tangent * cos(phi) + bitangent * sin(phi)));
+}
+
+// Estimate paths containing a volume collision. Unscattered surface transport is owned by the caller.
+float3 traceVolumeScattering<TComposition : IComposition>(PackedPathSegment incoming, float firstDistance,
+        uint2 pixel, out float firstScatterDistance) {
+    WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
+    NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
+    uint seed = traceSeed(pixel, frame.frameIndex, incoming.depth + 79u);
+    PackedPathSegment path = incoming;
+    path.throughput = float3(1.0);
+    float3 radiance = float3(0.0);
+    firstScatterDistance = 0.0;
+    bool collided = false;
+    float previousPdf = 0.0;
+    uint previousLightCandidateCount = 1u;
+    float3 previousPosition = path.origin;
+    for (uint bounce = 0u; bounce <= frame.maxBounces + 1u; bounce++) {
+        WorldHit hit = {};
+        bool missed = false;
+        float distance = firstDistance;
+        if (bounce > 0u) {
+            WorldPayload intersection = {};
+            intersection.seed = seed;
+            RayDesc ray = traceRay(path);
+            TraceRay(worldAccelerationStructure(), RAY_FLAG_NONE, WORLD_RAY_MASK_SECONDARY, 0u, 2u, 0u, ray, intersection);
+            hit = resolveWorldHit<TComposition>(intersection, ray, previousPdf);
+            missed = (hit.pathFlags & WORLD_PATH_MISS) != 0u;
+            distance = missed ? TRACE_MAX_DISTANCE : hit.hitDistance;
+        }
+        float length = min(distance, 256.0 / state.metersPerSceneUnit);
+        uint count = max(1u, uint(ceil(length * state.metersPerSceneUnit / 4.0)));
+        float step = length / float(count);
+        float remainingDepth = -log(max(1.0 - retainedLightRandom(seed), 1.0e-7));
+        float3 ratio = float3(1.0);
+        float eventDistance = -1.0;
+        SpatialMediumProperties medium = {};
+        bool terminal = path.depth > frame.maxBounces;
+        if (terminal && (path.flags & PATH_ENDPOINT_VOLUME) == 0u)
+            ratio = traceMediumShadowTransmittance<TComposition>(path.origin, path.direction, distance, seed);
+        if (!terminal && (path.flags & PATH_ENDPOINT_VOLUME) == 0u) {
+            float majorant = worldBindings.spatialMediumExtinctionMajorant;
+            if (majorant > 0.0) {
+                float travel = 0.0;
+                while (true) {
+                    travel += -log(max(1.0 - retainedLightRandom(seed), 1.0e-7)) / majorant;
+                    if (travel >= length) break;
+                    medium = traceMediumAt<TComposition>(path.origin + path.direction * travel);
+                    float rate = max(max(medium.extinction.x, medium.extinction.y), medium.extinction.z);
+                    radiance += path.throughput * ratio * medium.ambientSource / majorant;
+                    if (retainedLightRandom(seed) < rate / majorant) {
+                        eventDistance = travel;
+                        path.throughput *= ratio * medium.extinction * medium.scatteringAlbedo / rate;
+                        break;
+                    }
+                    ratio *= (1.0 - medium.extinction / majorant) / (1.0 - rate / majorant);
+                }
+            } else for (uint i = 0u; i < count; i++) {
+                medium = traceMediumAt<TComposition>(path.origin + path.direction * ((float(i) + 0.5) * step));
+                float rate = max(max(medium.extinction.x, medium.extinction.y), medium.extinction.z);
+                if (rate == 0.0) radiance += path.throughput * ratio * medium.ambientSource * step;
+                if (rate > 0.0 && remainingDepth < rate * step) {
+                    float localDistance = remainingDepth / rate;
+                    ratio *= exp((float3(rate) - medium.extinction) * localDistance);
+                    eventDistance = float(i) * step + localDistance;
+                    path.throughput *= ratio;
+                    // Ambient source is radiance added per scene unit, before scattering albedo.
+                    radiance += path.throughput * medium.ambientSource / rate;
+                    path.throughput *= medium.extinction * medium.scatteringAlbedo / rate;
+                    break;
+                }
+                remainingDepth -= rate * step;
+                ratio *= exp((float3(rate) - medium.extinction) * step);
+            }
+        }
+        if (eventDistance >= 0.0) {
+            if (!collided) firstScatterDistance = eventDistance;
+            collided = true;
+            float3 position = path.origin + path.direction * eventDistance;
+            RetainedLightSamplingContext context = retainedLightSamplingContext(state, pixel, 1u, false);
+            DirectLightSample light = sampleRetainedLight(context, position, 0u, seed);
+            if (light.valid) {
+                RayDesc shadow;
+                shadow.Origin = position;
+                shadow.Direction = light.direction;
+                shadow.TMin = traceEpsilon();
+                shadow.TMax = light.maximumDistance;
+                float3 visibility = traceVisibilityRay<TComposition>(shadow, float3(0.0), 1.0, seed, true, false);
+                float phase = tracePhase(dot(path.direction, light.direction), medium.anisotropy);
+                float mis = light.linkedEmitter && light.shapePdf > 0.0
+                        ? (light.proposalPdf * light.shapePdf) / (light.proposalPdf * light.shapePdf + phase) : 1.0;
+                radiance += path.throughput * visibility * light.radianceOverShapePdf * (phase * mis / light.proposalPdf);
+            }
+            previousLightCandidateCount = 1u;
+            previousPosition = position;
+            path.origin = position;
+            path.direction = tracePhaseDirection(path.direction, medium.anisotropy, seed, previousPdf);
+            path.depth++;
+        } else {
+            if (!collided) break;
+            path.throughput *= ratio * exp(-path.absorption * distance);
+            float3 emission = missed ? hit.radiance : hit.surface.emissionRadiance;
+            if (!missed && previousPdf > 0.0 && hit.lightIndex != NEE_AT_NO_LIGHT) {
+                float lightPdf = neeAtReverseParallelogramPdf(worldBindings, pixel, hit.lightIndex,
+                        previousPosition, hit.position, NEE_AT_PROPOSAL_GLOBAL, previousLightCandidateCount);
+                emission *= previousPdf / (previousPdf + lightPdf);
+            }
+            radiance += path.throughput * emission;
+            if (missed || path.depth > frame.maxBounces) break;
+            TraceLobes lobes = traceLobes(path, hit);
+            TraceDirect direct = traceDirect<TComposition>(path, hit, lobes, pixel, false, seed);
+            radiance += path.throughput * (direct.diffuse + direct.specular);
+            previousLightCandidateCount = clamp(state.candidateCount, 1u, 8u);
+            previousPosition = hit.position;
+            uint event;
+            if (!traceScatter(path, hit, lobes, seed, previousPdf, event)) break;
+        }
+        // The final phase/BSDF sample reaches its emitter before stopping, completing the NEE/MIS pair.
+        if (path.depth <= frame.maxBounces) {
+            float survival = clamp(max(max(path.throughput.x, path.throughput.y), path.throughput.z), 0.05, 1.0);
+            if (retainedLightRandom(seed) >= survival) break;
+            path.throughput /= survival;
+        }
+    }
+    return radiance;
 }
 
 public PackedPathSegment traceCamera<TComposition : IComposition>(uint2 pixel,

@@ -59,7 +59,8 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang", "guide.rmiss.slang",
             "shadow_closest_hit.slang", "shadow.rmiss.slang", "shadow_blocker.slang",
             "retained_lights.slang", "surface_bsdf.slang", "path_queue_types.slang",
-            "trace_transport.slang", "visibility_rays.slang", "path_tracer.slang", "retained_trace_policy.slang",
+            "trace_transport.slang", "visibility_rays.slang",
+            "trace_diagnostics.slang", "trace_diagnostics_types.slang", "trace_diagnostics_config.slang", "path_tracer.slang", "retained_trace_policy.slang",
             "retained_trace_ordinary.slang", "retained_trace_reordered.slang", "stable_planes.slang",
             "stable_plane_types.slang", "nrd_signals.slang");
     private static final List<String> API_MODULES = List.of(
@@ -122,6 +123,11 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
 
         Map<String, byte[]> sources = new LinkedHashMap<>();
         extractClasspath(WORLD_SHADER_ROOT, WORLD_MODULES, worldDirectory, "world", sources);
+        byte[] diagnosticsConfig = ("module trace_diagnostics_config;\n\n"
+                + "public static const bool SHADOW_DIAGNOSTICS_ENABLED = "
+                + Boolean.getBoolean("caustica.rt.shadowDiagnostics") + ";\n").getBytes(StandardCharsets.UTF_8);
+        Files.write(worldDirectory.resolve("trace_diagnostics_config.slang"), diagnosticsConfig);
+        sources.put("world/trace_diagnostics_config.slang", diagnosticsConfig);
         writeSpecializedModuleAlias(worldDirectory, "radiance_any_hit.rahit.slang", RADIANCE_ANY_HIT_MODULE);
         writeSpecializedModuleAlias(worldDirectory, "shadow_any_hit.rahit.slang", SHADOW_ANY_HIT_MODULE);
         extractClasspath(API_ROOT, API_MODULES, apiDirectory, "api", sources);

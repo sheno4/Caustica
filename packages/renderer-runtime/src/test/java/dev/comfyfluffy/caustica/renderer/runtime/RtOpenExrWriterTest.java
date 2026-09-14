@@ -28,6 +28,26 @@ final class RtOpenExrWriterTest {
     Path temp;
 
     @Test
+    void rawReadbackPreservesProjectionAttributeAndFlipsRows() throws IOException {
+        Path output = temp.resolve("projection.exr");
+        String projection = "{\"jitterPixels\":[0.25,-0.125],\"renderWidth\":1,\"renderHeight\":2}";
+        RtOpenExrWriter.writeRaw(output, 1, 2, new float[]{1, 2, 3, 4, 5, 6, 7, 8},
+                Map.of("causticaProjection", projection));
+        ByteBuffer file = ByteBuffer.wrap(Files.readAllBytes(output)).order(ByteOrder.LITTLE_ENDIAN);
+        file.position(8);
+        var attributes = readAttributes(file);
+        assertEquals(projection, StandardCharsets.UTF_8.decode(attributes.get("causticaProjection").value()).toString());
+        long first = file.getLong();
+        file.getLong();
+        assertEquals(first, file.position());
+        for (float[] row : new float[][]{{8, 7, 6, 5}, {4, 3, 2, 1}}) {
+            assertEquals(row[0] == 8 ? 0 : 1, file.getInt());
+            assertEquals(16, file.getInt());
+            for (float value : row) assertEquals(value, file.getFloat());
+        }
+    }
+
+    @Test
     @ResourceLock("java.util.TimeZone.default")
     void captureDateAndOffsetRecoverUtcInEveryTimeZone() throws IOException {
         TimeZone original = TimeZone.getDefault();

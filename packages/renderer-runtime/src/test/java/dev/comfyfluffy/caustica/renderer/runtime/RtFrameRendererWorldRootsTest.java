@@ -40,6 +40,24 @@ final class RtFrameRendererWorldRootsTest {
     }
 
     @Test
+    void pathTracedMediumPreservesDataAndSelectsPrimaryTransport() {
+        var type = ShaderDataType.<Object>create("path-medium");
+        var spatial = new dev.comfyfluffy.caustica.api.view.SpatialMedium<>(
+                new VolumeId<Object, Object>() { }, type.data(123), type.data(456), 8, 16, -24,
+                dev.comfyfluffy.caustica.api.view.SpatialMedium.Transport.PATH_TRACED, 0.125f);
+        ByteBuffer roots = roots((byte) 0);
+        RtFrameRenderer.writeSpatialMediumRoots(roots, spatial, 9,
+                dev.comfyfluffy.caustica.engine.scene.SceneOrigin.ZERO);
+        assertEquals(2, roots.getInt(RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET));
+        assertEquals(0.125f, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_EXTINCTION_MAJORANT_OFFSET));
+        assertEquals(123, roots.getLong(RtBindings.WORLD_SPATIAL_MEDIUM_BINDING_DATA_OFFSET));
+        assertEquals(456, roots.getLong(RtBindings.WORLD_SPATIAL_MEDIUM_INSTANCE_DATA_OFFSET));
+        assertEquals(-8, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET));
+        assertEquals(-16, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET));
+        assertEquals(24, roots.getFloat(RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET));
+    }
+
+    @Test
     void activeInitialVolumeWritesTypedImplementationAndData() {
         ShaderDataType<Object> binding = ShaderDataType.create("binding");
         ShaderDataType<Object> instance = ShaderDataType.create("instance");

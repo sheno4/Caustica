@@ -163,7 +163,9 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", debugImageNames(),
                     "operations", List.of("schema", "status", "passes.capture",
-                    "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "client.stop", "job")));
+                    "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "nsight.status", "nsight.start", "client.stop", "job")));
+            case "nsight.status", "nsight.start" -> future.complete(NsightDebug.execute(op.equals("nsight.start"),
+                    CausticaClientComposition.current().runtime().telemetry().frameSerial()));
             case "passes.capture" -> {
                 if (passCapture != null && !passCapture.isDone())
                     throw new IllegalStateException("A pass capture is already pending");
@@ -408,8 +410,15 @@ public final class MinecraftDebugService implements AutoCloseable {
         result.put("frameActive", CausticaClientComposition.current().runtime().frameActive());
         result.put("runtime", runtimeStatus());
         result.put("terrainOutstandingBuilds", CausticaClientComposition.current().terrain().outstandingBuilds());
-        if (client.level != null) result.put("world", Map.of("dimension", client.level.dimension().toString(),
-                "gameTime", client.level.getGameTime()));
+        if (client.level != null) {
+            var world = new LinkedHashMap<String, Object>();
+            world.put("dimension", client.level.dimension().toString());
+            world.put("gameTime", client.level.getGameTime());
+            var server = client.getSingleplayerServer();
+            if (server != null) world.put("directory", server.getWorldPath(
+                    net.minecraft.world.level.storage.LevelResource.ROOT).normalize().getFileName().toString());
+            result.put("world", world);
+        }
         if (client.player != null) result.put("player", Map.of("x", client.player.getX(), "y", client.player.getY(),
                 "z", client.player.getZ(), "yaw", client.player.getYRot(), "pitch", client.player.getXRot(),
                 "currentFlyingSpeed", client.player.getAbilities().getFlyingSpeed(),

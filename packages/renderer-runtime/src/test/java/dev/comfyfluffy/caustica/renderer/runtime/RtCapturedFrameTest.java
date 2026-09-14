@@ -85,7 +85,8 @@ final class RtCapturedFrameTest {
             var instance = type.data(456, dependency);
             var spatial = new dev.comfyfluffy.caustica.api.view.SpatialMedium<>(
                     new dev.comfyfluffy.caustica.api.program.VolumeId<Object, Object>() { }, binding, instance,
-                    30000000.25, 64.5, -30000000.75);
+                    30000000.25, 64.5, -30000000.75,
+                    dev.comfyfluffy.caustica.api.view.SpatialMedium.Transport.PATH_TRACED, 0.125f);
             var view = new SceneView(new SceneId() { }, Camera.IDENTITY,
                     dev.comfyfluffy.caustica.api.view.ViewMedium.Vacuum.INSTANCE, spatial);
             var captured = RtCapturedFrame.capture(new FrameSnapshot(view, SceneOrigin.ZERO, false, 0, 1));
@@ -97,6 +98,8 @@ final class RtCapturedFrameTest {
             assertEquals(30000000.25, retained.originX());
             assertEquals(64.5, retained.originY());
             assertEquals(-30000000.75, retained.originZ());
+            assertEquals(dev.comfyfluffy.caustica.api.view.SpatialMedium.Transport.PATH_TRACED, retained.transport());
+            assertEquals(0.125f, retained.extinctionMajorant());
             assertNotSame(binding, retained.bindingData());
             assertNotSame(instance, retained.instanceData());
             try (var reader = retained.instanceData().retain()) {

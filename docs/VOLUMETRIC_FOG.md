@@ -1,5 +1,7 @@
 # Volumetric fog checkpoint — 2026-09-13
 
+For the current post/path modes, measured results and remaining limitations, see [fog validation](FOG_VALIDATION.md) and [repeatable visual tests](FOG_VISUAL_TESTS.md). The checkpoint below describes the earlier implementation and its measurements.
+
 ## Visual and performance target
 
 Outdoor fog should form a spatial medium with smooth biome and height transitions, stronger dawn/night density and lighter noon air. Nearby geometry should remain readable, fog should respect the first physical surface and material visibility, and reflected/transmitted continuation paths should receive their own medium transport. The reference performance target is at least 50 rendered frames per second on RTX 5070 Ti at 3840 × 2160, RR Performance, four bounces and 32 sections, with frame generation off. Measurements below establish the tested scenes and identify approximation limits rather than promising every possible world workload.

@@ -85,6 +85,9 @@ def CLIENT_JVM_ARGUMENTS = ["-Xmx8G", "-XX:+UseStringDeduplication", "-XX:+UseZG
 if (findProperty("debugAgent")?.toString()?.toBoolean()) {
 	CLIENT_JVM_ARGUMENTS.add("-Dcaustica.debug.enabled=true")
 }
+if (findProperty("shadowDiagnostics")?.toString()?.toBoolean()) {
+	CLIENT_JVM_ARGUMENTS.add("-Dcaustica.rt.shadowDiagnostics=true")
+}
 
 if (loader == "fabric") {
 	loom {

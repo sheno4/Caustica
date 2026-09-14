@@ -75,7 +75,7 @@ public struct SpatialMediumProperties {
     public float3 extinction = float3(0.0);
     /** Fraction of extinction attributable to scattering, in [0, 1]. */
     public float3 scatteringAlbedo = float3(0.0);
-    /** Isotropic ambient/emission source radiance per scene unit, without pre-exposure. */
+    /** Isotropic emitted source radiance per scene unit, without pre-exposure; additive to traced lighting. */
     public float3 ambientSource = float3(0.0);
     /** Henyey-Greenstein anisotropy, strictly between -1 and 1. */
     public float anisotropy = 0.0;
