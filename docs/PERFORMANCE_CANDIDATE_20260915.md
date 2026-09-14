@@ -166,3 +166,24 @@ The candidate and a subsequent restored-source control used the same cold-start 
 | Jungle, default fog repeat | 20.587 ms | 19.512 ms |
 
 This pair supports approximately 11% lower dome frame time and 5% lower jungle frame time. Captured scene color, normal/roughness and primary depth contain no nonfinite values in either candidate scene. Source review verifies the reordered material evaluation consumes the same immutable frame/intersection inputs. Renderer-raytracing checks pass. Artifacts are in `tmp/material-liveness-performance` and `tmp/material-liveness-baseline`, including the candidate patch and original JFR references. The candidate is retained; its register/spill changes have not yet been measured in a follow-up Nsight trace. The dome remains above the 20 ms target.
+
+## Nether, flight replay, and withdrawn candidates
+
+The material-lifetime build with the source-density and cutout candidates completed a crimson-forest Nether sequence at 4K Performance RR. Twenty seconds each of stationary view, slow circular flight and rest averaged **20.429 / 20.784 / 20.467 ms**; respective maxima were 22.326 / 25.943 / 22.386 ms, with no frames above 33.3 ms. The view is an open cavern with crimson stems, hanging vines and nearby emissive blocks. Artifacts are in `tmp/nether-matrix`. This is an enabled-setting performance test, not proof of visible Nether fog: the Minecraft field derives coverage from sky light, and the density evaluator multiplies by that coverage.
+
+The subsequent maximum-speed jungle replay averaged **15.513 ms** during 20 seconds of flight and **14.088 ms** during 30 seconds of rest. Flight p99/max were 23.289/63.727 ms, with six frames above 33.3 ms and two above 50 ms. Rest p99/max were 15.151/69.909 ms, with one frame above 50 ms. Neither interval exceeded 100 ms. Planner p99/max were 1.597/3.403 ms during flight. The flight ended with 11,619 geometry sections and rest with 30,965. These populations and the new world history differ from earlier runs, so the modest mean improvement does not isolate an optimization. Original recordings and metadata are in `tmp/liveness-flight`.
+
+The source-density candidate is withdrawn despite its measured mean frame-time gain. Exact enumeration now checks the second moment as well as expectation: mixed-source cases can increase variance by approximately 15–178%, while another case decreases it by 34%. These synthetic cases do not quantify rendered-image noise, but establish that the estimator change is not a free speedup. The original mixture-weight estimator is restored. The cutout blocker certificate is also withdrawn because ordinary timings showed no clear gain. Their combined patch is preserved in `tmp/source-reservoir-performance/withdrawn-candidates.patch`, with exact expectation/variance results alongside it. Earlier timings that include those candidates are not final retained-build measurements.
+
+After withdrawal, checks pass for renderer-raytracing, renderer-presentation, minecraft-rendering and api (`tmp/fog-local/retained-performance-check.log`). The material-lifetime and conservative fog-depth changes remain retained.
+
+The clean retained build repeats the dome-to-jungle route with the same 36,296/37,539 settled geometry populations. Each interval records 600 RT frames:
+
+| Scene | Default fog | Fog off | Default fog repeat |
+| --- | ---: | ---: | ---: |
+| Glass dome | 24.768 ms | 21.168 ms | 24.858 ms |
+| Jungle | 20.000 ms | 16.836 ms | 20.041 ms |
+
+All six intervals have no frame above 33.3 ms. Six captured color/normal/primary-depth buffers contain no nonfinite values. Artifacts are in `tmp/retained-performance`. These are the current retained-build absolute timings, not a matched control for withdrawing each candidate: both candidates were removed together and GPU clocks were not locked. The jungle is approximately at 50 FPS; the dome remains approximately 40 FPS with default fog. The client restored its pose/settings/window and exited normally.
+
+Streaming JFR analysis avoids large expanded JSON files and correlates outer callbacks with the flight replay's worst loops (`tmp/fog-local/HitchScopes.java`). Flight loop 3331 / frame 37081 lasts **42.186 ms**, including a **21.141 ms** render-thread park in `CompletableFuture.join` called by Minecraft `SoundEngine.play`; outer mod callbacks total 7.568 ms. This identifies an audio wait contributing to one hitch, not the cause of every spike. The 63.727 ms flight hitch has only 5.009 ms of outer mod callbacks, and the 69.909 ms rest hitch only 3.226 ms. The rest hitch's recorded GC pause is 0.0145 ms. Their remaining time is not attributed by these events. Scope reports are saved beside the motion manifest; isolated execution samples are observations, not duration attribution.
