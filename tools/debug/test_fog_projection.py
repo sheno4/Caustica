@@ -1,5 +1,6 @@
 import unittest
 import numpy as np
+from check_fog_shafts import latch_frozen_time
 from analyze_fog import shaft_false_dark, fog_reference_error
 from plan_fog_shafts import captured_rays, expected_lengths, fixture_endpoints
 
@@ -65,6 +66,24 @@ class CapturedProjectionTest(unittest.TestCase):
         result = fog_reference_error(candidate,reference,mask)
         self.assertEqual(result['relativeMeanAbsoluteError'],0)
         self.assertEqual(result['relativeP99ResidualCurvature'],0)
+
+    def test_frozen_clock_latch_restarts_after_late_packet(self):
+        state={'time':0.,'tick':100}
+        def wait(frames):
+            self.assertEqual(frames,120)
+            state['time']+=.5
+            if state['time']>=1:state['tick']=101
+        tick,observations=latch_frozen_time(lambda:{'world':{'gameTime':state['tick']}},wait,lambda:state['time'])
+        self.assertEqual(tick,101)
+        self.assertEqual(state['time'],3)
+        self.assertEqual(observations[-1]['elapsed'],3)
+
+    def test_frozen_clock_latch_rejects_continuously_advancing_time(self):
+        state={'time':0.}
+        def wait(frames):state['time']+=.5
+        with self.assertRaises(RuntimeError):
+            latch_frozen_time(lambda:{'world':{'gameTime':int(state['time']*2)}},wait,lambda:state['time'])
+        self.assertEqual(state['time'],15)
 
     def test_captured_eye_is_relative_to_fixture_not_scene_origin(self):
         p = self.projection((0, 0))

@@ -19,15 +19,15 @@ import org.lwjgl.vulkan.*;
 
 import java.nio.ByteOrder;
 
-/** Opt-in fill-pass counters read only after their owning graphics frame completes. */
+/** Opt-in per-dispatch counters read only after their owning graphics frame completes. */
 final class RtShadowDiagnostics implements AutoCloseable {
     static final boolean ENABLED = Boolean.getBoolean("caustica.rt.shadowDiagnostics");
     private final RtCompletionSlotPool<Buffers> slots = new RtCompletionSlotPool<>(Buffers::close);
 
     Reservation begin(VulkanDeviceContext context, VkCommandBuffer command, MemoryStack stack,
-                      GraphicsUse use, long frameId) {
+                      GraphicsUse use, long frameId, String pass) {
         var buffers = slots.acquire(value -> true, () -> allocate(context));
-        var reservation = new Reservation(buffers, frameId);
+        var reservation = new Reservation(buffers, frameId, pass);
         use.keepAlive(reservation);
         VK10.vkCmdFillBuffer(command, buffers.gpu.handle(), 0, ShadowDiagnosticsData.BYTE_SIZE, 0);
         barrier(command, stack, buffers.gpu, VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
@@ -71,11 +71,13 @@ final class RtShadowDiagnostics implements AutoCloseable {
     final class Reservation implements AutoCloseable {
         private final Buffers buffers;
         private final long frameId;
+        private final String pass;
         private boolean submitted;
 
-        Reservation(Buffers buffers, long frameId) {
+        Reservation(Buffers buffers, long frameId, String pass) {
             this.buffers = buffers;
             this.frameId = frameId;
+            this.pass = pass;
         }
 
         VulkanDeviceAddress address() { return buffers.gpu.deviceAddress(); }
@@ -100,7 +102,7 @@ final class RtShadowDiagnostics implements AutoCloseable {
                     buffers.readback.invalidate();
                     var data = ShadowDiagnosticsData.read(MemoryUtil.memByteBuffer(buffers.readback.mapped(),
                             ShadowDiagnosticsData.BYTE_SIZE).order(ByteOrder.nativeOrder()));
-                    publish(frameId, data);
+                    publish(frameId, pass, data);
                 }
             } finally {
                 slots.release(buffers);
@@ -108,9 +110,10 @@ final class RtShadowDiagnostics implements AutoCloseable {
         }
     }
 
-    static void publish(long frameId, ShadowDiagnosticsData data) {
+    static void publish(long frameId, String pass, ShadowDiagnosticsData data) {
         var event = new ShadowTraversalEvent();
         event.frameId = frameId;
+        event.pass = pass;
         event.maxShadowRestartsAbove32 = Integer.toUnsignedLong(data.maxShadowRestartsAbove32());
         event.maxQueryProceedAbove256 = Integer.toUnsignedLong(data.maxQueryProceedAbove256());
         event.maxShadowProceedAbove512 = Integer.toUnsignedLong(data.maxShadowProceedAbove512());
@@ -131,11 +134,12 @@ final class RtShadowDiagnostics implements AutoCloseable {
     @Name("dev.comfyfluffy.caustica.ShadowTraversal")
     @Label("Shadow traversal thresholds")
     @Category({"Caustica", "GPU"})
-    @Description("Completed fill-pass counters; zero maxima mean no threshold exceedance. Frame ID identifies the source GPU frame.")
+    @Description("Completed per-dispatch counters; zero maxima mean no threshold exceedance. Frame ID identifies the source GPU frame.")
     @StackTrace(false)
     @Enabled(false)
     static final class ShadowTraversalEvent extends Event {
         long frameId;
+        String pass;
         long maxShadowRestartsAbove32;
         long maxQueryProceedAbove256;
         long maxShadowProceedAbove512;

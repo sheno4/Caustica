@@ -40,7 +40,7 @@ The planner clips rays against floor/roof/back-wall geometry and measures their 
 ## Post-mode capture and acceptance
 
 1. Select an exact disposable save and verify the fixture. Save fog/sky/exposure/bloom/view/time/player/input settings. Stop movement; set time6000 with advancement disabled, density4, the sky settings above, bloom off and manual EV-12. Settle terrain and verify the camera eye, including the assumed1.62 player-eye offset.
-2. Issue `tick freeze` after initial terrain settlement. Record `status.world.gameTime` and verify it before and after every capture. Disabling daytime advancement alone does not freeze procedural fog wind, which uses game time.
+2. Issue `tick freeze` after initial terrain settlement. After freezing, wait until the client reports unchanged `status.world.gameTime` for two wall-clock seconds, with a 15-second bound, to drain late time packets. Latch that value and verify it before and after every capture. Disabling daytime advancement alone does not freeze procedural fog wind, which uses game time.
 3. Capture three same-frame bundles of `primary-depth` and `scene-color` at `fog.debug=1`, then three at `fog.debug=2`. T is dimensionless; S is scattering radiance times pre-exposure. Divide only S by pre-exposure. Retain exact capture projection and frame IDs.
 4. Close the slit, wait for geometry publication, and repeat. Keep ticks frozen through edits and the second camera pose. The two poses, two roof states, two signals and three repeats produce24 bundles. More repeats can estimate smaller changes. No JFR runs during readbacks.
 5. In `finally`, restore the opening, issue `tick unfreeze` for the initially running world, and restore all saved state.
@@ -76,3 +76,18 @@ For banding, compare diagnostic S and T against a high-sample spatial reference 
 Mask physical surface and slit-visibility boundaries using the captured projection and depth. Within the common interior report normalized absolute radiance error, p99 error, and residual second spatial differences along rows and columns; broad repeated peaks identify integration bands even when every pixel is nonzero. Compare motion residuals against the matched reference at each recorded pose, not raw adjacent-frame RGB, which changes legitimately with viewpoint. Inspect every connected error band in the normal output. Record thresholds before the next candidate run, with the reference convergence error below those thresholds; these metrics alone have no calibrated perceptual pass threshold yet.
 
 Measure readback-free GPU scene-effects mean/p95/max and total frame cadence on the same stationary, motion, and return trajectories. Include off controls, repeated post runs, terrain counts and the full transient intervals. Do not accept a quality change that merely moves the user-visible stall into another stage. Root-cause counter improvements are supporting evidence, not a substitute for these quality and end-to-end performance checks.
+
+## Same-field prefix comparison
+
+The prefix integrator exposes `fog.samples` (32..512). Use one bounded capture session for candidate and reference so roof closure and integration changes share the same frozen field:
+
+```powershell
+uv run python tools/debug/check_fog_shafts.py --copied-world YOUR_DISPOSABLE_SAVE --fixtures tmp/fog-review/fixtures.json --output tmp/fog-review/prefix-pair --samples 64 --reference-samples 512
+uv run python tools/debug/analyze_fog_shafts.py tmp/fog-review/prefix-pair/samples-64
+uv run python tools/debug/analyze_fog_shafts.py tmp/fog-review/prefix-pair/samples-512
+uv run python tools/debug/compare_fog_shafts.py tmp/fog-review/prefix-pair/samples-64 tmp/fog-review/prefix-pair/samples-512 --output tmp/fog-review/prefix-pair/reference-comparison.json
+```
+
+The parent manifest contains48 bundles and becomes complete only after both24-bundle sets. Each child can become capture-complete earlier; `restorationComplete` remains false until the parent's final cleanup succeeds. Captured per-sample integration count and frozen game time are retained, and the original sample setting is restored. Omitting the reference preserves the single24-bundle layout.
+
+Comparison uses intersection masks at matching camera/projection and reports normalized delta-scattering bias, absolute error and residual spatial curvature. The512-sample result is a denser stochastic spatial reference, not automatically converged truth. A further same-field256/512 pair can examine reference sensitivity. Pixel coverage, average placement, reference error and continuous-motion evidence remain separate requirements.

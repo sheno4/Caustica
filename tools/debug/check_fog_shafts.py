@@ -8,13 +8,40 @@ from check_fog import validate_world
 from fog_fixtures import apply_block_command
 
 
+def latch_frozen_time(status, wait_frames, clock=time.monotonic):
+    """Wait for late client clock packets to drain before requiring an invariant game time."""
+    started = clock()
+    stable_since = started
+    value = status()['world']['gameTime']
+    observations = [{'elapsed':0,'gameTime':value}]
+    while clock()-started < 15:
+        wait_frames(120)
+        current = status()['world']['gameTime']
+        now = clock()
+        observations.append({'elapsed':now-started,'gameTime':current})
+        if current != value:
+            value = current
+            stable_since = now
+        if now-started >= 15:
+            break
+        if now-stable_since >= 2:
+            return value,observations
+    raise RuntimeError('Client gameTime did not stay stable for2seconds within15seconds after tick freeze')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--copied-world', required=True)
     p.add_argument('--fixtures', type=Path, required=True, help='Existing fog_fixtures.py recipe for the selected copied world')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--session', default='run/caustica-debug/session.json')
+    p.add_argument('--samples', type=int, help='Candidate fog integration samples,32..512')
+    p.add_argument('--reference-samples', type=int, help='Second sample count in the same frozen world,32..512')
     a = p.parse_args()
+    if any(v is not None and not 32 <= v <= 512 for v in (a.samples,a.reference_samples)):
+        p.error('Sample counts must be32..512')
+    if a.reference_samples is not None and (a.samples is None or a.reference_samples==a.samples):
+        p.error('Reference requires a distinct --samples count')
     recipe = json.loads(a.fixtures.read_text())
     if recipe['copiedWorld'] != a.copied_world:
         raise ValueError('Fixture recipe belongs to another copied world')
@@ -28,15 +55,26 @@ def main():
     changes = {'fog.enabled': True, 'fog.density': 4,
                'fog.debug': 0, 'fog.resolution-divisor': 4,
                'sky.sun-noon-south-tilt-degrees': 30, 'sky.sun-angular-radius-degrees': .1}
+    sample_counts = [a.samples if a.samples is not None else mc['fog.samples']['value']]
+    if a.reference_samples is not None: sample_counts.append(a.reference_samples)
+    changes['fog.samples'] = sample_counts[0]
     saved_mc = {k: mc[k]['value'] for k in changes}
     saved_renderer = {k: initial['settings'][k]['value'] for k in ['exposure.mode', 'exposure.manual-ev']}
     saved_time = cmd('time query time'); saved_advance = bool(cmd('gamerule minecraft:advance_time'))
     saved_mode = cmd('data get entity @s playerGameType'); player = initial['player']
     r = dict(initial=initial, savedMinecraft=saved_mc, savedRenderer=saved_renderer,
              savedTime=saved_time, savedAdvanceTime=saved_advance, fixture=fixture,
-             samples=[], roofJournal=[], cleanupErrors=[], complete=False)
+             samples=[], roofJournal=[], cleanupErrors=[], complete=False, samplingCounts=sample_counts, restorationComplete=False)
     a.output.mkdir(parents=True, exist_ok=True)
-    def save(): (a.output / 'manifest.json').write_text(json.dumps(r, indent=2))
+    def save():
+        (a.output / 'manifest.json').write_text(json.dumps(r, indent=2))
+        if len(sample_counts)>1:
+            for count in sample_counts:
+                child = {**r, 'samples':[v for v in r['samples'] if v.get('integrationSamples')==count],
+                         'integrationSamples':count, 'parentManifest':str(a.output/'manifest.json')}
+                child['complete'] = len(child['samples'])==24 and all(v.get('captureComplete',False) for v in child['samples'])
+                folder = a.output/f'samples-{count}'; folder.mkdir(exist_ok=True)
+                (folder/'manifest.json').write_text(json.dumps(child,indent=2))
     def wait(n): c.call('wait', frames=n, timeoutMs=180000)
     def settled():
         deadline = time.monotonic() + 120
@@ -68,7 +106,7 @@ def main():
         cmd(f'tp @s {x+4:.6f} {y+2.88:.6f} {z+.5:.6f} 0 0'); settled()
         r['tickQueryBefore'] = c.call('command', command='tick query')
         cmd('tick freeze'); tick_frozen = True
-        wait(60); frozen_game_time = c.call('status')['world']['gameTime']
+        frozen_game_time, r['freezeClockObservations'] = latch_frozen_time(lambda:c.call('status'),wait)
         r['frozenGameTime'] = frozen_game_time; save()
         # Require the authored open slot before editing; restoration is then exact.
         for bx in (x+8, x+9):
@@ -76,29 +114,32 @@ def main():
                 if cmd(f'execute if block {bx} {y+8} {bz} minecraft:air') != 1:
                     raise RuntimeError('Roof slit differs from authored open fixture')
         roof_verified = True
-        for lateral in (0, .25):
-            cmd(f'tp @s {x+4+lateral:.6f} {y+2.88:.6f} {z+.5:.6f} 0 0'); settled()
-            camera = c.call('status')['camera']
-            if max(abs(camera[k] - target) for k, target in zip(('x','y','z'), (x+4+lateral,y+4.5,z+.5))) > .01:
-                raise RuntimeError(f'Unexpected camera eye: {camera}')
-            for state, block in [('open','air'), ('closed','stone')]:
-                roof(block); settled()
-                for debug, signal in [(1,'T'), (2,'S')]:
-                    c.call('settings.set', feature='caustica:minecraft', values={'fog.debug': debug}); wait(60)
-                    for index in range(3):
-                        sample = dict(label=f'x{lateral}-{state}-{signal}-{index}', lateral=lateral,
-                                      roof=state, signal=signal, before=c.call('status'))
-                        r['samples'].append(sample); save()
-                        if sample['before']['world']['gameTime'] != frozen_game_time:
-                            raise RuntimeError('Procedural game time changed while tick freeze required')
-                        sample['raw'] = c.call('image.capture', names=['primary-depth','scene-color'])
-                        sample['capturedFrameIds'] = [image['metadata']['frameSerial'] for image in sample['raw']['images']]
-                        sample['after'] = c.call('status')
-                        if sample['after']['world']['gameTime'] != frozen_game_time:
-                            raise RuntimeError('Procedural game time changed during capture')
-                        save(); print(sample['label'], flush=True); wait(2)
-            roof('air')
-        r['complete'] = True
+        for count in sample_counts:
+            c.call('settings.set',feature='caustica:minecraft',values={'fog.samples':count}); wait(60)
+            for lateral in (0, .25):
+                cmd(f'tp @s {x+4+lateral:.6f} {y+2.88:.6f} {z+.5:.6f} 0 0'); settled()
+                camera = c.call('status')['camera']
+                if max(abs(camera[k] - target) for k, target in zip(('x','y','z'), (x+4+lateral,y+4.5,z+.5))) > .01:
+                    raise RuntimeError(f'Unexpected camera eye: {camera}')
+                for state, block in [('open','air'), ('closed','stone')]:
+                    roof(block); settled()
+                    for debug, signal in [(1,'T'), (2,'S')]:
+                        c.call('settings.set', feature='caustica:minecraft', values={'fog.debug': debug}); wait(60)
+                        for index in range(3):
+                            sample = dict(label=f'x{lateral}-{state}-{signal}-{index}', lateral=lateral,
+                                          roof=state, signal=signal, integrationSamples=count, before=c.call('status'))
+                            r['samples'].append(sample); save()
+                            if sample['before']['world']['gameTime'] != frozen_game_time:
+                                raise RuntimeError('Procedural game time changed while tick freeze required')
+                            sample['raw'] = c.call('image.capture', names=['primary-depth','scene-color'])
+                            sample['capturedFrameIds'] = [image['metadata']['frameSerial'] for image in sample['raw']['images']]
+                            sample['after'] = c.call('status')
+                            if sample['after']['world']['gameTime'] != frozen_game_time:
+                                raise RuntimeError('Procedural game time changed during capture')
+                            sample['captureComplete'] = True
+                            save(); print(sample['label'], flush=True); wait(2)
+                roof('air')
+        r['complete'] = len(r['samples'])==24*len(sample_counts) and all(v.get('captureComplete',False) for v in r['samples'])
     finally:
         operations = [('input.set', {'flyingSpeed': player['currentFlyingSpeed']})]
         if roof_verified:
@@ -118,6 +159,7 @@ def main():
         for op, args in operations:
             try: c.call(op, **args)
             except Exception as e: r['cleanupErrors'].append(dict(op=op,error=str(e)))
+        r['restorationComplete'] = not r['cleanupErrors']
         save()
         if r['cleanupErrors']: raise RuntimeError(r['cleanupErrors'])
 

@@ -661,7 +661,7 @@ public final class RtFrameRenderer {
             }
             RtShadowDiagnostics.Reservation shadowCounters = null;
             if (RtShadowDiagnostics.ENABLED) {
-                shadowCounters = shadowDiagnostics.begin(ctx, cmd, stack, graphicsUse, telemetry.frameSerial());
+                shadowCounters = shadowDiagnostics.begin(ctx, cmd, stack, graphicsUse, telemetry.frameSerial(), "fill stable planes");
                 roots.putLong(RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET, shadowCounters.address().value());
             }
             try (var gpu = commands.time("fill stable planes");
@@ -794,7 +794,14 @@ public final class RtFrameRenderer {
             roots.putLong(RtBindings.WORLD_VISIBILITY_RAYS_ADDRESS_OFFSET, rays.value());
             roots.putLong(RtBindings.WORLD_VISIBILITY_RESULTS_ADDRESS_OFFSET, results.value());
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
+            RtShadowDiagnostics.Reservation shadowCounters = null;
+            if (RtShadowDiagnostics.ENABLED) {
+                shadowCounters = shadowDiagnostics.begin(context, commandBuffer, stack, execution.graphicsUse,
+                        telemetry.frameSerial(), "material visibility");
+                roots.putLong(RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET, shadowCounters.address().value());
+            }
             execution.program.pipeline().trace(commandBuffer, width, height, roots, RtProgramBackend.VISIBILITY_RAYGEN_INDEX, execution.trace.hitTable());
+            if (shadowCounters != null) shadowCounters.copy(commandBuffer, stack, execution.graphicsUse);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
         }
     }
