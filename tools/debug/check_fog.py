@@ -10,8 +10,7 @@ from caustica_debug import Client
 
 FEATURE = "caustica:minecraft"
 MODES = {"off": {"fog.enabled": False},
-         "post": {"fog.enabled": True, "fog.mode": "POST_PROCESS"},
-         "path": {"fog.enabled": True, "fog.mode": "PATH_TRACED"}}
+         "post": {"fog.enabled": True}}
 BUFFERS = ["primary-depth", "depth", "trace-color", "reconstructed-color", "scene-color"]
 EVENTS = ["Frame", "CpuStage", "GpuStage", "FrameCounter", "Exposure"]
 
@@ -38,10 +37,6 @@ def run(args):
     validate_world(initial, args.copied_world)
     fog = client.call("settings.get", feature=FEATURE)
     saved_fog = {key: entry["value"] for key, entry in fog.items() if key.startswith("fog.")}
-    # A baseline binary can run off/post cases before the path mode is installed.
-    for mode in args.modes:
-        if mode == "path" and "fog.mode" not in saved_fog:
-            raise RuntimeError("This client does not expose fog.mode; use --modes off post for baseline")
     def command(text):
         return client.call("command", command=text)["result"]
 
@@ -117,8 +112,6 @@ def run(args):
             command(f"time set {args.time}")
         for mode in args.modes:
             values = {**MODES[mode], "fog.debug": 0}
-            if "fog.mode" not in saved_fog:
-                values.pop("fog.mode", None)
             client.call("settings.set", feature=FEATURE, values=values)
             pose()
             wait(args.warmup)

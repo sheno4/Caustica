@@ -1,6 +1,6 @@
 # Roof-slit shaft placement acceptance
 
-Both the frozen-medium 48-step baseline and 96-step quadratic candidate pass the copied-world mean placement controls. The candidate removes the measured near-zero-response holes in both tested views, while visible discrete intensity bands remain.
+The user still reports planes and poor performance with the 96-step result. Earlier mean-placement and zero-hole checks missed these failures. They remain diagnostic measurements, not acceptance; the continuous-motion and banding requirements below must also pass.
 
 `plan_fog_shafts.py` creates commands and an analytic mask without contacting the client:
 
@@ -55,8 +55,24 @@ On the eroded analytic lit mask with common measured endpoints, a **false-dark p
 
 The frozen48-step baseline (`roof-acceptance-frozen`) passes mean placement but has false-dark fractions18.0951% and21.7159% at the two poses. Its256/48=5.333-metre spacing exceeds the slit width. The96-step quadratic candidate (`roof-quadratic96`) retains both mean-placement controls and has zero false-dark pixels among326678 and343712 eligible lit pixels. Both views have open/closed T p99 difference0 and median T0.993652. Diagnostic previews retain visible discrete intensity bands. Separate runs froze different game times, so coverage improvement does not establish brightness causality or unbiased radiance; these sparse poses do not prove flicker-free motion.
 
-## Captured projection and path scope
+## Captured projection
 
 Capture metadata and the EXR `causticaProjection` JSON attribute contain column-major inverse projection/view rotation, absolute camera, native trace dimensions, and signed trace jitter. For top-down post pixels use `UV=((x+.5)/W,1-(y+.5)/H)`; for primary depth use `UV=((x+.5+jitterX)/renderWidth,1-(y+.5-jitterY)/renderHeight)`. Unproject reverse-Z and add cameraWorld; zero depth denotes environment.
 
-Path beauty and density-zero controls can show a qualitative medium response, but they mix volume, surface, attenuation and indirect transport. Strict path direct-shaft acceptance requires an isolated primary direct-volume-scattering AOV, ideally with event distance. The present POST experiment makes no such path claim.
+Path-volume mode is removed from active testing at the user's request. Historical measurements remain in FOG_VALIDATION.md.
+
+## Continuous-motion and banding acceptance
+
+A zero false-dark fraction only establishes that every selected pixel has some response. A sequence of bright planar slices can satisfy it. Mean lit/dark controls likewise cannot distinguish smooth integration from stair steps. Neither result accepts the remaining appearance or performance.
+
+Use three paired scenes: the noon slit (thin shadow boundaries), the saved overhead world view (long depth range), and the close oblique wall (smooth depth with no internal silhouette). Keep density, field time, sky, exposure, render/output resolution and reconstruction route fixed. Run fog off and post on each. Begin with terrain drained, then repeat the flight/return route separately to test transient cost.
+
+For motion, capture at least eight seconds of uninterrupted output at a fixed measured cadence, including two seconds stationary, a four-second 0.25-metre lateral traverse or 12-degree/second yaw, and two seconds after stopping. Repeat with a downward pitch sweep across the reported overhead view. Review normal display output at native resolution and normal playback speed; use slow playback and scattering-only output to locate a failure, not to excuse visible bands. Require no new planar bands, camera-locked slabs, abrupt intensity steps, flicker, or persistent trails during motion and settling. Passing two endpoint stills is insufficient.
+
+Synchronous `image.capture` waits for readback and can skip many displayed frames. A sequence made that way is a sparse pose sweep, not continuous-motion evidence. A valid renderer capture needs a bounded asynchronous staging ring with submitted frame IDs, camera/projection, time, and an explicit dropped-frame count, or a separately verified screen-video recorder with frame timestamps. Do not benchmark while either recorder is active. No such consecutive-frame renderer capture is supplied by the current debug image API; report missing motion evidence explicitly until a recorder is available.
+
+For banding, compare diagnostic S and T against a high-sample spatial reference at the identical frozen field, camera and light. Establish reference convergence by doubling sample count until residual changes are below the intended error tolerance. An alternate constant-density medium with an analytic slit integral would also be suitable, but the current public fog settings do not provide that fixture override. The 48- and96-sample implementations are not ground truth for one another. Different frozen game times cannot be compared for radiance accuracy.
+
+Mask physical surface and slit-visibility boundaries using the captured projection and depth. Within the common interior report normalized absolute radiance error, p99 error, and residual second spatial differences along rows and columns; broad repeated peaks identify integration bands even when every pixel is nonzero. Compare motion residuals against the matched reference at each recorded pose, not raw adjacent-frame RGB, which changes legitimately with viewpoint. Inspect every connected error band in the normal output. Record thresholds before the next candidate run, with the reference convergence error below those thresholds; these metrics alone have no calibrated perceptual pass threshold yet.
+
+Measure readback-free GPU scene-effects mean/p95/max and total frame cadence on the same stationary, motion, and return trajectories. Include off controls, repeated post runs, terrain counts and the full transient intervals. Do not accept a quality change that merely moves the user-visible stall into another stage. Root-cause counter improvements are supporting evidence, not a substitute for these quality and end-to-end performance checks.

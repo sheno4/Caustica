@@ -33,6 +33,33 @@ def shaft_false_dark(delta_scattering, lit_mask):
             "falseDarkFraction": count / response.size if applicable else None}
 
 
+def fog_reference_error(candidate, reference, interior):
+    """Residual magnitude and band curvature for identical field/camera reference captures."""
+    if candidate.shape != reference.shape or candidate.shape != (*interior.shape, 3):
+        raise ValueError("Candidate, reference RGB and interior mask dimensions must match")
+    if not interior.any() or not np.isfinite(candidate[interior]).all() or not np.isfinite(reference[interior]).all():
+        raise ValueError("Require nonempty finite interior samples")
+    scale = float(np.abs(reference[interior]).mean())
+    if scale <= 0:
+        raise ValueError("A zero reference has no radiance normalization scale")
+    residual = (candidate - reference) / scale
+    curvature = []
+    for axis in (0, 1):
+        center = [slice(None), slice(None)]
+        left = center.copy(); right = center.copy()
+        center[axis] = slice(1, -1); left[axis] = slice(None, -2); right[axis] = slice(2, None)
+        valid = interior[tuple(center)] & interior[tuple(left)] & interior[tuple(right)]
+        second = residual[tuple(left)] - 2 * residual[tuple(center)] + residual[tuple(right)]
+        curvature.append(np.abs(second[valid]).ravel())
+    curvature = np.concatenate(curvature)
+    absolute = np.abs(residual[interior])
+    return {"referenceMeanAbsoluteRadiance": scale,
+            "relativeMeanAbsoluteError": float(absolute.mean()),
+            "relativeP99AbsoluteError": float(np.percentile(absolute, 99)),
+            "relativeP99ResidualCurvature": float(np.percentile(curvature, 99)) if curvature.size else None,
+            "acceptance": "Requires a converged same-field reference and separately specified tolerances"}
+
+
 def stationary_difference(first, second, first_depth, second_depth):
     """Compare native-resolution radiance only where the physical depth stays stable."""
     if first.shape != second.shape or first_depth.shape != first.shape[:2] or second_depth.shape != first_depth.shape:

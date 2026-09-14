@@ -32,13 +32,11 @@ public final class FogPass implements Pass<PostEffectFrame> {
     public static final PassId ID = new PassId("caustica", "fog");
     public static final String GROUP = "fog";
     public static final Option<Boolean> ENABLED = Option.bool("fog.enabled", true).inGroupAsHeader(GROUP);
-    public static final Option<SpatialMedium.Transport> MODE = Option.enumOf("fog.mode",
-            SpatialMedium.Transport.POST_PROCESS, List.of(SpatialMedium.Transport.values())).inGroup(GROUP);
     public static final Option<Float> DENSITY = Option.range("fog.density", 0.0f, 4.0f, 1.0f).inGroup(GROUP);
     public static final Option<Float> RESOLUTION_DIVISOR =
             Option.range("fog.resolution-divisor", 4.0f, 8.0f, 8.0f).inGroup(GROUP).step(4.0);
     public static final Option<Float> DEBUG = Option.range("fog.debug", 0.0f, 2.0f, 0.0f).inGroup(GROUP).step(1.0);
-    public static final List<Option<?>> OPTIONS = List.of(ENABLED, MODE, DENSITY, RESOLUTION_DIVISOR, DEBUG);
+    public static final List<Option<?>> OPTIONS = List.of(ENABLED, DENSITY, RESOLUTION_DIVISOR, DEBUG);
     private static final int STEPS = 96;
     private static final int VISIBILITY_SAMPLES = 8;
 
@@ -67,7 +65,6 @@ public final class FogPass implements Pass<PostEffectFrame> {
         var medium = frame.view().spatialMedium();
         if (medium == null || medium.bindingData().type() != FogVolume.BINDING_DATA
                 || !frame.spatialMediumActive()) return;
-        if (medium.transport() == SpatialMedium.Transport.PATH_TRACED) return;
         long binding = medium.bindingData().bits();
         int divisor = Math.round(values.get(RESOLUTION_DIVISOR));
         int width = Math.max(1, (frame.renderWidth() + divisor - 1) / divisor);

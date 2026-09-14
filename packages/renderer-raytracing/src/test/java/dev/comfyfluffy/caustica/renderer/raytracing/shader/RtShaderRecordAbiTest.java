@@ -141,7 +141,7 @@ final class RtShaderRecordAbiTest {
     @Test
     void worldPushRootsRetainTheirDescriptorHeapAbi() {
         assertArrayEquals(new int[]{0, 8, 16, 24, 32, 40, 56, 68, 72, 76, 80, 84, 88, 92,
-                        96, 100, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 180, 184, 188, 192, 196, 200, 208},
+                        96, 100, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 180, 184, 188, 192, 200, 208},
                 new int[]{RtBindings.WORLD_PUSH_ADDRESS_OFFSET, RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET,
                         RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET, RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
                         RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, RtBindings.WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET,
@@ -160,7 +160,6 @@ final class RtShaderRecordAbiTest {
                         RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET, RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET,
                         RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET,
                         RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET,
-                        RtBindings.WORLD_SPATIAL_MEDIUM_EXTINCTION_MAJORANT_OFFSET,
                         RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET, RtBindings.WORLD_PUSH_CONSTANT_SIZE});
     }
 

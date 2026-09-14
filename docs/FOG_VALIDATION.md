@@ -1,22 +1,18 @@
 # Fog validation — 2026-09-14
 
-The revised post fog and path-traced mode were exercised in the disposable save `caustica-fog-review-20260914`. The reproduced flight hitches were traced to grazing transparent shadow rays repeatedly accepting the same triangle, sometimes over 100,000 times. Normal-offset continuation removes that failure in the four measured fixed routes: all five diagnostic counters are zero across 2,436 matched GPU frames, and fill maxima are 6.365–7.021 ms. Post depth and visibility changes address the displaced-plane artifacts; the new path mode remains materially more expensive in dense overhead fog. These runs validate the reproduced failure, not a universal frame-rate guarantee.
+The user reports unresolved planes and poor performance with the 96-sample result. The earlier narrow-shaft mean-placement and zero-hole checks were insufficient and must not be read as visual acceptance. Path-volume mode is being removed at the user's request. The measurements below are historical evidence for the tested binaries, including the removed mode; they do not establish that the current post fog solves the reported problem.
 
-## Modes and reproduction
+The transparent-shadow continuation fix eliminated repeated same-triangle traversal in the four recorded instrumented routes. That bounded improvement does not explain or resolve all remaining fog cost and appearance failures.
 
-The `caustica:minecraft` settings feature exposes `fog.enabled`, `fog.mode` (`POST_PROCESS` or `PATH_TRACED`), `fog.density`, `fog.resolution-divisor` and `fog.debug`. Disable `fog.enabled` for the control. Path mode evaluates camera and continuation medium transport in the trace; the post camera effect is bypassed. The two modes reuse the captured spatial field. Post debug 1 shows dimensionless transmittance; it is not an exposure-scaled beauty signal.
+## Active reproduction
 
-Post mode de-jitters the physical depth guide, interpolates projected depth within compatible surfaces, and evaluates visibility at each of 96 density samples with quadratically spaced distance intervals. Eight visibility rays per pixel are reused across twelve batches, with full-float accumulation. Secondary single scattering samples a density-weighted position and uses compensated shadow roulette for thin media.
+Use `fog.enabled` for off/post comparisons, with `fog.density`, `fog.resolution-divisor` and `fog.debug`. Debug1 is dimensionless transmittance; debug2 is scattering times pre-exposure. There is no active path-mode recipe. See [FOG_VISUAL_TESTS.md](FOG_VISUAL_TESTS.md) and [FOG_SHAFT_TEST.md](FOG_SHAFT_TEST.md), including the stronger continuous-motion and banding requirements.
 
-Path mode uses heterogeneous delta tracking, Henyey–Greenstein scattering, direct light sampling and ratio-tracked shadow transmittance. `SpatialMedium` carries the shared field, transport selection and an extinction majorant per scene unit. Explicit glass/water interiors replace outdoor fog. A dedicated primary volume plane leaves two surface planes; NRD and RR reconstruct its noisy lighting. NRD demodulation and remodulation use the same BSDF floor so weak volume lighting survives composition.
+Record timing separately from image readbacks. Raw bundles contain same-frame guides, radiance and captured projection; separate PNGs are different frames. Historical tables preserve their original modes and configuration for attribution.
 
-This is a bounded real-time volume integrator, with the renderer's bounce limit and a 256-metre medium domain. Stable ballistic transmittance and guide distance use adaptive 1/2/4/8-node quadrature; extremely narrow field features can disagree with stochastic collision sampling. It does not implement all Cycles volume features, and post mode still uses a coarse spatial grid without temporal fog reconstruction.
+## Historical overhead camera — 96-sample quadratic integration
 
-See [the experiment recipes](FOG_VISUAL_TESTS.md) for `check_fog.py`, fixture creation, restoration and capture semantics. Record JFR separately from image readbacks. Every raw bundle captures its guides and radiance in one submitted frame; its PNG is a separate frame. Local manifests retain settings, poses, paths and checkout state. The checkout revision alone does not identify an already-running binary.
-
-## Final overhead camera — 96-sample quadratic integration
-
-The adopted configuration is recorded in `tmp/fog-review/quadratic96-overhead/`: player `(-1632.065859, 180, -6503.652155)`, yaw 47.52295, pitch 65; 3840×2160 output, 1920×1080 trace, RR Performance, four bounces, frame generation off, density 1 and post divisor 8. Each mode used 300 warmup frames and 400 requested measured frames before separate raw/PNG repeats; all reported zero outstanding terrain builds. Shader diagnostics and Nsight are disabled. Times are GPU milliseconds:
+The rejected 96-sample configuration is recorded in `tmp/fog-review/quadratic96-overhead/`: player `(-1632.065859, 180, -6503.652155)`, yaw 47.52295, pitch 65; 3840×2160 output, 1920×1080 trace, RR Performance, four bounces, frame generation off, density 1 and post divisor 8. Each mode used 300 warmup frames and 400 requested measured frames before separate raw/PNG repeats; all reported zero outstanding terrain builds. Shader diagnostics and Nsight are disabled. Times are GPU milliseconds:
 
 | Mode | World trace mean / p95 / max | Fill mean / max | Scene effects mean / p95 / max | RR mean |
 | --- | ---: | ---: | ---: | ---: |
@@ -137,7 +133,7 @@ A subsequent 120-frame native capture and completed TSV export are retained in `
 
 The separate delayed capture in `tmp/fog-review/nsight-timeline-flight-valid/` used 3,000 ms and one million timestamps, producing 120 valid pass timings without overflow: fill maximum 50.480 ms and GPU frame maximum 61.542 ms. Its separate JFR 224.777 ms fill hitch was absent from exported timings. It reported 512 MiB VRAM demotion, but no frame-local demotion timeline. The actual report still enabled real-time shader profiling despite omission of the CLI flag. Launch-clock scheduling was not a verified capture boundary; the SDK capture above corrects that timing limitation. This delayed capture cannot identify the cause of uninstrumented hitches.
 
-The Python suite currently passes 60 tests, including cleanup/idempotent fixture behavior and independent analytical/statistical references for RGB medium weighting, phase sampling, shadow roulette and heterogeneous delta/ratio tracking. The adopted presentation check passes, including shader compilation. The mathematical references do not execute the GPU shader; live captures are a separate validation layer. Media remain bounded by the implemented transport distance and captured field, and path sampling cost/noise can be substantial in dense scenes.
+The earlier Python and shader checks passed for the recorded binary. Path-only statistical references are removed from the active suite along with that mode; retained mathematical checks do not execute GPU shaders. Passing these checks did not establish acceptable visual quality or fog performance.
 
 
 ### Controlled narrow-shaft placement and sampling coverage

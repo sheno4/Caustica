@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from analyze_fog import shaft_false_dark
+from analyze_fog import shaft_false_dark, fog_reference_error
 from plan_fog_shafts import captured_rays, expected_lengths, fixture_endpoints
 
 
@@ -47,6 +47,24 @@ class CapturedProjectionTest(unittest.TestCase):
         metric = shaft_false_dark(np.zeros((2,2,3)), np.ones((2,2),dtype=bool))
         self.assertFalse(metric['responsePresent'])
         self.assertIsNone(metric['falseDarkFraction'])
+
+    def test_nonzero_bands_pass_hole_metric_but_have_reference_curvature(self):
+        reference = np.ones((8,8,3))
+        candidate = reference.copy()
+        candidate[:, ::2] *= 1.2
+        mask = np.ones((8,8),dtype=bool)
+        self.assertEqual(shaft_false_dark(candidate,mask)['falseDarkFraction'],0)
+        error = fog_reference_error(candidate,reference,mask)
+        self.assertAlmostEqual(error['relativeP99ResidualCurvature'],.4)
+        self.assertAlmostEqual(error['relativeMeanAbsoluteError'],.1)
+
+    def test_smooth_reference_and_masked_boundary_have_no_residual_bands(self):
+        reference = np.broadcast_to(np.arange(8)[None,:,None]+1.,(8,8,3)).copy()
+        candidate = reference.copy(); candidate[:,0] = 1000
+        mask = np.ones((8,8),dtype=bool); mask[:,0] = False
+        result = fog_reference_error(candidate,reference,mask)
+        self.assertEqual(result['relativeMeanAbsoluteError'],0)
+        self.assertEqual(result['relativeP99ResidualCurvature'],0)
 
     def test_captured_eye_is_relative_to_fixture_not_scene_origin(self):
         p = self.projection((0, 0))

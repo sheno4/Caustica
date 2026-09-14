@@ -25,7 +25,7 @@ def main():
     cmd = lambda text: c.call('command', command=text)['result']
     mc = c.call('settings.get', feature='caustica:minecraft')
     bloom = c.call('settings.get', feature='caustica:bloom')
-    changes = {'fog.enabled': True, 'fog.mode': 'POST_PROCESS', 'fog.density': 4,
+    changes = {'fog.enabled': True, 'fog.density': 4,
                'fog.debug': 0, 'fog.resolution-divisor': 4,
                'sky.sun-noon-south-tilt-degrees': 30, 'sky.sun-angular-radius-degrees': .1}
     saved_mc = {k: mc[k]['value'] for k in changes}

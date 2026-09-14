@@ -50,7 +50,6 @@ final class RtPipelineBindingAbiTest {
         assertEquals(184, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET);
         assertEquals(188, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET);
         assertEquals(192, RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Z_OFFSET);
-        assertEquals(196, RtBindings.WORLD_SPATIAL_MEDIUM_EXTINCTION_MAJORANT_OFFSET);
         assertEquals(200, RtBindings.WORLD_SHADOW_DIAGNOSTICS_ADDRESS_OFFSET);
         assertEquals(208, WORLD_PUSH_CONSTANT_SIZE);
     }

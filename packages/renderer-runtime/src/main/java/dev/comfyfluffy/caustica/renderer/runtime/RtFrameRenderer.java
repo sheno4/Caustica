@@ -860,9 +860,7 @@ public final class RtFrameRenderer {
                 active ? spatial.instanceData().bits() : 0L);
         target.putInt(base + RtBindings.WORLD_SPATIAL_MEDIUM_IMPLEMENTATION_OFFSET, active ? implementation : 0);
         target.putInt(base + RtBindings.WORLD_SPATIAL_MEDIUM_ACTIVE_OFFSET,
-                active ? spatial.transport() == SpatialMedium.Transport.PATH_TRACED ? 2 : 1 : 0);
-        target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_EXTINCTION_MAJORANT_OFFSET,
-                active ? spatial.extinctionMajorant() : 0);
+                active ? 1 : 0);
         target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_X_OFFSET,
                 active ? (float) (traceOrigin.x() - spatial.originX()) : 0);
         target.putFloat(base + RtBindings.WORLD_SPATIAL_MEDIUM_ORIGIN_Y_OFFSET,

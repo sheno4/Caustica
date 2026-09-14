@@ -118,10 +118,6 @@
 
 	"caustica.option.caustica.minecraft.fog.enabled": "Volumetric Fog",
 	"caustica.option.caustica.minecraft.fog.enabled.tooltip": "Add drifting mist that varies with time of day, terrain height, and biome.",
-	"caustica.option.caustica.minecraft.fog.mode": "Fog Rendering",
-	"caustica.option.caustica.minecraft.fog.mode.tooltip": "Choose reduced-resolution fog after reconstruction or volumetric transport inside the path tracer.",
-	"caustica.option.caustica.minecraft.fog.mode.POST_PROCESS": "Post Process",
-	"caustica.option.caustica.minecraft.fog.mode.PATH_TRACED": "Path Traced",
 	"caustica.option.caustica.minecraft.fog.density": "Fog Density",
 	"caustica.option.caustica.minecraft.fog.density.tooltip": "Scale the thickness of the mist. Higher values reduce visibility.",
 	"caustica.option.caustica.minecraft.fog.resolution-divisor": "Fog Resolution Divisor",
