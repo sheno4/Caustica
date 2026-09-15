@@ -164,7 +164,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             case "schema" -> future.complete(Map.of("views", VIEWS,
                     "images", debugImageNames(),
                     "operations", List.of("schema", "status", "terrain.status", "memory.capture", "passes.capture",
-                    "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "nsight.status", "nsight.start", "client.stop", "job")));
+                    "settings.get", "settings.set", "runtime.set", "resources.reload", "world.leave", "view.set", "screen.close", "window.resize", "window.fullscreen", "window.maximize", "window.restore", "input.set", "wait", "command", "screenshot", "image.capture", "jfr.start", "jfr.dump", "jfr.stop", "nsight.status", "nsight.start", "client.stop", "job")));
             case "nsight.status", "nsight.start" -> future.complete(NsightDebug.execute(op.equals("nsight.start"),
                     CausticaClientComposition.current().runtime().telemetry().frameSerial()));
             case "passes.capture" -> {
@@ -189,6 +189,12 @@ public final class MinecraftDebugService implements AutoCloseable {
                 if (width < 1 || height < 1) throw new IllegalArgumentException("Window dimensions must be positive");
                 client.getWindow().setWindowed(width, height);
                 future.complete(Map.of("requestedWidth", width, "requestedHeight", height));
+            }
+            case "window.fullscreen" -> {
+                boolean enabled = request.get("enabled").getAsBoolean();
+                var window = client.getWindow();
+                if (window.isFullscreen() != enabled) window.toggleFullScreen();
+                future.complete(Map.of("requestedFullscreen", enabled));
             }
             case "window.maximize", "window.restore" -> {
                 var window = client.getWindow();
