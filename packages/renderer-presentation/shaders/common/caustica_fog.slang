@@ -77,11 +77,15 @@ float4 fogPrefixAt(uint2 pixel, uint2 extent, float distance, float maximumDista
     float cell = sqrt(saturate(distance / maximumDistance)) * float(pc.steps);
     uint step = min(uint(cell), pc.steps - 1u);
     float2 interval = fogInterval(step, maximumDistance);
-    float fraction = saturate((distance - interval.x) / interval.y);
     float4* prefix = (float4*)pc.prefixAddress;
     uint planeSize = extent.x * extent.y;
+    // The terminal prefix integrates only to its conservative depth limit.
+    float limit = prefix[pixel.x + pixel.y * extent.x + (pc.steps + 1u) * planeSize].x;
+    interval.y = min(interval.y, max(0.0, limit - interval.x));
     uint base = pixel.x + pixel.y * extent.x + step * planeSize;
     float4 before = prefix[base], after = prefix[base + planeSize];
+    if (interval.y <= 0.0) return before;
+    float fraction = saturate((distance - interval.x) / interval.y);
     if (fraction <= 0.0) return before;
     if (fraction >= 1.0) return after;
     // Integrate the partial cell with the same homogeneous coefficients as its stored endpoints.
@@ -155,8 +159,10 @@ public void runFog(uint3 id) {
         for(uint j=0;j<visibilityCount;j++) {
             uint step = firstStep+j;
             float2 interval = fogInterval(step, medium.profile.w);
+            // Sampling beyond the terminal limit can import light from behind the visible boundary.
+            interval.y = min(interval.y, max(0.0, depthLimit - interval.x));
             float3 p = direction*(interval.x+fogSamplePhase(id.xy,step)*interval.y);
-            float sigma = step < pc.steps && interval.x <= depthLimit
+            float sigma = step < pc.steps && interval.y > 0.0
                     ? intervalDensity(medium, direction, interval) : 0.0;
             // The integration dispatch consumes this density before replacing it with cumulative transport.
             if (step < pc.steps) prefix[prefixBase+(step+1u)*w*h] = float4(0,0,0,sigma);
@@ -186,6 +192,8 @@ public void runFog(uint3 id) {
         float4* visibilityResults = (float4*)pc.visibilityResultsAddress;
         for(uint i=firstStep;i<min(firstStep+visibilityCount,pc.steps);i++) {
             float2 interval = fogInterval(i, medium.profile.w);
+            float depthLimit = prefix[prefixBase + (pc.steps + 1u)*w*h].x;
+            interval.y = min(interval.y, max(0.0, depthLimit - interval.x));
             float segmentLength = interval.y;
             float3 p = direction*(interval.x+0.5*segmentLength);
             float sigma = prefix[prefixBase+(i+1u)*w*h].a;
