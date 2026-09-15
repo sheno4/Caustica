@@ -588,3 +588,20 @@ The scene-effect-before-reconstruction implementation is retained based on reduc
 Compared with `tmp/early-fog-motion`, dome static mean changed from 22.705 to 21.938 ms, circle 21.816 to 21.083 ms, and recovery 22.815 to 21.990 ms. Candidate dome intervals had no loops above 33.3 ms. Jungle means were essentially unchanged: static 16.838 ms, flight 15.687 ms (p99 20.666, max 37.888, 3/1284 above 33.3), recovery 14.845 ms (max 37.129, 1/2021 above 33.3). The dome screenshot was inspected and is coherent, but this single image does not establish the variance cost. No matched multi-frame variance comparison or NRD acceptance was performed. The approximately 3.4% dome gain and negligible jungle gain do not justify adopting this estimator change without further quality evidence; it is shelved, not retained. Raw JFR and color/guide snapshots are referenced by the manifest.
 
 Resource minima: 17.133 GiB physical available, 6.512 GiB commit headroom, 188.518 GiB disk. The copied-world camera/settings were restored. Remaining trace work should address a larger cost than the number of filled endpoints alone, while retaining the deterministic guide construction required by reflective/refractive surfaces.
+
+## Base-color texture evaluation diagnostic
+
+A matched retained control and temporary shader ablation are recorded in `tmp/base-texture-control` and `tmp/base-texture-ablation`. The ablation replaces only the base-color fetch inside `evaluateMinecraftMaterial` with `(0.5, 0.5, 0.5, 1)`. Coverage/any-hit evaluation, authored transmission weights, normal/roughness maps, geometry, and light selection stay active. This still changes base/transmission tint and therefore throughput, roulette, and potentially path distribution: differences are not isolated texture-fetch durations or an exact upper bound on material-evaluation cost. The appearance-changing shader was archived as `candidate.patch` and restored after measurement.
+
+| Scene / interval | Control mean ms | Ablation mean ms |
+| --- | ---: | ---: |
+| Dome default fog | 22.785 | 21.175 |
+| Dome fog off | 19.129 | 17.887 |
+| Dome default repeat | 22.812 | 21.184 |
+| Jungle default fog | 18.030 | 17.408 |
+| Jungle fog off | 14.555 | 14.080 |
+| Jungle default repeat | 18.087 | 17.447 |
+
+The fixed jungle pose uses pitch 28.65, unlike the pitch-zero flight workload. Each interval records at least 300 HostLoop samples after warmup at 3840x2160 Performance RR; no measured interval exceeds 33.3 ms. The diagnostic's limited gain, despite altering appearance and tint, does not support base-texture removal or a base-texture-only redesign as the solution to the throughput gap. No optimization is retained. Minecraft-rendering check passed for the diagnostic, and both client/helper pairs exited successfully with settings restored. Resource minima control/ablation: physical 17.534/17.152 GiB, commit headroom 6.678/6.842 GiB, disk 188.090/187.901 GiB.
+
+The preceding Nsight UI review is recorded in `tmp/current-steady-nsight/shader-review-20260915.json`. Entire-trace aggregate input dependency samples were global load 55.07%, ray tracing 17.76%, local load 16.32%, texture fetch 4.30%. These include other passes and NGX and are not exclusive time attribution. The historical trace predates current fog ordering. The build function tooltip showed 13.38% of total samples and 59.19% long-scoreboard stalls within that function's sample scope. Source navigation temporarily became unresponsive; Nsight private memory reached 9.83 GiB before a normal close completed. No new large trace export was generated. The earlier history ablation remains a reason not to repeat instance-history preprocessing as the next intervention.
