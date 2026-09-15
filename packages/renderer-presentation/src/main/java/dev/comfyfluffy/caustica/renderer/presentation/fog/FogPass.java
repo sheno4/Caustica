@@ -138,7 +138,7 @@ public final class FogPass implements Pass<PostEffectFrame> {
         PrefixBuffer secondHistory = null;
         try {
             long rayCount = (long) width * height * VISIBILITY_SAMPLES;
-            rays = VmaMappedBuffer.create(gpu, rayCount * 48, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            rays = VmaMappedBuffer.create(gpu, rayCount * 64, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     "Fog visibility rays");
             results = VmaMappedBuffer.create(gpu, rayCount * 16, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     "Fog visibility results");

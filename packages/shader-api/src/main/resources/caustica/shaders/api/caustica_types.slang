@@ -77,6 +77,8 @@ public struct SpatialMediumProperties {
     public float3 scatteringAlbedo = float3(0.0);
     /** Isotropic emitted source radiance per scene unit, without pre-exposure; additive to traced lighting. */
     public float3 ambientSource = float3(0.0);
+    /** Isotropic distant incident radiance, without pre-exposure; subject to material-aware visibility. */
+    public float3 ambientRadiance = float3(0.0);
     /** Henyey-Greenstein anisotropy, strictly between -1 and 1. */
     public float anisotropy = 0.0;
 };

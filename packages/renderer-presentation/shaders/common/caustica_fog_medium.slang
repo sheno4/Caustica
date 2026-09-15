@@ -76,7 +76,7 @@ public struct FogVolumeModel : IVolumeModel {
         SpatialMediumProperties properties = {};
         properties.extinction = float3(sigma);
         properties.scatteringAlbedo = float3(0.95);
-        properties.ambientSource = sigma * 0.95 * volume.ambientRadiance.xyz;
+        properties.ambientRadiance = volume.ambientRadiance.xyz;
         properties.anisotropy = 0.45;
         return properties;
     }

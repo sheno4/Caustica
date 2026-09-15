@@ -31,7 +31,7 @@ public float retainedLightRandom(inout uint state) {
     return float(state >> 8u) * (1.0 / 16777216.0);
 }
 
-void retainedLightBasis(float3 normal, out float3 tangent, out float3 bitangent) {
+public void retainedLightBasis(float3 normal, out float3 tangent, out float3 bitangent) {
     float3 up = abs(normal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
     tangent = normalize(cross(up, normal));
     bitangent = cross(normal, tangent);

@@ -326,6 +326,62 @@ static const float2 SPATIAL_QUADRATURE[15] = {
     float2(0.9801449282487681, 0.0506142681451882)
 };
 
+public float3 traceVolumeLighting<TComposition : IComposition>(float3 position, float3 direction,
+        float anisotropy, float3 ambientRadiance, uint2 pixel, uint candidates, bool coherent,
+        float minimumDistance, float maximumDistance, inout uint seed) {
+    NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
+    RetainedLightSamplingContext context = retainedLightSamplingContext(state, pixel, candidates, coherent);
+    DirectLightSample selected = invalidDirectLight();
+    float3 selectedRadiance = 0.0;
+    float selectedWeight = 0.0;
+    float totalWeight = 0.0;
+    for (uint candidate = 0; candidate < candidates; candidate++) {
+        DirectLightSample light = sampleRetainedLight(context, position, candidate, seed);
+        if (!light.valid) continue;
+        float phase = tracePhase(dot(direction, light.direction), anisotropy);
+        float3 radiance = light.radianceOverShapePdf * (phase / light.proposalPdf);
+        float weight = traceLuminance(radiance);
+        totalWeight += weight;
+        if (weight > 0.0 && retainedLightRandom(seed) * totalWeight < weight) {
+            selected = light;
+            selectedRadiance = radiance;
+            selectedWeight = weight;
+        }
+    }
+    if (any(ambientRadiance > 0.0)) {
+        // Phase sampling cancels the phase PDF for constant distant radiance. The ambient
+        // candidate represents one integral, while the retained-light candidates are averaged.
+        float u = retainedLightRandom(seed);
+        float g = anisotropy;
+        float ratio = (1.0 - g * g) / (1.0 - g + 2.0 * g * u);
+        float cosine = abs(g) < 1e-4 ? 2.0 * u - 1.0 : (1.0 + g * g - ratio * ratio) / (2.0 * g);
+        cosine = clamp(cosine, -1.0, 1.0);
+        float phi = 6.28318530718 * retainedLightRandom(seed);
+        float3 tangent, bitangent;
+        retainedLightBasis(direction, tangent, bitangent);
+        float3 ambientDirection = direction * cosine + sqrt(max(0.0, 1.0 - cosine * cosine))
+                * (tangent * cos(phi) + bitangent * sin(phi));
+        float3 radiance = ambientRadiance * float(candidates);
+        float weight = traceLuminance(radiance);
+        totalWeight += weight;
+        if (weight > 0.0 && retainedLightRandom(seed) * totalWeight < weight) {
+            selected.valid = true;
+            selected.direction = ambientDirection;
+            selected.maximumDistance = maximumDistance;
+            selectedRadiance = radiance;
+            selectedWeight = weight;
+        }
+    }
+    if (!selected.valid) return 0.0;
+    RayDesc ray;
+    ray.Origin = position;
+    ray.Direction = selected.direction;
+    ray.TMin = minimumDistance;
+    ray.TMax = min(selected.maximumDistance, maximumDistance);
+    float3 visibility = traceVisibilityRay<TComposition>(ray, float3(0.0), 1.0, seed);
+    return selectedRadiance * visibility * (totalWeight / (float(candidates) * selectedWeight));
+}
+
 public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>(
         PackedPathSegment path, float distance, uint2 pixel, bool includeScattering) {
     TraceSpatialMedium result = { float3(1.0), float3(0.0), 0.0 };
@@ -351,6 +407,7 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
     float selectedDistance = 0.0;
     float3 selectedCoefficient = float3(0.0);
     float selectedAnisotropy = 0.0;
+    float3 selectedAmbientRadiance = 0.0;
     float selectedWeight = 0.0;
     float scatteringWeight = 0.0;
     for (uint i = 0u; i < sampleCount; i++) {
@@ -375,6 +432,7 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
                 selectedDistance = sampleDistance;
                 selectedCoefficient = coefficient;
                 selectedAnisotropy = medium.anisotropy;
+                selectedAmbientRadiance = medium.ambientRadiance;
                 selectedWeight = weight;
             }
             float3 scattering = result.transmittance * medium.ambientSource * integral;
@@ -388,21 +446,9 @@ public TraceSpatialMedium traceSpatialMediumSegment<TComposition : IComposition>
     float shadowProbability = min(totalWeight * 16.0, 1.0);
     if (includeScattering && shadowProbability > 0.0 && retainedLightRandom(seed) < shadowProbability) {
         float3 position = path.origin + path.direction * selectedDistance;
-        RetainedLightSamplingContext context = retainedLightSamplingContext(state, pixel, 1u, false);
-        DirectLightSample light = sampleRetainedLight(context, position, 0u, seed);
-        if (light.valid) {
-            RayDesc shadow;
-            shadow.Origin = position;
-            shadow.Direction = light.direction;
-            shadow.TMin = traceEpsilon();
-            shadow.TMax = min(light.maximumDistance, maximumDistance);
-            float3 visibility = traceVisibilityRay<TComposition>(shadow, float3(0.0), 1.0, seed);
-            float phase = tracePhase(dot(path.direction, light.direction), selectedAnisotropy);
-            float3 scattering = selectedCoefficient * visibility * light.radianceOverShapePdf
-                    * (phase * totalWeight / (selectedWeight * shadowProbability * light.proposalPdf));
-            result.scattering += scattering;
-
-        }
+        float3 lighting = traceVolumeLighting<TComposition>(position, path.direction, selectedAnisotropy,
+                selectedAmbientRadiance, pixel, 1u, false, traceEpsilon(), maximumDistance, seed);
+        result.scattering += selectedCoefficient * lighting * (totalWeight / (selectedWeight * shadowProbability));
     }
     result.scatteringDistance = scatteringWeight > 0.0 ? result.scatteringDistance / scatteringWeight : 0.0;
     return result;

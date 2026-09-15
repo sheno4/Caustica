@@ -42,6 +42,7 @@ struct VolumeLightingPoint {
     float4 positionMin;
     float4 directionAnisotropy;
     float4 sampling;
+    float4 ambientRadiance;
 };
 
 [shader("raygeneration")]
@@ -54,32 +55,9 @@ void volumeLighting<TComposition : IComposition>() {
     NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
     uint2 pixel = min(uint2(input.sampling.xy * float2(state.extentWidth, state.extentHeight)),
             uint2(state.extentWidth - 1u, state.extentHeight - 1u));
-    const uint candidates = 8u;
-    RetainedLightSamplingContext context = retainedLightSamplingContext(state, pixel, candidates, true);
     uint seed = asuint(input.sampling.z) | 1u;
-    DirectLightSample selected = invalidDirectLight();
-    float3 selectedRadiance = 0.0;
-    float selectedWeight = 0.0;
-    float totalWeight = 0.0;
-    for (uint candidate = 0; candidate < candidates; candidate++) {
-        DirectLightSample light = sampleRetainedLight(context, input.positionMin.xyz, candidate, seed);
-        if (!light.valid) continue;
-        float phase = tracePhase(dot(input.directionAnisotropy.xyz, light.direction), input.directionAnisotropy.w);
-        float3 radiance = light.radianceOverShapePdf * (phase / light.proposalPdf);
-        float weight = traceLuminance(radiance);
-        totalWeight += weight;
-        if (weight > 0.0 && retainedLightRandom(seed) * totalWeight < weight) {
-            selected = light;
-            selectedRadiance = radiance;
-            selectedWeight = weight;
-        }
-    }
-    if (!selected.valid) return;
-    RayDesc ray;
-    ray.Origin = input.positionMin.xyz;
-    ray.Direction = selected.direction;
-    ray.TMin = input.positionMin.w;
-    ray.TMax = selected.maximumDistance;
-    float3 visibility = traceVisibilityRay<TComposition>(ray, float3(0.0), 1.0, seed);
-    results[index] = float4(selectedRadiance * visibility * (totalWeight / (float(candidates) * selectedWeight)), 1.0);
+    float3 lighting = traceVolumeLighting<TComposition>(input.positionMin.xyz,
+            input.directionAnisotropy.xyz, input.directionAnisotropy.w, input.ambientRadiance.rgb,
+            pixel, 8u, true, input.positionMin.w, TRACE_MAX_DISTANCE, seed);
+    results[index] = float4(lighting, 1.0);
 }

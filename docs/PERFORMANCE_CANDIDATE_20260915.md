@@ -491,3 +491,26 @@ Candidate and restored control each run a settled, 20-second maximum-speed jungl
 There is no mean-throughput gain. A lower maximum in one short candidate run does not establish reduced rare-hitch frequency, so the candidate is rejected. The candidate still samples native semaphore waits and descriptor-heap binding during hitches; the control samples vkQueuePresentKHR in its 49.319 ms flight and 34.327 ms recovery hitches. These observations do not identify the driver's internal dependencies. They do show that combining background command buffers does not eliminate native host stalls.
 
 Raw recordings and compact hitch reports are retained in `tmp/compute-batch-flight` and `tmp/compute-batch-control`. Available physical memory stays above 17.35 / 17.40 GiB, commit headroom above 6.74 / 6.81 GiB, and disk space above 201.29 / 201.36 GiB. All candidate changes are reverted; the retained roulette renderer remains the production implementation. GPU architecture and fog visual limitations remain open.
+
+## Shadowed ambient fog lighting checkpoint
+
+The enclosed-room baseline reproduces a bright ceiling-shaped scattering field despite no visible light source. Source inspection finds Minecraft's approximate sky radiance supplied through SpatialMediumProperties.ambientSource, whose contract is emitted source radiance, and added directly in primary post fog. Neither ambient contribution tests material visibility.
+
+The implementation separates distant isotropic ambientRadiance from emitted ambientSource. Primary and secondary fog use one shared retained-light/ambient reservoir estimator. Eight retained-light candidates in primary fog (one in secondary) estimate direct lighting; one phase-sampled ambient candidate estimates the constant distant radiance integral. Its reservoir weight accounts for the retained-candidate average. Only the selected candidate traces visibility, so the estimator does not add a second shadow ray per evaluated sample. Emissive spatial-medium sources keep their existing behavior. The post-lighting input record expands from 48 to 64 bytes, with producer stride, buffer allocation, consumer layout and API documentation changed together.
+
+`tmp/ambient-baseline` and `tmp/ambient-shadow` each contain default/off/default-repeat timing and raw normal/scattering/transmittance captures for indoor and jungle fixtures at 4K Performance RR. All six intervals per build complete, with at least 300 host loops each and no loop above 33.3 ms.
+
+| Scene / mode | Baseline mean | Shadowed ambient mean |
+| --- | ---: | ---: |
+| Indoor default | 16.816 ms | 16.637 ms |
+| Indoor off | 14.536 ms | 14.609 ms |
+| Indoor default repeat | 16.747 ms | 16.814 ms |
+| Jungle default | 17.817 ms | 18.296 ms |
+| Jungle off | 14.612 ms | 14.643 ms |
+| Jungle default repeat | 17.832 ms | 18.328 ms |
+
+The room's unexposed scattering diagnostic mean falls from 0.512990 to 0.0000001133, with candidate p99 zero. Both room previews were inspected: the ceiling haze disappears and the enclosed unlit room is dark. All decoded scene-color diagnostics are finite. Mean room transmittance is 0.999116 / 0.999503. Game-time procedural animation continues despite fixed daylight, so this is not a pixel-identical density comparison. The unchanged density implementation and near-unity transport are consistent with a lighting correction; no exact-transmittance-equivalence claim is made.
+
+Outdoor previews preserve visible fog and gross scene lighting. The candidate raw scattering image has stronger visible sampling noise, which needs temporal assessment; this checkpoint does not resolve foliage flashing. Jungle pays approximately 0.48–0.50 ms for the shadowed ambient estimator, but both tested scenes remain above 50 FPS. Block-light regression, transmitted-path visuals, dynamic foliage, and the full scene matrix remain required for this shader change.
+
+Shader API, ray-tracing and presentation checks pass, including compilation, shader reflection and SPIR-V validation (`tmp/fog-local/ambient-shadow-check.log`). An initial missing exported helper was corrected before the passing check and live candidate run. Both helpers restore settings and both clients exit successfully. Physical availability remains above 17.42 / 17.37 GiB, commit headroom above 7.08 / 5.83 GiB, and disk space above 200.52 / 199.36 GiB. Raw capture manifests, compact image statistics, previews and JFR recordings remain local. This is a retained visual-correctness checkpoint with the stated performance/noise tradeoff, not completion of the broader goal.

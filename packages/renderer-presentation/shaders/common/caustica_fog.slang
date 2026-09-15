@@ -160,11 +160,12 @@ public void runFog(uint3 id) {
                     ? intervalDensity(medium, direction, interval) : 0.0;
             // The integration dispatch consumes this density before replacing it with cumulative transport.
             if (step < pc.steps) prefix[prefixBase+(step+1u)*w*h] = float4(0,0,0,sigma);
-            uint base = (visibilityBase+j)*3;
+            uint base = (visibilityBase+j)*4;
             rays[base] = float4(p+pc.tlasCamera.xyz,pc.tlasCamera.w);
             rays[base+1] = float4(direction, 0.45);
             uint seed = (id.x + id.y*w) * 0x9e3779b9u ^ step * 0x85ebca6bu ^ asuint(pc.mediumCamera.w) * 0xc2b2ae35u;
             rays[base+2] = float4(uv, asfloat(seed), sigma > 0.0 ? 1.0 : 0.0);
+            rays[base+3] = float4(medium.ambientRadiance.xyz, 0.0);
         }
         return;
     }
@@ -200,7 +201,7 @@ public void runFog(uint3 id) {
             for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
                 uint2 neighbor = uint2(clamp(int2(id.xy) + int2(x,y), int2(0), int2(w-1,h-1)));
                 uint sampleIndex = (neighbor.x + neighbor.y * w) * visibilityCount + i - firstStep;
-                if (rays[sampleIndex * 3u + 2u].w == 0.0) continue;
+                if (rays[sampleIndex * 4u + 2u].w == 0.0) continue;
                 float3 currentLighting = visibilityResults[sampleIndex].rgb;
                 minimumLighting = min(minimumLighting, currentLighting);
                 maximumLighting = max(maximumLighting, currentLighting);
@@ -211,7 +212,7 @@ public void runFog(uint3 id) {
             lighting = lerp(previous.rgb, lighting, 1.0 / confidence);
             history[5u + id.x + id.y * w + i*w*h] = float4(lighting, confidence);
             float segmentT = exp(-sigma*segmentLength);
-            float3 source = (medium.ambientRadiance.xyz + lighting) * pc.traceData.z;
+            float3 source = lighting * pc.traceData.z;
             scattering += transmittance * (1.0-segmentT) * source * 0.95;
             transmittance *= segmentT;
             prefix[prefixBase+(i+1u)*w*h] = float4(scattering,transmittance);

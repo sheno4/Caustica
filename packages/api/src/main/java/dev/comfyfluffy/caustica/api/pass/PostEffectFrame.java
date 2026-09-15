@@ -80,9 +80,11 @@ public interface PostEffectFrame extends PassFrame {
 
     /**
      * Sample phase-weighted direct lighting from this frame's retained lights, including material-aware shadows.
-     * Each 48-byte input contains float4(TLAS-relative position, minimum shadow distance),
+     * Each 64-byte input contains float4(TLAS-relative position, minimum shadow distance),
      * float4(normalized camera-to-sample direction, Henyey-Greenstein anisotropy), and
-     * float4(normalized screen UV, random-seed bits, active flag). A zero active flag returns zero radiance.
+     * float4(normalized screen UV, random-seed bits, active flag), and
+     * float4(isotropic distant ambient radiance in ACEScg, unused). Ambient light is also shadowed.
+     * A zero active flag returns zero radiance.
      * Each float4 result contains unexposed ACEScg incident radiance integrated against the phase function,
      * with alpha one. The caller applies scattering coefficients and integrates along the view ray.
      * Buffer ownership, extents and write/read ordering follow traceVisibility.
