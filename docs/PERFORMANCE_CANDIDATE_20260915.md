@@ -621,3 +621,22 @@ The compact format was removed from the working tree after range review. `traceL
 The separate `tmp/packed-guides-routes` smoke test completed and restored settings; its client log ends with BUILD SUCCESSFUL. RAW, Reblur with SR, and RR color/depth/normal/albedo captures are finite (`image-summary.json`). The contact sheet was inspected, but the presentation includes chat overlays and the NRD image contains horizontal dark marks, so it is not clean visual acceptance or evidence that glass is correct. No dynamic precision comparison was performed.
 
 The next architectural investigation should measure the cost of the endpoint restart boundary: build already resolves the endpoint material, while fill traces a narrow interval around that same hit and resolves the material again before direct lighting and scattering. A previous geometry-cache experiment failed to improve performance, so merely adding another large endpoint cache is not supported. Moving first-endpoint shading into build would require measuring the increased build live state and preserving per-plane direct-light signals, feedback, and guide ownership; it remains a hypothesis, not an implemented optimization.
+
+## Rejected fused endpoint shading
+
+`tmp/global-proposal-control` and `tmp/fused-endpoints-candidate` compare separate versus fused build/fill with the global light proposal in both. Local proposals depend on current depth/motion and are baked between the ordinary passes; using the global proposal avoids consuming an unprepared local distribution in fused shading. This is a diagnostic configuration, not a recommendation to remove local sampling.
+
+The fused candidate shades each endpoint immediately after build stores its guides, reusing the resolved hit and avoiding the restart trace/material evaluation. A completed-endpoint flag keeps feedback valid for resolve while preventing the subsequent fill dispatch from shading it again. The normal fill fallback remains compiled. Branches run serially within each build invocation. The full patch is archived in `tmp/fused-endpoints-candidate/candidate.patch`; all three source files were restored after the client stopped.
+
+| Scene / fog | Separate mean ms | Fused mean ms |
+| --- | ---: | ---: |
+| Dome default | 22.481 | 45.223 |
+| Dome off | 19.066 | 41.470 |
+| Dome default repeat | 22.453 | 45.227 |
+| Jungle default | 17.712 | 23.361 |
+| Jungle off | 14.413 | 19.720 |
+| Jungle default repeat | 17.705 | 23.401 |
+
+Both runs use the stationary 4K Performance RR dome and pitch-28.65 jungle protocol, at least 300 HostLoop samples per interval, with raw JFR referenced in the manifests. The fused dome repeat reaches 52.139 ms maximum; control maxima stay below 24.122 ms. This design substantially regresses both scenes despite removing repeated endpoint work. The experiment does not isolate serial branch execution from increased shader live state or other GPU costs; no new Nsight capture was taken for this rejected variant.
+
+Raytracing and runtime checks pass in `tmp/fog-local/fused-endpoints-check3.log`. Initial checks failed when the prototype removed the normal fill shader; the final candidate preserves that fallback and its traversal contracts. All six raw scene-color/normal/depth arrays per run are finite. The control dome/jungle preview and candidate dome preview were inspected without gross scene corruption; this is not a temporal, NRD, water, or glass correctness acceptance. Both helper/client pairs exited successfully and restored settings. Available physical/commit/disk minima were 17.598/6.985/189.647 GiB for control and 17.366/6.781/189.273 GiB for the candidate. Neither global-only sampling nor fused shading is retained.
