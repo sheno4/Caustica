@@ -545,3 +545,24 @@ The diagnostic masks are heuristic, not geometric ground truth: a native-depth t
 The mean/standard-deviation/edge-mask contact sheet was inspected. Transmittance instability follows depth boundaries, while scattering noise also occupies stable-depth foliage interiors. This identifies separate reconstruction and lighting-estimator concerns under a fixed scene; it does not establish moving-scene acceptance or a before/after flicker improvement. Current post fog is composited after scene reconstruction, so exploring earlier integration is justified for coverage instability, alongside a separate investigation of lighting variance. No additional shader change is made from these measurements alone.
 
 Diagnostic physical availability stays above 16.53 GiB, commit headroom above 7.16 GiB and disk space above 192.89 GiB. Compact outputs are `summary.json` and `temporal-summary.json`; raw recordings/images and manifests remain local. Native flight hitches, dome throughput, moving foliage, other fixture regressions and the full glass request remain open.
+
+## Fog before reconstruction prototype: 4K motion and route smoke checks
+
+The uncommitted prototype applies scene effects at trace resolution before RR, or after NRD and before SR. This lets temporal reconstruction process fog together with scene radiance. Two owned RGBA16F targets add 31.64 MiB at 1920x1080. Exposure metering remains downstream. The prototype is not yet accepted: moving foliage visual quality and block-light regression remain to be checked.
+
+Raw evidence: `tmp/early-fog-motion/manifest.json`, `summary.json`, raw JFR paths in the manifest, and `resources.jsonl`. Default fog, 3840x2160 Performance RR, copied world, dome circle and maximum-speed jungle flight use the same scripted routes as `tmp/fog-corrected-motion`. Both client and helper exited successfully; the manifest records restoration.
+
+| Scene / interval | Mean host loop ms | p99 ms | Maximum ms | Frames >33.3 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Dome static | 22.705 | 23.951 | 24.413 | 0/664 |
+| Dome circle | 21.816 | 23.765 | 26.654 | 0/926 |
+| Dome recovery | 22.815 | 23.868 | 25.521 | 0/659 |
+| Jungle static | 16.850 | 18.305 | 20.465 | 0/894 |
+| Jungle flight | 15.769 | 22.759 | 46.733 | 2/1280 |
+| Jungle recovery | 14.951 | 16.822 | 29.525 | 0/2005 |
+
+These means are close to the previous pipeline. This change has not resolved the dome's 20 ms budget shortfall. Resource minima were 17.463 GiB available physical memory, 6.864 GiB commit headroom, and 191.125 GiB disk space.
+
+`tmp/early-fog-routes/manifest.json`, `image-summary.json`, and `routes.jpg` record a separate 1600x900 dome smoke test of RAW, NRD+SR (Reblur), and RR. All 12 captured color/depth/normal buffers are finite. RAW uses 1600x900 effect inputs; both reconstructed routes use 800x450 inputs and 1600x900 outputs. Screenshots show the dome in each route, with expected RAW noise; host chat overlays contaminate the presentation screenshots. This is not glass material acceptance or a temporal visual test. Minecraft configures SR whenever the temporal-denoiser route is selected, so NRD without SR was not exercised. Both processes exited successfully and settings were restored.
+
+Earlier frozen diagnostic evidence remains in `tmp/early-fog-foliage`. Reconstructed T depth-edge p99 temporal standard deviation was 0.002715 versus 0.018144 in the prior pipeline; reconstructed log1p scattering stable-depth p99 was 0.060749 versus 0.207211. The reconstruction filters diagnostic signals and the two runs used different frozen procedural phases, so these numbers are observations, not an exact transport comparison or proof of moving-scene stability. `scene-effect-color` retains the pre-reconstruction diagnostic signal for analysis.
