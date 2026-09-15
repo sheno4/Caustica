@@ -18,6 +18,43 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class RtTerrainWorkerPreparationTest {
+    @Test void invalidatedEmptyRevisionCannotPublish() throws Exception {
+        try (var fixture = new Fixture()) {
+            var build = fixture.build();
+            build.request().invalidate();
+            fixture.terrain.completeEmpty(build);
+            fixture.awaitPublication();
+            assertFalse(build.request().section.ready);
+            assertEquals(0, fixture.outstanding());
+            assertEquals(1, fixture.submitted.getCount());
+        }
+    }
+
+    @Test void emptyRevisionPublishesWhileTessellationWorkerIsOccupied() throws Exception {
+        try (var fixture = new Fixture()) {
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            fixture.workers.submit(() -> {
+                entered.countDown();
+                try { release.await(); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            });
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                var build = fixture.build();
+                fixture.terrain.completeEmpty(build);
+                fixture.workers.coordinateAndWait(() -> { });
+                var published = new CountDownLatch(1);
+                fixture.workers.submitPublication(published::countDown, () -> { });
+                assertTrue(published.await(5, TimeUnit.SECONDS));
+                fixture.workers.coordinateAndWait(() -> { });
+                assertTrue(build.request().section.ready);
+                assertEquals(0, fixture.outstanding());
+                assertEquals(1, fixture.submitted.getCount());
+            } finally { release.countDown(); }
+        }
+    }
+
     @Test void unbindStopsWorkersWhenDiscardFails() throws Exception {
         stopsWorkersWhenDiscardFails(false);
     }

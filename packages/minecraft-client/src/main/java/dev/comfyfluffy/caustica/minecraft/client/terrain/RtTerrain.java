@@ -330,7 +330,9 @@ public final class RtTerrain {
                           OptionValues settings) {
         int cx = mc.player.getBlockX() >> 4, cy = mc.player.getBlockY() >> 4, cz = mc.player.getBlockZ() >> 4;
         int batchSize = settings.get(MinecraftOptions.Rt.Terrain.ASYNC_DISPATCH_PER_PASS);
-        var context = new TerrainDispatchPlanner.Context(epoch, cx, cy, cz, lowY, highY, batchSize);
+        // Selection includes empty vertical sections; only tessellation consumes the geometry budget.
+        var context = new TerrainDispatchPlanner.Context(epoch, cx, cy, cz, lowY, highY,
+                Math.multiplyExact(batchSize, highY - lowY + 1));
         int slots = Math.min(settings.get(MinecraftOptions.Rt.Terrain.ASYNC_DISPATCH_PER_PASS),
                 settings.get(MinecraftOptions.Rt.Terrain.MAX_INFLIGHT_SECTIONS) - outstandingBuilds.get());
         if (slots <= 0) {
@@ -364,7 +366,7 @@ public final class RtTerrain {
                     }
                     readyColumns.add(column);
                 }
-                if (dispatch(candidate.request(), lookup, mc)) accepted++;
+                accepted += dispatch(candidate.request(), lookup, mc);
             }
             if (dispatchCursor == dispatchPlan.candidates().size()) {
                 nextBatch = !dispatchPlan.candidates().isEmpty();
@@ -374,15 +376,16 @@ public final class RtTerrain {
         dispatchPlanner.request(context, nextBatch);
     }
 
-    private boolean dispatch(TerrainUpdates.Request<Build> request, MinecraftMaterialLookup lookup, Minecraft mc) {
+    /** Returns the number of asynchronous geometry slots consumed by this request. */
+    private int dispatch(TerrainUpdates.Request<Build> request, MinecraftMaterialLookup lookup, Minecraft mc) {
         long taskEpoch = epoch;
-        if (!request.reserve()) return false;
+        if (!request.reserve()) return 0;
         long key = request.section.key;
         int x = sectionX(key), y = sectionY(key), z = sectionZ(key);
         long paletteStarted = instrumentation.startStage();
         RtSectionSnapshots.Region region;
         try {
-            region = snapshots.createRegion(world, x, y, z);
+            region = snapshots.isEmpty(world, x, y, z) ? null : snapshots.createRegion(world, x, y, z);
         } catch (RuntimeException | Error failure) {
             coordinate(() -> updates.retry(request));
             throw failure;
@@ -394,11 +397,15 @@ public final class RtTerrain {
         var colors = mc.getBlockColors();
         long taskRevision = ++revision;
         Object extraction = instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1);
-        if (taskEpoch != epoch || !request.extracted()) return false;
+        if (taskEpoch != epoch || !request.extracted()) return 0;
         coordinate(() -> updates.dispatched(request));
         instrumentation.count("sectionsSnapshotted", 1);
         recordJob(request, taskEpoch, taskRevision, "dispatch", false);
         var build = new Build(request, taskEpoch, lookup.epoch(), taskRevision, null, extraction, null, null);
+        if (region == null) {
+            completeEmpty(build);
+            return 0;
+        }
         try {
             submitBuild(build, geometry, () -> {
                 var state = WORKER_TESS.get();
@@ -409,7 +416,14 @@ public final class RtTerrain {
             coordinate(() -> updates.retry(request));
             throw failure;
         }
-        return true;
+        return 1;
+    }
+
+    /** Empty revisions follow normal group publication without entering the tessellation queue. */
+    void completeEmpty(Build build) {
+        recordJob(build, "empty-inline");
+        Object ready = instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN_READY, 1);
+        acceptCompletedBuild(build.result(ready, null, null));
     }
 
     /** One terminal result owns the dispatch slot through CPU extraction, upload, and GPU preparation. */
@@ -458,6 +472,10 @@ public final class RtTerrain {
 
     private void completeBuild(Build build) {
         outstandingBuilds.decrementAndGet();
+        acceptCompletedBuild(build);
+    }
+
+    private void acceptCompletedBuild(Build build) {
         if (build.epoch != epoch || geometry == null) {
             recordJob(build, "prepared-result-stale");
             build.close();

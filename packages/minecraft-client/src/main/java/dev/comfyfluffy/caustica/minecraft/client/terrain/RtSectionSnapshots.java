@@ -40,6 +40,11 @@ final class RtSectionSnapshots {
         this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
     }
 
+    /** Debug worlds synthesize blocks independently of their stored section palettes. */
+    boolean isEmpty(ClientLevel level, int x, int y, int z) {
+        return !level.isDebug() && section(level.getChunk(x, z), x, y, z) == AIR;
+    }
+
     /** Snapshot the 3×3×3 neighbourhood of a section, reusing cached palette copies (render thread). */
     Region createRegion(ClientLevel level, int scx, int scy, int scz) {
         Object[] sections = new Object[27];
