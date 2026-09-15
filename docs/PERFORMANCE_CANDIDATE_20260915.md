@@ -424,3 +424,22 @@ The debug service now exposes `window.fullscreen` through Minecraft's normal tog
 Fullscreen saves approximately 0.6–0.7 ms with fog and 0.5–0.6 ms without it, relative to the surrounding windowed intervals. Windows GPU Engine samples show compositor utilization approximately 3.15–3.18% windowed and 1.36% fullscreen. Windowed timing is also faster than the prior approximately 26 ms baseline under higher background compositor activity, but that cross-run comparison is not a controlled attribution. Fullscreen is not made the default and does not meet the dome's 20 ms target. Further renderer optimization remains necessary.
 
 Resource minima are 16.41 GiB available physical memory, 7.22 GiB commit headroom and 201.63 GiB free disk space. The monitor never reaches its stopping floors. Only raw JFRs, a HostLoop-only transient analysis and compact summaries are used; no full expanded JFR export is saved.
+
+## Bounce-dependent indirect-path sampling candidate
+
+RTXPT's `PathTracer.hlsli::HandleRussianRoulette` combines a perceptual throughput term with increasing termination probability after 40% of the bounce limit. The fill candidate applies that policy after scattering, compensates surviving throughput, and retains a 5% survival floor. Stable-plane build and the configured bounce limit are unchanged. The terminal emission segment remains outside this roulette, matching the previous implementation's boundary. This changes the sampling distribution rather than discarding unweighted lighting.
+
+`tmp/bounce-roulette` and the subsequent restored `tmp/bounce-roulette-control` use the same settled 4K Performance RR dome/jungle cameras, frozen daylight and default/off/default fog sequence. Every interval contains at least 600 host loops:
+
+| Scene / fog | Candidate mean | Control mean |
+| --- | ---: | ---: |
+| Dome / default | 22.738 ms | 23.091 ms |
+| Dome / off | 19.096 ms | 19.474 ms |
+| Dome / default repeat | 22.771 ms | 23.069 ms |
+| Jungle / default | 17.699 ms | 20.120 ms |
+| Jungle / off | 14.440 ms | 16.381 ms |
+| Jungle / default repeat | 17.828 ms | 20.099 ms |
+
+No measured frame exceeds 33.3 ms. Jungle improves approximately 12%; dome only approximately 1.4%. Outside timing, each run captures 16 unexposed raw trace-color frames per scene, separated by eight frames. Candidate/control mean luminance differs by +0.14% in dome and −0.03% in jungle. Mean temporal variance changes by −3.85% / +5.15%, respectively; jungle median temporal standard deviation increases approximately 16.7%. These short, independently seeded sequences include animated foliage and do not prove equal noise everywhere or flicker-free motion. Raw radiance and all captured final-color/normal/depth buffers are finite. Jungle final-color previews were inspected and show consistent gross lighting and geometry; they do not replace dynamic validation.
+
+The sampling candidate is reinstated for broader dynamic validation, with renderer checks passing. Both clients restore settings and exit normally. Minimum available physical memory is 17.78 / 17.92 GiB, commit headroom 7.16 / 7.34 GiB and disk space 200.32 / 199.00 GiB. Monitoring floors are never reached. Raw captures and compact summaries are retained without full JFR exports. The six-scene dynamic matrix and foliage flicker checks remain outstanding for this candidate.

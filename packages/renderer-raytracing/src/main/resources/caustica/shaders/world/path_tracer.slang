@@ -122,8 +122,11 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
         if (first) diffusePath = (event & EVENT_DIFFUSE) != 0u;
         coherent = coherent && previousPdf == 0.0;
         first = false;
-        if (path.depth >= 3u && path.depth <= frame.maxBounces) {
-            float survival = clamp(max(max(path.throughput.x, path.throughput.y), path.throughput.z), 0.05, 1.0);
+        if (path.depth <= frame.maxBounces) {
+            float lowThroughput = saturate(0.85 - sqrt(max(traceLuminance(path.throughput), 0.0)));
+            float termination = saturate(lowThroughput * lowThroughput
+                    + max(0.0, float(path.depth) / float(frame.maxBounces) - 0.4));
+            float survival = max(1.0 - termination, 0.05);
             if (retainedLightRandom(seed) >= survival) break;
             path.throughput /= survival;
         }
