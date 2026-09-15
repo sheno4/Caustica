@@ -6,6 +6,7 @@
 	"client": [
 		"BlockModelRenderStateMixin",
 		"BlockModelResolverMixin",
+		"ChunkSkyLightSourcesMixin",
 		"CommandEncoderAccessor",
 		"DebugScreenEntriesAccessor",
 		"GameRendererMixin",
