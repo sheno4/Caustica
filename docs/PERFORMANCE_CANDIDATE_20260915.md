@@ -443,3 +443,23 @@ RTXPT's `PathTracer.hlsli::HandleRussianRoulette` combines a perceptual throughp
 No measured frame exceeds 33.3 ms. Jungle improves approximately 12%; dome only approximately 1.4%. Outside timing, each run captures 16 unexposed raw trace-color frames per scene, separated by eight frames. Candidate/control mean luminance differs by +0.14% in dome and −0.03% in jungle. Mean temporal variance changes by −3.85% / +5.15%, respectively; jungle median temporal standard deviation increases approximately 16.7%. These short, independently seeded sequences include animated foliage and do not prove equal noise everywhere or flicker-free motion. Raw radiance and all captured final-color/normal/depth buffers are finite. Jungle final-color previews were inspected and show consistent gross lighting and geometry; they do not replace dynamic validation.
 
 The sampling candidate is reinstated for broader dynamic validation, with renderer checks passing. Both clients restore settings and exit normally. Minimum available physical memory is 17.78 / 17.92 GiB, commit headroom 7.16 / 7.34 GiB and disk space 200.32 / 199.00 GiB. Monitoring floors are never reached. Raw captures and compact summaries are retained without full JFR exports. The six-scene dynamic matrix and foliage flicker checks remain outstanding for this candidate.
+
+## Sampling candidate scene and flight validation
+
+`tmp/roulette-scene-matrix` completes the six fixture routes plus maximum-speed jungle flight on `dc046061`, at 4K Performance RR with default fog enabled. Static and recovery intervals are 15 seconds, moving intervals 20 seconds; jungle recovery is 30 seconds. The fixture routes use slow continuous movement and turning; jungle uses speed 0.2, sprint and a level camera. Each scene settles before timing. All 21 raw recordings are complete, settings are restored and the client exits normally.
+
+| Scene | Static mean | Moving mean | Recovery mean |
+| --- | ---: | ---: | ---: |
+| Lake | 17.13 ms | 17.47 ms | 17.14 ms |
+| Cave | 16.60 ms | 16.62 ms | 16.59 ms |
+| Indoor | 17.23 ms | 17.13 ms | 17.27 ms |
+| Glass dome | 22.92 ms | 22.01 ms | 22.94 ms |
+| Underwater | 17.21 ms | 17.49 ms | 17.19 ms |
+| Nether | 15.28 ms | 15.63 ms | 15.37 ms |
+| Jungle | 16.44 ms | 15.51 ms | 14.59 ms |
+
+Five of the six fixtures, plus jungle, average above 50 FPS. Dome remains approximately 44–45 FPS. There are six host loops above 33.3 ms: one indoor recovery frame at 50.183 ms, four jungle-flight frames (maximum 46.929 ms), and one jungle recovery frame at 38.628 ms. None exceeds 100 ms. Jungle flight p99 is 21.54 ms; recovery p99 is 16.30 ms. At recovery end, dispatched terrain work is zero and all 3,696 pending requests are neighbor-blocked, with 30,974 resident geometry sections. This run does not show persistent streaming failure, but transient hitches remain.
+
+Streaming JFR analysis in `*-hitches.txt` finds 32.231 ms in `world.capture` for a 41.822 ms flight loop, and 37.196 ms in `world.capture` for the recovery hitch. The latter contains a render-thread sample in `RtSectionSnapshots.Cache.put` → `Long2ObjectLinkedOpenHashMap.removeFirst/shiftKeys`, reached during terrain region creation. Other flight-hitch samples include Minecraft skylight map copying, entity extraction and fog-column capture. The indoor hitch includes a native sample in `vkEndCommandBuffer` while importing completed compute writes. Sampling does not establish the duration or sole cause of any sampled operation. The matrix did not enable nested `CpuStage` events; a focused flight repeat with those existing scopes is needed before changing the cache or capture architecture.
+
+The seven-scene screenshot contact sheet was inspected. It confirms the intended fixtures but does not establish temporal visual quality or substantial fog in every dimension. The indoor ceiling still shows the previously noted unoccluded-looking fog illumination; foliage flashing remains unverified. Available physical memory never falls below 17.57 GiB, commit headroom below 6.72 GiB, or disk space below 198.64 GiB. Sampled GPU usage peaks at 14,140 MiB in the checks taken during this run; this is not a continuous peak measurement. No resource floor is reached.
