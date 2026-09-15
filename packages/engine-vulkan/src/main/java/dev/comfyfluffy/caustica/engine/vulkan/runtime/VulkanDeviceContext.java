@@ -62,6 +62,7 @@ public final class VulkanDeviceContext implements GpuDevice {
     private final VulkanRendererBackend host;
     private final VkDevice vk;
     private final long vma;
+    private final VmaMemoryTelemetry memoryTelemetry;
     private final VulkanDescriptorHeap descriptorHeap;
     private final VulkanQueueRef graphicsQueue;
     private final VulkanQueueRef computeQueue;
@@ -82,10 +83,12 @@ public final class VulkanDeviceContext implements GpuDevice {
 
     private VulkanDeviceContext(VulkanRendererBackend host, long vma, VulkanDescriptorHeap descriptorHeap,
                       int handleSize, int baseAlign, int handleAlign,
-                      int maxSbtStride, int scratchAlign, int maxOpacitySubdivision) {
+                      int maxSbtStride, int scratchAlign, int maxOpacitySubdivision,
+                      VmaMemoryTelemetry memoryTelemetry) {
         this.host = host;
         this.vk = host.device();
         this.vma = vma;
+        this.memoryTelemetry = memoryTelemetry;
         this.descriptorHeap = descriptorHeap;
         this.graphicsQueue = host.graphicsQueue();
         this.computeQueue = host.computeQueue();
@@ -106,18 +109,22 @@ public final class VulkanDeviceContext implements GpuDevice {
     /** Create the resources owned by one installed renderer Vulkan device. */
     public static VulkanDeviceContext create(VulkanRendererBackend host) {
         VkDevice vk = host.device();
+        VmaMemoryTelemetry memoryTelemetry = new VmaMemoryTelemetry();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDevice phys = vk.getPhysicalDevice();
 
             // Every renderer buffer exposes a device address.
             VmaVulkanFunctions fns = VmaVulkanFunctions.calloc(stack).set(phys.getInstance(), vk);
+            // Smaller growth units limit mapping/commit bursts when streaming exhausts a block.
             VmaAllocatorCreateInfo aci = VmaAllocatorCreateInfo.calloc(stack)
                     .flags(Vma.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT)
+                    .preferredLargeHeapBlockSize(64L * 1024 * 1024)
                     .instance(phys.getInstance())
                     .vulkanApiVersion(VulkanRequiredProfile.VULKAN_1_4)
                     .device(vk)
                     .physicalDevice(phys)
-                    .pVulkanFunctions(fns);
+                    .pVulkanFunctions(fns)
+                    .pDeviceMemoryCallbacks(memoryTelemetry.callbacks());
             PointerBuffer pVma = stack.mallocPointer(1);
             check(Vma.vmaCreateAllocator(aci, pVma), "vmaCreateAllocator(RT)");
             VulkanDiagnostics.registerAllocator(pVma.get(0));
@@ -149,13 +156,17 @@ public final class VulkanDeviceContext implements GpuDevice {
                         rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
                         rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
                         asProps.minAccelerationStructureScratchOffsetAlignment(),
-                        host.capabilities().opacityMicromap() ? opacityProps.maxOpacity4StateSubdivisionLevel() : -1);
+                        host.capabilities().opacityMicromap() ? opacityProps.maxOpacity4StateSubdivisionLevel() : -1,
+                        memoryTelemetry);
             } catch (Throwable failure) {
                 if (descriptorHeap != null) descriptorHeap.close();
                 VulkanDiagnostics.registerAllocator(0L);
                 Vma.vmaDestroyAllocator(allocator);
                 throw failure;
             }
+        } catch (Throwable failure) {
+            memoryTelemetry.close();
+            throw failure;
         }
     }
 
@@ -573,6 +584,7 @@ public final class VulkanDeviceContext implements GpuDevice {
             VulkanDiagnostics.registerAllocator(0L);
             Vma.vmaDestroyAllocator(vma);
         }
+        memoryTelemetry.close();
     }
 
     private void ensurePool() {
