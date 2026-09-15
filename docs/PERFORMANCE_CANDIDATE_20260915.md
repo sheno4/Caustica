@@ -746,3 +746,26 @@ The confirmed trace contains sustained mesh preparation on Vulkan Compute Q:3 co
 Companion JFR (`manifest.json` and `compute.txt`) covers the entire held flight: 1,714 successful batches and 178,276 jobs, with median/p95 batch size 128. Aggregate pool/record/wait/callback host time was 1.126/5.624/39.976/3.322 seconds. Submission includes a 6.584-second outlier during the profiling run; these timings must not be treated as ordinary gameplay performance. The evidence supports testing at most two outstanding compute batches so recording can overlap completion waiting, followed by ordinary east/west route comparisons. It does not justify unbounded submission or removing completion dependencies. Completion callbacks, dependent compaction submissions, cancellation, shutdown, and pool leases must remain correct before performance testing.
 
 The helper restored settings and exited successfully; Minecraft PID 38304 and Nsight PID 57672 were verified absent after normal shutdown. Minimum physical/commit/disk headroom during capture was 15.493/4.147/285.778 GiB. No renderer scheduling change is retained from this trace review. The incremental cleanup compressed 33 new captures without changing their paths or lengths and reclaimed another 117 MiB; future captures remain bounded and raw.
+
+## Bounded overlap of compute recording and completion
+
+The retained compute worker permits at most two submitted batches. It records the next batch before waiting for the oldest, retains each command-pool lease through GPU completion, and uses the last submitted timeline value for the next batch's device dependency. Completed values are still published in submission order. Recording and terminal callbacks remain on one worker. An empty producer queue drains outstanding submissions so a lone batch cannot remain unfinished. Explicit draining also consumes work enqueued by terminal callbacks, including dependent BLAS compaction. Device-idle failures are latched without skipping the accepted batch's failure callbacks.
+
+The validation-enabled run in `tmp/compute-overlap-validation` requested the Khronos validation layer, exercised 67,289 successful compute jobs with two overlapping batch lifetimes, and disconnected with 192 terrain builds outstanding. Outstanding builds reached zero and both client/helper exited successfully. No Vulkan validation errors or device-loss errors were reported. This exercises normal completion and cancellation during disconnect; native device-failure branches were not fault-injected. Engine checks and client compilation passed again in `tmp/fog-local/compute-overlap-final-check.log`.
+
+Ordinary 4K Performance RR/default-fog comparisons use `tmp/compute-overlap-streaming` and the fresh single-batch control `tmp/compute-overlap-control-repeat`. Both use identical JFR event selections, 15/30/45-second static/flight/recovery intervals, and all 3,649 loaded columns at each flight endpoint. The eastbound endpoints differ by approximately 4.4 blocks over a roughly 2.6 km route. The first attempted control in `tmp/compute-overlap-control` was stopped and restored because the patch reversal had failed; it is excluded from comparisons.
+
+| Route / measure | Single batch | Two batches |
+| --- | ---: | ---: |
+| East flight mean / p99 / max (ms) | 16.428 / 21.508 / 48.152 | 16.867 / 21.122 / 36.980 |
+| East flight loops above 33.3 ms | 1 / 1,832 | 1 / 1,788 |
+| East pending requests | 38,468 | 25,418 |
+| East resident geometry sections | 17,115 | 21,630 |
+| West flight mean / p99 / max (ms) | 17.441 / 24.132 / 51.885 | 17.693 / 24.391 / 38.013 |
+| West flight loops above 33.3 ms | 2 / 1,729 | 4 / 1,703 |
+| West pending requests | 30,604 | 21,603 |
+| West resident geometry sections | 15,254 | 17,772 |
+
+Pending work falls by approximately 34% eastbound and 29% westbound; resident geometry rises by 26% and 17%. Mean flight times increase by 0.439 and 0.252 ms while rendering more terrain. Static means are nearly unchanged: east 17.975 versus 18.069 ms, west 17.838 versus 17.855 ms. Recovery means are 16.271 versus 16.347 ms east and 17.525 versus 17.569 ms west; all static/recovery intervals stay below 33.3 ms. Lower observed maxima do not establish a stutter fix, especially with the higher westbound hitch count. Candidate `west-hitches.txt` preserves the remaining host/GPU submission evidence.
+
+Eastbound compute jobs increase from 143,048 to 174,000, and mean oldest-job queue delay falls from 23.327 to 10.888 ms. JFR verifies maximum overlapping batch lifetimes of one for the control and two for the candidate. Event lifetimes now overlap and must not be summed as serial worker utilization; `docs/DEBUGGING.md` documents the changed timing interpretation. All recorded compute batches succeeded. Minimum physical/commit/disk headroom was 17.249/5.455/285.661 GiB for the candidate and 16.987/5.867/285.577 GiB for the control. Both helpers restored settings and all process handles exited successfully. This change improves streaming throughput but does not keep up with the complete view window at maximum spectator speed or resolve the remaining static-scene GPU budget and visual issues.

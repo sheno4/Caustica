@@ -79,8 +79,10 @@ Direct clients POST JSON `{ "op": "status" }` to the discovery `baseUrl` plus `/
 `ComputeBatch` records asynchronous compute host timing: command-pool acquisition, command recording,
 submission setup and host-lock acquisition, timeline waiting, and completion callbacks. Its queue delay
 belongs before the batch and must not be added to the batch's elapsed time. A queue delay of `-1` means
-the job was enqueued before recording was enabled. Timeline waiting includes GPU work and host
-scheduling; it is not a GPU execution-time measurement. The event is disabled by default.
+the job was enqueued before recording was enabled. Batch lifetimes overlap because up to two batches
+can be outstanding; summing event durations does not measure worker utilization. Deferred timeline
+waiting excludes GPU progress made during another batch's recording and includes host scheduling;
+it is not a GPU execution-time measurement. The event is disabled by default.
 
 The game emits raw observations without hitch thresholds, percentile filtering or CSV logging. Warm up, start a recording, wait a useful number of frames, stop, then capture images outside the measured interval. Repeat comparable runs when performance differences are small.
 

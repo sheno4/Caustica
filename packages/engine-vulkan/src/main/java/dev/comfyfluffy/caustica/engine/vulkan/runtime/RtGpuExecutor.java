@@ -9,6 +9,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -26,6 +27,8 @@ public final class RtGpuExecutor implements GpuComputeQueue {
     private final ExecutorService compute = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().daemon().name("Caustica GPU compute").factory());
     private final ConcurrentLinkedQueue<Job> jobs = new ConcurrentLinkedQueue<>();
+    private final ArrayDeque<PendingBatch> pending = new ArrayDeque<>();
+    private long submittedComputeValue;
     private long nextJobValue;
     private volatile Throwable executorFailure;
     private boolean closed;
@@ -52,6 +55,8 @@ public final class RtGpuExecutor implements GpuComputeQueue {
     }
 
     private void runBatch() {
+        // Two leases bound GPU backlog while recording overlaps the preceding submission.
+        if (pending.size() == 2) completeFirst();
         List<Job> executable = new ArrayList<>();
         for (int count = 0; count < 128; count++) {
             Job job = jobs.poll();
@@ -60,7 +65,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             else if (job.cancelled.get()) finish(job, new GpuComputeCompletion.Cancelled());
             else executable.add(job);
         }
-        if (executable.isEmpty()) return;
+        if (executable.isEmpty()) {
+            completePending();
+            return;
+        }
         ComputeBatchEvent event = BATCH_EVENT.isEnabled() ? new ComputeBatchEvent() : null;
         if (event != null) {
             event.begin();
@@ -68,16 +76,44 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             long queued = executable.getFirst().queuedNanos;
             event.oldestQueueNanos = queued == 0 ? -1 : System.nanoTime() - queued;
         }
-        GpuComputeCompletion result;
         try {
             long value = executable.getLast().value;
-            execute(value, executable, event);
-            ctx.publishCompletedCompute(value);
-            result = new GpuComputeCompletion.Succeeded();
+            pending.addLast(execute(value, executable, event));
         } catch (Throwable failure) {
             latchFailure(failure);
+            completePending();
+            finishBatch(executable, new GpuComputeCompletion.Failed(failure), event);
+        }
+        // A lone submission must complete even when no further producer wakes the worker.
+        if (jobs.isEmpty()) completePending();
+    }
+
+    private void completePending() {
+        while (!pending.isEmpty()) completeFirst();
+    }
+
+    private void completeFirst() {
+        PendingBatch batch = pending.removeFirst();
+        GpuComputeCompletion result;
+        long started = batch.event == null ? 0 : System.nanoTime();
+        try {
+            waitTimeline(jobTimeline, batch.value);
+            batch.lease.close();
+            ctx.publishCompletedCompute(batch.value);
+            result = new GpuComputeCompletion.Succeeded();
+        } catch (Throwable failure) {
+            batch.lease.fail();
+            latchFailure(failure);
+            // Callbacks can release submitted resources only after the device has stopped using them.
+            try { ctx.waitIdle(); }
+            catch (Throwable idleFailure) { latchFailure(idleFailure); }
             result = new GpuComputeCompletion.Failed(failure);
         }
+        if (batch.event != null) batch.event.waitNanos = System.nanoTime() - started;
+        finishBatch(batch.jobs, result, batch.event);
+    }
+
+    private void finishBatch(List<Job> executable, GpuComputeCompletion result, ComputeBatchEvent event) {
         long callbacksStarted = event == null ? 0 : System.nanoTime();
         for (Job job : executable) finish(job, result);
         if (event != null) {
@@ -99,7 +135,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
 
     /** Wait for every accepted job's terminal callback; producers must already be stopped. */
     void drain() {
-        await(compute.submit(() -> {}));
+        await(compute.submit(() -> {
+            // Terminal callbacks may enqueue dependent compaction work behind this drain task.
+            while (!jobs.isEmpty() || !pending.isEmpty()) runBatch();
+        }));
     }
 
     void stop() {
@@ -145,13 +184,12 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         if (executorFailure != null) throw new IllegalStateException("GPU executor failed", executorFailure);
     }
 
-    private void execute(long value, List<Job> batch, ComputeBatchEvent event) {
+    private PendingBatch execute(long value, List<Job> batch, ComputeBatchEvent event) {
         long stageStarted = event == null ? 0 : System.nanoTime();
         var lease = commandPools.acquire(batch.size());
         if (event != null) { event.poolNanos = System.nanoTime() - stageStarted; stageStarted = System.nanoTime(); }
         GpuCrashHistory.record(COMPUTE_POOL_RECORD, lease.poolHandle(), value, 0, batch.size());
         boolean submitted = false;
-        boolean complete = false;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var commands = VkCommandBufferSubmitInfo.calloc(batch.size(), stack);
             for (int index = 0; index < batch.size(); index++) {
@@ -165,7 +203,8 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                     .semaphore(jobTimeline).value(value).stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             var submission = VkSubmitInfo2.calloc(1, stack).sType$Default()
                     .pCommandBufferInfos(commands).pSignalSemaphoreInfos(signal);
-            long prior = ctx.completedComputeValue();
+            // Consecutive batches need a device dependency even if the preceding batch is unfinished.
+            long prior = submittedComputeValue;
             if (prior != 0L) {
                 var wait = VkSemaphoreSubmitInfo.calloc(1, stack).sType$Default()
                         .semaphore(jobTimeline).value(prior).stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
@@ -178,15 +217,11 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                 ctx.checkDeviceResult(result, "vkQueueSubmit2(compute)");
             }
             submitted = true;
-            if (event != null) { event.submitNanos = System.nanoTime() - stageStarted; stageStarted = System.nanoTime(); }
-            waitTimeline(jobTimeline, value);
-            if (event != null) event.waitNanos = System.nanoTime() - stageStarted;
-            complete = true;
+            submittedComputeValue = value;
+            if (event != null) event.submitNanos = System.nanoTime() - stageStarted;
+            return new PendingBatch(value, batch, lease, event);
         } finally {
-            if (complete) lease.close();
-            else lease.fail();
-            // Failed waits cannot permit completion callbacks to destroy resources still in execution.
-            if (submitted && !complete) ctx.waitIdle();
+            if (!submitted) lease.fail();
         }
     }
 
@@ -225,12 +260,15 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         @Timespan(Timespan.NANOSECONDS) long recordNanos;
         @Description("Host submission setup, queue host-lock acquisition, and driver submission")
         @Timespan(Timespan.NANOSECONDS) long submitNanos;
-        @Description("Host timeline wait, including GPU work and host scheduling; not GPU execution time")
+        @Description("Deferred host timeline wait; excludes work completed while another batch records")
         @Timespan(Timespan.NANOSECONDS) long waitNanos;
         @Timespan(Timespan.NANOSECONDS) long callbackNanos;
     }
 
     private record Job(long value, AtomicBoolean cancelled, Consumer<? super VkCommandBuffer> recorder,
                        Consumer<? super GpuComputeCompletion> completion, long queuedNanos) {}
+
+    private record PendingBatch(long value, List<Job> jobs, CommandPoolCache<VkCommandBuffer>.Lease lease,
+                                ComputeBatchEvent event) {}
 
 }
