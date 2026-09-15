@@ -476,3 +476,18 @@ The repeat helper and client both exit successfully after restoring settings. Re
 
 Source files changed externally during this investigation after the initial clean renderer status check. This task did not rebuild or modify those renderer files. The repeat is evidence for JVM safepoint attribution, not a controlled comparison of those concurrent source changes.
 
+
+## Rejected single-command-buffer compute batches
+
+The remaining detailed flight hitches include 9–20 ms command acquisition scopes. A bounded candidate records all jobs in an asynchronous compute batch into one command buffer instead of one per job. It preserves the existing batch submission, timeline wait, resource ownership and completion callbacks. The candidate temporarily updates the compute API's command-state contract; the production contract and implementation are restored after comparison. Candidate patch: `tmp/compute-batch-flight/candidate.patch`.
+
+Candidate and restored control each run a settled, 20-second maximum-speed jungle flight followed by 30 seconds of recovery at 4K Performance RR with default fog. Both use HostLoop, HostWork, HostSubmission, GpuWait, TerrainDispatchPlan, GpuMemoryBlock and ChunkSkylight events, omitting the densely emitted CpuStage/Frame/FrameCounter events. Both clients and helpers exit successfully and restore temporary settings. Engine-Vulkan checks pass before the candidate; the restored control builds and runs successfully.
+
+| Implementation | Flight mean / p99 / max | Flight >33.3 ms | Recovery mean / p99 / max | Recovery >33.3 ms |
+| --- | --- | ---: | --- | ---: |
+| Single command buffer | 15.577 / 22.104 / 38.369 ms | 3 / 1,290 | 14.707 / 17.011 / 29.082 ms | 0 / 2,040 |
+| Original per-job buffers | 15.515 / 24.094 / 49.319 ms | 3 / 1,293 | 14.419 / 16.287 / 34.327 ms | 1 / 2,078 |
+
+There is no mean-throughput gain. A lower maximum in one short candidate run does not establish reduced rare-hitch frequency, so the candidate is rejected. The candidate still samples native semaphore waits and descriptor-heap binding during hitches; the control samples vkQueuePresentKHR in its 49.319 ms flight and 34.327 ms recovery hitches. These observations do not identify the driver's internal dependencies. They do show that combining background command buffers does not eliminate native host stalls.
+
+Raw recordings and compact hitch reports are retained in `tmp/compute-batch-flight` and `tmp/compute-batch-control`. Available physical memory stays above 17.35 / 17.40 GiB, commit headroom above 6.74 / 6.81 GiB, and disk space above 201.29 / 201.36 GiB. All candidate changes are reverted; the retained roulette renderer remains the production implementation. GPU architecture and fog visual limitations remain open.
