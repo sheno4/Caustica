@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProf
 import dev.comfyfluffy.caustica.minecraft.client.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh;
-import dev.comfyfluffy.caustica.minecraft.rendering.terrain.TerrainOpacityBaker;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.TerrainOpacityCache;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh.Coverage;
 import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainEmitter;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
@@ -61,6 +61,7 @@ final class RtTerrainMesher {
         final List<BlockStateModelPart> modelParts = new ArrayList<>();
         final FluidCapture fluidCapture = new FluidCapture();
         final SectionMesh mesh = new SectionMesh();
+        final TerrainOpacityCache opacity = new TerrainOpacityCache();
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
         void reset(BlockColors blockColors) {
@@ -90,7 +91,8 @@ final class RtTerrainMesher {
         // Material luminance and sampled footprint determine which quads contribute retained lights.
         var lights = new ArrayList<MinecraftTerrainEmitter>();
         collectLights(lights, mesh.geometry, CausticaConfig.get(MinecraftOptions.Rt.Lights.MIN_FILL_RATIO));
-        PackedSection packed = packSection(mesh, materials);
+        worker.opacity.beginEpoch(materials);
+        PackedSection packed = packSection(mesh, materials, worker.opacity);
         return new CpuSection(packed.mesh(), remapLights(lights, packed.sourceToDestinationPrimitives()));
     }
 
@@ -101,7 +103,7 @@ final class RtTerrainMesher {
         }
     }
 
-    private static PackedSection packSection(SectionMesh mesh, MinecraftMaterialLookup materials) {
+    private static PackedSection packSection(SectionMesh mesh, MinecraftMaterialLookup materials, TerrainOpacityCache opacityCache) {
         Geom geom = mesh.geometry();
         ArrayList<TriangleRouting> routing = new ArrayList<>(geom.surfaces.size());
         for (int triangle = 0; triangle < geom.surfaces.size(); triangle++) {
@@ -125,16 +127,11 @@ final class RtTerrainMesher {
         for (var geometry : packed.geometries()) {
             var opacity = geometry.coverage() == Coverage.CUTOUT
                     && geometry.program() == MinecraftTerrainMesh.ProgramCategory.MATERIAL
-                    ? TerrainOpacityBaker.bake(packed.cornerUvs(), geometry.firstIndex() / 3, geometry.indexCount() / 3,
-                    (triangle, minU, minV, maxU, maxV) -> {
+                    ? opacityCache.bake(packed.cornerUvs(), geometry.firstIndex() / 3, geometry.indexCount() / 3,
+                    triangle -> {
                         var material = geom.surfaces.get(sourceTriangles[triangle]).material();
-                        var bounds = materials.opacity(material.material());
-                        if (bounds == null) return TerrainOpacityBaker.UNKNOWN;
-                        var uv = bounds.uv();
-                        return TerrainOpacityBaker.classifyRegion(bounds.width(), bounds.height(), 2, bounds::alpha,
-                                (minU - uv.u()) * uv.inverseDu(), (minV - uv.v()) * uv.inverseDv(),
-                                (maxU - uv.u()) * uv.inverseDu(), (maxV - uv.v()) * uv.inverseDv(), geometry.alphaCutoff());
-                    }) : null;
+                        return materials.opacity(material.material());
+                    }, geometry.alphaCutoff()) : null;
             geometries.add(new MinecraftTerrainMesh.Geometry(geometry.program(), geometry.coverage(),
                     geometry.firstIndex(), geometry.indexCount(), geometry.alphaCutoff(), opacity,
                     geometry.guaranteedShadowBlocker()));
