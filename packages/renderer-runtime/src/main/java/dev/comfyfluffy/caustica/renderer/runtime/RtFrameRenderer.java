@@ -100,6 +100,7 @@ public final class RtFrameRenderer {
     private boolean loggedActive;
     private long debugCaptureFrameSerial = -1;
     private GpuImage debugCaptureSceneColor;
+    private GpuImage debugCaptureSceneEffectColor;
     private float debugCapturePreExposure;
     private RtDenoisingSettings debugCaptureDenoising;
     private DebugProjection debugCaptureProjection;
@@ -228,7 +229,7 @@ public final class RtFrameRenderer {
     }
 
     public static List<String> debugImageNames() {
-        return List.of("display-color", "scene-color", "reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
+        return List.of("display-color", "scene-color", "scene-effect-color", "reconstructed-color", "trace-color", "normal-roughness", "diffuse-albedo",
                 "specular-albedo", "depth", "primary-depth", "motion", "specular-motion", "nrd-view-z",
                 "nrd-diffuse", "nrd-specular", "nrd-stable-radiance", "stable-plane-metadata");
     }
@@ -242,6 +243,7 @@ public final class RtFrameRenderer {
         GpuImage image = switch (name) {
             case "display-color" -> presentationResources().displayImage();
             case "scene-color" -> debugCaptureSceneColor;
+            case "scene-effect-color" -> debugCaptureSceneEffectColor;
             case "reconstructed-color" -> images.reconstructedColor();
             case "trace-color" -> images.traceColor();
             case "normal-roughness" -> images.normalRoughness();
@@ -262,6 +264,7 @@ public final class RtFrameRenderer {
             case "display-color" -> "RGBA: SDR display output, normalized UNORM8, before Minecraft UI composition";
             case "reconstructed-color", "trace-color" -> "RGB: ACEScg scene radiance * preExposure";
             case "scene-color" -> "RGB: post-chain ACEScg radiance * preExposure; effect diagnostic modes override the signal";
+            case "scene-effect-color" -> "RGB: jittered trace-resolution scene effects before reconstruction; ACEScg radiance * preExposure; diagnostic modes override the signal";
             case "nrd-stable-radiance" -> "RGB: ACEScg scene-linear radiance (unexposed)";
             case "stable-plane-metadata" -> "R: available planes / 3; G: dominant plane index / 2; "
                     + "B: dominant endpoint delta depth / 9; A: dominant path crossed transmission (0 or 1)";
@@ -356,6 +359,7 @@ public final class RtFrameRenderer {
         }
         debugCaptureFrameSerial = -1;
         debugCaptureSceneColor = null;
+        debugCaptureSceneEffectColor = null;
         frameCounter++;
         telemetry.beginRenderFrame();
         telemetry.beginFrameIfInactive();
@@ -533,7 +537,7 @@ public final class RtFrameRenderer {
             recordTrace(ctx, cmd, stack, graphicsUse, program, execution.frame, commands,
                     revision.get().publicationCutoff());
             var output = reconstruction.record(commands, stack, graphicsUse, execution.frame,
-                    traceResources());
+                    traceResources(), source -> recordSceneEffects(commands, stack, graphicsUse, source));
             VkCommandBuffer postCommands;
             try (var ignored = telemetry.frame().stage("frame.beginPostCommands")) {
                 postCommands = commands.heap("post processing and display");
@@ -709,18 +713,29 @@ public final class RtFrameRenderer {
         }
     }
 
+    private dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage recordSceneEffects(RtFrameCommands commands, MemoryStack stack,
+            GraphicsUse graphicsUse, GpuImage source) {
+        VkCommandBuffer cmd = commands.heap("scene effects before reconstruction");
+        passes.beginFrame(passFrame(cmd, graphicsUse, null, source,
+                traceImages().sceneEffectColorA(), traceImages().sceneEffectColorB()));
+        try (var gpu = commands.time("scene effects");
+             var label = RtDebugLabels.scope(context, cmd, "scene effects");
+             var cpu = telemetry.frame().stage("frame.sceneEffects")) {
+            VulkanBarriers.memoryBarrier(cmd, stack);
+            services.passes().recordSceneEffects();
+            VulkanBarriers.memoryBarrier(cmd, stack);
+            debugCaptureSceneEffectColor = passes.sceneColor();
+            return (dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage) passes.sceneColor();
+        } finally {
+            passes.endFrame();
+        }
+    }
+
     private void recordPostProcessing(VulkanDeviceContext ctx, RtFrameCommands commands, VkCommandBuffer cmd, MemoryStack stack,
             GraphicsUse graphicsUse, dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage output, long dstImage, int debugView) {
         passes.beginFrame(passFrame(cmd, graphicsUse, null, output));
         try {
             VulkanBarriers.memoryBarrier(cmd, stack); // reconstructed output visible to exposure histogram
-
-            try (var gpu = commands.time("scene effects");
-                 var ignored = RtDebugLabels.scope(ctx, cmd, "scene effects");
-                 var cpu = telemetry.frame().stage("frame.sceneEffects")) {
-                services.passes().recordSceneEffects();
-            }
-            VulkanBarriers.memoryBarrier(cmd, stack);
 
             // Meter the scene after participating media composition, before exposure-dependent effects.
             try (var ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
@@ -789,12 +804,18 @@ public final class RtFrameRenderer {
 
     private RtPassSchedulerBackend.FrameState passFrame(VkCommandBuffer commandBuffer, GraphicsUse graphicsUse,
                                                          RtPassSchedulerBackend.UiState ui, GpuImage output) {
+        return passFrame(commandBuffer, graphicsUse, ui, output,
+                presentationResources().postColorA(), presentationResources().postColorB());
+    }
+
+    private RtPassSchedulerBackend.FrameState passFrame(VkCommandBuffer commandBuffer, GraphicsUse graphicsUse,
+            RtPassSchedulerBackend.UiState ui, GpuImage output, GpuImage targetA, GpuImage targetB) {
         return new RtPassSchedulerBackend.FrameState(commandBuffer, graphicsUse, execution.resources, frameCounter,
                 execution.frame.snapshot().view(), execution.frame.snapshot().timeSeconds(),
                 execution.frame.snapshot().metersPerWorldUnit(),
                 traceExtent().renderWidth(), traceExtent().renderHeight(), output,
-                presentationResources().exposure().image(), presentationResources().postColorA(),
-                presentationResources().postColorB(), traceImages().depth(), traceImages().primaryDepth(),
+                presentationResources().exposure().image(), targetA,
+                targetB, traceImages().depth(), traceImages().primaryDepth(),
                 new Matrix4f(execution.frame.projection()).mul(execution.frame.viewRotation()).invert().get(new float[16]),
                 execution.trace.tlasDescriptor(),
                 new float[] { execution.frame.cameraOffset().x(), execution.frame.cameraOffset().y(),

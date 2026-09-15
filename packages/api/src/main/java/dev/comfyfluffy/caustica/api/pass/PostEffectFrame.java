@@ -6,13 +6,14 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
  * Frame capabilities for a post-effect registration, adding what the post chain produces for it to read
  * and the target that enrols it.
  *
- * <p>Scene colour images are display-resolution; depth is trace-resolution. Each image carries its extent.
+ * <p>Scene-effect colour images are trace-resolution and retain trace jitter. Ordinary post-effect colour
+ * images are display-resolution after reconstruction. Depth is trace-resolution. Each image carries its extent.
  */
 public interface PostEffectFrame extends PassFrame {
     /**
      * The scene as it stands at this point in the chain: scene-linear ACEScg multiplied by preExposure(), not yet look
-     * transformed, or tone mapped. For the first pass that acquires an output it is the reconstructed colour
-     * after reconstruction; after that it is whatever the previous participating pass wrote.
+     * transformed, or tone mapped. The first scene effect receives trace-resolution colour; the first ordinary
+     * post effect receives reconstructed colour. Later effects receive the previous participating pass's output.
      *
      * <p>Engine-produced and resolved fresh every frame — never cache the returned {@link GpuImage} across
      * frames, since a resize recreates it.

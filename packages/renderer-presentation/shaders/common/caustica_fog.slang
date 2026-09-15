@@ -8,24 +8,6 @@ float3 unproject(float2 uv, float depth) {
              + pc.clipZ * depth + pc.clipW;
     return q.xyz / q.w;
 }
-float4 depthFootprint(float2 uv, out float4 weights, out bool continuous) {
-    Texture2D<float> depth = ResourceDescriptorHeap[pc.depthIndex];
-    uint w, h; depth.GetDimensions(w, h);
-    // The depth samples include trace jitter, whereas the post image uses an unjittered grid.
-    float2 pixel = uv * float2(w,h) - 0.5 - pc.traceData.xy;
-    int2 base = int2(floor(pixel));
-    float2 blend = pixel - floor(pixel);
-    float4 depths;
-    for(int y=0;y<2;y++) for(int x=0;x<2;x++) {
-        int2 p = clamp(base+int2(x,y),int2(0),int2(w-1,h-1));
-        depths[y*2+x] = depth.Load(int3(p,0));
-        weights[y*2+x] = (x == 0 ? 1-blend.x : blend.x)*(y == 0 ? 1-blend.y : blend.y);
-    }
-    float maximum = max(max(depths.x, depths.y), max(depths.z, depths.w));
-    float minimum = min(min(depths.x, depths.y), min(depths.z, depths.w));
-    continuous = maximum - minimum <= max(maximum * 0.05, 1e-8);
-    return depths;
-}
 float fogDepthLimit(uint2 pixel, uint2 extent, float maximumDistance) {
     Texture2D<float> depth = ResourceDescriptorHeap[pc.depthIndex];
     uint w,h; depth.GetDimensions(w,h);
@@ -229,19 +211,10 @@ public void runFog(uint3 id) {
     } else {
         Texture2D<float4> fog = ResourceDescriptorHeap[pc.fogIndex];
         uint fw,fh; fog.GetDimensions(fw,fh);
-        float4 weights;
-        bool continuous;
-        float4 depths = depthFootprint(uv, weights, continuous);
-        float4 volume;
-        if (continuous) {
-            // Projected depth is affine on a continuous surface.
-            volume = fogTransportAt(uv, dot(depths, weights), uint2(fw,fh), medium.profile.w);
-        } else {
-            // Coverage mixes transport, not depth: foreground and background retain their own fog lengths.
-            volume = 0.0;
-            for (uint i=0;i<4;i++) volume += weights[i]
-                    * fogTransportAt(uv, depths[i], uint2(fw,fh), medium.profile.w);
-        }
+        // Scene effects share the traced pixel's jitter and physical endpoint before reconstruction.
+        Texture2D<float> depth = ResourceDescriptorHeap[pc.depthIndex];
+        uv += pc.traceData.xy / float2(w,h);
+        float4 volume = fogTransportAt(uv, depth.Load(int3(id.xy,0)), uint2(fw,fh), medium.profile.w);
         if(pc.debug == 1) { output[id.xy] = float4(volume.aaa,1.0); return; }
         if(pc.debug == 2) { output[id.xy] = float4(volume.rgb,1.0); return; }
         Texture2D<float4> scene = ResourceDescriptorHeap[pc.sceneIndex];

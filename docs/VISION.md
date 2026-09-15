@@ -99,7 +99,7 @@ Trace may contain multiple passes, including light and guide passes. Resource Bu
 
 The engine provides injection points at Resource Build, Post Processing, UI, and Display Transform. Extensions own their pass implementations and pass-local resources. Stage contracts define input/output color spaces, resolution, ordering, and synchronization responsibilities. UI composition follows the engine's SDR/HDR color contract.
 
-Post Processing records scene effects before exposure metering and post effects afterward. Participating media belong before metering so their scattering and attenuation influence exposure. Both chains share the reconstructed scene's pre-exposure scale.
+Scene effects run at trace resolution before temporal reconstruction; when denoising and upscaling are separate, they run between those operations. Participating media use this chain so reconstruction can resolve their scattering and attenuation with the scene. Post Processing meters the reconstructed result before ordinary post effects. Both chains use the frame's pre-exposure scale.
 
 ## Simplicity
 

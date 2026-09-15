@@ -151,3 +151,5 @@ it no longer contains the original noisy trace output when captured at frame end
 - **Mesh delay:** correlate raw geometry and entity revision events in Python. Separate submit-to-ready from assembly delay, and validate apparent changes with a visible object.
 
 Restore changed settings and debug view after experiments. Report observed data separately from suspected causes; keep recordings/images out of Git.
+
+`scene-effect-color` captures the jittered trace-resolution scene-effect result before RR or SR (after NRD when using separate denoising). It uses the frame pre-exposure scale. Fog diagnostic modes override this signal before reconstruction: use this buffer for raw scattering/transmittance analysis. Reconstructed diagnostic output is temporally filtered and may contain history residuals or a nonzero numerical floor even when the corresponding raw signal is zero.

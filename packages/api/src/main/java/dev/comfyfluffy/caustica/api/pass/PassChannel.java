@@ -24,8 +24,9 @@ public interface PassChannel {
     PassRegistration addWorldResourcePass(PassFactory<WorldResourceSetup, PassFrame> factory);
 
     /**
-     * Compose scene-linear effects after reconstruction and before exposure metering. Ordering anchors
-     * apply only within this stage. The resulting image feeds exposure and ordinary post effects.
+     * Compose scene-linear effects at trace resolution before temporal upscaling, and before exposure metering.
+     * Ray reconstruction consumes these effects; separate denoising runs before them. Ordering anchors
+     * apply only within this stage. Inputs retain the current trace jitter.
      */
     PassRegistration addSceneEffectPass(PassId id, PassFactory<PostEffectSetup, PostEffectFrame> factory);
 

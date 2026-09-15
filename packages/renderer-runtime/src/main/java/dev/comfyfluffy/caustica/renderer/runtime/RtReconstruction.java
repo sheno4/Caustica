@@ -38,6 +38,7 @@ import org.lwjgl.vulkan.VkImageCopy2;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Optional;
+import java.util.function.UnaryOperator;
 /** Owns output reconstruction; every route returns the image consumed by presentation. */
 final class RtReconstruction implements AutoCloseable {
     static final float NRD_DENOISING_RANGE = 50_000.0f;
@@ -78,15 +79,19 @@ final class RtReconstruction implements AutoCloseable {
     }
 
     GpuImage record(RtFrameCommands commands, MemoryStack stack, GraphicsUse graphicsUse,
-                    RtFrameInput frame, TraceResources trace) {
+                    RtFrameInput frame, TraceResources trace, UnaryOperator<GpuImage> sceneEffects) {
         GpuImage source = trace.images().traceColor();
         GpuImage output = trace.images().reconstructedColor();
         boolean reconstructed = switch (frame.route()) {
             case RAW -> {
+                source = sceneEffects.apply(source);
                 copyImage(commands.external("raw trace copy"), stack, source, output);
                 yield true;
             }
-            case RAY_RECONSTRUCTION -> recordRayReconstruction(commands, frame, trace.images());
+            case RAY_RECONSTRUCTION -> {
+                source = sceneEffects.apply(source);
+                yield recordRayReconstruction(commands, frame, trace.images(), source);
+            }
             case TEMPORAL_DENOISER -> {
                 boolean upscale = upscaler.configured();
                 GpuImage denoised = upscale ? source : output;
@@ -95,7 +100,11 @@ final class RtReconstruction implements AutoCloseable {
                     reset = recordTemporalDenoiser(commands, stack, graphicsUse,
                             frame, trace, denoised);
                 }
-                if (!upscale) yield true;
+                source = sceneEffects.apply(denoised);
+                if (!upscale) {
+                    if (source != output) copyImage(commands.external("scene effect copy"), stack, source, output);
+                    yield true;
+                }
                 try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.upscale")) {
                     VkCommandBuffer command = commands.external("DLSS super resolution");
                     TraceExtent extent = frame.extent();
@@ -107,7 +116,7 @@ final class RtReconstruction implements AutoCloseable {
                     boolean success = false;
                     if (ready) {
                         try (var checkpoint = commands.checkpoint(command, "NGX DLSS-SR evaluate")) {
-                            success = upscaler.evaluate(command, denoised, trace.images().depth(), trace.images().motion(), output,
+                            success = upscaler.evaluate(command, source, trace.images().depth(), trace.images().motion(), output,
                                     extent.renderWidth(), extent.renderHeight(), extent.displayWidth(), extent.displayHeight(),
                                     -frame.jitterX(), -frame.jitterY(), reset, frame.preExposure());
                         }
@@ -125,7 +134,7 @@ final class RtReconstruction implements AutoCloseable {
         return output;
     }
 
-    private boolean recordRayReconstruction(RtFrameCommands commands, RtFrameInput frame, TraceImages images) {
+    private boolean recordRayReconstruction(RtFrameCommands commands, RtFrameInput frame, TraceImages images, GpuImage source) {
         if (!rayReconstruction.enabled()) return false;
         TraceExtent extent = frame.extent();
         if (!rayReconstruction.featureReadyFor(extent.renderWidth(), extent.renderHeight(),
@@ -137,7 +146,7 @@ final class RtReconstruction implements AutoCloseable {
         }
         try (var checkpoint = commands.checkpoint(command, "NGX DLSS-RR evaluate");
              RtTelemetry.Scope ignored = telemetry.frame().stage("frame.dlssRr")) {
-            boolean success = rayReconstruction.evaluate(command, images.traceColor(), images.depth(), images.motion(),
+            boolean success = rayReconstruction.evaluate(command, source, images.depth(), images.motion(),
                     images.diffuseAlbedo(), images.specularAlbedo(), images.normalRoughness(), images.specularMotion(),
                     images.reconstructedColor(), extent.renderWidth(), extent.renderHeight(),
                     extent.displayWidth(), extent.displayHeight(), -frame.jitterX(), -frame.jitterY(), frame.preExposure());

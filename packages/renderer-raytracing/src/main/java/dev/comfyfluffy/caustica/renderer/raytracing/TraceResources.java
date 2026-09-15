@@ -111,6 +111,10 @@ public final class TraceResources {
         GpuImage reconstructedColor = createImage(context, displayWidth, displayHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                 "reconstruction output " + displayWidth + "x" + displayHeight);
+        GpuImage sceneEffectColorA = createImage(context, renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "scene effect color A");
+        GpuImage sceneEffectColorB = createImage(context, renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "scene effect color B");
         stablePlaneBuffer = context.createBuffer(stablePlaneBytes(renderWidth, renderHeight),
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 false, "stable planes " + renderWidth + "x" + renderHeight + "x3");
@@ -125,7 +129,8 @@ public final class TraceResources {
                 specularAlbedo, specularMotion, diffuseRadianceHitDistance,
                 specularRadianceHitDistance, nrdViewZ, nrdMotion, nrdDisocclusionThresholdMix,
                 denoisedDiffuseRadianceHitDistance,
-                denoisedSpecularRadianceHitDistance, nrdStableRadiance, reconstructedColor);
+                denoisedSpecularRadianceHitDistance, nrdStableRadiance, reconstructedColor,
+                sceneEffectColorA, sceneEffectColorB);
         extent = wanted;
     }
 

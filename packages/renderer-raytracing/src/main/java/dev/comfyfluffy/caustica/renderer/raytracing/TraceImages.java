@@ -23,7 +23,8 @@ public record TraceImages(
         GpuImage denoisedDiffuseRadianceHitDistance,
         GpuImage denoisedSpecularRadianceHitDistance,
         GpuImage nrdStableRadiance,
-        GpuImage reconstructedColor) {
+        GpuImage reconstructedColor,
+        GpuImage sceneEffectColorA, GpuImage sceneEffectColorB) {
     public TraceImages {
         Objects.requireNonNull(traceColor, "traceColor");
         Objects.requireNonNull(stablePlaneMetadata, "stablePlaneMetadata");
@@ -43,5 +44,7 @@ public record TraceImages(
         Objects.requireNonNull(denoisedSpecularRadianceHitDistance, "denoisedSpecularRadianceHitDistance");
         Objects.requireNonNull(nrdStableRadiance, "nrdStableRadiance");
         Objects.requireNonNull(reconstructedColor, "reconstructedColor");
+        Objects.requireNonNull(sceneEffectColorA, "sceneEffectColorA");
+        Objects.requireNonNull(sceneEffectColorB, "sceneEffectColorB");
     }
 }
