@@ -385,3 +385,26 @@ The retained allocator policy is measured with a targeted `ChunkSkylight` event 
 In `tmp/chunk-skylight-flight`, the 20-second flight records 9,265 render-thread initializations: mean **0.0432 ms**, p99 **0.1109 ms**, maximum **0.4807 ms**, total **400.607 ms**. Their overlap with host loops averages **0.329 ms**, p99 **3.325 ms**, maximum **4.298 ms**. The 30-second rest records 153 render-thread initializations totaling 5.314 ms. Events also occur on C2ME workers, which are excluded from these render-thread statistics.
 
 Flight mean/p99/maximum are 16.573 / 21.709 / 27.387 ms; rest is 15.264 / 16.928 / 24.543 ms. There is no frame above 33.3 ms, so this run does not reproduce or fully explain the earlier 45.969 ms skylight-sampled hitch. The source shows that chunk packet installation loads heightmaps before initializing skylight; using per-column world-surface bounds could skip known air, but no optimization is introduced on this evidence. Typical initialization cost is small, and a packet burst or scheduling effect remains possible. The diagnostic is retained for future hitch attribution while larger GPU/fog costs remain the priority. The client restored settings and exited normally; raw JFRs and compact analysis are preserved.
+
+## Dependent stable-plane build dispatch experiment
+
+The retained dome capture was reopened in Nsight Graphics through Computer Use. Its 7.02 ms build reports 25.4 active threads per warp, 19.2% ray-generation warp occupancy and 73.9% VidL2 throughput. Build hotspots include binding access, shadow traversal and stable-plane/path-record stores. This capture predates endpoint-attenuation reuse; it motivates a hypothesis rather than directly measuring the current binary. UI observations are saved in `tmp/split-build-performance/nsight-review.json`. Nsight was closed before ordinary timing.
+
+A candidate builds one dependent plane per dispatch, using two additional ray-generation entries and barriers. Plane zero's unused specular fields temporarily hold the count and full-precision accumulated stable radiance; finalization clears them before guide export. Existing queued branches retain order and the sampling seeds. Camera direction is recomputed in each dispatch. There is no additional scratch allocation. Renderer checks pass, all three entries compile in the live client, and the six captured color/normal/depth buffers are finite. Dome candidate and control previews were inspected; this is not pixel-exact equivalence or dynamic-guide validation.
+
+The candidate is **discarded**. A subsequent restored control uses the same frozen-time poses, scene populations, 4K Performance RR, fog-on/off/on sequence and at least 600 host frames per interval:
+
+| Scene / fog | Three-dispatch build mean | Restored build mean |
+| --- | ---: | ---: |
+| Dome / default | 30.170 ms | 26.134 ms |
+| Dome / off | 26.330 ms | 21.970 ms |
+| Dome / default repeat | 30.181 ms | 26.237 ms |
+| Jungle / default | 22.057 ms | 22.749 ms |
+| Jungle / off | 17.822 ms | 18.444 ms |
+| Jungle / default repeat | 22.037 ms | 22.763 ms |
+
+The dome regresses by approximately 4 ms; the small jungle improvement does not justify retaining the split. The candidate has one 38.219 ms frame; all control frames are below 33.3 ms. No new GPU-stage capture isolates the cause of the regression. The complete patch and two additional entry files remain under `tmp/split-build-performance`; control artifacts are `tmp/split-build-control`. The original renderer is restored and checks pass. Both clients restored settings and exited normally.
+
+The restored control is itself slower than the earlier endpoint-attenuation repeat despite identical recorded scene populations and similar sampled GPU clocks (approximately 2.9 GHz). This invalidates comparisons against the older absolute timings as a measure of the dispatch experiment.
+
+The allocator reversal in `tmp/default-block-static` restores 256 MiB growth blocks with the original renderer. Dome default/off/repeat means are 25.917 / 21.656 / 26.233 ms; jungle means are 22.757 / 18.437 / 22.695 ms. All intervals contain at least 600 host loops and no frame above 33.3 ms. The run restores settings and exits normally. These timings are close to the 64 MiB control and do not recover the older 21.6 ms dome / 19.0 ms jungle means. The 64 MiB policy is restored; this comparison does not support allocator granularity as the cause of the steady slowdown. Recorded renderer settings, camera and output dimensions also match the older repeat. The cause remains unresolved; background GPU activity and other unrecorded conditions are not excluded.
