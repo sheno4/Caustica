@@ -327,7 +327,7 @@ public final class MinecraftDebugService implements AutoCloseable {
             events.addAll(List.of("HostLoop", "HostWork", "HostCallbackTotals", "HostSubmission", "Frame", "CpuStage", "FramePreparation", "TraceRanges", "FrameCounter", "GeometryVisibility",
                     "EntityMeshFrame", "EntityMeshPublication", "EntityMeshUpload", "Exposure",
                     "GpuStage", "GpuWait", "NeeFrame", "TerrainState", "TerrainJob", "TerrainPublication",
-                    "TerrainDispatchPlan"));
+                    "TerrainDispatchPlan", "ComputeBatch"));
         }
         var recording = new Recording(Configuration.getConfiguration("profile"));
         try {

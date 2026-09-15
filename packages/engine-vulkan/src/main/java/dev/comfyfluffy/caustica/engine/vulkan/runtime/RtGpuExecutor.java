@@ -13,11 +13,13 @@ import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import jdk.jfr.*;
 
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 /** Batched asynchronous compute recording and terminal job completion on a reserved queue. */
 public final class RtGpuExecutor implements GpuComputeQueue {
+    private static final EventType BATCH_EVENT = EventType.getEventType(ComputeBatchEvent.class);
     private final VulkanDeviceContext ctx;
     private final long jobTimeline;
     private final CommandPoolCache<VkCommandBuffer> commandPools;
@@ -44,7 +46,7 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         if (closed) throw new IllegalStateException("GPU executor is closed");
         AtomicBoolean cancelled = new AtomicBoolean();
         long value = ++nextJobValue;
-        jobs.add(new Job(value, cancelled, recorder, completion));
+        jobs.add(new Job(value, cancelled, recorder, completion, BATCH_EVENT.isEnabled() ? System.nanoTime() : 0));
         compute.execute(this::runBatch);
         return () -> cancelled.set(true);
     }
@@ -59,17 +61,30 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             else executable.add(job);
         }
         if (executable.isEmpty()) return;
+        ComputeBatchEvent event = BATCH_EVENT.isEnabled() ? new ComputeBatchEvent() : null;
+        if (event != null) {
+            event.begin();
+            event.jobs = executable.size();
+            long queued = executable.getFirst().queuedNanos;
+            event.oldestQueueNanos = queued == 0 ? -1 : System.nanoTime() - queued;
+        }
         GpuComputeCompletion result;
         try {
             long value = executable.getLast().value;
-            execute(value, executable);
+            execute(value, executable, event);
             ctx.publishCompletedCompute(value);
             result = new GpuComputeCompletion.Succeeded();
         } catch (Throwable failure) {
             latchFailure(failure);
             result = new GpuComputeCompletion.Failed(failure);
         }
+        long callbacksStarted = event == null ? 0 : System.nanoTime();
         for (Job job : executable) finish(job, result);
+        if (event != null) {
+            event.callbackNanos = System.nanoTime() - callbacksStarted;
+            event.succeeded = result instanceof GpuComputeCompletion.Succeeded;
+            event.commit();
+        }
     }
 
     private void finish(Job job, GpuComputeCompletion result) {
@@ -130,8 +145,10 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         if (executorFailure != null) throw new IllegalStateException("GPU executor failed", executorFailure);
     }
 
-    private void execute(long value, List<Job> batch) {
+    private void execute(long value, List<Job> batch, ComputeBatchEvent event) {
+        long stageStarted = event == null ? 0 : System.nanoTime();
         var lease = commandPools.acquire(batch.size());
+        if (event != null) { event.poolNanos = System.nanoTime() - stageStarted; stageStarted = System.nanoTime(); }
         GpuCrashHistory.record(COMPUTE_POOL_RECORD, lease.poolHandle(), value, 0, batch.size());
         boolean submitted = false;
         boolean complete = false;
@@ -143,6 +160,7 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                 ctx.checkDeviceResult(VK10.vkEndCommandBuffer(command), "vkEndCommandBuffer(compute)");
                 commands.get(index).sType$Default().commandBuffer(command);
             }
+            if (event != null) { event.recordNanos = System.nanoTime() - stageStarted; stageStarted = System.nanoTime(); }
             var signal = VkSemaphoreSubmitInfo.calloc(1, stack).sType$Default()
                     .semaphore(jobTimeline).value(value).stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             var submission = VkSubmitInfo2.calloc(1, stack).sType$Default()
@@ -160,7 +178,9 @@ public final class RtGpuExecutor implements GpuComputeQueue {
                 ctx.checkDeviceResult(result, "vkQueueSubmit2(compute)");
             }
             submitted = true;
+            if (event != null) { event.submitNanos = System.nanoTime() - stageStarted; stageStarted = System.nanoTime(); }
             waitTimeline(jobTimeline, value);
+            if (event != null) event.waitNanos = System.nanoTime() - stageStarted;
             complete = true;
         } finally {
             if (complete) lease.close();
@@ -193,7 +213,24 @@ public final class RtGpuExecutor implements GpuComputeQueue {
         }
     }
 
+    @Name("dev.comfyfluffy.caustica.ComputeBatch")
+    @Label("Asynchronous compute host batch") @Category({"Caustica", "Compute"})
+    @StackTrace(false) @Enabled(false)
+    static final class ComputeBatchEvent extends Event {
+        int jobs;
+        boolean succeeded;
+        @Description("Oldest executable job's enqueue-to-batch delay; -1 if queued before recording enabled")
+        @Timespan(Timespan.NANOSECONDS) long oldestQueueNanos;
+        @Timespan(Timespan.NANOSECONDS) long poolNanos;
+        @Timespan(Timespan.NANOSECONDS) long recordNanos;
+        @Description("Host submission setup, queue host-lock acquisition, and driver submission")
+        @Timespan(Timespan.NANOSECONDS) long submitNanos;
+        @Description("Host timeline wait, including GPU work and host scheduling; not GPU execution time")
+        @Timespan(Timespan.NANOSECONDS) long waitNanos;
+        @Timespan(Timespan.NANOSECONDS) long callbackNanos;
+    }
+
     private record Job(long value, AtomicBoolean cancelled, Consumer<? super VkCommandBuffer> recorder,
-                       Consumer<? super GpuComputeCompletion> completion) {}
+                       Consumer<? super GpuComputeCompletion> completion, long queuedNanos) {}
 
 }
