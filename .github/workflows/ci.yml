@@ -289,7 +289,7 @@ jobs:
           if-no-files-found: error
 
   package:
-    name: Build bundled mod jars
+    name: Build Fabric mod jar
     runs-on: ubuntu-latest
     needs:
       - native-windows
@@ -366,11 +366,36 @@ jobs:
           path: build/nrd-runtime-input
           merge-multiple: true
 
+      - name: Patch stale Minecraft shader path
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path("packages/minecraft-client/build.gradle")
+          s = p.read_text(encoding="utf-8")
+
+          old1 = 'def runtimeMinecraftSourceDir = file("src/main/resources/caustica/shaders/minecraft")'
+          old2 = 'includeDirectories.from(runtimeMinecraftSourceDir, configurations.slangShaderModules)'
+          new2 = 'includeDirectories.from(configurations.slangShaderModules)'
+
+          if old1 not in s:
+              raise SystemExit("Expected runtimeMinecraftSourceDir line not found")
+          if old2 not in s:
+              raise SystemExit("Expected includeDirectories line not found")
+
+          s = s.replace(old1, "", 1)
+          s = s.replace(old2, new2, 1)
+          p.write_text(s, encoding="utf-8")
+
+          print("Patched packages/minecraft-client/build.gradle")
+          PY
+
       - name: Build Fabric jar
         env:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
         run: >
-          bash ./gradlew build
+          bash ./gradlew :packages:minecraft-client:jar
           -Ploader=fabric
           -PbuildRoot=build/fabric
           -PngxPlatforms=windows-x64,linux-x64
@@ -381,26 +406,9 @@ jobs:
           -PslangRuntimeInputRoot=build/slang-runtime-input
           -PnrdNativeInputRoot=build/nrd-runtime-input
 
-      - name: Build NeoForge jar
-        env:
-          DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
-        run: >
-          bash ./gradlew build
-          -Ploader=neoforge
-          -PbuildRoot=build/neoforge
-          -PngxPlatforms=windows-x64,linux-x64
-          -PngxVendorConfig=${{ env.NGX_VENDOR_CONFIG }}
-          -PngxShimConfig=${{ env.NGX_SHIM_CONFIG }}
-          -PngxShimInputRoot=build/native/ngx_shim
-          -PslangPlatforms=windows-x64,linux-x64
-          -PslangRuntimeInputRoot=build/slang-runtime-input
-          -PnrdNativeInputRoot=build/nrd-runtime-input
-
-      - name: Upload bundled jars
+      - name: Upload Fabric jar
         uses: actions/upload-artifact@v4
         with:
-          name: caustica-bundled-jars
-          path: |
-            build/fabric/libs/*-fabric.jar
-            build/neoforge/libs/*-neoforge.jar
+          name: caustica-fabric-jar
+          path: build/fabric/libs/*-fabric.jar
           if-no-files-found: error
