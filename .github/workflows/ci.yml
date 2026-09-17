@@ -78,11 +78,21 @@ jobs:
         shell: pwsh
         run: python -m pip install "cmake==$env:CMAKE_VERSION"
 
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
+      - name: Setup Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
-          version: ${{ env.VULKAN_SDK_VERSION }}
-          cache: true
+          vulkan-query-version: ${{ env.VULKAN_SDK_VERSION }}
+          vulkan-components: Vulkan-Headers, Vulkan-Loader, Glslang, SPIRV-Tools
+          vulkan-use-cache: true
+
+      - name: Verify Vulkan headers
+        shell: pwsh
+        run: |
+          $header = Join-Path $env:VULKAN_SDK "include\vulkan\vulkan.h"
+          if (-not (Test-Path $header)) {
+            throw "Missing Vulkan header: $header"
+          }
+          Write-Host "Found Vulkan header: $header"
 
       - name: Install Slang SDK
         shell: pwsh
