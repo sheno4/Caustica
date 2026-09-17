@@ -1,4 +1,4 @@
-name: CI
+name: CI - Fabric RR2 Windows
 
 on:
   workflow_dispatch:
@@ -17,34 +17,28 @@ on:
       - ".gitmodules"
       - "packages/**"
       - "third_party/NRD"
-  pull_request:
-    paths:
-      - ".github/workflows/**"
-      - "build.gradle"
-      - "settings.gradle"
-      - "gradle.properties"
-      - "gradle/**"
-      - "gradlew"
-      - "gradlew.bat"
-      - ".gitmodules"
-      - "packages/**"
-      - "third_party/NRD"
 
 env:
-  DLSS_SDK_REF: v310.7.0
+  # DLSS 310.9.1 adds Ray Reconstruction Transformer Mode / Preset F (RR2).
+  # Caustica is NOT patched to force Preset F: preset 0/default is left intact.
+  DLSS_SDK_REF: v310.9.1
   DLSS_SDK_PATH: third_party/DLSS
+
   NGX_SHIM_CONFIG: release
   NGX_VENDOR_CONFIG: rel
+
   VULKAN_SDK_VERSION: 1.4.350.0
   VULKAN_SDK_SHA256: b65f068ab36263559da49d7cacd7e7b9df23824ca8b68ccc522a2b06f5725df2
+
   SLANG_VERSION: 2026.14.1
   SLANG_WINDOWS_SHA256: 5ed0a59d650a0af0aca45d5db4e083b3d8fb5cea05748747dd95dfbe9c580658
   SLANG_LINUX_SHA256: d7c02e044b5f2f4ceb8e220a2cf8f7d053418db1877da2656fb59e1ce545f8dd
+
   CMAKE_VERSION: 3.30.5
 
 jobs:
   native-windows:
-    name: Build Windows native shims
+    name: Build Windows natives (DLSS 310.9.1 RR2-capable)
     runs-on: windows-2022
 
     steps:
@@ -53,7 +47,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Checkout DLSS SDK
+      - name: Checkout DLSS SDK 310.9.1
         uses: actions/checkout@v4
         with:
           repository: NVIDIA/DLSS
@@ -94,18 +88,44 @@ jobs:
           }
           Write-Host "Found Vulkan header: $header"
 
+      - name: Verify DLSS SDK contains RR2
+        shell: pwsh
+        run: |
+          $sdk = Join-Path $env:GITHUB_WORKSPACE $env:DLSS_SDK_PATH
+          $header = Join-Path $sdk "include\nvsdk_ngx_defs_dlssd.h"
+
+          if (-not (Test-Path $header)) {
+            throw "Missing DLSS RR header: $header"
+          }
+
+          $text = Get-Content -Raw $header
+
+          if ($text -notmatch "NVSDK_NGX_RayReconstruction_Hint_Render_Preset_F\s*=\s*6") {
+            throw "DLSS SDK does not expose RR Preset F = 6"
+          }
+
+          if ($text -notmatch "Default model RR2") {
+            throw "DLSS SDK header does not identify Preset F as RR2"
+          }
+
+          Write-Host "DLSS SDK RR2 support verified."
+          Write-Host "Preset F exists, but this workflow does NOT force it."
+
       - name: Install Slang SDK
         shell: pwsh
         run: |
           $archive = "$env:RUNNER_TEMP/slang.zip"
           $destination = "$env:RUNNER_TEMP/slang-sdk"
+
           Invoke-WebRequest `
             -Uri "https://github.com/shader-slang/slang/releases/download/v$env:SLANG_VERSION/slang-$env:SLANG_VERSION-windows-x86_64.zip" `
             -OutFile $archive
+
           $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           if ($actual -ne $env:SLANG_WINDOWS_SHA256) {
             throw "Slang archive hash mismatch: $actual"
           }
+
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
           "SLANG_SDK=$destination" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -140,8 +160,11 @@ jobs:
         run: |
           $destination = "build/slang-runtime-input/windows-x64"
           New-Item -ItemType Directory -Force -Path $destination | Out-Null
+
           Copy-Item "build/native/slang_shim/release/causticaslang.dll" $destination
-          Get-ChildItem "$env:SLANG_SDK/bin" -Filter "slang*.dll" | Copy-Item -Destination $destination
+          Get-ChildItem "$env:SLANG_SDK/bin" -Filter "slang*.dll" |
+            Copy-Item -Destination $destination
+
           Get-ChildItem "$env:SLANG_SDK/bin" -Directory -Filter "slang-standard-module-*" |
             Copy-Item -Destination $destination -Recurse
 
@@ -174,9 +197,11 @@ jobs:
           path: build/slang-runtime-input
           if-no-files-found: error
 
-  native-linux:
-    name: Build Linux native shims
+  package:
+    name: Build slim Windows Fabric jar
     runs-on: ubuntu-latest
+    needs:
+      - native-windows
 
     steps:
       - name: Checkout Caustica
@@ -184,17 +209,12 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Checkout DLSS SDK
+      - name: Checkout DLSS SDK 310.9.1
         uses: actions/checkout@v4
         with:
           repository: NVIDIA/DLSS
           ref: ${{ env.DLSS_SDK_REF }}
           path: ${{ env.DLSS_SDK_PATH }}
-
-      - name: Install native build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -210,114 +230,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install CMake
-        run: python -m pip install "cmake==${CMAKE_VERSION}"
-
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: ${{ env.VULKAN_SDK_VERSION }}
-          cache: true
-
-      - name: Install Slang SDK
-        run: |
-          archive="${RUNNER_TEMP}/slang.zip"
-          destination="${RUNNER_TEMP}/slang-sdk"
-          curl --fail --location --output "${archive}" \
-            "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.zip"
-          echo "${SLANG_LINUX_SHA256}  ${archive}" | sha256sum --check
-          unzip -q "${archive}" -d "${destination}"
-          echo "SLANG_SDK=${destination}" >> "${GITHUB_ENV}"
-
-      - name: Configure NGX shim
-        env:
-          DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
-        run: >
-          cmake -S packages/nvidia-ngx/native/ngx_shim
-          -B build/cmake/ngx_shim
-          -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build NGX shim
-        run: cmake --build build/cmake/ngx_shim --config Release
-
-      - name: Configure Slang shim
-        run: >
-          cmake -S packages/slang-runtime/native
-          -B build/cmake/slang_shim
-          -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build Slang shim
-        run: cmake --build build/cmake/slang_shim --config Release
-
-      - name: Prepare Linux Slang runtime
-        run: |
-          destination="build/slang-runtime-input/linux-x64"
-          mkdir -p "${destination}"
-          cp "build/native/slang_shim/release/libcausticaslang.so" "${destination}/"
-          find "${SLANG_SDK}/lib" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
-          find "${SLANG_SDK}/lib" -maxdepth 1 -type l -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
-          find "${SLANG_SDK}/bin" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
-          find "${SLANG_SDK}" -maxdepth 3 -type d -name 'slang-standard-module-*' -exec cp -R '{}' "${destination}/" \;
-
-      - name: Upload Linux NGX shim
-        uses: actions/upload-artifact@v4
-        with:
-          name: ngxshim-linux-x64
-          path: build/native/ngx_shim/release/libngxshim.so
-          if-no-files-found: error
-
-      - name: Prepare NRD build dependencies
-        run: bash ./gradlew :packages:nvidia-nrd:prepareNrdNativeDependencies
-
-      - name: Build Linux NRD runtime
-        run: bash ./gradlew :packages:nvidia-nrd:bundleNrdNative :packages:nvidia-nrd:testNrdNative
-
-      - name: Upload Linux NRD runtime
-        uses: actions/upload-artifact@v4
-        with:
-          name: nrd-runtime-linux-x64
-          path: packages/nvidia-nrd/build/generated/nrd-natives
-          if-no-files-found: error
-
-      - name: Upload Linux Slang runtime
-        uses: actions/upload-artifact@v4
-        with:
-          name: slang-runtime-linux-x64
-          path: build/slang-runtime-input
-          if-no-files-found: error
-
-  package:
-    name: Build Fabric mod jar
-    runs-on: ubuntu-latest
-    needs:
-      - native-windows
-      - native-linux
-
-    steps:
-      - name: Checkout Caustica
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Checkout DLSS SDK
-        uses: actions/checkout@v4
-        with:
-          repository: NVIDIA/DLSS
-          ref: ${{ env.DLSS_SDK_REF }}
-          path: ${{ env.DLSS_SDK_PATH }}
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "25"
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
       - name: Install Vulkan SDK shader tools
+        shell: bash
         run: |
           archive="vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
           url="https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/${archive}"
@@ -325,46 +239,50 @@ jobs:
 
           curl --fail --location --retry 3 --retry-delay 5 --output "${archive}" "${url}"
           echo "${VULKAN_SDK_SHA256}  ${archive}" | sha256sum --check
+
           mkdir -p "${RUNNER_TEMP}/vulkan-sdk"
           tar -xf "${archive}" -C "${RUNNER_TEMP}/vulkan-sdk"
 
           echo "VULKAN_SDK=${sdk_root}" >> "${GITHUB_ENV}"
           echo "${sdk_root}/bin" >> "${GITHUB_PATH}"
+
           "${sdk_root}/bin/glslangValidator" --version
           "${sdk_root}/bin/spirv-val" --version
 
-      - name: Install Slang SDK
+      - name: Install Slang SDK for shader compilation
+        shell: bash
         run: |
           archive="${RUNNER_TEMP}/slang.zip"
           destination="${RUNNER_TEMP}/slang-sdk"
+
           curl --fail --location --output "${archive}" \
             "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.zip"
+
           echo "${SLANG_LINUX_SHA256}  ${archive}" | sha256sum --check
           unzip -q "${archive}" -d "${destination}"
+
           echo "SLANG_SDK=${destination}" >> "${GITHUB_ENV}"
           echo "${destination}/bin" >> "${GITHUB_PATH}"
+
           "${destination}/bin/slangc" -version
 
-      - name: Download NGX shims
+      - name: Download Windows NGX shim
         uses: actions/download-artifact@v4
         with:
-          pattern: ngxshim-*
+          name: ngxshim-windows-x64
           path: build/native/ngx_shim/release
-          merge-multiple: true
 
-      - name: Download Slang runtimes
+      - name: Download Windows Slang runtime
         uses: actions/download-artifact@v4
         with:
-          pattern: slang-runtime-*
+          name: slang-runtime-windows-x64
           path: build/slang-runtime-input
-          merge-multiple: true
 
-      - name: Download NRD runtimes
+      - name: Download Windows NRD runtime
         uses: actions/download-artifact@v4
         with:
-          pattern: nrd-runtime-*
+          name: nrd-runtime-windows-x64
           path: build/nrd-runtime-input
-          merge-multiple: true
 
       - name: Patch stale Minecraft shader path
         shell: bash
@@ -381,34 +299,81 @@ jobs:
 
           if old1 not in s:
               raise SystemExit("Expected runtimeMinecraftSourceDir line not found")
+
           if old2 not in s:
               raise SystemExit("Expected includeDirectories line not found")
 
           s = s.replace(old1, "", 1)
           s = s.replace(old2, new2, 1)
-          p.write_text(s, encoding="utf-8")
 
-          print("Patched packages/minecraft-client/build.gradle")
+          p.write_text(s, encoding="utf-8")
+          print("Patched stale minecraft-client shader include path.")
           PY
 
-      - name: Build Fabric jar
+      - name: Build Windows-only Fabric jar
         env:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
         run: >
           bash ./gradlew :packages:minecraft-client:jar
           -Ploader=fabric
           -PbuildRoot=build/fabric
-          -PngxPlatforms=windows-x64,linux-x64
+          -PngxPlatforms=windows-x64
           -PngxVendorConfig=${{ env.NGX_VENDOR_CONFIG }}
           -PngxShimConfig=${{ env.NGX_SHIM_CONFIG }}
           -PngxShimInputRoot=build/native/ngx_shim
-          -PslangPlatforms=windows-x64,linux-x64
+          -PslangPlatforms=windows-x64
           -PslangRuntimeInputRoot=build/slang-runtime-input
           -PnrdNativeInputRoot=build/nrd-runtime-input
 
-      - name: Upload Fabric jar
+      - name: Verify slim Windows jar
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          jars = list(Path("build/fabric/libs").glob("*-fabric.jar"))
+          if len(jars) != 1:
+              raise SystemExit(f"Expected exactly one Fabric jar, found: {jars}")
+
+          jar = jars[0]
+
+          with ZipFile(jar) as z:
+              names = z.namelist()
+
+          required = [
+              "caustica/natives/windows-x64/ngxshim.dll",
+              "caustica/natives/windows-x64/nvngx_dlssd.dll",
+          ]
+
+          missing = [name for name in required if name not in names]
+          if missing:
+              raise SystemExit(f"Missing required Windows NGX files: {missing}")
+
+          if any("linux-x64" in name for name in names):
+              raise SystemExit("Linux natives unexpectedly found in slim Windows jar")
+
+          nrd_ok = any("/windows-x64/nrdshim.dll" in name for name in names)
+          slang_ok = any("/windows-x64/causticaslang.dll" in name for name in names)
+
+          if not nrd_ok:
+              raise SystemExit("Windows NRD runtime not found in jar")
+
+          if not slang_ok:
+              raise SystemExit("Windows Slang runtime not found in jar")
+
+          size_mib = jar.stat().st_size / (1024 * 1024)
+
+          print(f"Final jar: {jar}")
+          print(f"Size: {size_mib:.1f} MiB")
+          print("Windows-only native bundle verified.")
+          print("DLSS SDK: 310.9.1 (RR2 capable).")
+          print("RR preset: default / not forced.")
+          PY
+
+      - name: Upload Fabric RR2 Windows jar
         uses: actions/upload-artifact@v4
         with:
-          name: caustica-fabric-jar
+          name: caustica-fabric-rr2-windows
           path: build/fabric/libs/*-fabric.jar
           if-no-files-found: error
