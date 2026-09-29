@@ -59,7 +59,7 @@ public final class CausticaConfig {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Reflex.ENABLED, Rt.Exposure.MODE, Rt.Tonemap.GAMMA, Rt.FrameStats.ENABLED,
-            Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
+            Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Rt.Clouds.ENABLED, Ngx.PATH,
         };
     }
 
@@ -526,6 +526,17 @@ public final class CausticaConfig {
                 intAtLeast("caustica.rt.workerThreads", "worker-threads", defaultWorkerThreads(), 1);
 
         private Rt() {
+        }
+
+        public static final class Clouds {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.clouds", "clouds.enabled", true);
+            public static final FloatSetting HEIGHT = clampedFloat("caustica.rt.clouds.height", "clouds.height-km", 1f, 0.1f, 4f);
+            public static final FloatSetting THICKNESS = clampedFloat("caustica.rt.clouds.thickness", "clouds.thickness-km", 2f, 0.1f, 4f);
+            public static final FloatSetting COVERAGE = clampedFloat("caustica.rt.clouds.coverage", "clouds.coverage", 0.5f, 0f, 1f);
+            public static final FloatSetting DENSITY = clampedFloat("caustica.rt.clouds.density", "clouds.density", 1f, 0f, 4f);
+            public static final FloatSetting CIRRUS = clampedFloat("caustica.rt.clouds.cirrus", "clouds.cirrus-density", 1f, 0f, 4f);
+            public static final FloatSetting WIND = clampedFloat("caustica.rt.clouds.wind", "clouds.wind-km-per-second", 0.002f, 0f, 0.05f);
+            public static final IntSetting STEPS = clampedInt("caustica.rt.clouds.steps", "clouds.steps", 64, 16, 128);
         }
 
         public static final class Composite {

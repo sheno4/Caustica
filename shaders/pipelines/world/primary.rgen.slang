@@ -160,6 +160,10 @@ public PathSegment tracePrimary(PathSegment seg,
             }
         }
 
+        // Cloud scattering on the camera-to-interface segment is integrated by pass B.
+        // Keep this segment intact after producing the dielectric guides.
+        if (worldPush.cloudLayer.w > 0.0) return terminal;
+
         // Split once, write both post-interface continuations, and stop Pass A radiance traversal.
         // Pass B owns every radiance trace after this point.
         bool splitEligible = dot(transmittedDir, transmittedDir) > 0.0

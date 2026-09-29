@@ -379,6 +379,7 @@ java {
 }
 
 tasks.named("jar", Jar).configure {
+	from("licenses") { into "META-INF/licenses" }
 	from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
 		into "META-INF"
 	}

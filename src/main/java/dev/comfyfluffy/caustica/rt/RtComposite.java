@@ -186,6 +186,7 @@ public final class RtComposite {
     // Packed primary -> indirect continuations. Pass A is fixed at one sample and owns two records per
     // render pixel (base + optional transmission); Pass B resamples them at the configured SPP.
     private RtBuffer continuationQueue;
+    private final RtCloudData cloudData = new RtCloudData();
     private RtImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
     // display mapper reads level 0, which the upsample sweep leaves holding the sum of every band.
@@ -1156,7 +1157,16 @@ public final class RtComposite {
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
-                    exposure.preExposure()
+                    exposure.preExposure(),
+                    cloudData.address(ctx),
+                    new Float4((float) (camX / 100.0), (float) ((camY - Minecraft.getInstance().level.getSeaLevel()) / 100.0),
+                            (float) (camZ / 100.0), (float) (Minecraft.getInstance().level.getGameTime() / 20.0)),
+                    new Float4(CausticaConfig.Rt.Clouds.HEIGHT.value(), CausticaConfig.Rt.Clouds.THICKNESS.value(),
+                            CausticaConfig.Rt.Clouds.COVERAGE.value(), CausticaConfig.Rt.Clouds.ENABLED.value()
+                                    && Minecraft.getInstance().level.dimension() == net.minecraft.world.level.Level.OVERWORLD
+                                    ? CausticaConfig.Rt.Clouds.DENSITY.value() : 0f),
+                    new Float4(CausticaConfig.Rt.Clouds.STEPS.value(), CausticaConfig.Rt.Clouds.CIRRUS.value(),
+                            CausticaConfig.Rt.Clouds.WIND.value(), 0f)
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
@@ -1464,6 +1474,7 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
+        cloudData.destroy();
         if (RtDlssRr.enabled()) {
             RtDlssRr.INSTANCE.destroy();
         }

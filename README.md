@@ -1,5 +1,13 @@
 # Caustica
 
+## Alpha-Piscium cloud edition
+
+This fork includes volumetric cumulus and cirrus clouds ported from
+[Alpha-Piscium](https://github.com/Luna5ama/Alpha-Piscium), with cloud shadows,
+reflections, and configurable quality. See the
+[cloud settings and integration notes](docs/alpha-piscium-clouds.md).
+Cloud scattering also credits [HanPi Volume Cloud / AshenOneArt](https://github.com/AshenOneArt/HPVolumeCloud).
+
 Caustica is an experimental ray-traced renderer for Minecraft 26.2's Vulkan backend.
 It replaces the vanilla world view with hardware ray tracing and NVIDIA DLSS
 features while keeping Minecraft's familiar UI and gameplay intact.

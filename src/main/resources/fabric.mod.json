@@ -7,7 +7,7 @@
 	"authors": [
 		"i"
 	],
-	"license": "LGPL-3.0-or-later",
+	"license": ["LGPL-3.0-or-later", "GPL-3.0-only"],
 	"environment": "client",
 	"entrypoints": {
 		"main": [

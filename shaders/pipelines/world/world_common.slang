@@ -88,6 +88,10 @@ public struct WorldPush {
     // near mid-grey at any scene brightness; the display pass divides it back out, so the two cancel
     // exactly and this cannot change the image. 1.0 disables it.
     public float    preExposure;
+    public uint64_t cloudDataAddr;    // immutable packed noise and phase tables
+    public float4 cloudOrigin;        // camera km relative to sea level, time in seconds
+    public float4 cloudLayer;         // base km, thickness km, coverage, density (0 disables)
+    public float4 cloudQuality;       // view steps, cirrus density, wind km/s, reserved
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the

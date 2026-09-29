@@ -15,3 +15,8 @@ version 3 additional permissions.
 Third-party components are not relicensed by this notice. Release artifacts may
 include NVIDIA DLSS/NGX SDK binaries and related components under NVIDIA's own
 license terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+The Alpha-Piscium-derived cloud modules and resources retain GPL-3.0, and the
+combined cloud-enabled shader is distributed under GPL-3.0. See
+[the cloud notices](THIRD_PARTY_NOTICES.md#alpha-piscium-cloud-renderer) and
+[the retained license](licenses/alpha-piscium/GPL-3.0.txt).

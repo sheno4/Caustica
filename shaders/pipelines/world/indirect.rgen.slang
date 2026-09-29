@@ -30,6 +30,7 @@ import trace_ser;
 #endif
 import lighting;
 import sky;
+import clouds;
 import bindings;
 
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
@@ -88,6 +89,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         traceRadiance(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
                       showCelestial, rayConeWidth, rayConeSpread);
 #endif
+
+        if (!medium.current.water && medium.current.ior <= 1.001) {
+            CloudResult cloud = integrateClouds(worldPush, ro, rd,
+                    payload.hitT < 0.0 ? 20000.0 : payload.hitT, transmittanceLut, skyViewLut);
+            L += throughput * bt709ToAcesCg(cloud.radiance);
+            throughput *= cloud.transmittance;
+        }
 
         if (payload.hitT < 0.0) {
             // A ray still in water should leave through a water interface. A miss instead means the
@@ -211,7 +219,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             float ndl = abs(signedNdl);
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
-                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
+                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance
+                        * cloudShadow(worldPush, shadowOrigin, lightDir);
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                     L += throughput * albedo * INV_PI * celestialLight.illuminance * ndl * vis;
                 }
@@ -287,7 +296,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float ndl = max(0.0, dot(n, lightDir));
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(p, lightDir, 10000.0);
-            float3 vis = shadow.transmittance;
+            float3 vis = shadow.transmittance * cloudShadow(worldPush, p, lightDir);
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
             // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
             // so it applies to the whole NEE term (diffuse + specular).
@@ -330,7 +339,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
                 VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
-                float3 visB = shadowBack.transmittance;
+                float3 visB = shadowBack.transmittance * cloudShadow(worldPush, hitPos, lightDir);
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
                 // flicker with the same light bands as the floor around it.
                 if (medium.current.water && waterWaves && shadowBack.waterHitT > 0.0) {

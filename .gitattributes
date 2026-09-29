@@ -1,0 +1,3 @@
+# Noise and phase tables contain arbitrary bytes, including CR/LF sequences.
+*.bin binary
+*.png binary
