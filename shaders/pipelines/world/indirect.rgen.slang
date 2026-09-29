@@ -30,6 +30,7 @@ import trace_ser;
 #endif
 import lighting;
 import sky;
+import clouds;
 import bindings;
 
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
@@ -212,6 +213,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
                 float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
+                vis *= cloudDirectionalTransmittance(shadowOrigin, lightDir, worldPush, skyState(worldPush));
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                     L += throughput * albedo * INV_PI * celestialLight.illuminance * ndl * vis;
                 }
@@ -294,6 +296,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (medium.current.water && waterWaves && shadow.waterHitT > 0.0) {
                 vis *= waterCaustic(p + lightDir * shadow.waterHitT, lightDir, shadow.waterHitT);
             }
+            // Clouds participate in the same NEE visibility term as terrain and water, producing moving
+            // world-space cloud shadows rather than a decorative sky-only layer.
+            vis *= cloudDirectionalTransmittance(p, lightDir, worldPush, skyState(worldPush));
             if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                 float3 brdf = diffAlb * INV_PI; // Lambertian diffuse (f = albedo/PI)
                 float3 h = normalize(lightDir + v);
@@ -337,6 +342,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                     visB *= waterCaustic(hitPos + lightDir * shadowBack.waterHitT,
                                          lightDir, shadowBack.waterHitT);
                 }
+                visB *= cloudDirectionalTransmittance(hitPos - n * SURF_BIAS, lightDir,
+                                                      worldPush, skyState(worldPush));
                 if (max(visB.r, max(visB.g, visB.b)) > 0.0) {
                     float cosT = dot(lightDir, rd);
                     L += throughput * diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * backNdl * celestialLight.illuminance * visB;

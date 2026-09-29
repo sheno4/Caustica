@@ -1,0 +1,8 @@
+Added:
+  shaders/pipelines/world/clouds.slang
+  REALISTIC_CLOUDS.md
+  CLOUD_PORT_MANIFEST.txt
+
+Modified:
+  shaders/pipelines/world/sky.rmiss.slang
+  shaders/pipelines/world/indirect.rgen.slang

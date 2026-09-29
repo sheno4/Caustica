@@ -14,6 +14,7 @@
 import world_common;
 import sky;
 import bindings;
+import clouds;
 
 // Vanilla celestials atlas (sun + moon-phase sprites), bound by RtComposite. Sampled with an explicit LOD
 // (a miss shader has no derivatives). Keeping the real sprites means a resource pack's sun and moon still
@@ -150,6 +151,12 @@ void main(inout Payload payload) {
         // No separate horizon gate on either body. A set sun or moon goes dark because its extinction is
         // zero below the horizon, matching the NEE visibility test.
     }
+
+    // Composite the Nubis-style participating cloud layer after stars and celestial sprites so cloud
+    // extinction naturally occludes every background sky component. The cloud pass remains in BT.709;
+    // the existing pack seam below converts the combined sky exactly once into ACEScg.
+    CloudResult cloud = renderClouds(WorldRayOrigin(), dir, worldPush, state, transmittanceLut, color);
+    color = cloud.inScattering + color * cloud.transmittance;
 
     // The sky goes out in absolute scene units at full fp32 — packSky writes the payload's three surface
     // words as raw floats rather than halves, which is why the sun disc's ~1e5 cd/m² needs neither a
