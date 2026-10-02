@@ -1,0 +1,19 @@
+{
+  "target": "Caustica",
+  "approximation": true,
+  "densityChannel": 0,
+  "positionUnits": "metres",
+  "sourceUpAxis": "Z",
+  "scaleMeaning": "fullSize",
+  "rotationMeaning": "eulerZRadians",
+  "componentTransforms": "absolute",
+  "densityOperation": "maxUnion",
+  "densityRemap": "identity",
+  "extinctionUnits": "inverseMetres",
+  "sunAzimuthAxis": "sourceX",
+  "ambientRadianceCdM2": 250.0,
+  "singleScatteringAlbedo": 1.0,
+  "phaseG1": 0.2,
+  "phaseG2": 0.3,
+  "phaseMixFactor": 0.3
+}

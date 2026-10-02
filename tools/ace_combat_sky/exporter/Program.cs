@@ -188,7 +188,7 @@ static void SaveNativeHeader(byte[] raw, DefaultFileProvider provider, EGame par
             if (provider.GlobalData.ScriptObjectEntriesMap.TryGetValue(script.OuterIndex, out var outer))
                 outerName = provider.GlobalData.GlobalNameMap[outer.ObjectName.NameIndex].Name;
         }
-        classRecords.Add(new { index, objectName = names[entry.ObjectName.NameIndex].Name,
+        classRecords.Add(new { index, objectName = new FName(entry.ObjectName, names).Text,
             className, outerName, classIndex = entry.ClassIndex.TypeAndId.ToString("x16"),
             serialSize = entry.CookedSerialSize, serialOffset = entry.CookedSerialOffset });
     }

@@ -12,6 +12,22 @@ import re
 import struct
 
 
+def native_object_name(raw, header):
+    exports = header["exports"]
+    # A mapped FName has a base-name index and a numeric suffix. Read the
+    # exact fields from the native export map so suffixes such as _16 survive.
+    export_map_offset, bundle_offset = struct.unpack_from("<ii", raw, 32)
+    if bundle_offset - export_map_offset != 72 or not 0 <= export_map_offset <= len(raw) - 72:
+        raise ValueError("Expected one bounded native Zen export-map entry")
+    serial_offset, serial_size, mapped_name, number = struct.unpack_from("<QQII", raw, export_map_offset)
+    if serial_offset != exports[0]["serialOffset"] or serial_size != exports[0]["serialSize"]:
+        raise ValueError("Native export-map offsets differ from the parsed header")
+    names = header["names"]
+    if mapped_name >> 30 or not mapped_name < len(names):
+        raise ValueError("Expected a package-scoped native object name")
+    return names[mapped_name] + (f"_{number - 1}" if number else "")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("package_directory", type=Path)
@@ -24,6 +40,7 @@ def main():
     exports = header["exports"]
     if len(exports) != 1 or exports[0]["className"] != "VolumeTexture":
         raise ValueError("Expected one confirmed native VolumeTexture export")
+    object_name = native_object_name(raw, header)
     layouts = header["bulkLayouts"]
     if len(layouts) != 1:
         raise ValueError("Expected exactly one structurally validated native bulk table")
@@ -69,7 +86,7 @@ def main():
         mip_records.append({"level": level, "sizeX": mx, "sizeY": my, "sizeZ": mz,
                             "bytes": size, "sourceOffset": data_offset,
                             "sha256": hashlib.sha256(data).hexdigest(), "path": str(mip_path)})
-    result = {"sourceObject": exports[0]["objectName"], "class": "VolumeTexture",
+    result = {"sourceObject": object_name, "class": "VolumeTexture",
               "format": "PF_DXT1", "blockFormat": "BC1", "blockWidth": 4,
               "blockHeight": 4, "bytesPerBlock": 8, "firstMip": first_mip,
               "sizeX": x, "sizeY": y, "sizeZ": z, "mips": mip_records,

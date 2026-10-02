@@ -19,10 +19,25 @@ MAX_PACK_BYTES = 1024 * 1024 * 1024
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
+def preserve_duplicate_properties(pairs):
+    record = {}
+    repeated = set()
+    for name, value in pairs:
+        if name not in record:
+            record[name] = value
+        elif name in repeated:
+            record[name].append(value)
+        else:
+            record[name] = [record[name], value]
+            repeated.add(name)
+    return record
+
+
 def read_json(path):
     if path.stat().st_size > MAX_JSON_BYTES:
         raise ValueError("JSON input exceeds the 16 MiB bound")
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+    return json.loads(path.read_text(encoding="utf-8-sig"),
+                      object_pairs_hook=preserve_duplicate_properties)
 
 
 def single_export(path, expected_type):
@@ -73,6 +88,8 @@ def main():
     parser.add_argument("--components-export", required=True, type=Path)
     parser.add_argument("--texture-exports", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--renderer-adapter", type=Path,
+                        help="Explicit Caustica approximation settings; source fields remain unchanged")
     args = parser.parse_args()
     output_root = private_output(args.output)
     texture_root = args.texture_exports.resolve()
@@ -175,12 +192,18 @@ def main():
             "componentPositionUnitsVerified": False,
             "cloudlyChannelSemanticsVerified": False,
             "renderingAlgorithmRecovered": False,
+            "duplicatePropertyEncoding": "Repeated native JSON property names become ordered arrays of occurrences",
             "volumeLayout": "BC1 4x4 blocks, X block columns and Y block rows within each Z slice"
         },
         "skyParameters": sky_parameters,
         "components": components,
         "textures": textures
     }
+    if args.renderer_adapter:
+        adapter = read_json(args.renderer_adapter)
+        if not isinstance(adapter, dict) or adapter.get("target") != "Caustica" or adapter.get("approximation") is not True:
+            raise ValueError("Renderer adapter must explicitly target Caustica and mark approximation:true")
+        manifest["rendererAdapter"] = adapter
     manifest_json = json.dumps(manifest, indent=2, allow_nan=False)
     output_root.mkdir(parents=True, exist_ok=True)
     for source_path, output_path in copies:

@@ -152,3 +152,15 @@ contains only referenced raw BC1 mips and metadata; it has no absolute game path
 or keys. It does not decode channel values or assign units to unlabeled fields.
 Native defaults and the original Cloudly rendering algorithm remain separate
 evidence requirements.
+
+CUE4Parse can emit repeated JSON property names for native static arrays. The
+converter preserves every occurrence as an ordered JSON array under the original
+name, instead of silently retaining only the last value. Source metadata records
+this encoding.
+
+An optional `--renderer-adapter` input adds explicit implementation choices as
+`rendererAdapter`. That JSON object must contain `"target":"Caustica"` and
+`"approximation":true`. Its settings do not alter the original serialized
+properties or the source verification flags. Treat channel selection, coordinate
+units, scale meaning, and axis conversion supplied here as adapter assumptions
+until separate native evidence verifies them.
