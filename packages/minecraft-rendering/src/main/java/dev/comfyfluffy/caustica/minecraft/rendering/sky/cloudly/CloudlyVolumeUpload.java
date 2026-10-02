@@ -32,6 +32,7 @@ import org.lwjgl.vulkan.VkPhysicalDeviceImageFormatInfo2;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -76,6 +77,7 @@ public final class CloudlyVolumeUpload {
         ResourceOwner jobOwner = null;
         try {
             for (CloudlySourcePack.Texture texture : source.textures()) {
+                checkInterrupted();
                 uploads.add(allocate(gpu, compute, texture));
             }
             images = gpu.descriptorHeap().allocateResources(uploads.size());
@@ -156,6 +158,7 @@ public final class CloudlyVolumeUpload {
             ByteBuffer mapping = staging.mapped();
             long[] offsets = mipOffsets(texture);
             for (int level = 0; level < texture.mips().size(); level++) {
+                checkInterrupted();
                 CloudlySourcePack.Mip mip = texture.mips().get(level);
                 mip.decodeRgba8(mapping.slice(Math.toIntExact(offsets[level]), Math.toIntExact(mip.rgbaByteSize())));
             }
@@ -196,6 +199,10 @@ public final class CloudlyVolumeUpload {
                 throw new UnsupportedOperationException("Cloudly texture " + texture.textureId() + " exceeds 3D image limits");
             }
         }
+    }
+
+    private static void checkInterrupted() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Cloudly preparation cancelled");
     }
 
     private static void writeDescriptors(GpuDevice gpu,

@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.function.Supplier;
 
 /** Owns Minecraft's retained sun, moon, and helmet lights. */
@@ -101,7 +102,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
     static CelestialFrame celestialFrame(MinecraftCelestialFrame captured, CelestialSettings settings) {
         var lighting = captured.lighting();
         return new CelestialFrame(
-                captured.sunAngleRadians(), captured.moonAngleRadians(),
+                settings.sunAngleRadians().orElse(captured.sunAngleRadians()), captured.moonAngleRadians(),
                 settings.noonTiltDegrees() * TO_RADIANS,
                 lighting.sunIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE,
                 lighting.moonIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE,
@@ -137,7 +138,11 @@ public final class MinecraftLightProvider implements AutoCloseable {
 
     /** Sky-owned angular settings sampled by this contribution without process-global option access. */
     public record CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
-                                    double moonAngularRadiusDegrees) {
+                                    double moonAngularRadiusDegrees, OptionalDouble sunAngleRadians) {
+        public CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
+                                 double moonAngularRadiusDegrees) {
+            this(noonTiltDegrees, sunAngularRadiusDegrees, moonAngularRadiusDegrees, OptionalDouble.empty());
+        }
     }
 
 }

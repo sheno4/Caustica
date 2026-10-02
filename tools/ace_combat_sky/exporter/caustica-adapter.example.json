@@ -4,6 +4,8 @@
   "densityChannel": 0,
   "positionUnits": "metres",
   "sourceUpAxis": "Z",
+  "axisMap": "X,Z,-Y",
+  "heightOrigin": "hostSeaLevel",
   "scaleMeaning": "fullSize",
   "rotationMeaning": "eulerZRadians",
   "componentTransforms": "absolute",

@@ -50,7 +50,16 @@ def compileMinecraftSkyShaders = tasks.register("compileMinecraftSkyShaders", Co
     descriptorHeapNative = true
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders/pipelines/sky") }
 }
-sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compileMinecraftSkyShaders))
+
+def compileCloudlyShaders = tasks.register("compileCloudlyShaders", CompileSlangShaders) {
+    group = "build"
+    sourceDirectory = file("shaders/pipelines/cloudly")
+    includeDirectories.from(minecraftShaderModules, configurations.slangShaderModules)
+    aliasSourceDirectory = file("shaders/pipelines/cloudly")
+    descriptorHeapNative = true
+    outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders/pipelines/cloudly") }
+}
+sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compileMinecraftSkyShaders, compileCloudlyShaders))
 
 def verifyMinecraftSkyShaders = tasks.register("verifyMinecraftSkyShaders") {
     group = "verification"
@@ -60,7 +69,7 @@ def verifyMinecraftSkyShaders = tasks.register("verifyMinecraftSkyShaders") {
         if (task.spirvProfile.get() != "spirv_1_6" || task.vulkanTarget.get() != "vulkan1.4") {
             throw new GradleException("sky shaders target ${task.spirvProfile.get()}/${task.vulkanTarget.get()}")
         }
-        def names = fileTree(generatedShaderResources).matching { include "**/*.spv" }.files*.name.sort()
+        def names = fileTree(generatedShaderResources.map { it.dir("caustica/shaders/pipelines/sky") }).matching { include "**/*.spv" }.files*.name.sort()
         if (names != ["multiscatter.comp.spv", "transmittance.comp.spv", "view.comp.spv"]) {
             throw new GradleException("sky SPIR-V outputs drifted: ${names}")
         }
@@ -79,7 +88,9 @@ def minecraftRenderingRecordSpecs = [
         "buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.rendering.gen|MinecraftInstanceData|false",
         "buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|MinecraftEnvironmentBindingData|false",
         "push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyInputsData|false",
-        "push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyLutPushData|false"
+        "push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyLutPushData|false",
+        "buffer|cloudlyComponentLayoutProbe|CloudlyCloudComponent|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCloudComponentData|false",
+        "push|cloudlyPushProbe|CloudlyCloudPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCloudPushData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateMinecraftRenderingRecords = tasks.register("generateMinecraftRenderingRecords", GenerateShaderRecords) {
@@ -160,6 +171,8 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
             }
         }
         def expectedResources = [
+                "caustica/shaders/minecraft/sky/caustica_cloudly_types.slang",
+                "caustica/shaders/minecraft/sky/caustica_cloudly_clouds.slang",
                 "caustica/shaders/minecraft/surface/caustica_minecraft_coverage.slang",
                 "caustica/shaders/minecraft/surface/caustica_minecraft_material.slang",
                 "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",

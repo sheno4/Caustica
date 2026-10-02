@@ -2,6 +2,17 @@ import caustica_minecraft_material;
 import caustica_minecraft_sky_atmosphere;
 import caustica_minecraft_sky_bindings;
 import caustica_minecraft_sky_lut_types;
+import caustica_cloudly_types;
+
+struct CloudlyComponentLayoutProbe { CloudlyCloudComponent values[2]; };
+[[vk::binding(10, 0)]] StructuredBuffer<CloudlyComponentLayoutProbe, Std430DataLayout> cloudlyComponentLayoutProbe;
+
+[[vk::push_constant]] CloudlyCloudPush cloudlyPushProbe;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeCloudlyPush(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) { float sink = float(cloudlyPushProbe.componentsAddress) + float(cloudlyComponentLayoutProbe[0].values[0].textureIndex); }
+}
 
 struct MinecraftImplementationLayoutProbe { MinecraftImplementationData values[2]; };
 struct MinecraftMaterialLayoutProbe { MinecraftMaterialRecord values[2]; };

@@ -14,6 +14,8 @@ import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftSkyFrame;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.*;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCloudPass;
 import dev.comfyfluffy.caustica.settings.*;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.vulkan.*;
@@ -59,6 +61,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private final EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment;
     private final MinecraftEnvironmentSelector selector;
     private final ResourceFactory resourceFactory;
+    private final CloudlySkyPreset preset;
     private final VmaImage2D transmittance, multiScatter, skyView;
     private final VulkanSampler lutSampler, celestialSampler;
     private final VmaMappedBuffer skyInputs;
@@ -74,12 +77,21 @@ public final class SkyLutPass implements Pass<PassFrame> {
                       Supplier<MinecraftSkyFrame> frames,
                       EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
                       MinecraftEnvironmentSelector selector, ResourceFactory resourceFactory, long epoch) {
+        this(gpu, options, frames, environment, selector, resourceFactory, epoch, null);
+    }
+
+    public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
+                      Supplier<MinecraftSkyFrame> frames,
+                      EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
+                      MinecraftEnvironmentSelector selector, ResourceFactory resourceFactory, long epoch,
+                      CloudlySkyPreset preset) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
         this.options = Objects.requireNonNull(options, "options");
         this.frames = Objects.requireNonNull(frames, "frames");
         this.environment = Objects.requireNonNull(environment, "environment");
         this.selector = Objects.requireNonNull(selector, "selector");
         this.resourceFactory = Objects.requireNonNull(resourceFactory, "resourceFactory");
+        this.preset = preset;
         resourcePackEpoch = new AtomicLong(epoch);
         List<Runnable> allocated = new ArrayList<>();
         try {
@@ -124,7 +136,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
         MinecraftSkyFrame captured = frames.get();
         if (captured == null) return;
         if (hasPriorGpuUse) priorRayReadsToSkyWrites(frame.commandBuffer());
-        SkyState state = gather(options.get(), captured.celestial());
+        SkyState state = gather(options.get(), captured.celestial(), preset);
         AtlasSnapshot snapshot = atlasSnapshot(captured.atlas());
         SkyInputsData inputs = skyInputs(state, snapshot);
         ensureBinding(snapshot);
@@ -272,14 +284,21 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     static SkyState gather(OptionValues options, MinecraftCelestialFrame captured) {
+        return gather(options, captured, null);
+    }
+
+    static SkyState gather(OptionValues options, MinecraftCelestialFrame captured, CloudlySkyPreset preset) {
+        if (preset != null && !options.get(CloudlyCloudPass.ENABLED)) preset = null;
         float altitude = viewerAltitudeKm(captured.cameraY(), captured.seaLevel(),
                 captured.metersPerSceneUnit());
         float r = (float) (Math.PI / 180.0);
         MinecraftLightingCalibration l = captured.lighting();
-        return new SkyState(captured.sunAngleRadians(), captured.moonAngleRadians(),
+        return new SkyState(preset == null ? captured.sunAngleRadians() : (float) preset.sunAngleRadians(),
+                captured.moonAngleRadians(),
                 captured.starAngleRadians(), captured.starBrightness(), l.sunIlluminanceLux(),
                 l.moonIlluminanceLux(), l.nightAirglowLuminanceCdM2(), l.starLuminanceCdM2(),
-                options.get(SUN_NOON_SOUTH_TILT_DEGREES) * r, options.get(SUN_ANGULAR_RADIUS_DEGREES) * r,
+                (preset == null ? options.get(SUN_NOON_SOUTH_TILT_DEGREES) : (float) preset.noonTiltDegrees()) * r,
+                options.get(SUN_ANGULAR_RADIUS_DEGREES) * r,
                 options.get(MOON_ANGULAR_RADIUS_DEGREES) * r, l.moonPhaseFixedFraction(),
                 options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r,
                 options.get(MOON_DISC_HALF_ANGLE_DEGREES) * r, altitude,

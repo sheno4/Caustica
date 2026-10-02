@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "inspection_date": "2026-10-02",
+  "upstream_commit": "0cc9d0af4f4118cd26b830084a14f2bafc0d904d",
+  "steam_app_id": 2288340,
+  "steam_build_id": 25201480,
+  "implementation_status": "experimental_primary_cloud_adapter",
+  "inspection": "read_only_metadata_and_offline_resource_exports",
+  "archives": [
+    {
+      "archive": "global.utoc",
+      "archive_size": 3151,
+      "header_sha256": "cffaeac4b8ca609a0921475a7784b7f80e81d0617c0a21a7d883b026d8deaf7b",
+      "utoc_version": 6,
+      "flags": [
+        "signed"
+      ],
+      "encrypted": false,
+      "toc_entries": 1,
+      "compression_methods": [],
+      "compression_block_size": 65536,
+      "directory_size": 0,
+      "directory_status": "absent"
+    },
+    {
+      "archive": "pakchunk0-Windows.utoc",
+      "archive_size": 64972298,
+      "header_sha256": "0d6a1126dd1cc49d00979b06f47c16dc21d63e3c6ced3e08cc284ab6e24a8a94",
+      "utoc_version": 6,
+      "flags": [
+        "compressed",
+        "encrypted",
+        "signed",
+        "indexed"
+      ],
+      "encrypted": true,
+      "toc_entries": 112294,
+      "compression_methods": [
+        "Oodle"
+      ],
+      "compression_block_size": 65536,
+      "directory_size": 2309088,
+      "directory_status": "decrypted_with_locally_validated_key"
+    },
+    {
+      "archive": "pakchunk0optional-Windows.utoc",
+      "archive_size": 923210,
+      "header_sha256": "8d5f896f236eb0eb7b3419857039727bd335e665363b284acaf92488006682c3",
+      "utoc_version": 6,
+      "flags": [
+        "compressed",
+        "signed",
+        "indexed"
+      ],
+      "encrypted": false,
+      "toc_entries": 31,
+      "compression_methods": [
+        "Oodle"
+      ],
+      "compression_block_size": 65536,
+      "directory_size": 2701,
+      "directory_status": "readable",
+      "readable_file_count": 30,
+      "file_extensions": [
+        ".uptnl"
+      ],
+      "sky_candidate_count": 0
+    },
+    {
+      "archive": "pakchunk10-Windows.utoc",
+      "archive_size": 77422543,
+      "header_sha256": "6cceeb4aec733ca7e302cfe5fc1da23dfb222ecdf33000c2f9d22f5fa867bbb9",
+      "utoc_version": 6,
+      "flags": [
+        "compressed",
+        "encrypted",
+        "signed",
+        "indexed"
+      ],
+      "encrypted": true,
+      "toc_entries": 43153,
+      "compression_methods": [
+        "Oodle"
+      ],
+      "compression_block_size": 65536,
+      "directory_size": 2209808,
+      "directory_status": "decrypted_with_locally_validated_key"
+    },
+    {
+      "archive": "pakchunk10optional-Windows.utoc",
+      "archive_size": 710306,
+      "header_sha256": "92c052087942ac94a243bcdb6f82ee66ed090ea08d917b5df668a496202aec98",
+      "utoc_version": 6,
+      "flags": [
+        "compressed",
+        "signed",
+        "indexed"
+      ],
+      "encrypted": false,
+      "toc_entries": 38,
+      "compression_methods": [
+        "Oodle"
+      ],
+      "compression_block_size": 65536,
+      "directory_size": 2384,
+      "directory_status": "readable",
+      "readable_file_count": 37,
+      "file_extensions": [
+        ".uptnl"
+      ],
+      "sky_candidate_count": 0
+    },
+    {
+      "archive": "pakchunk20-Windows.utoc",
+      "archive_size": 22174808,
+      "header_sha256": "57c3b6ed043e08fc271dedade3702c038bbfc9fd5620cd40283cd3fb540a6dd0",
+      "utoc_version": 6,
+      "flags": [
+        "compressed",
+        "encrypted",
+        "signed",
+        "indexed"
+      ],
+      "encrypted": true,
+      "toc_entries": 33348,
+      "compression_methods": [
+        "Oodle"
+      ],
+      "compression_block_size": 65536,
+      "directory_size": 1606304,
+      "directory_status": "decrypted_with_locally_validated_key"
+    },
+    {
+      "archive": "pakchunk20optional-Windows.utoc",
+      "archive_size": 4813868,
+      "header_sha256": "032fa3abf08805c7334c35aaf6d8f8f23032cf28400af45963b081ded740da98",
+      "utoc_version": 6,
+      "flags": [
+        "compressed",
+        "signed",
+        "indexed"
+      ],
+      "encrypted": false,
+      "toc_entries": 290,
+      "compression_methods": [
+        "Oodle"
+      ],
+      "compression_block_size": 65536,
+      "directory_size": 11974,
+      "directory_status": "readable",
+      "readable_file_count": 289,
+      "file_extensions": [
+        ".uptnl"
+      ],
+      "sky_candidate_count": 0
+    }
+  ],
+  "resource_access": "one_local_candidate_validated_against_complete_pak_index_sha1; key_not_in_git",
+  "source_pack": {
+    "sky_asset": "/Game/Cloudly/CloudlySkyParams/Ingame/Hangar001/CSP_Hangar001_Daytime01",
+    "components_asset": "/Game/Cloudly/CloudlySkyParams/Ingame/Hangar001/CVC_Hangar001_Daytime01",
+    "components": 35,
+    "groups": 4,
+    "volumes": 31,
+    "textures": 9,
+    "mips": 90,
+    "format": "PF_DXT1",
+    "volume_dimensions": [
+      512,
+      512,
+      64
+    ],
+    "mip_bytes": 86283000,
+    "native_defaults_included": false,
+    "original_rendering_algorithm_recovered": false,
+    "renderer_adapter_approximation": true,
+    "image_tests_performed": false,
+    "gpu_rendering_verified": false,
+    "manifest_sha256": "a5ac9008f4d264aab64975e08c9bd6fad7bbda5ffb1a3feecfed47edb674ff30",
+    "cpu_render_model_validated": true
+  },
+  "validation": {
+    "java_compile": true,
+    "gpu_execution": false,
+    "image_tests": false,
+    "focused_numeric_tests": 34,
+    "slang_compile": true,
+    "descriptor_heap_validation": true,
+    "spirv_validation": true
+  }
+}

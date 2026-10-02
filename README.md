@@ -1,5 +1,10 @@
 # Caustica
 
+This fork's `ace-combat-sky` branch adds an experimental importer and camera-volume
+adapter for locally extracted ACE COMBAT 8 Cloudly assets. See the
+[sky port guide](docs/ACE_COMBAT_SKY.md) for setup, supported behavior, and validation.
+Original game assets and resource keys are kept outside Git.
+
 Caustica is an experimental ray-traced renderer for Minecraft 26.2's Vulkan backend.
 It replaces the vanilla world view with hardware ray tracing and NVIDIA DLSS
 features while keeping Minecraft's familiar UI and gameplay intact.
