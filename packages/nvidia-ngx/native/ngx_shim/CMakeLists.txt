@@ -37,7 +37,8 @@ set(DLSS_SDK_INCLUDE_DIR "${DLSS_SDK_DIR}/include")
 
 
 target_include_directories(ngxshim PRIVATE "${DLSS_SDK_INCLUDE_DIR}")
-target_include_directories(ngxshim PRIVATE "$ENV{VULKAN_SDK}/include")
+set(NGX_VULKAN_INCLUDE_DIR "$ENV{VULKAN_SDK}/include" CACHE PATH "Vulkan headers for the NGX shim")
+target_include_directories(ngxshim PRIVATE "${NGX_VULKAN_INCLUDE_DIR}")
 if(WIN32)
   set(NGX_STATIC_LIB "${DLSS_SDK_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib")
   set_property(TARGET ngxshim PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")

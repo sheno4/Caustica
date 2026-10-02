@@ -33,6 +33,11 @@ jobs:
           repository: NVIDIA/DLSS
           ref: v310.7.0
           path: third_party/DLSS
+      - uses: actions/checkout@v4
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: v1.4.350
+          path: third_party/Vulkan-Headers
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -60,7 +65,7 @@ jobs:
       - name: Build Windows runtime libraries
         shell: pwsh
         run: |
-          cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim -G "Visual Studio 17 2022" -A x64
+          cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim -G "Visual Studio 17 2022" -A x64 "-DNGX_VULKAN_INCLUDE_DIR=$env:GITHUB_WORKSPACE/third_party/Vulkan-Headers/include"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build/cmake/ngx_shim --config Release
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
