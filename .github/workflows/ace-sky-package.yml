@@ -62,7 +62,16 @@ jobs:
           if ((Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant() -ne $env:SLANG_SHA256) { throw 'Slang SDK hash mismatch' }
           Expand-Archive -LiteralPath $archivePath -DestinationPath $sdkPath
           "SLANG_SDK=$sdkPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - uses: actions/cache/restore@v4
+        id: native-cache
+        with:
+          path: |
+            build/native/ngx_shim/release
+            build/native/slang_shim/release
+            packages/nvidia-nrd/build/generated/nrd-natives
+          key: ace-sky-native-windows-x64-slang2026.14.1-dlss310.7.0-vulkan1.4.350-${{ hashFiles('packages/nvidia-ngx/native/**', 'packages/slang-runtime/native/**', 'packages/nvidia-nrd/native/**', 'packages/nvidia-nrd/build.gradle') }}
       - name: Build Windows runtime libraries
+        if: steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim -G "Visual Studio 17 2022" -A x64 "-DNGX_VULKAN_INCLUDE_DIR=$env:GITHUB_WORKSPACE/third_party/Vulkan-Headers/include"
@@ -75,6 +84,14 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./gradlew.bat :packages:nvidia-nrd:prepareNrdNativeDependencies :packages:nvidia-nrd:bundleNrdNative
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/cache/save@v4
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/native/ngx_shim/release
+            build/native/slang_shim/release
+            packages/nvidia-nrd/build/generated/nrd-natives
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Compile and package Fabric mod
         shell: pwsh
         run: ./gradlew.bat :packages:minecraft-client:jar -Ploader=fabric -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
