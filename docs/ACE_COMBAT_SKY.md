@@ -61,7 +61,14 @@ max-distance-km = 200.0
 
 基线为 `ComfyFluffy/Caustica` 的 `rewrite`，提交 `0cc9d0af4f4118cd26b830084a14f2bafc0d904d`。工作位于用户 fork 的独立 `ace-combat-sky` 分支，基线标签为 `ace-combat-sky-base-2026-10-02`。既有 `main`、`rewrite` 及旧云层分支保留。
 
-已完成：四个代表资源的原生属性解析、九个真实关联纹理及全部 mip 的校验，以及真实私有资源包的渲染模型检查。34 项相关数值检查通过，包括 5 项 BC1/完整性/所有权、6 项源云体适配、4 项太阳预设，以及 19 项既有天空/光照检查。Java、反射生成的 ABI、Slang、SPIR-V 和描述符布局验证通过。最终加载器构建结果在打包完成后补充。
+已完成：四个代表资源的原生属性解析、九个真实关联纹理及全部 mip 的校验，以及真实私有资源包的渲染模型检查。34 项相关数值检查通过，包括 5 项 BC1/完整性/所有权、6 项源云体适配、4 项太阳预设，以及 19 项既有天空/光照检查。Java、反射生成的 ABI、Slang、SPIR-V 和描述符布局验证通过。
+
+[Windows 构建 37021534425](https://github.com/sheno4/Caustica/actions/runs/37021534425) 已成功生成 Fabric 和 NeoForge 包，对应提交 `e1234d0a9ec5b703124714ccd0fc7cd88417ea6f`，版本标签为 `v0.1.0-ac8-sky.1`。下载后的两个包均已确认：包含云层类、编译后的着色器、八份必要的 Windows 运行库及许可证，没有重复条目，也没有原始游戏资源。
+
+| 安装包 | SHA-256 |
+| --- | --- |
+| `caustica-0.1.0-ac8-sky.1-fabric.jar` | `b20a8a486577d2d744d1858de8738226fc110ee71ef9e299056ce729d23d2cfc` |
+| `caustica-0.1.0-ac8-sky.1-neoforge.jar` | `1fca2c1cacaeb07df8ac3ea218fc0c906282dc0a2fba56cc3bc50f4472acc3bb` |
 
 Windows 构建工作流分别生成 Fabric 和 NeoForge 包，固定 Slang 2026.14.1、Java 25 及原项目的 SDK 版本。工作流只编译和打包；不运行游戏，不进行图像测试。
 

@@ -187,5 +187,29 @@
     "slang_compile": true,
     "descriptor_heap_validation": true,
     "spirv_validation": true
+  },
+  "build": {
+    "image_tests": false,
+    "package_integrity_validated": true,
+    "conclusion": "success",
+    "version_tag": "v0.1.0-ac8-sky.1",
+    "run_url": "https://github.com/sheno4/Caustica/actions/runs/37021534425",
+    "original_game_assets_included": false,
+    "gpu_execution": false,
+    "version": "0.1.0-ac8-sky.1",
+    "source_commit": "e1234d0a9ec5b703124714ccd0fc7cd88417ea6f",
+    "packages": [
+      {
+        "bytes": 108222278,
+        "name": "caustica-0.1.0-ac8-sky.1-fabric.jar",
+        "sha256": "b20a8a486577d2d744d1858de8738226fc110ee71ef9e299056ce729d23d2cfc"
+      },
+      {
+        "bytes": 107819041,
+        "name": "caustica-0.1.0-ac8-sky.1-neoforge.jar",
+        "sha256": "1fca2c1cacaeb07df8ac3ea218fc0c906282dc0a2fba56cc3bc50f4472acc3bb"
+      }
+    ],
+    "windows_runtimes_included": true
   }
 }
