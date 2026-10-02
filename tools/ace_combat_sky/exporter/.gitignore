@@ -1,0 +1,9 @@
+bin/
+obj/
+*.private.json
+*.mip.bin
+*.bc1.bin
+*.uasset
+*.ubulk
+*.uexp
+*.uptnl
