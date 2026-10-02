@@ -31,6 +31,7 @@ dependencies {
     slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
     api project(":packages:minecraft-content")
     implementation "org.slf4j:slf4j-api:2.0.17"
+    implementation "com.google.code.gson:gson:2.14.0"
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
