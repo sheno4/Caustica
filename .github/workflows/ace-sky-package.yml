@@ -1,4 +1,4 @@
-name: ACE sky Windows package
+name: ACE sky Fabric Windows package
 
 on:
   push:
@@ -94,14 +94,10 @@ jobs:
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Compile and package Fabric mod
         shell: pwsh
-        run: ./gradlew.bat :packages:minecraft-client:jar -Ploader=fabric -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
-      - name: Compile and package NeoForge mod
-        shell: pwsh
-        run: ./gradlew.bat :packages:minecraft-client:jar -Ploader=neoforge -PbuildRoot=build-neoforge -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
+        run: ./gradlew.bat :packages:minecraft-client:test --tests dev.comfyfluffy.caustica.minecraft.client.settings.OptionControlsTest.optionalPathsCanBeSavedReloadedClearedAndReset :packages:minecraft-client:jar -Ploader=fabric -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
       - uses: actions/upload-artifact@v4
         with:
-          name: ace-sky-windows-${{ github.sha }}
+          name: ace-sky-fabric-${{ github.sha }}
           path: |
             build/libs/*-fabric.jar
-            build-neoforge/libs/*-neoforge.jar
           if-no-files-found: error

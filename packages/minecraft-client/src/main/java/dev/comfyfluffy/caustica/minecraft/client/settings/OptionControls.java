@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.network.chat.Component;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Predicate;
 
 /** Adapts declared options to native screen controls backed by the shared in-memory preference store. */
@@ -16,14 +17,15 @@ public final class OptionControls {
         return of(store, featureId, option, ignored -> true);
     }
 
-    /** Null for options without a native row, including optional paths and unrestricted colors. */
+    /** Null for options without a native row, including unrestricted colors. */
     public static SettingControl of(CausticaOptions store, ResourceId featureId, Option<?> option,
                                     Predicate<Option<?>> available) {
         return switch (option.kind()) {
             case BOOL -> new BoolRow(store, featureId, cast(option), available);
             case RANGE, INTEGER -> new RangeRow(store, featureId, cast(option), available);
             case INT_CHOICE, STRING_CHOICE, ENUM -> new ChoiceRow<>(store, featureId, option, available);
-            case OPTIONAL_STRING, COLOR -> null;
+            case OPTIONAL_STRING -> new TextRow(store, featureId, cast(option), available);
+            case COLOR -> null;
         };
     }
 
@@ -62,6 +64,17 @@ public final class OptionControls {
         @Override public boolean get() { return value(); }
         @Override public void set(boolean value) { write(value); }
         @Override public boolean defaultValue() { return option.defaultValue(); }
+    }
+
+    private static final class TextRow extends Row<Optional<String>> implements SettingControl.TextControl {
+        TextRow(CausticaOptions store, ResourceId featureId, Option<Optional<String>> option,
+                Predicate<Option<?>> available) {
+            super(store, featureId, option, available);
+        }
+
+        @Override public String get() { return value().orElse(""); }
+        @Override public void set(String value) { write(value.isBlank() ? Optional.empty() : Optional.of(value)); }
+        @Override public String defaultValue() { return option.defaultValue().orElse(""); }
     }
 
     private static final class RangeRow extends Row<Number> implements SettingControl.RangeControl {

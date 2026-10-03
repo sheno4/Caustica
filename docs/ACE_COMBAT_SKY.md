@@ -1,22 +1,22 @@
 # ACE COMBAT 8 天空适配
 
-这是 `rewrite` 分支上的实验适配版本 `0.1.0-ac8-sky.1`。它导入原游戏的体积云纹理、云体位置和预设参数，并使用 Caustica 的渲染流程绘制云层。Cloudly 原始渲染器源码没有随游戏资源提供；适配中的解释和近似保存在独立的 `rendererAdapter` 中。
+这是 `rewrite` 分支上的实验适配版本 `0.1.0-ac8-sky.2`。它导入原游戏的体积云纹理、云体位置和预设参数，并使用 Caustica 的渲染流程绘制云层。Cloudly 原始渲染器源码没有随游戏资源提供；适配中的解释和近似保存在独立的 `rendererAdapter` 中。
 
 ## 使用
 
-使用 Minecraft 26.2 的 Vulkan 后端，安装本分支构建的 Fabric 或 NeoForge 包及该加载器所需的依赖。原模组的硬件要求仍适用。
+使用 Minecraft 26.2 的 Vulkan 后端，安装本分支构建的 Fabric 包、Fabric Loader 和 Fabric API。原模组的硬件要求仍适用。
 
-将私有资源包保存在 Git 仓库外。在 Minecraft 的 `config/caustica.toml` 中加入：
+将私有资源包保存在 Minecraft 实例的 `config/caustica-cloudly` 目录内，并确保下方路径指向该实例中的文件。在 Minecraft 的 `config/caustica.toml` 中加入：
 
 ```toml
 ["caustica:minecraft".sky.cloudly]
 enabled = true
-source-pack = 'D:/DESK/X/caustica/analysis-game/source-pack-hangar001/manifest.json'
+source-pack = 'D:/Minecraft/config/caustica-cloudly/source-pack-hangar001/manifest.json'
 samples = 64.0
 max-distance-km = 200.0
 ```
 
-路径应指向实际导入包的 `manifest.json`。在设置中的 **ACE COMBAT Clouds (Experimental)** 可以关闭效果、调整采样数和距离。初次启用或改变资源包后，需要重新进入世界。原始资源没有包含在公开构建包内。
+路径应指向实际导入包的 `manifest.json`。在设置中的 **皇牌空战云层（实验性）** 可以关闭效果、输入资源包路径、调整采样数和距离。初次启用或改变资源包后，需要重新进入世界。原始资源没有包含在公开构建包内。云层开关打开但路径为空时，日志会明确报告缺少配置；资源上传完成后会记录云体及纹理数量。
 
 资源在后台解码、上传，完成后才参与绘制。未配置资源包时采用普通 Minecraft 天空。导入包仅用于主世界。
 
@@ -63,13 +63,8 @@ max-distance-km = 200.0
 
 已完成：四个代表资源的原生属性解析、九个真实关联纹理及全部 mip 的校验，以及真实私有资源包的渲染模型检查。34 项相关数值检查通过，包括 5 项 BC1/完整性/所有权、6 项源云体适配、4 项太阳预设，以及 19 项既有天空/光照检查。Java、反射生成的 ABI、Slang、SPIR-V 和描述符布局验证通过。
 
-[Windows 构建 37021534425](https://github.com/sheno4/Caustica/actions/runs/37021534425) 已成功生成 Fabric 和 NeoForge 包，对应提交 `e1234d0a9ec5b703124714ccd0fc7cd88417ea6f`，版本标签为 `v0.1.0-ac8-sky.1`。下载后的两个包均已确认：包含云层类、编译后的着色器、八份必要的 Windows 运行库及许可证，没有重复条目，也没有原始游戏资源。
+版本 `0.1.0-ac8-sky.2` 修复资源路径设置项未显示的问题，并补齐当前中文界面的全部设置键。Fabric 构建和路径保存回归检查结果在打包后补充。旧版安装包仍可通过 Git 版本标签追溯。
 
-| 安装包 | SHA-256 |
-| --- | --- |
-| `caustica-0.1.0-ac8-sky.1-fabric.jar` | `b20a8a486577d2d744d1858de8738226fc110ee71ef9e299056ce729d23d2cfc` |
-| `caustica-0.1.0-ac8-sky.1-neoforge.jar` | `1fca2c1cacaeb07df8ac3ea218fc0c906282dc0a2fba56cc3bc50f4472acc3bb` |
-
-Windows 构建工作流分别生成 Fabric 和 NeoForge 包，固定 Slang 2026.14.1、Java 25 及原项目的 SDK 版本。工作流只编译和打包；不运行游戏，不进行图像测试。
+Windows 构建工作流只生成 Fabric 包，固定 Slang 2026.14.1、Java 25 及原项目的 SDK 版本。工作流只编译和打包；不运行游戏，不进行图像测试。
 
 [官方开发者介绍](https://en.bandainamcoent.eu/ace-combat/news/ace-combat-8-wings-of-theve-developer-diary) 将 Cloudly 描述为内部技术，并介绍了其与 Lumen 的结合。这些原渲染器功能与本适配的实现边界需分别看待。

@@ -405,11 +405,17 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     private static CloudlySourcePack cloudlySource(OptionValues values) {
         var path = values.get(CloudlyCloudPass.SOURCE_PACK);
-        if (!values.get(CloudlyCloudPass.ENABLED) || path.isEmpty()) return null;
+        if (!values.get(CloudlyCloudPass.ENABLED)) return null;
+        if (path.isEmpty()) {
+            CausticaMod.LOGGER.warn("ACE COMBAT sky is enabled, but no local source pack is configured in the sky settings");
+            return null;
+        }
         try {
             CloudlySourcePack pack = CloudlySourcePack.load(java.nio.file.Path.of(path.get()));
             CloudlyCloudPass.validateSource(pack);
             CloudlySkyPreset.from(pack);
+            CausticaMod.LOGGER.info("Loaded ACE COMBAT sky pack: {} source components, {} volume textures",
+                    pack.components().size(), pack.textures().size());
             return pack;
         } catch (java.io.IOException | IllegalArgumentException failure) {
             CausticaMod.LOGGER.error("Cloudly source pack could not be loaded", failure);

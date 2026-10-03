@@ -12,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -109,9 +110,31 @@ final class OptionControlsTest {
     }
 
     @Test
-    void optionalPathsDoNotCreateAnUnsupportedRow() {
+    void optionalPathsCanBeSavedReloadedClearedAndReset() {
         var path = Option.optionalString("path");
-        assertNull(OptionControls.of(store(path), FEATURE, path));
+        var original = store(path);
+        var row = (SettingControl.TextControl) OptionControls.of(original, FEATURE, path);
+        String manifestPath = "D:\\天空资源\\Hangar 001\\manifest.json";
+
+        assertEquals("", row.get());
+        row.set(manifestPath);
+        assertEquals(Optional.of(manifestPath), original.options(FEATURE).get(path));
+        assertTrue(row.isModified());
+        original.save();
+
+        var reloaded = store(path);
+        var reloadedRow = (SettingControl.TextControl) OptionControls.of(reloaded, FEATURE, path);
+        assertEquals(manifestPath, reloadedRow.get());
+        reloadedRow.set(" \t ");
+        reloaded.save();
+        assertEquals(Optional.empty(), store(path).options(FEATURE).get(path));
+
+        reloadedRow.set(manifestPath);
+        reloadedRow.reset();
+        assertEquals("", reloadedRow.get());
+        assertFalse(reloadedRow.isModified());
+        reloaded.save();
+        assertEquals(Optional.empty(), store(path).options(FEATURE).get(path));
     }
 
     @SuppressWarnings("unchecked")

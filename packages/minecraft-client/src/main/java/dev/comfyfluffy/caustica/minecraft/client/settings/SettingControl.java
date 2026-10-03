@@ -27,6 +27,25 @@ public sealed interface SettingControl {
 
     void reset();
 
+    /** An editable string; an empty value clears an optional preference. */
+    non-sealed interface TextControl extends SettingControl {
+        String get();
+
+        void set(String value);
+
+        String defaultValue();
+
+        @Override
+        default boolean isModified() {
+            return !get().equals(defaultValue());
+        }
+
+        @Override
+        default void reset() {
+            set(defaultValue());
+        }
+    }
+
     non-sealed interface BoolControl extends SettingControl {
         boolean get();
 

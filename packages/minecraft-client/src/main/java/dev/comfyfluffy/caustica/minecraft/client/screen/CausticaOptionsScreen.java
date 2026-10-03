@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaPaint;
 import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaScrollPane;
 import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaSlider;
 import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaTextButton;
+import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaTextField;
 import dev.comfyfluffy.caustica.minecraft.client.screen.widget.CausticaToggle;
 import dev.comfyfluffy.caustica.minecraft.client.settings.CausticaSections;
 import dev.comfyfluffy.caustica.minecraft.client.settings.SettingControl;
@@ -171,6 +172,8 @@ public final class CausticaOptionsScreen extends Screen {
                     new CausticaSlider(range, font, section().accent());
             case SettingControl.ChoiceControl<?> choice ->
                     new CausticaDropdown<>(choice, font, section().accent(), this::toggleDropdown);
+            case SettingControl.TextControl text ->
+                    new CausticaTextField(text, font, section().accent());
         };
     }
 

@@ -141,6 +141,8 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
             owner = resources.create(() -> new ResourceLifetime(root::close, clouds::close).close());
             Published revision = new Published(root, model.components().size(), clouds.samplerIndex().value(), owner);
             published = revision;
+            LOGGER.info("ACE COMBAT clouds ready: {} volume components, {} uploaded textures",
+                    revision.componentCount(), clouds.textures().size());
         } catch (RuntimeException | Error failure) {
             if (owner != null) owner.close();
             else {
