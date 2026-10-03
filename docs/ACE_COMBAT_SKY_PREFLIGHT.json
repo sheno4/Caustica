@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "inspection_date": "2026-10-02",
+  "inspection_date": "2026-10-03",
   "upstream_commit": "0cc9d0af4f4118cd26b830084a14f2bafc0d904d",
   "steam_app_id": 2288340,
   "steam_build_id": 25201480,
-  "implementation_status": "experimental_primary_cloud_adapter",
+  "implementation_status": "experimental_display_resolution_cloud_adapter",
   "inspection": "read_only_metadata_and_offline_resource_exports",
   "archives": [
     {
@@ -171,45 +171,149 @@
       64
     ],
     "mip_bytes": 86283000,
-    "native_defaults_included": false,
+    "native_defaults_included": true,
     "original_rendering_algorithm_recovered": false,
     "renderer_adapter_approximation": true,
     "image_tests_performed": false,
     "gpu_rendering_verified": false,
-    "manifest_sha256": "a5ac9008f4d264aab64975e08c9bd6fad7bbda5ffb1a3feecfed47edb674ff30",
-    "cpu_render_model_validated": true
+    "manifest_sha256": "674c74c32d62c5d85f1322d734072fdb1c2ed37ea4cfacc95d98feb7c127b352",
+    "cpu_render_model_validated": true,
+    "native_defaults_complete": false,
+    "recovered_native_fields": 14,
+    "scene_parameters_included": true,
+    "scene_asset": "/Game/Maps/Hangar/Hangar001/Hangar001_Lit_Daytime02",
+    "scene_export_sha256": "8efca195251b082bc49f3d54cfca4823e843efa983bf9750445dc4764a0ed662",
+    "native_constructor_sha256": "c80c2d455a6accba1155245d3210e4599c6df735b1d097178a8a36f8982f0c4d"
   },
   "validation": {
     "java_compile": true,
     "gpu_execution": false,
     "image_tests": false,
-    "focused_numeric_tests": 34,
     "slang_compile": true,
     "descriptor_heap_validation": true,
-    "spirv_validation": true
-  },
-  "build": {
-    "image_tests": false,
-    "package_integrity_validated": true,
-    "conclusion": "success",
-    "version_tag": "v0.1.0-ac8-sky.1",
-    "run_url": "https://github.com/sheno4/Caustica/actions/runs/37021534425",
-    "original_game_assets_included": false,
-    "gpu_execution": false,
-    "version": "0.1.0-ac8-sky.1",
-    "source_commit": "e1234d0a9ec5b703124714ccd0fc7cd88417ea6f",
-    "packages": [
+    "spirv_validation": true,
+    "previous_numeric_tests": 34,
+    "sky3_focused_numeric_tests": [
       {
-        "bytes": 108222278,
-        "name": "caustica-0.1.0-ac8-sky.1-fabric.jar",
-        "sha256": "b20a8a486577d2d744d1858de8738226fc110ee71ef9e299056ce729d23d2cfc"
+        "test": "dev.comfyfluffy.caustica.engine.pass.PassSessionTest.reconstructionMediaRunAfterReconstructionBeforeMeteringAndRemainStageScoped()",
+        "conclusion": "success",
+        "xml_sha256": "a846e0fa936f41c56dd691b425e563847bf4ee2255097d160e6d1848de40d242"
       },
       {
-        "bytes": 107819041,
-        "name": "caustica-0.1.0-ac8-sky.1-neoforge.jar",
-        "sha256": "1fca2c1cacaeb07df8ac3ea218fc0c906282dc0a2fba56cc3bc50f4472acc3bb"
+        "test": "dev.comfyfluffy.caustica.renderer.runtime.pass.RtPassSchedulerBackendTest.reconstructionMediaOutputFeedsMeteringAndTheOrdinaryPostChain()",
+        "conclusion": "success",
+        "xml_sha256": "08b75d2abc926f4282dbe25f0397f2cfd547d586e1903a4c7a3efa582d0cf5a9"
+      },
+      {
+        "test": "dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCloudPassTest.recoveredScatteringAndAuthoredDetailRetainSerializedPrecedence()",
+        "conclusion": "success",
+        "xml_sha256": "28a79cb949c38797eec7d18fcf6567850c67a1ab04079a26e19fe0cd4a5fd4c4"
+      },
+      {
+        "test": "dev.comfyfluffy.caustica.minecraft.rendering.sky.CloudlySkyPresetTest.sceneSunAndSerializedOverridesRetainNativeDefaultsAndDiscEnergy(Path)",
+        "conclusion": "success",
+        "xml_sha256": "d7e76bc5b539f81c256294da3f2674eb00d68e3c0a69a90c022f2ee4e6b99c54"
       }
     ],
-    "windows_runtimes_included": true
+    "actual_private_source_model": "success",
+    "settings_persistence": {
+      "conclusion": "success",
+      "test": "OptionControlsTest.optionalPathsCanBeSavedReloadedClearedAndReset",
+      "run_url": "https://github.com/sheno4/Caustica/actions/runs/37086821028",
+      "source_commit": "a388fec9da63a79d6738536920d693ae571af182"
+    }
+  },
+  "build": {
+    "version": "0.1.0-ac8-sky.3",
+    "version_tag": "v0.1.0-ac8-sky.3",
+    "source_commit": "55c6eddfa9cb28bb3ed01c4022ceb798b76799bc",
+    "run_url": "https://github.com/sheno4/Caustica/actions/runs/37104291169",
+    "conclusion": "success",
+    "package_integrity_validated": true,
+    "windows_runtimes_included": true,
+    "original_game_assets_included": false,
+    "gpu_execution": false,
+    "image_tests": false,
+    "packages": [
+      {
+        "name": "caustica-0.1.0-ac8-sky.3-fabric.jar",
+        "bytes": 108287908,
+        "sha256": "577c237d718316cd5bb7c91ac32098eece58d81aaad9a794af5497c658436c7c"
+      }
+    ]
+  },
+  "previous_builds": [
+    {
+      "image_tests": false,
+      "package_integrity_validated": true,
+      "conclusion": "success",
+      "version_tag": "v0.1.0-ac8-sky.1",
+      "run_url": "https://github.com/sheno4/Caustica/actions/runs/37021534425",
+      "original_game_assets_included": false,
+      "gpu_execution": false,
+      "version": "0.1.0-ac8-sky.1",
+      "source_commit": "e1234d0a9ec5b703124714ccd0fc7cd88417ea6f",
+      "packages": [
+        {
+          "bytes": 108222278,
+          "name": "caustica-0.1.0-ac8-sky.1-fabric.jar",
+          "sha256": "b20a8a486577d2d744d1858de8738226fc110ee71ef9e299056ce729d23d2cfc"
+        },
+        {
+          "bytes": 107819041,
+          "name": "caustica-0.1.0-ac8-sky.1-neoforge.jar",
+          "sha256": "1fca2c1cacaeb07df8ac3ea218fc0c906282dc0a2fba56cc3bc50f4472acc3bb"
+        }
+      ],
+      "windows_runtimes_included": true
+    },
+    {
+      "version": "0.1.0-ac8-sky.2",
+      "version_tag": "v0.1.0-ac8-sky.2",
+      "source_commit": "c53cfcf0f3a162349312853eb8cf6cc6aad84796",
+      "run_url": "https://github.com/sheno4/Caustica/actions/runs/37087594507",
+      "conclusion": "success",
+      "package_integrity_validated": true,
+      "packages": [
+        {
+          "name": "caustica-0.1.0-ac8-sky.2-fabric.jar",
+          "bytes": 108230050,
+          "sha256": "5b1fd9e0e8a2f2f1f15af1a7ef1439de42eb53c1ea86e8800c210810bad17bc2"
+        }
+      ],
+      "installed_in_target_instance": true,
+      "superseded_by": "0.1.0-ac8-sky.3"
+    }
+  ],
+  "settings_repair": {
+    "version": "0.1.0-ac8-sky.3",
+    "locale": "zh_cn",
+    "current_english_keys": 132,
+    "translated_chinese_keys": 133,
+    "missing_chinese_keys": 0,
+    "source_path_field": true,
+    "source_loading_logs": true,
+    "tab_focus_reveals_row": true,
+    "private_source_installed_inside_instance": true,
+    "configuration_and_old_jar_backed_up": true,
+    "installed_loader": "fabric",
+    "samples_before": 128.0,
+    "samples_after": 512.0,
+    "other_preferences_preserved": true,
+    "actual_game_rendering_verified": false
+  },
+  "rendering_repair": {
+    "composition_stage": "after_reconstruction_before_exposure",
+    "resolution": "display",
+    "primary_sampling": "stable_cell_center",
+    "step_control": "world_texel_and_optical_depth",
+    "sun_direction": "negative_scene_directional_light_forward",
+    "analytic_sun_disc": true,
+    "sun_full_diameter_degrees": 0.5357000231742859,
+    "source_scattering_orders": 4,
+    "serialized_scattering_attenuation": 0.5,
+    "detail_model": "authored_perlin_worley_approximation",
+    "original_cloudly_shader_recovered": false,
+    "gpu_performance_verified": false
   }
 }
