@@ -146,8 +146,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     setup -> new FogPass(setup, context.renderSession().resources(),
                             () -> options.snapshot().options(MinecraftProvidersExtension.ID)));
             if (context.dimension().id().equals(OVERWORLD)) {
-                cloudRegistration = context.renderSession().passes().addSceneEffectPass(CloudlyCloudPass.ID,
-                        PassPlacement.before(FogPass.ID), setup -> new CloudlyCloudPass(setup,
+                cloudRegistration = context.renderSession().passes().addReconstructionEffectPass(CloudlyCloudPass.ID,
+                        setup -> new CloudlyCloudPass(setup,
                                 context.renderSession().compute(), context.renderSession().resources(),
                                 () -> options.snapshot().options(MinecraftProvidersExtension.ID),
                                 frames::skyFrame, cloudlySource));

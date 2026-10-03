@@ -735,7 +735,13 @@ public final class RtFrameRenderer {
             GraphicsUse graphicsUse, dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage output, long dstImage, int debugView) {
         passes.beginFrame(passFrame(cmd, graphicsUse, null, output));
         try {
-            VulkanBarriers.memoryBarrier(cmd, stack); // reconstructed output visible to exposure histogram
+            VulkanBarriers.memoryBarrier(cmd, stack); // reconstructed output visible to display-resolution media
+
+            try (var ignored = RtDebugLabels.scope(ctx, cmd, "reconstruction effects");
+                 RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.reconstructionEffects")) {
+                services.passes().recordReconstructionEffects();
+            }
+            VulkanBarriers.memoryBarrier(cmd, stack); // composed media visible to exposure histogram
 
             // Meter the scene after participating media composition, before exposure-dependent effects.
             try (var ignored = RtDebugLabels.scope(ctx, cmd, "exposure");

@@ -7,13 +7,16 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
  * and the target that enrols it.
  *
  * <p>Scene-effect colour images are trace-resolution and retain trace jitter. Ordinary post-effect colour
- * images are display-resolution after reconstruction. Depth is trace-resolution. Each image carries its extent.
+ * images and reconstruction-effect colour are display-resolution after reconstruction. Reconstruction
+ * effects run before exposure metering; ordinary post effects run after it. Depth is trace-resolution.
+ * Each image carries its own extent.
  */
 public interface PostEffectFrame extends PassFrame {
     /**
      * The scene as it stands at this point in the chain: scene-linear ACEScg multiplied by preExposure(), not yet look
      * transformed, or tone mapped. The first scene effect receives trace-resolution colour; the first ordinary
-     * post effect receives reconstructed colour. Later effects receive the previous participating pass's output.
+     * reconstruction effect receives reconstructed colour. The first ordinary post effect receives the
+     * pre-exposure effects' composed colour. Later effects receive the previous participating pass's output.
      *
      * <p>Engine-produced and resolved fresh every frame — never cache the returned {@link GpuImage} across
      * frames, since a resize recreates it.

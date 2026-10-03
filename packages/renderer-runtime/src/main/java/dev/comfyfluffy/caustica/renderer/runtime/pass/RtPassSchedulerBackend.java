@@ -87,7 +87,8 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
 
     @Override
     public PostInvocation beginPostEffect(PassKey pass) {
-        if (pass.stage() != PassKey.Stage.POST_EFFECT && pass.stage() != PassKey.Stage.SCENE_EFFECT) {
+        if (pass.stage() != PassKey.Stage.POST_EFFECT && pass.stage() != PassKey.Stage.SCENE_EFFECT
+                && pass.stage() != PassKey.Stage.RECONSTRUCTION_EFFECT) {
             throw new IllegalArgumentException("pass stage is " + pass.stage());
         }
         FrameState frame = beginInvocation();

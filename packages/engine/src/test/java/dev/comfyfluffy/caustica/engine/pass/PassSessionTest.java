@@ -29,6 +29,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PassSessionTest {
     @Test
+    void reconstructionMediaRunAfterReconstructionBeforeMeteringAndRemainStageScoped() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (key, failure) -> { throw new AssertionError(failure); });
+        var channel = session.openChannel();
+        List<String> events = new ArrayList<>();
+        channel.addPostEffectPass(id("clouds"), setup -> pass(frame -> events.add("bloom"), () -> { }));
+        channel.addReconstructionEffectPass(id("clouds"),
+                setup -> pass(frame -> events.add("clouds"), () -> { }));
+        channel.addSceneEffectPass(id("fog"), setup -> pass(frame -> events.add("fog"), () -> { }));
+        session.recordSceneEffects();
+        events.add("reconstruction");
+        session.recordReconstructionEffects();
+        events.add("exposure");
+        session.recordPostEffects();
+        assertEquals(List.of("fog", "reconstruction", "clouds", "exposure", "bloom"), events);
+        assertEquals(3, backend.postValidations);
+    }
+
+    @Test
     void sceneEffectsAreOrderedIndependentlyBeforeExposure() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (key, failure) -> { throw new AssertionError(failure); });

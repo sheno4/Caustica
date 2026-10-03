@@ -30,6 +30,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtPassSchedulerBackendTest {
     @Test
+    void reconstructionMediaOutputFeedsMeteringAndTheOrdinaryPostChain() {
+        Fixture fixture = new Fixture();
+        var clouds = fixture.backend.beginPostEffect(new PassKey(0, PassKey.Stage.RECONSTRUCTION_EFFECT));
+        GpuImage clouded = clouds.frame().acquireSceneColorOutput();
+        assertNotSame(clouds.frame().sceneColor(), clouded);
+        clouds.validateOutputChain();
+        clouds.submit(() -> { });
+        assertSame(clouded, fixture.backend.sceneColor());
+        var post = fixture.backend.beginPostEffect(post(1));
+        assertSame(clouded, post.frame().sceneColor());
+        assertNotSame(clouded, post.frame().acquireSceneColorOutput());
+        post.validateOutputChain();
+        post.submit(() -> { });
+    }
+
+    @Test
     void visibilityUsesCurrentFrameAndExpiresWithTheBorrow() {
         Fixture fixture = new Fixture();
         var invocation = fixture.backend.beginPostEffect(post(0));

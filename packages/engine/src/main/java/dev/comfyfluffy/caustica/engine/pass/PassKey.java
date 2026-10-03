@@ -5,6 +5,7 @@ public record PassKey(long sequence, Stage stage) {
     public enum Stage {
         WORLD_RESOURCE,
         SCENE_EFFECT,
+        RECONSTRUCTION_EFFECT,
         POST_EFFECT,
         UI
     }

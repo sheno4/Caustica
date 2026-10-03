@@ -38,6 +38,18 @@ public final class PassContributionChannel implements PassChannel {
     }
 
     @Override
+    public PassRegistration addReconstructionEffectPass(PassId id,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory) {
+        return session.addReconstructionEffect(this, id, null, factory);
+    }
+
+    @Override
+    public PassRegistration addReconstructionEffectPass(PassId id, PassPlacement placement,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory) {
+        return session.addReconstructionEffect(this, id, placement, factory);
+    }
+
+    @Override
     public PassRegistration addPostEffectPass(
             PassId id, PassFactory<PostEffectSetup, PostEffectFrame> factory) {
         return session.addPostEffect(this, id, null, factory);

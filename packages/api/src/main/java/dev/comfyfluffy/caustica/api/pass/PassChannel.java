@@ -35,6 +35,18 @@ public interface PassChannel {
             PassFactory<PostEffectSetup, PostEffectFrame> factory);
 
     /**
+     * Compose scene-linear effects at display resolution after reconstruction and before exposure metering.
+     * This stage is suitable for participating media without reconstruction depth and motion guides.
+     * Ordering anchors apply only within this stage; trace depth retains its own extent and jitter.
+     */
+    PassRegistration addReconstructionEffectPass(PassId id,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory);
+
+    /** Adds a reconstruction effect with an ordering relationship within the pre-exposure stage. */
+    PassRegistration addReconstructionEffectPass(PassId id, PassPlacement placement,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory);
+
+    /**
      * Record after reconstruction and before the display transform. Effects compose in constrained order,
      * with global acceptance order breaking otherwise-unconstrained ties. A pass joins the scene-colour
      * chain for a frame only by acquiring and fully writing its output.

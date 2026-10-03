@@ -53,6 +53,12 @@ public final class PassSession implements AutoCloseable {
         return add(channel, PassKey.Stage.SCENE_EFFECT, id, placement, factory, backend.postEffectSetup());
     }
 
+    PassRegistration addReconstructionEffect(
+            PassContributionChannel channel, PassId id, PassPlacement placement,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory) {
+        return add(channel, PassKey.Stage.RECONSTRUCTION_EFFECT, id, placement, factory, backend.postEffectSetup());
+    }
+
     PassRegistration addPostEffect(
             PassContributionChannel channel, PassId id, PassPlacement placement,
             PassFactory<PostEffectSetup, PostEffectFrame> factory) {
@@ -111,6 +117,11 @@ public final class PassSession implements AutoCloseable {
     /** Composes scene effects before exposure metering. */
     public void recordSceneEffects() {
         dispatch(PassKey.Stage.SCENE_EFFECT);
+    }
+
+    /** Composes display-resolution effects before exposure metering. */
+    public void recordReconstructionEffects() {
+        dispatch(PassKey.Stage.RECONSTRUCTION_EFFECT);
     }
 
     /** Records and composes all active post effects in constrained order. */
@@ -201,6 +212,7 @@ public final class PassSession implements AutoCloseable {
         return switch (stage) {
             case WORLD_RESOURCE -> "world-resource";
             case SCENE_EFFECT -> "scene-effect";
+            case RECONSTRUCTION_EFFECT -> "reconstruction-effect";
             case POST_EFFECT -> "post-effect";
             case UI -> "ui";
         };
@@ -221,7 +233,7 @@ public final class PassSession implements AutoCloseable {
         try {
             invocation = (PassSchedulerBackend.Invocation<F>) switch (registration.key.stage()) {
                 case WORLD_RESOURCE -> backend.beginWorldResource(registration.key);
-                case SCENE_EFFECT, POST_EFFECT -> backend.beginPostEffect(registration.key);
+                case SCENE_EFFECT, RECONSTRUCTION_EFFECT, POST_EFFECT -> backend.beginPostEffect(registration.key);
                 case UI -> backend.beginUi(registration.key);
             };
         } catch (Throwable failure) {

@@ -111,6 +111,10 @@ final class ShowcaseSessionLifecycleTest {
                 PassFactory<PostEffectSetup, PostEffectFrame> factory) { return registration(); }
         @Override public PassRegistration addSceneEffectPass(PassId id, PassPlacement placement,
                 PassFactory<PostEffectSetup, PostEffectFrame> factory) { return registration(); }
+        @Override public PassRegistration addReconstructionEffectPass(PassId id,
+                PassFactory<PostEffectSetup, PostEffectFrame> factory) { return registration(); }
+        @Override public PassRegistration addReconstructionEffectPass(PassId id, PassPlacement placement,
+                PassFactory<PostEffectSetup, PostEffectFrame> factory) { return registration(); }
 
         private PassFactory<WorldResourceSetup, PassFrame> worldFactory;
         private final AtomicInteger closed = new AtomicInteger();
