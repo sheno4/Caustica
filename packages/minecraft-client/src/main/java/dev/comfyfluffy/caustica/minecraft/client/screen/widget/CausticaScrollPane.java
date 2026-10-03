@@ -33,6 +33,7 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
     private final List<Entry> entries = new ArrayList<>();
     private final List<Placed> placed = new ArrayList<>();
     private int contentHeight;
+    private boolean pointerFocus;
 
     public CausticaScrollPane() {
         super(0, 0, 0, 0, Component.empty());
@@ -109,7 +110,7 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
     @Override
     public void setFocused(GuiEventListener focused) {
         super.setFocused(focused);
-        if (focused instanceof AbstractWidget widget) {
+        if (!pointerFocus && focused instanceof AbstractWidget widget) {
             if (widget.getY() < getY()) {
                 setScrollAmount(scrollAmount() + widget.getY() - getY());
             } else if (widget.getBottom() > getBottom()) {
@@ -126,7 +127,13 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
      */
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-        return isMouseOver(event.x(), event.y()) && super.mouseClicked(event, doubleClick);
+        if (!isMouseOver(event.x(), event.y())) return false;
+        pointerFocus = true;
+        try {
+            return super.mouseClicked(event, doubleClick);
+        } finally {
+            pointerFocus = false;
+        }
     }
 
     @Override
