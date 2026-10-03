@@ -105,6 +105,20 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
         return entries.stream().map(Entry::widget).filter(widget -> widget.visible).toList();
     }
 
+    /** Keyboard navigation reveals the focused row before it receives editing input. */
+    @Override
+    public void setFocused(GuiEventListener focused) {
+        super.setFocused(focused);
+        if (focused instanceof AbstractWidget widget) {
+            if (widget.getY() < getY()) {
+                setScrollAmount(scrollAmount() + widget.getY() - getY());
+            } else if (widget.getBottom() > getBottom()) {
+                setScrollAmount(scrollAmount() + widget.getBottom() - getBottom());
+            }
+            applyScroll();
+        }
+    }
+
     /**
      * Pointer events are rejected outside the pane before they reach a child. {@code isHovered} is computed
      * against the scissor, but hit testing is not, so a row scrolled past the edge would otherwise still

@@ -94,7 +94,7 @@ jobs:
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Compile and package Fabric mod
         shell: pwsh
-        run: ./gradlew.bat :packages:minecraft-client:test --tests dev.comfyfluffy.caustica.minecraft.client.settings.OptionControlsTest.optionalPathsCanBeSavedReloadedClearedAndReset :packages:minecraft-client:jar -Ploader=fabric -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
+        run: ./gradlew.bat :packages:minecraft-client:jar -Ploader=fabric -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
       - uses: actions/upload-artifact@v4
         with:
           name: ace-sky-fabric-${{ github.sha }}
