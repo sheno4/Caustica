@@ -40,7 +40,7 @@ final class SkyLutPassTest {
     @Test void generatedSkyInputsMapStateAndAtlasRects() {
         ByteBuffer bytes = ByteBuffer.allocate(SkyInputsData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
         SkyLutPass.skyInputs(SKY, ATLAS).write(bytes);
-        assertEquals(112, SkyInputsData.BYTE_SIZE);
+        assertEquals(128, SkyInputsData.BYTE_SIZE);
         assertEquals(SKY.sunAngleRadians(), bytes.getFloat(0));
         assertEquals(SKY.groundAlbedo(), bytes.getFloat(64));
         assertEquals(.1f, bytes.getFloat(80));
@@ -48,7 +48,7 @@ final class SkyLutPassTest {
     }
 
     @Test void generatedRootsMatchDescriptorHeapAbi() {
-        assertEquals(144, SkyLutPushData.BYTE_SIZE);
+        assertEquals(160, SkyLutPushData.BYTE_SIZE);
         assertEquals(32, MinecraftEnvironmentBindingData.BYTE_SIZE);
         assertEquals(1, SkyLutPass.groups(1));
         assertEquals(2, SkyLutPass.groups(9));

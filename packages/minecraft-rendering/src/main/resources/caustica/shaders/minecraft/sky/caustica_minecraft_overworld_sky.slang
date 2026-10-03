@@ -51,7 +51,14 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
 
     if (query.showEnvironmentEmitters) {
         float2 local;
-        if (celestialSquareLocal(dir, state.sunDir, state.sunDiscHalfAngle, local)) {
+        if (state.analyticSun) {
+            if (dot(dir, state.sunDir) >= cos(state.sunDiscHalfAngle)) {
+                float3 sunExtinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
+                        state.viewerRadiusKm, state.sunDir, state.sunAngularRadius);
+                color += circularDiscRadiance(state.sunIlluminance, state.sunDiscHalfAngle)
+                        * state.sunColor * sunExtinction;
+            }
+        } else if (celestialSquareLocal(dir, state.sunDir, state.sunDiscHalfAngle, local)) {
             // Tint from the body's CENTRE, not from this ray. The drawn quad spans tens of degrees
             // (vanilla's size, not the real sun's half degree), so per-ray extinction would redden its
             // lower limb by several stops relative to its upper one — an accurate answer to a question

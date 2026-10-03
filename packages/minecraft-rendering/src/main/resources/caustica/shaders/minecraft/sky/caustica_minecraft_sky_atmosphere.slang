@@ -450,9 +450,10 @@ public struct SkyInputs {
     // x drawn sun half-angle (rad), y drawn moon half-angle (rad), z viewer altitude (km),
     // w moon phase index (0 full .. 4 new).
     public float4 skyLook2;
-    public float4 skyLook3;         // x ground albedo, y horizon soften (rad), zw reserved
+    public float4 skyLook3;         // x ground albedo, y horizon soften (rad), z analytic source sun, w reserved
     public float4 sunUv;            // vanilla sun sprite atlas rect (u0,v0,u1,v1)
     public float4 moonUv;           // vanilla current-moon-phase sprite atlas rect
+    public float4 sunColor;         // RGB source tint in linear BT.709; white for the Minecraft sky
 };
 
 // ---- Per-frame sky state ------------------------------------------------------------------------
@@ -466,6 +467,8 @@ public struct SkyState {
     public float3 sunDir;
     public float3 moonDir;
     public float  sunIlluminance;      // lux, top of atmosphere
+    public float3 sunColor;            // linear BT.709 colour, matching the atmosphere coefficients
+    public bool   analyticSun;
     public float  moonIlluminance;     // lux, already scaled by the visible phase
     public float  viewerRadiusKm;      // planet centre to viewer
     public float  sunAngularRadius;    // physical half-angle, also the planet-shadow softness
@@ -493,6 +496,8 @@ public SkyState skyState(SkyInputs push) {
     s.sunDir = celestialDirection(push.celestial.x, s.noonTilt);
     s.moonDir = celestialDirection(push.celestial.y, s.noonTilt);
     s.sunIlluminance = push.skyLook0.x;
+    s.sunColor = push.sunColor.xyz;
+    s.analyticSun = push.skyLook3.z != 0.0;
     // A fixed floor plus the visible phase: a new moon still casts a little directional light, which is
     // a gameplay calibration independent of the astronomical phase.
     float phaseFixed = push.skyLook1.w;

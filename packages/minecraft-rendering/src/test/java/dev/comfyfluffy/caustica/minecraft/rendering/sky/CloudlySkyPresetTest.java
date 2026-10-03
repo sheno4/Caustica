@@ -1,8 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.sky;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCloudPass;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySourcePack;
@@ -44,8 +47,8 @@ final class CloudlySkyPresetTest {
         assertEquals(sun.directionY(), Math.cos(sky.noonTiltRadians()) * Math.cos(sky.sunAngleRadians()), 1e-7);
         assertEquals(sun.directionZ(), Math.sin(sky.noonTiltRadians()) * Math.cos(sky.sunAngleRadians()), 1e-7);
         assertEquals(100_000, sun.illuminanceRedLux(), 1e-9);
-        assertEquals(LIGHTING.sunIlluminanceLux(), sky.sunIlluminanceLux());
-        assertEquals(base.sunAngularRadiusDegrees(), selected.sunAngularRadiusDegrees());
+        assertEquals(100_000, sky.sunIlluminanceLux());
+        assertEquals(.535700023 * .5, selected.sunAngularRadiusDegrees(), 1e-12);
         assertEquals(base.moonAngularRadiusDegrees(), selected.moonAngularRadiusDegrees());
         assertEquals(CAPTURED.moonAngleRadians(), sky.moonAngleRadians());
         assertEquals(CAPTURED.starAngleRadians(), sky.starAngleRadians());
@@ -78,13 +81,65 @@ final class CloudlySkyPresetTest {
         assertThrows(IllegalArgumentException.class, () -> CloudlySkyPreset.from(CloudlySourcePack.load(manifest)));
     }
 
+    @Test void sceneSunAndSerializedOverridesRetainNativeDefaultsAndDiscEnergy(@TempDir Path directory) throws Exception {
+        Path path = source(directory, 25, -72, "sourceX").manifest();
+        JsonObject manifest = JsonParser.parseString(Files.readString(path)).getAsJsonObject();
+        manifest.getAsJsonObject("rendererAdapter").addProperty("sunDirectionSource", "sceneDirectionalLight");
+        manifest.getAsJsonObject("rendererAdapter").remove("sunAzimuthAxis");
+        manifest.add("sceneParameters", JsonParser.parseString("""
+                {"directionalLight":{"RelativeRotation":{"Pitch":-25,"Yaw":18,"Roll":0}}}
+                """));
+        JsonObject skyParameters = manifest.getAsJsonObject("skyParameters");
+        skyParameters.add("SunIntensity[115]", JsonParser.parseString("""
+                {"Factor":120000,"RGB":{"X":0.8}}
+                """));
+        skyParameters.addProperty("SunDiskVisibleAngleInDegrees[119]", .7);
+        Files.writeString(path, manifest.toString());
+
+        var pack = CloudlySourcePack.load(path);
+        var preset = CloudlySkyPreset.from(pack);
+        var selected = preset.lightSettings(new MinecraftLightProvider.CelestialSettings(30, .6, 1.5));
+        var sun = MinecraftLightProvider.celestialLights(CAPTURED, selected).sun().orElseThrow();
+        var sky = SkyLutPass.gather(IMPORT_ENABLED, CAPTURED, preset);
+        var inputs = SkyLutPass.skyInputs(sky, new SkyLutPass.AtlasSnapshot(null, 0, 1,
+                new SkyInputsData.Float4(0, 0, 1, 1), new SkyInputsData.Float4(0, 0, 1, 1)));
+
+        assertEquals(-Math.cos(Math.toRadians(25)) * Math.cos(Math.toRadians(18)), sun.directionX(), 1e-12);
+        assertEquals(Math.sin(Math.toRadians(25)), sun.directionY(), 1e-12);
+        assertEquals(Math.cos(Math.toRadians(25)) * Math.sin(Math.toRadians(18)), sun.directionZ(), 1e-12);
+        assertEquals(120_000, sky.sunIlluminanceLux());
+        assertEquals(.8, preset.sunColorLinearBt709().red());
+        assertEquals(1, preset.sunColorLinearBt709().green());
+        assertEquals(1, preset.sunColorLinearBt709().blue());
+        assertEquals(120_000 * preset.sunColorAcesCg()[0], sun.illuminanceRedLux(), .01);
+        assertEquals(Math.toRadians(.535700023 * .5), preset.sunAngularRadiusRadians(), 1e-12);
+        assertEquals(Math.toRadians(.7 * .5), preset.sunDiscHalfAngleRadians(), 1e-12);
+        assertEquals(1, inputs.skyLook3().z());
+        assertEquals(.8f, inputs.sunColor().x());
+        assertFalse(pack.skyParameters().containsKey("SunDiskAngleInDegrees"));
+
+        double angle = preset.sunDiscHalfAngleRadians();
+        double step = angle / 4096;
+        double projectedIntegral = 0;
+        for (int sample = 0; sample < 4096; sample++) {
+            double theta = (sample + .5) * step;
+            projectedIntegral += 2 * Math.PI * Math.sin(theta) * Math.cos(theta) * step;
+        }
+        assertEquals(preset.sunIlluminanceLux(),
+                CloudlySkyPreset.discRadiance(preset.sunIlluminanceLux(), angle) * projectedIntegral, .01);
+    }
+
     private static CloudlySourcePack source(Path directory, double elevation, double azimuth, String axis) throws Exception {
         Files.write(directory.resolve("mip.bc1"), new byte[8]);
         Path manifest = directory.resolve("manifest.json");
         Files.writeString(manifest, """
                 {"schemaVersion":1,"source":{},"skyParameters":{
                  "SunElevationAngleInDegrees[108]":%s,"SunAzimuthAngleInDegrees[109]":%s},
-                 "components":[],"rendererAdapter":{"target":"Caustica","approximation":true,"sunAzimuthAxis":"%s"},
+                 "nativeDefaults":{"source":{},"skyParameters":{"bUseUnrealSunData":true,
+                  "SunIntensity":{"Factor":100000,"RGB":{"X":1,"Y":1,"Z":1}},
+                  "SunDiskAngleInDegrees":0.535700023,"SunDiskVisibleAngleInDegrees":0.535700023}},
+                 "components":[],"rendererAdapter":{"target":"Caustica","approximation":true,"sunAzimuthAxis":"%s",
+                   "sunAngleMeaning":"fullDiameter","sunIntensityUnits":"lux","sunColorSpace":"linearBt709"},
                  "textures":[{"textureId":0,"sourceAsset":"fixture","format":"PF_DXT1",
                    "mips":[{"level":0,"width":4,"height":4,"depth":1,"path":"mip.bc1","sha256":"%s"}]}]}
                 """.formatted(elevation, azimuth, axis, "0".repeat(64)));

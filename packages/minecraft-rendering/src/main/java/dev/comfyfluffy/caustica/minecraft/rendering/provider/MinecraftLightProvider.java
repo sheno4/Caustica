@@ -89,7 +89,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
 
     static CelestialLights celestialLights(CelestialFrame frame) {
         Optional<LightDescriptor.Distant> sun = aboveHorizon(frame.sunAngleRadians(),
-                frame.noonTiltRadians(), frame.sunIlluminanceLux(), frame.sunAngularRadiusRadians());
+                frame.noonTiltRadians(), frame.sunIlluminanceLux(), frame.sunAngularRadiusRadians(), frame.sunColor());
         double litFraction = Math.abs(frame.moonPhaseIndex() - 4.0) / 4.0;
         double moonIlluminance = frame.moonIlluminanceLux()
                 * (frame.moonPhaseFixedFraction()
@@ -101,27 +101,36 @@ public final class MinecraftLightProvider implements AutoCloseable {
 
     static CelestialFrame celestialFrame(MinecraftCelestialFrame captured, CelestialSettings settings) {
         var lighting = captured.lighting();
+        SunLightOverride sun = settings.sunLight().orElse(new SunLightOverride(
+                lighting.sunIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE, 1, 1, 1));
         return new CelestialFrame(
                 settings.sunAngleRadians().orElse(captured.sunAngleRadians()), captured.moonAngleRadians(),
                 settings.noonTiltDegrees() * TO_RADIANS,
-                lighting.sunIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE,
+                sun.illuminanceLux(),
                 lighting.moonIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE,
                 captured.moonPhaseIndex(),
                 lighting.moonPhaseFixedFraction(),
                 settings.sunAngularRadiusDegrees() * TO_RADIANS,
-                settings.moonAngularRadiusDegrees() * TO_RADIANS);
+                settings.moonAngularRadiusDegrees() * TO_RADIANS, sun);
     }
 
     private static Optional<LightDescriptor.Distant> aboveHorizon(double angle, double noonTilt,
                                                                    double illuminance,
                                                                    double angularRadius) {
+        return aboveHorizon(angle, noonTilt, illuminance, angularRadius, new SunLightOverride(illuminance, 1, 1, 1));
+    }
+
+    private static Optional<LightDescriptor.Distant> aboveHorizon(double angle, double noonTilt,
+                                                                double illuminance, double angularRadius,
+                                                                SunLightOverride color) {
         double peak = Math.cos(angle);
         double x = -Math.sin(angle);
         double y = Math.cos(noonTilt) * peak;
         double z = Math.sin(noonTilt) * peak;
         if (y <= 0.0 || illuminance <= 0.0) return Optional.empty();
         return Optional.of(new LightDescriptor.Distant(x, y, z,
-                illuminance, illuminance, illuminance, angularRadius, true));
+                illuminance * color.redAcesCg(), illuminance * color.greenAcesCg(),
+                illuminance * color.blueAcesCg(), angularRadius, true));
     }
 
     public record CelestialLights(Optional<LightDescriptor.Distant> sun,
@@ -133,12 +142,29 @@ public final class MinecraftLightProvider implements AutoCloseable {
                           double noonTiltRadians, double sunIlluminanceLux,
                           double moonIlluminanceLux, int moonPhaseIndex,
                           double moonPhaseFixedFraction, double sunAngularRadiusRadians,
-                          double moonAngularRadiusRadians) {
+                          double moonAngularRadiusRadians, SunLightOverride sunColor) {
+        CelestialFrame(double sunAngleRadians, double moonAngleRadians,
+                       double noonTiltRadians, double sunIlluminanceLux,
+                       double moonIlluminanceLux, int moonPhaseIndex,
+                       double moonPhaseFixedFraction, double sunAngularRadiusRadians,
+                       double moonAngularRadiusRadians) {
+            this(sunAngleRadians, moonAngleRadians, noonTiltRadians, sunIlluminanceLux,
+                    moonIlluminanceLux, moonPhaseIndex, moonPhaseFixedFraction, sunAngularRadiusRadians,
+                    moonAngularRadiusRadians, new SunLightOverride(sunIlluminanceLux, 1, 1, 1));
+        }
     }
+
+    /** Imported sunlight uses scene-linear ACEScg colour and the pack's explicit lux interpretation. */
+    public record SunLightOverride(double illuminanceLux, double redAcesCg, double greenAcesCg, double blueAcesCg) { }
 
     /** Sky-owned angular settings sampled by this contribution without process-global option access. */
     public record CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
-                                    double moonAngularRadiusDegrees, OptionalDouble sunAngleRadians) {
+                                    double moonAngularRadiusDegrees, OptionalDouble sunAngleRadians,
+                                    Optional<SunLightOverride> sunLight) {
+        public CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
+                                 double moonAngularRadiusDegrees, OptionalDouble sunAngleRadians) {
+            this(noonTiltDegrees, sunAngularRadiusDegrees, moonAngularRadiusDegrees, sunAngleRadians, Optional.empty());
+        }
         public CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
                                  double moonAngularRadiusDegrees) {
             this(noonTiltDegrees, sunAngularRadiusDegrees, moonAngularRadiusDegrees, OptionalDouble.empty());

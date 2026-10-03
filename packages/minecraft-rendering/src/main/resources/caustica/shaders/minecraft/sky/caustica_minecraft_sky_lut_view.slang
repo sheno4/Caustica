@@ -24,7 +24,7 @@ public void runSkyView(uint3 tid) {
     int row = int(tid.y) - body * SKY_VIEW_LUT_H;
     bool isSun = body == SKY_VIEW_BODY_SUN;
     float3 worldLightDir = isSun ? sky.sunDir : sky.moonDir;
-    float3 illuminance = float3(isSun ? sky.sunIlluminance : sky.moonIlluminance);
+    float3 illuminance = isSun ? sky.sunIlluminance * sky.sunColor : float3(sky.moonIlluminance);
     float angularRadius = isSun ? sky.sunAngularRadius : sky.moonAngularRadius;
 
     // Sampling applies the half-texel correction; the bake must invert exactly that, so it works in the

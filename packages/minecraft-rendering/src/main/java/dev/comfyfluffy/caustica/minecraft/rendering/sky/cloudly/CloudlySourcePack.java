@@ -31,17 +31,23 @@ public final class CloudlySourcePack {
     private final Path manifest;
     private final Map<String, Object> source;
     private final Map<String, Object> skyParameters;
+    private final Map<String, Object> nativeDefaults;
+    private final Map<String, Object> sceneParameters;
     private final Map<String, Object> rendererAdapter;
     private final List<Map<String, Object>> components;
     private final List<Texture> textures;
 
     private CloudlySourcePack(Path manifest, Map<String, Object> source,
                               Map<String, Object> skyParameters,
+                              Map<String, Object> nativeDefaults,
+                              Map<String, Object> sceneParameters,
                               Map<String, Object> rendererAdapter,
                               List<Map<String, Object>> components, List<Texture> textures) {
         this.manifest = manifest;
         this.source = source;
         this.skyParameters = skyParameters;
+        this.nativeDefaults = nativeDefaults;
+        this.sceneParameters = sceneParameters;
         this.rendererAdapter = rendererAdapter;
         this.components = List.copyOf(components);
         this.textures = List.copyOf(textures);
@@ -59,6 +65,10 @@ public final class CloudlySourcePack {
             if (integer(root, "schemaVersion") != 1) throw new IOException("Unsupported Cloudly source-pack schema");
             Map<String, Object> source = object(root.getAsJsonObject("source"));
             Map<String, Object> sky = object(root.getAsJsonObject("skyParameters"));
+            Map<String, Object> defaults = root.has("nativeDefaults")
+                    ? object(root.getAsJsonObject("nativeDefaults")) : Map.of();
+            Map<String, Object> scene = root.has("sceneParameters")
+                    ? object(root.getAsJsonObject("sceneParameters")) : Map.of();
             Map<String, Object> adapter = root.has("rendererAdapter")
                     ? object(root.getAsJsonObject("rendererAdapter")) : Map.of();
             if (!adapter.isEmpty() && (!"Caustica".equals(adapter.get("target"))
@@ -124,7 +134,7 @@ public final class CloudlySourcePack {
                 if (mips.isEmpty()) throw new IOException("Cloudly texture " + id + " has no mip payloads");
                 textures.add(new Texture(id, texture.get("sourceAsset").getAsString(), List.copyOf(mips)));
             }
-            return new CloudlySourcePack(actualManifest, source, sky, adapter, components, textures);
+            return new CloudlySourcePack(actualManifest, source, sky, defaults, scene, adapter, components, textures);
         } catch (JsonParseException | IllegalStateException | IllegalArgumentException
                  | ArithmeticException | NullPointerException failure) {
             throw new IOException("Invalid Cloudly source pack " + actualManifest, failure);
@@ -135,6 +145,10 @@ public final class CloudlySourcePack {
     /** Deeply immutable values; numbers are BigDecimal and absent fields remain absent. */
     public Map<String, Object> source() { return source; }
     public Map<String, Object> skyParameters() { return skyParameters; }
+    /** Recovered native values and their provenance, kept separate from serialized asset overrides. */
+    public Map<String, Object> nativeDefaults() { return nativeDefaults; }
+    /** Serialized light and exposure parameters from the source scene, with their separate provenance. */
+    public Map<String, Object> sceneParameters() { return sceneParameters; }
     /** Separate compatibility choices; an absent adapter is represented by an empty map. */
     public Map<String, Object> rendererAdapter() { return rendererAdapter; }
     public List<Map<String, Object>> components() { return components; }

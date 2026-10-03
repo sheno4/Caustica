@@ -264,7 +264,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     private static SkyLutPushData.SkyInputs pushInputs(SkyInputsData v) {
         return new SkyLutPushData.SkyInputs(vec(v.celestial()), vec(v.skyLook0()), vec(v.skyLook1()),
-                vec(v.skyLook2()), vec(v.skyLook3()), vec(v.sunUv()), vec(v.moonUv()));
+                vec(v.skyLook2()), vec(v.skyLook3()), vec(v.sunUv()), vec(v.moonUv()), vec(v.sunColor()));
     }
     private static SkyLutPushData.Float4 vec(SkyInputsData.Float4 v) {
         return new SkyLutPushData.Float4(v.x(), v.y(), v.z(), v.w());
@@ -279,8 +279,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
                         s.moonAngularRadiusRadians(), s.moonPhaseFixedFraction()),
                 new SkyInputsData.Float4(s.sunDiscHalfAngleRadians(), s.moonDiscHalfAngleRadians(),
                         s.viewerAltitudeKm(), s.moonPhaseIndex()),
-                new SkyInputsData.Float4(s.groundAlbedo(), s.horizonSoftenRadians(), 0, 0),
-                a.sunUv(), a.moonUv());
+                new SkyInputsData.Float4(s.groundAlbedo(), s.horizonSoftenRadians(), s.analyticSun() ? 1 : 0, 0),
+                a.sunUv(), a.moonUv(), new SkyInputsData.Float4((float) s.sunColor().red(),
+                        (float) s.sunColor().green(), (float) s.sunColor().blue(), 0));
     }
 
     static SkyState gather(OptionValues options, MinecraftCelestialFrame captured) {
@@ -295,15 +296,17 @@ public final class SkyLutPass implements Pass<PassFrame> {
         MinecraftLightingCalibration l = captured.lighting();
         return new SkyState(preset == null ? captured.sunAngleRadians() : (float) preset.sunAngleRadians(),
                 captured.moonAngleRadians(),
-                captured.starAngleRadians(), captured.starBrightness(), l.sunIlluminanceLux(),
+                captured.starAngleRadians(), captured.starBrightness(),
+                preset == null ? l.sunIlluminanceLux() : (float) preset.sunIlluminanceLux(),
                 l.moonIlluminanceLux(), l.nightAirglowLuminanceCdM2(), l.starLuminanceCdM2(),
                 (preset == null ? options.get(SUN_NOON_SOUTH_TILT_DEGREES) : (float) preset.noonTiltDegrees()) * r,
-                options.get(SUN_ANGULAR_RADIUS_DEGREES) * r,
+                preset == null ? options.get(SUN_ANGULAR_RADIUS_DEGREES) * r : (float) preset.sunAngularRadiusRadians(),
                 options.get(MOON_ANGULAR_RADIUS_DEGREES) * r, l.moonPhaseFixedFraction(),
-                options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r,
+                preset == null ? options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r : (float) preset.sunDiscHalfAngleRadians(),
                 options.get(MOON_DISC_HALF_ANGLE_DEGREES) * r, altitude,
                 captured.moonPhaseIndex(), options.get(GROUND_ALBEDO),
-                options.get(HORIZON_SOFTEN_DEGREES) * r);
+                options.get(HORIZON_SOFTEN_DEGREES) * r, preset != null,
+                preset == null ? new CloudlySkyPreset.Color(1, 1, 1) : preset.sunColorLinearBt709());
     }
 
     static float viewerAltitudeKm(double cameraY, double seaLevel, double metersPerSceneUnit) {
@@ -415,7 +418,21 @@ public final class SkyLutPass implements Pass<PassFrame> {
                     float starLuminance, float noonTiltRadians, float sunAngularRadiusRadians,
                     float moonAngularRadiusRadians, float moonPhaseFixedFraction, float sunDiscHalfAngleRadians,
                     float moonDiscHalfAngleRadians, float viewerAltitudeKm, float moonPhaseIndex,
-                    float groundAlbedo, float horizonSoftenRadians) { }
+                    float groundAlbedo, float horizonSoftenRadians, boolean analyticSun,
+                    CloudlySkyPreset.Color sunColor) {
+        SkyState(float sunAngleRadians, float moonAngleRadians, float starAngleRadians, float starBrightness,
+                 float sunIlluminanceLux, float moonIlluminanceLux, float nightAirglowLuminance,
+                 float starLuminance, float noonTiltRadians, float sunAngularRadiusRadians,
+                 float moonAngularRadiusRadians, float moonPhaseFixedFraction, float sunDiscHalfAngleRadians,
+                 float moonDiscHalfAngleRadians, float viewerAltitudeKm, float moonPhaseIndex,
+                 float groundAlbedo, float horizonSoftenRadians) {
+            this(sunAngleRadians, moonAngleRadians, starAngleRadians, starBrightness, sunIlluminanceLux,
+                    moonIlluminanceLux, nightAirglowLuminance, starLuminance, noonTiltRadians,
+                    sunAngularRadiusRadians, moonAngularRadiusRadians, moonPhaseFixedFraction,
+                    sunDiscHalfAngleRadians, moonDiscHalfAngleRadians, viewerAltitudeKm, moonPhaseIndex,
+                    groundAlbedo, horizonSoftenRadians, false, new CloudlySkyPreset.Color(1, 1, 1));
+        }
+    }
 
     private static Option<Float> option(String name, float min, float max, float value) {
         return Option.range("sky." + name, min, max, value).inGroup(GROUP);

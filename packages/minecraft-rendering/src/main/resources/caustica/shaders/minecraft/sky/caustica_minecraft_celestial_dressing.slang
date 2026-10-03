@@ -8,6 +8,12 @@ public float3 discRadiance(float illuminance, float halfAngle) {
     return float3(illuminance / max(side * side, 1.0e-8));
 }
 
+/** A uniform circular emitter integrates to its normal illuminance over its projected solid angle. */
+public float3 circularDiscRadiance(float illuminance, float halfAngle) {
+    float sine = sin(halfAngle);
+    return float3(illuminance / max(3.14159265359 * sine * sine, 1.0e-8));
+}
+
 // Dave Hoskins' hash13 (https://www.shadertoy.com/view/4djSRW): well-distributed and pattern-free.
 public float hash13(float3 p3) {
     p3 = frac(p3 * 0.1031);
