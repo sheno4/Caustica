@@ -90,6 +90,7 @@ def minecraftRenderingRecordSpecs = [
         "push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyInputsData|false",
         "push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyLutPushData|false",
         "buffer|cloudlyComponentLayoutProbe|CloudlyCloudComponent|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCloudComponentData|false",
+        "buffer|cloudlyNoiseLayoutProbe|CloudlyNoiseProfile|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyNoiseProfileData|false",
         "push|cloudlyPushProbe|CloudlyCloudPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCloudPushData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")

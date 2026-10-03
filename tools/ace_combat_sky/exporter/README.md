@@ -164,3 +164,12 @@ An optional `--renderer-adapter` input adds explicit implementation choices as
 properties or the source verification flags. Treat channel selection, coordinate
 units, scale meaning, and axis conversion supplied here as adapter assumptions
 until separate native evidence verifies them.
+
+`--native-defaults` and `--scene-parameters` accept independent JSON objects with
+`source` and `evidence` records. They are copied as `nativeDefaults` and
+`sceneParameters`, never merged into the cooked `skyParameters`. Native defaults
+can include `skyParameters` for individually evidenced constructor fields;
+scene data can include `directionalLight`, `skyLight`, and `postProcess`. These
+inputs are private evidence files, not invented values from the adapter template.
+The current scene-sun adapter requires both inputs. Retain the source constructor
+and scene-export hashes, recovered field offsets, and property provenance.

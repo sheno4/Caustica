@@ -5,6 +5,8 @@ import caustica_minecraft_sky_lut_types;
 import caustica_cloudly_types;
 
 struct CloudlyComponentLayoutProbe { CloudlyCloudComponent values[2]; };
+struct CloudlyNoiseLayoutProbe { CloudlyNoiseProfile values[2]; };
+[[vk::binding(11, 0)]] StructuredBuffer<CloudlyNoiseLayoutProbe, Std430DataLayout> cloudlyNoiseLayoutProbe;
 [[vk::binding(10, 0)]] StructuredBuffer<CloudlyComponentLayoutProbe, Std430DataLayout> cloudlyComponentLayoutProbe;
 
 [[vk::push_constant]] CloudlyCloudPush cloudlyPushProbe;

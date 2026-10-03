@@ -16,6 +16,8 @@ import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloudComponentData;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloudPushData;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloudPushData.Float4;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyNoiseProfileData;
+import dev.comfyfluffy.caustica.support.ColorSpaces;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
@@ -44,7 +46,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     public static final String GROUP = "sky-cloudly";
     public static final Option<Boolean> ENABLED = Option.bool("sky.cloudly.enabled", false).inGroupAsHeader(GROUP);
     public static final Option<Optional<String>> SOURCE_PACK = Option.optionalString("sky.cloudly.source-pack").inGroup(GROUP);
-    public static final Option<Float> SAMPLES = Option.range("sky.cloudly.samples", 48, 128, 64).inGroup(GROUP).step(8);
+    public static final Option<Float> SAMPLES = Option.range("sky.cloudly.samples", 64, 1024, 512).inGroup(GROUP).step(32);
     public static final Option<Float> MAX_DISTANCE_KM = Option.range("sky.cloudly.max-distance-km", 1, 200, 200).inGroup(GROUP);
     public static final List<Option<?>> OPTIONS = List.of(ENABLED, SOURCE_PACK, SAMPLES, MAX_DISTANCE_KM);
     private static final Logger LOGGER = LoggerFactory.getLogger(CloudlyCloudPass.class);
@@ -125,16 +127,21 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
         VmaMappedBuffer buffer = null;
         ResourceOwner owner = null;
         try {
-            int byteCount = Math.multiplyExact(model.components().size(), CloudlyCloudComponentData.BYTE_SIZE);
+            int componentBytes = Math.multiplyExact(model.components().size(), CloudlyCloudComponentData.BYTE_SIZE);
+            int byteCount = componentBytes + model.details().size() * CloudlyNoiseProfileData.BYTE_SIZE;
             buffer = VmaMappedBuffer.create(gpu, byteCount, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Cloudly source components");
             var bytes = buffer.mapped().order(ByteOrder.LITTLE_ENDIAN);
             for (int index = 0; index < model.components().size(); index++) {
                 SourceComponent component = model.components().get(index);
                 CloudlyCloudResources.Texture texture = clouds.texture(component.textureId());
                 new CloudlyCloudComponentData(component.centerAndDensity(), component.inverseSizeAndCos(),
-                        component.uvScale(), component.uvOffset(), texture.sampledIndex().value(), texture.mipLevels(), 0, 0)
+                        component.uvScale(), component.uvOffset(), texture.sampledIndex().value(), texture.mipLevels(), component.layer(), 0)
                         .write(bytes.slice(index * CloudlyCloudComponentData.BYTE_SIZE,
                                 CloudlyCloudComponentData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
+            }
+            for (int index = 0; index < model.details().size(); index++) {
+                model.details().get(index).data().write(bytes.slice(componentBytes + index * CloudlyNoiseProfileData.BYTE_SIZE,
+                        CloudlyNoiseProfileData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
             }
             buffer.flush(0, byteCount);
             VmaMappedBuffer root = buffer;
@@ -173,7 +180,9 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
         float sunX = (float) -Math.sin(angle);
         float sunY = (float) (Math.cos(tilt) * Math.cos(angle));
         float sunZ = (float) (Math.sin(tilt) * Math.cos(angle));
-        float illuminance = sunY > 0 ? celestial.lighting().sunIlluminanceLux() : 0;
+        float illuminance = sunY > 0 ? (model.sun() == null ? celestial.lighting().sunIlluminanceLux()
+                : (float) model.sun().sunIlluminanceLux()) : 0;
+        float[] sunColor = model.sun() == null ? new float[]{1, 1, 1} : model.sun().sunColorAcesCg();
         var camera = frame.view().camera();
         float units = (float) frame.metersPerSceneUnit();
         float[] matrix = frame.cameraRelativeFromClip();
@@ -193,7 +202,11 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                     new Float4(model.extinction(), model.phaseG1(), model.phaseG2(), model.phaseMix()),
                     new Float4(model.ambientRadiance(), model.phaseScale(), model.albedo(), frame.preExposure()),
                     new Float4(jitter[0], jitter[1], values.get(MAX_DISTANCE_KM) * 1000, model.shadowFirstStep()),
-                    new Float4(model.shadowStepBase(), Float.intBitsToFloat((int) frame.frameIndex()), 0, 0)).write(push);
+                    new Float4(model.shadowStepBase(), model.voxelStep(), model.targetOpticalDepth(), model.emptyStepMultiplier()),
+                    new Float4(sunColor[0], sunColor[1], sunColor[2], 0),
+                    new Float4(model.ambientColor()[0], model.ambientColor()[1], model.ambientColor()[2], 0),
+                    new Float4(model.scatteringOrders(), model.scatteringAttenuation(), model.scatteringContribution(), model.scatteringEccentricity()),
+                    new Float4(model.maxShapeLod(), model.details().size(), 0, 0)).write(push);
             shader.dispatch(frame.commandBuffer(), push, (output.width() + 7) / 8, (output.height() + 7) / 8, 1);
         }
     }
@@ -233,12 +246,17 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     private record Published(VmaMappedBuffer buffer, int componentCount, int samplerIndex, ResourceOwner owner) { }
     record SourceComponent(int textureId, CloudlyCloudComponentData.Float4 centerAndDensity,
                                    CloudlyCloudComponentData.Float4 inverseSizeAndCos,
-                                   CloudlyCloudComponentData.Float4 uvScale, CloudlyCloudComponentData.Float4 uvOffset) { }
+                                   CloudlyCloudComponentData.Float4 uvScale, CloudlyCloudComponentData.Float4 uvOffset,
+                                   int layer) { }
 
     /** Source values stay separate from adapter assumptions; no omitted native field receives an implicit value. */
     record SourceModel(List<SourceComponent> components, CloudlySkyPreset sun, float extinction,
                                float phaseG1, float phaseG2, float phaseMix, float phaseScale, float ambientRadiance,
-                               float albedo, float shadowFirstStep, float shadowStepBase) {
+                               float albedo, float shadowFirstStep, float shadowStepBase,
+                               float[] ambientColor, float scatteringOrders, float scatteringAttenuation,
+                               float scatteringContribution, float scatteringEccentricity,
+                               float voxelStep, float targetOpticalDepth, float emptyStepMultiplier,
+                               float maxShapeLod, List<CloudlyDetailProfile> details) {
         static SourceModel from(CloudlySourcePack source) {
             Map<String, Object> adapter = source.rendererAdapter();
             require(adapter, "target", "Caustica");
@@ -257,9 +275,11 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
             Map<String, Object> sky = source.skyParameters();
             Map<String, Object> extinction = object(property(object(property(sky, "SigmaCloudAsAlbedoExtinction")), "Extinction_"));
             Map<String, Object> trace = object(property(sky, "TraceParams"));
-            float g1 = sourceOrAdapter(sky, "HGPhaseFunction_G1", adapter, "phaseG1");
-            float g2 = sourceOrAdapter(sky, "HGPhaseFunction_G2", adapter, "phaseG2");
-            float mix = sourceOrAdapter(sky, "HGPhaseFunction_MixFactor", adapter, "phaseMixFactor");
+            Map<String, Object> defaults = source.nativeDefaults().containsKey("skyParameters")
+                    ? object(source.nativeDefaults().get("skyParameters")) : Map.of();
+            float g1 = resolved(sky, defaults, "HGPhaseFunction_G1", number(adapter, "phaseG1"));
+            float g2 = resolved(sky, defaults, "HGPhaseFunction_G2", number(adapter, "phaseG2"));
+            float mix = resolved(sky, defaults, "HGPhaseFunction_MixFactor", number(adapter, "phaseMixFactor"));
             float albedo = number(adapter, "singleScatteringAlbedo");
             if (Math.abs(g1) >= 1 || Math.abs(g2) >= 1 || mix < 0 || mix > 1 || albedo < 0 || albedo > 1) {
                 throw new IllegalArgumentException("Cloudly phase or single-scattering adapter value is outside its physical range");
@@ -307,12 +327,29 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                         vector(number(position, "X"), number(position, "Z"), -number(position, "Y"), density),
                         vector(1 / sx, 1 / sy, 1 / sz, (float) Math.cos(angle)),
                         vector(object(property(component, "UVScale")), (float) Math.sin(angle)),
-                        vector(object(property(component, "UVOffset")), 0)));
+                        vector(object(property(component, "UVOffset")), 0), layer));
             }
             if (components.isEmpty() || components.size() > MAX_COMPONENTS) throw new IllegalArgumentException("Cloudly requires 1..64 visible source components");
-            CloudlySkyPreset sun = adapter.containsKey("sunAzimuthAxis") ? CloudlySkyPreset.from(source) : null;
+            CloudlySkyPreset sun = adapter.containsKey("sunAzimuthAxis") || adapter.containsKey("sunDirectionSource")
+                    ? CloudlySkyPreset.from(source) : null;
+            float[] ambientColor = new float[]{1, 1, 1};
+            if ("sceneSkyLightSrgb".equals(adapter.get("ambientColorSource"))) {
+                Map<String, Object> color = object(property(object(property(source.sceneParameters(), "skyLight")), "LightColor"));
+                ambientColor = ColorSpaces.srgbToAcesCg(number(color, "R") / 255.0,
+                        number(color, "G") / 255.0, number(color, "B") / 255.0);
+            }
+            float orders = resolved(sky, defaults, "CloudScatteringTimes", 1);
+            float attenuation = resolved(sky, defaults, "MS_Attenuation", .5f);
+            float contribution = resolved(sky, defaults, "MS_Contribution", .5f);
+            float eccentricity = resolved(sky, defaults, "MS_EccentricityAttenuationForG", 1);
+            if (orders < 1 || orders > 8 || attenuation < 0 || attenuation > 1 || contribution < 0 || contribution >= 1
+                    || eccentricity < 0 || eccentricity > 1) throw new IllegalArgumentException("Invalid source scattering orders or weights");
             return new SourceModel(List.copyOf(components), sun, sigma, g1, g2, mix,
-                    number(sky, "CloudPhaseFunctionScale_HG"), ambient, albedo, firstStep, stepBase);
+                    number(sky, "CloudPhaseFunctionScale_HG"), ambient, albedo, firstStep, stepBase,
+                    ambientColor, orders, attenuation, contribution, eccentricity,
+                    adapterNumber(adapter, "maxVoxelStep", .75f), adapterNumber(adapter, "targetOpticalDepth", .25f),
+                    adapterNumber(adapter, "emptySpaceStepMultiplier", 4), adapterNumber(adapter, "maxShapeLod", 1),
+                    CloudlyDetailProfile.from(source));
         }
     }
 
@@ -349,6 +386,14 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     private static float sourceOrAdapter(Map<String, Object> source, String key, Map<String, Object> adapter, String fallback) {
         Object value = optionalProperty(source, key);
         return value == null ? number(adapter, fallback) : finite((Number) value, key);
+    }
+    private static float resolved(Map<String, Object> serialized, Map<String, Object> defaults, String key, float fallback) {
+        Object value = optionalProperty(serialized, key);
+        if (value == null) value = optionalProperty(defaults, key);
+        return value == null ? fallback : finite((Number) value, key);
+    }
+    private static float adapterNumber(Map<String, Object> adapter, String key, float fallback) {
+        return resolved(adapter, Map.of(), key, fallback);
     }
     private static float number(Map<String, Object> source, String key) { return finite((Number) property(source, key), key); }
     private static float finite(Number value, String key) {

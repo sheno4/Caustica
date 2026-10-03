@@ -90,6 +90,10 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--renderer-adapter", type=Path,
                         help="Explicit Caustica approximation settings; source fields remain unchanged")
+    parser.add_argument("--native-defaults", type=Path,
+                        help="Separately evidenced native defaults, never merged into cooked properties")
+    parser.add_argument("--scene-parameters", type=Path,
+                        help="Separately evidenced scene lights and post-process properties")
     args = parser.parse_args()
     output_root = private_output(args.output)
     texture_root = args.texture_exports.resolve()
@@ -204,6 +208,14 @@ def main():
         if not isinstance(adapter, dict) or adapter.get("target") != "Caustica" or adapter.get("approximation") is not True:
             raise ValueError("Renderer adapter must explicitly target Caustica and mark approximation:true")
         manifest["rendererAdapter"] = adapter
+    for name, path in (("nativeDefaults", args.native_defaults), ("sceneParameters", args.scene_parameters)):
+        if path:
+            evidence = read_json(path)
+            if not isinstance(evidence, dict) or not evidence.get("source") or not evidence.get("evidence"):
+                raise ValueError(name + " requires an object with separate source and evidence records")
+            manifest[name] = evidence
+    manifest["source"]["nativeDefaultValuesIncluded"] = args.native_defaults is not None
+    manifest["source"]["nativeDefaultValuesComplete"] = False
     manifest_json = json.dumps(manifest, indent=2, allow_nan=False)
     output_root.mkdir(parents=True, exist_ok=True)
     for source_path, output_path in copies:

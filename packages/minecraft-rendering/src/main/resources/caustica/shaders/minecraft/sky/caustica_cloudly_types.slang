@@ -10,8 +10,16 @@ public struct CloudlyCloudComponent {
     public float4 uvOffset;
     public uint textureIndex;
     public uint mipLevels;
-    public uint padding0;
+    public uint layerIndex;
     public uint padding1;
+};
+
+/** Authored world-cell sizes and fractal parameters under the declared procedural-detail approximation. */
+public struct CloudlyNoiseProfile {
+    public float4 cellAndOctaves;
+    public float4 fractal;
+    public float4 remap;
+    public float4 displacement;
 };
 
 /** Physical lengths and extinction use metres under the pack's explicit approximation adapter. */
@@ -33,4 +41,8 @@ public struct CloudlyCloudPush {
     public float4 lightingParameters;
     public float4 traceParameters;
     public float4 shadowParameters;
+    public float4 sunColor;
+    public float4 ambientColor;
+    public float4 multipleScattering;
+    public float4 detailParameters;
 };

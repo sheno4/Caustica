@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -16,6 +17,42 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CloudlyCloudPassTest {
     @TempDir Path directory;
+
+    @Test void recoveredScatteringAndAuthoredDetailRetainSerializedPrecedence() throws Exception {
+        var fixture = fixture();
+        fixture.sky().put("MS_Attenuation[75]", .5);
+        fixture.adapter().put("detailModel", "authoredPerlinWorleyErosion");
+        fixture.adapter().put("detailDisplacementScale", .05);
+        fixture.sky().put("NoiseTexParamsB[190]", Map.of("CreateParams", Map.of("Channel[2]", List.of(
+                Map.of("AbsoluteCellSizeLog2f", xyz(5, 4, 2), "NumOctaves", 4,
+                        "Frequency", 2.419435, "Persistence", .630939,
+                        "PerlinWeight", .221116, "WorleyWeight", .874502))),
+                "RuntimeParams[1]", Map.of("TexelWorldSizeInMeters", 10,
+                        "EdgeDetailSDF", Map.of("EdgeDetailSDFDisplace", Map.of("Factor", 4000)))));
+        Path path = load(fixture).manifest();
+        var json = JsonParser.parseString(Files.readString(path)).getAsJsonObject();
+        json.add("nativeDefaults", JsonParser.parseString("""
+                {"skyParameters":{"CloudScatteringTimes":4,"MS_Attenuation":0.78,
+                 "MS_Contribution":0.5,"MS_EccentricityAttenuationForG":1,"HGPhaseFunction_G1":0.25}}
+                """));
+        Files.writeString(path, json.toString());
+        var pack = CloudlySourcePack.load(path);
+        var model = CloudlyCloudPass.SourceModel.from(pack);
+        assertEquals(4, model.scatteringOrders());
+        assertEquals(.5f, model.scatteringAttenuation());
+        assertEquals(.5f, model.scatteringContribution());
+        assertEquals(.25f, model.phaseG1());
+        assertFalse(pack.skyParameters().containsKey("CloudScatteringTimes"));
+        var detail = model.details().getFirst().data();
+        assertEquals(320, detail.cellAndOctaves().x());
+        assertEquals(160, detail.cellAndOctaves().y());
+        assertEquals(40, detail.cellAndOctaves().z());
+        assertEquals(200, detail.displacement().x());
+        assertEquals(2.419435f, detail.fractal().x());
+        assertEquals(.630939f, detail.fractal().y());
+        assertEquals(0, model.components().getFirst().layer());
+        assertEquals(256, dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloudPushData.BYTE_SIZE);
+    }
 
     @Test void sourceTransformsAndParentPlacementSelectActualDensity() throws Exception {
         var fixture = fixture();
