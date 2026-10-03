@@ -194,6 +194,7 @@ public final class RtGpuExecutor implements GpuComputeQueue {
             var commands = VkCommandBufferSubmitInfo.calloc(batch.size(), stack);
             for (int index = 0; index < batch.size(); index++) {
                 VkCommandBuffer command = lease.begin(index);
+                ctx.bindDescriptorHeaps(command);
                 batch.get(index).recorder.accept(command);
                 ctx.checkDeviceResult(VK10.vkEndCommandBuffer(command), "vkEndCommandBuffer(compute)");
                 commands.get(index).sType$Default().commandBuffer(command);
