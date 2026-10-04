@@ -59,6 +59,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     private final SourceModel model;
     private final ShaderObjectCompute shader;
     private final ResourceOwner shaderOwner;
+    private final CloudlyGpuTiming timing;
     private final Thread worker;
     private GpuComputeJob uploadJob;
     private Published published;
@@ -84,6 +85,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
             model = null;
             shader = null;
             shaderOwner = null;
+            timing = null;
             worker = null;
             return;
         }
@@ -91,6 +93,8 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
         shader = ShaderObjectCompute.load(gpu, CloudlyCloudPass.class, "/caustica/shaders/pipelines/cloudly/main.comp.spv");
         try { shaderOwner = resources.create(shader::close); }
         catch (RuntimeException | Error failure) { shader.close(); throw failure; }
+        try { timing = new CloudlyGpuTiming(gpu, resources); }
+        catch (RuntimeException | Error failure) { shaderOwner.close(); throw failure; }
         worker = Thread.ofVirtual().name("Caustica Cloudly source upload").unstarted(() -> prepare(compute, source));
         worker.start();
     }
@@ -135,7 +139,8 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                 SourceComponent component = model.components().get(index);
                 CloudlyCloudResources.Texture texture = clouds.texture(component.textureId());
                 new CloudlyCloudComponentData(component.centerAndDensity(), component.inverseSizeAndCos(),
-                        component.uvScale(), component.uvOffset(), texture.sampledIndex().value(), texture.mipLevels(), component.layer(), 0)
+                        component.uvScale(), component.uvOffset(), texture.sampledIndex().value(), texture.mipLevels(), component.layer(), 0,
+                        new CloudlyCloudComponentData.Float4(texture.width(), texture.height(), texture.depth(), 0))
                         .write(bytes.slice(index * CloudlyCloudComponentData.BYTE_SIZE,
                                 CloudlyCloudComponentData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
             }
@@ -207,7 +212,9 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                     new Float4(model.ambientColor()[0], model.ambientColor()[1], model.ambientColor()[2], 0),
                     new Float4(model.scatteringOrders(), model.scatteringAttenuation(), model.scatteringContribution(), model.scatteringEccentricity()),
                     new Float4(model.maxShapeLod(), model.details().size(), 0, 0)).write(push);
+            int measurement = timing.begin(frame, output.width(), output.height());
             shader.dispatch(frame.commandBuffer(), push, (output.width() + 7) / 8, (output.height() + 7) / 8, 1);
+            timing.end(frame, measurement);
         }
     }
 
@@ -229,7 +236,8 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                 () -> { if (pending != null) pending.close(); },
                 this::drainPreparation,
                 () -> { if (previous != null) previous.owner().close(); },
-                () -> { if (shaderOwner != null) shaderOwner.close(); }).close();
+                () -> { if (shaderOwner != null) shaderOwner.close(); },
+                () -> { if (timing != null) timing.close(); }).close();
     }
 
     /** Device allocations cease before session teardown; accepted GPU jobs retain their own resources. */

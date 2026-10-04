@@ -12,6 +12,8 @@ public struct CloudlyCloudComponent {
     public uint mipLevels;
     public uint layerIndex;
     public uint padding1;
+    /** Immutable source dimensions avoid a texture metadata query at every march and shadow step. */
+    public float4 textureDimensions;
 };
 
 /** Authored world-cell sizes and fractal parameters under the declared procedural-detail approximation. */

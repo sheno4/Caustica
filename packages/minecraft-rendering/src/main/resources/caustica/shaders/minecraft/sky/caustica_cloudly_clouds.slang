@@ -84,18 +84,21 @@ float cloudlyDetailNoise(CloudlyNoiseProfile profile, float3 point, float footpr
 struct CloudlyDensitySample { float density; float voxelStep; };
 
 /** Coarse source shapes retain their UVs; detail modulation is an explicitly declared compatible approximation. */
-CloudlyDensitySample cloudlySample(float3 point, float3 direction, float3 footprintX, float3 footprintY, bool details) {
+CloudlyDensitySample cloudlySample(float3 point, float3 direction, float3 footprintX, float3 footprintY, bool details,
+        uint2 activeComponents = uint2(0xffffffffu, 0xffffffffu)) {
     CloudlyCloudComponent* components = (CloudlyCloudComponent*)pc.componentsAddress;
     SamplerState sourceSampler = SamplerDescriptorHeap[pc.samplerIndex];
     CloudlyDensitySample result; result.density = 0.0; result.voxelStep = 1.0e20;
+    float detailValues[6] = {};
+    uint detailValid = 0;
     for (uint index = 0; index < pc.componentCount; index++) {
+        if ((activeComponents[index >> 5] & (1u << (index & 31u))) == 0) continue;
         CloudlyCloudComponent component = components[index];
         float3 local = cloudlyLocalVector(component, point - component.centerAndDensity.xyz);
         if (any(abs(local) > 0.50001)) continue;
         float3 uvw = (local + 0.5) * component.uvScale.xyz + component.uvOffset.xyz;
         Texture3D<float4> sourceTexture = ResourceDescriptorHeap[NonUniformResourceIndex(component.textureIndex)];
-        uint width, height, depth; sourceTexture.GetDimensions(width, height, depth);
-        float3 dimensions = float3(width, height, depth);
+        float3 dimensions = component.textureDimensions.xyz;
         float3 worldVoxels = 1.0 / (component.inverseSizeAndCos.xyz * dimensions);
         float3 rayInTexels = abs(cloudlyLocalVector(component, direction) * dimensions);
         result.voxelStep = min(result.voxelStep, 1.0 / max(max(rayInTexels.x, rayInTexels.y), max(rayInTexels.z, 1.0e-9)));
@@ -110,9 +113,15 @@ CloudlyDensitySample cloudlySample(float3 point, float3 direction, float3 footpr
             float voxelWidth = max(worldVoxels.x, max(worldVoxels.y, worldVoxels.z));
             float worldFootprint = max(length(footprintX), length(footprintY));
             for (uint layer = 0; layer < 2; layer++) {
-                CloudlyNoiseProfile profile = profiles[component.layerIndex * 2u + layer];
+                uint profileIndex = component.layerIndex * 2u + layer;
+                CloudlyNoiseProfile profile = profiles[profileIndex];
                 if (profile.displacement.x <= 0.0) continue;
-                float noise = cloudlyDetailNoise(profile, point, worldFootprint);
+                // Profiles, world position and footprint are shared by components of the same layer.
+                if ((detailValid & (1u << profileIndex)) == 0) {
+                    detailValues[profileIndex] = cloudlyDetailNoise(profile, point, worldFootprint);
+                    detailValid |= 1u << profileIndex;
+                }
+                float noise = detailValues[profileIndex];
                 float bottomDistance = (local.z + 0.5) / component.inverseSizeAndCos.z;
                 float fade = profile.displacement.w > 0.0 ? smoothstep(0.0, profile.displacement.w, bottomDistance) : 1.0;
                 float change = (noise - 0.5 - profile.displacement.y) * profile.displacement.x / max(voxelWidth, 1.0);
@@ -168,10 +177,12 @@ public void runCloudlyClouds(uint3 id) {
 
     CloudlyCloudComponent* components = (CloudlyCloudComponent*)pc.componentsAddress;
     float2 intervals[CLOUDLY_MAX_COMPONENTS] = {};
+    uint2 activeComponents = uint2(0);
     uint count = 0;
     for (uint component = 0; component < pc.componentCount; component++) {
         float2 interval = cloudlyBoxInterval(components[component], pc.cameraAndUnits.xyz, direction, limit);
         if (interval.y <= interval.x) continue;
+        activeComponents[component >> 5] |= 1u << (component & 31u);
         uint at = count;
         while (at > 0 && intervals[at - 1].x > interval.x) {
             intervals[at] = intervals[at - 1];
@@ -198,19 +209,19 @@ public void runCloudlyClouds(uint3 id) {
         float at = intervals[interval].x;
         while (at < intervals[interval].y && transmittance > 0.001 && sampleIndex < pc.steps) {
             float3 start = pc.cameraAndUnits.xyz + direction * at;
-            CloudlyDensitySample coarse = cloudlySample(start, direction, rayDeltaX * at, rayDeltaY * at, false);
+            CloudlyDensitySample coarse = cloudlySample(start, direction, rayDeltaX * at, rayDeltaY * at, false, activeComponents);
             float segment = coarse.voxelStep * pc.shadowParameters.y;
             if (coarse.density <= 1.0e-6) segment *= pc.shadowParameters.w;
             else segment = min(segment, pc.shadowParameters.z / max(coarse.density * pc.opticalParameters.x, 1.0e-7));
             segment = min(max(segment, 0.01), intervals[interval].y - at);
             float midpoint = at + segment * 0.5;
             float3 point = pc.cameraAndUnits.xyz + direction * midpoint;
-            float density = cloudlySample(point, direction, rayDeltaX * midpoint, rayDeltaY * midpoint, true).density;
+            float density = cloudlySample(point, direction, rayDeltaX * midpoint, rayDeltaY * midpoint, true, activeComponents).density;
             if (density * pc.opticalParameters.x * segment > pc.shadowParameters.z) {
                 segment = min(segment, pc.shadowParameters.z / (density * pc.opticalParameters.x));
                 midpoint = at + segment * 0.5;
                 point = pc.cameraAndUnits.xyz + direction * midpoint;
-                density = cloudlySample(point, direction, rayDeltaX * midpoint, rayDeltaY * midpoint, true).density;
+                density = cloudlySample(point, direction, rayDeltaX * midpoint, rayDeltaY * midpoint, true, activeComponents).density;
             }
             if (density > 0.0) {
                 float segmentT = exp(-min(density * pc.opticalParameters.x * segment, 80.0));
