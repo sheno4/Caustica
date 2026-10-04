@@ -63,16 +63,18 @@ public final class CloudlyVolumeBake {
 
     /** Dimensions, formats, mip counts and filtering requirements come from the private source plan. */
     public enum Dimension {
-        TWO_D(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D),
-        THREE_D(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D);
-        private final int imageType, viewType;
-        Dimension(int imageType, int viewType) { this.imageType = imageType; this.viewType = viewType; }
+        TWO_D(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D, 1),
+        THREE_D(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1),
+        CUBE(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE, 6);
+        private final int imageType, viewType, layers;
+        Dimension(int imageType, int viewType, int layers) { this.imageType = imageType; this.viewType = viewType; this.layers = layers; }
     }
     public record ImageSpec(String name, Dimension dimension, int width, int height, int depth,
                             int mipLevels, int format, boolean linearFiltering, boolean publish, ClearValue clear) {
         public ImageSpec {
             if (dimension == null || width < 1 || height < 1 || depth < 1 || mipLevels < 1
-                    || dimension == Dimension.TWO_D && depth != 1) {
+                    || dimension != Dimension.THREE_D && depth != 1
+                    || dimension == Dimension.CUBE && width != height) {
                 throw new IllegalArgumentException("Invalid original bake texture dimensions: " + name);
             }
         }
@@ -234,7 +236,8 @@ public final class CloudlyVolumeBake {
         GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var info = VkImageCreateInfo.calloc(stack).sType$Default().imageType(spec.dimension().imageType).format(spec.format())
-                    .mipLevels(spec.mipLevels()).arrayLayers(1).samples(VK_SAMPLE_COUNT_1_BIT)
+                    .flags(spec.dimension() == Dimension.CUBE ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0)
+                    .mipLevels(spec.mipLevels()).arrayLayers(spec.dimension().layers).samples(VK_SAMPLE_COUNT_1_BIT)
                     .tiling(VK_IMAGE_TILING_OPTIMAL).usage(USAGE).sharingMode(VK_SHARING_MODE_EXCLUSIVE)
                     .initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
             info.extent().set(spec.width(), spec.height(), spec.depth());
@@ -251,8 +254,9 @@ public final class CloudlyVolumeBake {
             for (int index = 0; index < descriptorCount; index++) {
                 boolean storageView = index > 0 && index <= spec.mipLevels();
                 int mip = storageView ? index - 1 : index - 1 - spec.mipLevels();
-                var view = views.get(index).sType$Default().image(image.image()).viewType(spec.dimension().viewType).format(spec.format());
-                view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseArrayLayer(0).layerCount(1)
+                int viewType = storageView && spec.dimension() == Dimension.CUBE ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : spec.dimension().viewType;
+                var view = views.get(index).sType$Default().image(image.image()).viewType(viewType).format(spec.format());
+                view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseArrayLayer(0).layerCount(spec.dimension().layers)
                         .baseMipLevel(index == 0 ? 0 : mip).levelCount(index == 0 ? spec.mipLevels() : 1);
                 var descriptor = encoded.get(index).sType$Default().pView(view).layout(VK_IMAGE_LAYOUT_GENERAL);
                 writes.add(new GpuDescriptorWriter.ImageWrite(storageView ? GpuImageDescriptorKind.STORAGE : GpuImageDescriptorKind.SAMPLED, descriptor));
@@ -282,13 +286,15 @@ public final class CloudlyVolumeBake {
                 throw new UnsupportedOperationException("Original Cloudly texture format unavailable: " + spec.name());
             }
             var query = VkPhysicalDeviceImageFormatInfo2.calloc(stack).sType$Default().format(spec.format())
-                    .type(spec.dimension().imageType).tiling(VK_IMAGE_TILING_OPTIMAL).usage(USAGE);
+                    .type(spec.dimension().imageType).tiling(VK_IMAGE_TILING_OPTIMAL).usage(USAGE)
+                    .flags(spec.dimension() == Dimension.CUBE ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0);
             var properties = VkImageFormatProperties2.calloc(stack).sType$Default();
             int result = VK11.vkGetPhysicalDeviceImageFormatProperties2(gpu.vk().getPhysicalDevice(), query, properties);
             if (result != VK_SUCCESS) throw new UnsupportedOperationException("Original Cloudly texture image unsupported: " + spec.name() + " (" + result + ")");
             var limits = properties.imageFormatProperties();
             if (spec.width() > limits.maxExtent().width() || spec.height() > limits.maxExtent().height()
-                    || spec.depth() > limits.maxExtent().depth() || spec.mipLevels() > limits.maxMipLevels()) {
+                    || spec.depth() > limits.maxExtent().depth() || spec.mipLevels() > limits.maxMipLevels()
+                    || spec.dimension().layers > limits.maxArrayLayers()) {
                 throw new UnsupportedOperationException("Original Cloudly texture dimensions exceed device limits: " + spec.name());
             }
         }
@@ -320,7 +326,7 @@ public final class CloudlyVolumeBake {
                         .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_GENERAL)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
                 transition.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0)
-                        .levelCount(image.spec().mipLevels()).baseArrayLayer(0).layerCount(1);
+                        .levelCount(image.spec().mipLevels()).baseArrayLayer(0).layerCount(image.spec().dimension().layers);
             }
             VK14.vkCmdPipelineBarrier2(commands, VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(transitions));
             for (OwnedImage image : images) {
@@ -328,7 +334,7 @@ public final class CloudlyVolumeBake {
                 if (clear == null) continue;
                 var value = VkClearColorValue.calloc(stack).uint32(0, clear.x()).uint32(1, clear.y()).uint32(2, clear.z()).uint32(3, clear.w());
                 var range = VkImageSubresourceRange.calloc(stack).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0)
-                        .levelCount(image.spec().mipLevels()).baseArrayLayer(0).layerCount(1);
+                        .levelCount(image.spec().mipLevels()).baseArrayLayer(0).layerCount(image.spec().dimension().layers);
                 vkCmdClearColorImage(commands, image.image().image(), VK_IMAGE_LAYOUT_GENERAL, value, range);
             }
             dependency(commands, stack);
@@ -336,8 +342,8 @@ public final class CloudlyVolumeBake {
                 try (MemoryStack dispatchStack = MemoryStack.stackPush()) {
                     if (stage instanceof RecordedCopy copy) {
                         var region = VkImageCopy.calloc(1, dispatchStack);
-                        region.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(copy.sourceMip()).baseArrayLayer(0).layerCount(1);
-                        region.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(copy.destinationMip()).baseArrayLayer(0).layerCount(1);
+                        region.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(copy.sourceMip()).baseArrayLayer(0).layerCount(copy.source().dimension().layers);
+                        region.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(copy.destinationMip()).baseArrayLayer(0).layerCount(copy.destination().dimension().layers);
                         region.extent().set(Math.max(1, copy.source().width() >> copy.sourceMip()),
                                 Math.max(1, copy.source().height() >> copy.sourceMip()), Math.max(1, copy.source().depth() >> copy.sourceMip()));
                         vkCmdCopyImage(commands, copy.source().image(), VK_IMAGE_LAYOUT_GENERAL,
@@ -352,6 +358,11 @@ public final class CloudlyVolumeBake {
                     dependency(commands, dispatchStack);
                 }
             }
+            var hostRead = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                    .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_HOST_BIT).dstAccessMask(VK13.VK_ACCESS_2_HOST_READ_BIT);
+            VK14.vkCmdPipelineBarrier2(commands, VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(hostRead));
         }
     }
 

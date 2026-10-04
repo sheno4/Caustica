@@ -157,6 +157,15 @@ public final class VmaMappedBuffer implements AutoCloseable {
         Vma.vmaFlushAllocation(allocator, allocation, byteOffset, byteLength);
     }
 
+    /** Makes a completed GPU write visible to host reads of a non-empty mapped byte range. */
+    public void invalidate(long byteOffset, long byteLength) {
+        if (byteOffset < 0L || byteLength <= 0L
+                || Math.addExact(byteOffset, byteLength) > byteSize()) {
+            throw new IllegalArgumentException("invalidate range is outside buffer");
+        }
+        Vma.vmaInvalidateAllocation(allocator, allocation, byteOffset, byteLength);
+    }
+
     /** Destroys the buffer immediately. Every GPU use must already be drained or retired. */
     @Override
     public void close() {
