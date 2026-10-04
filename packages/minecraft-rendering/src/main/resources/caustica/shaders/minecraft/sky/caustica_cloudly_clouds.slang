@@ -162,7 +162,7 @@ public void runCloudlyClouds(uint3 id) {
     if (any(id.xy >= uint2(width, height))) return;
     Texture2D<float4> scene = ResourceDescriptorHeap[pc.sceneIndex];
     float4 background = scene.Load(int3(id.xy, 0));
-    float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
+    float2 uv = (float2(id.xy) + 0.5 + pc.traceParameters.xy) / float2(width, height);
     float3 direction = normalize(cloudlyUnproject(uv, 1.0));
     float3 rayDeltaX = normalize(cloudlyUnproject(uv + float2(1.0 / float(width), 0), 1.0)) - direction;
     float3 rayDeltaY = normalize(cloudlyUnproject(uv + float2(0, 1.0 / float(height)), 1.0)) - direction;

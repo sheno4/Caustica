@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.support.ColorSpaces;
 
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalDouble;
 import java.util.regex.Pattern;
 
 /** Source sun values under the pack's explicit direction, angle, photometric and colour-space adapter. */
@@ -62,9 +61,9 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
 
     public MinecraftLightProvider.CelestialSettings lightSettings(MinecraftLightProvider.CelestialSettings base) {
         float[] color = sunColorAcesCg();
-        return new MinecraftLightProvider.CelestialSettings(noonTiltDegrees,
+        return new MinecraftLightProvider.CelestialSettings(base.noonTiltDegrees(),
                 Math.toDegrees(sunAngularRadiusRadians()), base.moonAngularRadiusDegrees(),
-                OptionalDouble.of(sunAngleRadians), Optional.of(new MinecraftLightProvider.SunLightOverride(
+                base.sunAngleRadians(), Optional.of(new MinecraftLightProvider.SunLightOverride(
                         sunIlluminanceLux(), color[0], color[1], color[2])));
     }
 

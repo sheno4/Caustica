@@ -294,12 +294,12 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 captured.metersPerSceneUnit());
         float r = (float) (Math.PI / 180.0);
         MinecraftLightingCalibration l = captured.lighting();
-        return new SkyState(preset == null ? captured.sunAngleRadians() : (float) preset.sunAngleRadians(),
+        return new SkyState(captured.sunAngleRadians(),
                 captured.moonAngleRadians(),
                 captured.starAngleRadians(), captured.starBrightness(),
                 preset == null ? l.sunIlluminanceLux() : (float) preset.sunIlluminanceLux(),
                 l.moonIlluminanceLux(), l.nightAirglowLuminanceCdM2(), l.starLuminanceCdM2(),
-                (preset == null ? options.get(SUN_NOON_SOUTH_TILT_DEGREES) : (float) preset.noonTiltDegrees()) * r,
+                options.get(SUN_NOON_SOUTH_TILT_DEGREES) * r,
                 preset == null ? options.get(SUN_ANGULAR_RADIUS_DEGREES) * r : (float) preset.sunAngularRadiusRadians(),
                 options.get(MOON_ANGULAR_RADIUS_DEGREES) * r, l.moonPhaseFixedFraction(),
                 preset == null ? options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r : (float) preset.sunDiscHalfAngleRadians(),

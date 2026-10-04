@@ -21,7 +21,7 @@
   "sunAngleMeaning": "fullDiameter",
   "sunIntensityUnits": "lux",
   "sunColorSpace": "linearBt709",
-  "compositionStage": "afterReconstructionBeforeExposure",
+  "compositionStage": "beforeReconstruction",
   "samplingModel": "worldTexelOpticalDepth",
   "samplingOffset": "stableCellCenter",
   "maxVoxelStep": 0.75,

@@ -40,9 +40,10 @@ final class CloudlySkyPresetTest {
         var selected = preset.lightSettings(base);
         var sun = MinecraftLightProvider.celestialLights(CAPTURED, selected).sun().orElseThrow();
         var sky = SkyLutPass.gather(IMPORT_ENABLED, CAPTURED, preset);
-        assertEquals(0, sun.directionX(), 1e-12);
-        assertEquals(.5, sun.directionY(), 1e-12);
-        assertEquals(-Math.sqrt(3) / 2, sun.directionZ(), 1e-12);
+        assertEquals(-Math.sin(CAPTURED.sunAngleRadians()), sun.directionX(), 1e-12);
+        assertEquals(Math.cos(Math.toRadians(30)) * Math.cos(CAPTURED.sunAngleRadians()), sun.directionY(), 1e-12);
+        assertEquals(Math.sin(Math.toRadians(30)) * Math.cos(CAPTURED.sunAngleRadians()), sun.directionZ(), 1e-12);
+        assertTrue(selected.sunAngleRadians().isEmpty());
         assertEquals(sun.directionX(), -Math.sin(sky.sunAngleRadians()), 1e-7);
         assertEquals(sun.directionY(), Math.cos(sky.noonTiltRadians()) * Math.cos(sky.sunAngleRadians()), 1e-7);
         assertEquals(sun.directionZ(), Math.sin(sky.noonTiltRadians()) * Math.cos(sky.sunAngleRadians()), 1e-7);
@@ -104,9 +105,10 @@ final class CloudlySkyPresetTest {
         var inputs = SkyLutPass.skyInputs(sky, new SkyLutPass.AtlasSnapshot(null, 0, 1,
                 new SkyInputsData.Float4(0, 0, 1, 1), new SkyInputsData.Float4(0, 0, 1, 1)));
 
-        assertEquals(-Math.cos(Math.toRadians(25)) * Math.cos(Math.toRadians(18)), sun.directionX(), 1e-12);
-        assertEquals(Math.sin(Math.toRadians(25)), sun.directionY(), 1e-12);
-        assertEquals(Math.cos(Math.toRadians(25)) * Math.sin(Math.toRadians(18)), sun.directionZ(), 1e-12);
+        assertEquals(-Math.cos(Math.toRadians(25)) * Math.cos(Math.toRadians(18)), -Math.sin(preset.sunAngleRadians()), 1e-12);
+        assertEquals(-Math.sin(CAPTURED.sunAngleRadians()), sun.directionX(), 1e-12);
+        assertEquals(Math.cos(Math.toRadians(30)) * Math.cos(CAPTURED.sunAngleRadians()), sun.directionY(), 1e-12);
+        assertEquals(Math.sin(Math.toRadians(30)) * Math.cos(CAPTURED.sunAngleRadians()), sun.directionZ(), 1e-12);
         assertEquals(120_000, sky.sunIlluminanceLux());
         assertEquals(.8, preset.sunColorLinearBt709().red());
         assertEquals(1, preset.sunColorLinearBt709().green());
@@ -127,6 +129,32 @@ final class CloudlySkyPresetTest {
         }
         assertEquals(preset.sunIlluminanceLux(),
                 CloudlySkyPreset.discRadiance(preset.sunIlluminanceLux(), angle) * projectedIntegral, .01);
+    }
+
+    @Test void importedSunMovesWithWorldTimeAndUsesConfiguredTilt(@TempDir Path directory) throws Exception {
+        var preset = CloudlySkyPreset.from(source(directory, 30, 90, "sourceX"));
+        OptionValues configured = new OptionValues() {
+            @Override public <T> T get(Option<T> option) {
+                if (option.equals(CloudlyCloudPass.ENABLED)) return option.normalize(true);
+                if (option.equals(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES)) return option.normalize(50f);
+                return option.defaultValue();
+            }
+        };
+        var settings = preset.lightSettings(new MinecraftLightProvider.CelestialSettings(50, .6, 1.5));
+        var morning = new MinecraftCelestialFrame(-.8f, 0, 0, 0, 0, 63, 80, 1, LIGHTING);
+        var noon = new MinecraftCelestialFrame(0, 0, 0, 0, 0, 63, 80, 1, LIGHTING);
+        var night = new MinecraftCelestialFrame((float)Math.PI, 0, 0, 0, 0, 63, 80, 1, LIGHTING);
+        var morningSun = MinecraftLightProvider.celestialLights(morning, settings).sun().orElseThrow();
+        var noonSun = MinecraftLightProvider.celestialLights(noon, settings).sun().orElseThrow();
+        var morningSky = SkyLutPass.gather(configured, morning, preset);
+        var noonSky = SkyLutPass.gather(configured, noon, preset);
+        assertNotEquals(morningSun.directionX(), noonSun.directionX());
+        assertEquals(-Math.sin(morningSky.sunAngleRadians()), morningSun.directionX(), 1e-7);
+        assertEquals(Math.cos(noonSky.noonTiltRadians()), noonSun.directionY(), 1e-7);
+        assertEquals(Math.toRadians(50), noonSky.noonTiltRadians(), 1e-7);
+        assertEquals(100000, noonSun.illuminanceRedLux(), 1e-9);
+        assertTrue(MinecraftLightProvider.celestialLights(night, settings).sun().isEmpty());
+        assertEquals(night.sunAngleRadians(), SkyLutPass.gather(configured, night, preset).sunAngleRadians());
     }
 
     private static CloudlySourcePack source(Path directory, double elevation, double azimuth, String axis) throws Exception {

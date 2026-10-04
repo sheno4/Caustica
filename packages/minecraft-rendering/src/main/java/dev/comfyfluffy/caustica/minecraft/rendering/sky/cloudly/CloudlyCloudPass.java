@@ -179,9 +179,8 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
             frame.retain(shaderOwner);
         }
         var celestial = captured.celestial();
-        double angle = model.sun() == null ? celestial.sunAngleRadians() : model.sun().sunAngleRadians();
-        double tilt = Math.toRadians(model.sun() == null ? values.get(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES)
-                : model.sun().noonTiltDegrees());
+        double angle = celestial.sunAngleRadians();
+        double tilt = Math.toRadians(values.get(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES));
         float sunX = (float) -Math.sin(angle);
         float sunY = (float) (Math.cos(tilt) * Math.cos(angle));
         float sunZ = (float) (Math.sin(tilt) * Math.cos(angle));
