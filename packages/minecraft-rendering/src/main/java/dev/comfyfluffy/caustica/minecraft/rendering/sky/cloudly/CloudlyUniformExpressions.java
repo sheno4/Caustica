@@ -2,12 +2,18 @@ package dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly;
 
 import com.google.gson.JsonElement;
 import java.util.Map;
+import java.util.function.Function;
 
 /** Typed private parameter recipes preserve scalar branches, integer masks and float32 arithmetic. */
 public final class CloudlyUniformExpressions {
     private CloudlyUniformExpressions() { }
 
     public static double[] evaluate(JsonElement expression, Map<String, double[]> inputs) {
+        return evaluate(expression, inputs::get);
+    }
+
+    /** Resolving inputs lazily avoids reading producers from unselected shader stages or source branches. */
+    public static double[] evaluate(JsonElement expression, Function<String, double[]> inputs) {
         if (expression.isJsonPrimitive()) {
             var primitive = expression.getAsJsonPrimitive();
             return new double[]{primitive.isBoolean() ? primitive.getAsBoolean() ? 1 : 0 : primitive.getAsDouble()};
@@ -21,7 +27,7 @@ public final class CloudlyUniformExpressions {
         var object = expression.getAsJsonObject();
         if (object.has("input")) {
             String name = object.get("input").getAsString();
-            double[] value = inputs.get(name);
+            double[] value = inputs.apply(name);
             if (value == null) throw new IllegalArgumentException("Missing original runtime input " + name);
             return value.clone();
         }
