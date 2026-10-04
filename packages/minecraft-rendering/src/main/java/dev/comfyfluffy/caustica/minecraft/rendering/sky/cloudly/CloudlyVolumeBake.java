@@ -24,6 +24,7 @@ import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageFormatProperties2;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
+import org.lwjgl.vulkan.VkImageCopy;
 import org.lwjgl.vulkan.VkImageSubresourceRange;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
@@ -47,7 +48,8 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** One-time execution of private noise and SDF programs with explicitly supplied source data. */
 public final class CloudlyVolumeBake {
-    private static final int USAGE = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    private static final int USAGE = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
+            | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     private CloudlyVolumeBake() { }
 
@@ -82,10 +84,15 @@ public final class CloudlyVolumeBake {
      * Complete parameter bytes are frozen here. The binding and push factories only resolve already
      * allocated descriptors and addresses; they supply every field required by the private program ABI.
      */
+    public sealed interface StageSpec permits DispatchSpec, CopySpec { }
+
+    /** Same-format copies preserve the quantized original before a separable filter changes it. */
+    public record CopySpec(String source, int sourceMip, String destination, int destinationMip) implements StageSpec { }
+
     public record DispatchSpec(String programId, ByteBuffer constants,
                                Function<View, ByteBuffer> bindings,
                                BiFunction<View, CloudlyShaderLibrary.Parameters, Map<String, Long>> push,
-                               int groupsX, int groupsY, int groupsZ) {
+                               int groupsX, int groupsY, int groupsZ) implements StageSpec {
         public DispatchSpec {
             ByteBuffer frozen = ByteBuffer.allocate(constants.remaining()).order(ByteOrder.LITTLE_ENDIAN);
             frozen.put(constants.duplicate()).flip();
@@ -95,17 +102,24 @@ public final class CloudlyVolumeBake {
 
     /** Input owners are borrowed; the accepted job holds independent references until completion. */
     public record Plan(List<ImageSpec> images, List<SamplerSpec> samplers,
-                       List<DispatchSpec> dispatches, List<ResourceOwner> inputs) {
+                       List<StageSpec> stages, List<ResourceOwner> inputs) {
         public Plan {
             images = List.copyOf(images); samplers = List.copyOf(samplers);
-            dispatches = List.copyOf(dispatches); inputs = List.copyOf(inputs);
+            stages = List.copyOf(stages); inputs = List.copyOf(inputs);
+            var names = new java.util.HashSet<String>();
+            for (ImageSpec image : images) if (!names.add(image.name())) throw new IllegalArgumentException("Duplicate bake image " + image.name());
+            Map<String, ImageSpec> byName = new LinkedHashMap<>();
+            images.forEach(image -> byName.put(image.name(), image));
+            for (StageSpec stage : stages) if (stage instanceof CopySpec copy) validateCopy(copy, byName);
         }
     }
 
     public record Texture(Dimension dimension, int width, int height, int depth, int mipLevels, int format, long image,
-                          GpuDescriptorIndex.Resource sampledIndex, List<GpuDescriptorIndex.Resource> storageIndices) {
-        public Texture { storageIndices = List.copyOf(storageIndices); }
+                          GpuDescriptorIndex.Resource sampledIndex, List<GpuDescriptorIndex.Resource> storageIndices,
+                          List<GpuDescriptorIndex.Resource> mipSampledIndices) {
+        public Texture { storageIndices = List.copyOf(storageIndices); mipSampledIndices = List.copyOf(mipSampledIndices); }
         public GpuDescriptorIndex.Resource storageIndex(int mip) { return storageIndices.get(mip); }
+        public GpuDescriptorIndex.Resource sampledIndex(int mip) { return mip < 0 ? sampledIndex : mipSampledIndices.get(mip); }
     }
     public record View(Map<String, Texture> images, Map<String, GpuDescriptorIndex.Sampler> samplers) {
         public View { images = Map.copyOf(images); samplers = Map.copyOf(samplers); }
@@ -152,10 +166,15 @@ public final class CloudlyVolumeBake {
                 if (image.spec().publish()) outputs.put(image.spec().name(), image.texture());
             }
             View view = new View(textureIndices, samplerIndices);
-            List<RecordedDispatch> dispatches = new ArrayList<>();
+            List<RecordedStage> stages = new ArrayList<>();
             Map<String, CloudlyShaderLibrary.Instance> shaderInstances = new LinkedHashMap<>();
-            for (DispatchSpec spec : plan.dispatches()) {
+            for (StageSpec stage : plan.stages()) {
                 checkInterrupted();
+                if (stage instanceof CopySpec copy) {
+                    stages.add(new RecordedCopy(view.image(copy.source()), copy.sourceMip(), view.image(copy.destination()), copy.destinationMip()));
+                    continue;
+                }
+                DispatchSpec spec = (DispatchSpec) stage;
                 CloudlyShaderLibrary.Instance shader = shaderInstances.get(spec.programId());
                 if (shader == null) {
                     shader = library.program(spec.programId()).create(gpu, resources);
@@ -164,7 +183,7 @@ public final class CloudlyVolumeBake {
                 }
                 var parameter = shader.parameters(gpu, resources, spec.constants(), spec.bindings().apply(view));
                 parameters.add(parameter);
-                dispatches.add(new RecordedDispatch(shader, Map.copyOf(spec.push().apply(view, parameter)),
+                stages.add(new RecordedDispatch(shader, Map.copyOf(spec.push().apply(view, parameter)),
                         spec.groupsX(), spec.groupsY(), spec.groupsZ()));
             }
             var samplerAllocation = samplers;
@@ -179,7 +198,7 @@ public final class CloudlyVolumeBake {
             acceptedClaims.add(outputOwner.retain()); acceptedClaims.add(workOwner.retain());
             for (ResourceOwner input : plan.inputs()) acceptedClaims.add(input.retain());
             ResourceOwner preparationClaim = workOwner;
-            return queue.submit(commands -> record(commands, images, dispatches), acceptedClaims, result -> {
+            return queue.submit(commands -> record(commands, images, stages), acceptedClaims, result -> {
                 preparationClaim.close();
                 if (result instanceof GpuComputeCompletion.Succeeded) {
                     try { completion.accept(ready); }
@@ -222,22 +241,27 @@ public final class CloudlyVolumeBake {
             int[] families = queue.sharedQueueFamilyIndices();
             if (families.length > 1) info.sharingMode(VK_SHARING_MODE_CONCURRENT).pQueueFamilyIndices(stack.ints(families));
             image = VmaImageAllocation.create(gpu, info, "Cloudly original bake " + spec.name());
-            descriptors = gpu.descriptorHeap().allocateResources(spec.mipLevels() + 1);
-            var views = VkImageViewCreateInfo.calloc(spec.mipLevels() + 1, stack);
-            var encoded = VkImageDescriptorInfoEXT.calloc(spec.mipLevels() + 1, stack);
+            int descriptorCount = 2 * spec.mipLevels() + 1;
+            descriptors = gpu.descriptorHeap().allocateResources(descriptorCount);
+            var views = VkImageViewCreateInfo.calloc(descriptorCount, stack);
+            var encoded = VkImageDescriptorInfoEXT.calloc(descriptorCount, stack);
             List<GpuDescriptorWriter.ImageWrite> writes = new ArrayList<>();
             List<GpuDescriptorIndex.Resource> storage = new ArrayList<>();
-            for (int index = 0; index <= spec.mipLevels(); index++) {
+            List<GpuDescriptorIndex.Resource> mipSampled = new ArrayList<>();
+            for (int index = 0; index < descriptorCount; index++) {
+                boolean storageView = index > 0 && index <= spec.mipLevels();
+                int mip = storageView ? index - 1 : index - 1 - spec.mipLevels();
                 var view = views.get(index).sType$Default().image(image.image()).viewType(spec.dimension().viewType).format(spec.format());
                 view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseArrayLayer(0).layerCount(1)
-                        .baseMipLevel(index == 0 ? 0 : index - 1).levelCount(index == 0 ? spec.mipLevels() : 1);
+                        .baseMipLevel(index == 0 ? 0 : mip).levelCount(index == 0 ? spec.mipLevels() : 1);
                 var descriptor = encoded.get(index).sType$Default().pView(view).layout(VK_IMAGE_LAYOUT_GENERAL);
-                writes.add(new GpuDescriptorWriter.ImageWrite(index == 0 ? GpuImageDescriptorKind.SAMPLED : GpuImageDescriptorKind.STORAGE, descriptor));
-                if (index > 0) storage.add(new GpuDescriptorIndex.Resource(descriptors.firstIndex().value() + index));
+                writes.add(new GpuDescriptorWriter.ImageWrite(storageView ? GpuImageDescriptorKind.STORAGE : GpuImageDescriptorKind.SAMPLED, descriptor));
+                if (storageView) storage.add(new GpuDescriptorIndex.Resource(descriptors.firstIndex().value() + index));
+                else if (index > 0) mipSampled.add(new GpuDescriptorIndex.Resource(descriptors.firstIndex().value() + index));
             }
             gpu.descriptorHeap().writer().writeImages(descriptors, 0, writes);
             Texture texture = new Texture(spec.dimension(), spec.width(), spec.height(), spec.depth(), spec.mipLevels(), spec.format(),
-                    image.image(), descriptors.firstIndex(), storage);
+                    image.image(), descriptors.firstIndex(), storage, mipSampled);
             return new OwnedImage(spec, image, descriptors, texture);
         } catch (RuntimeException | Error failure) {
             var allocatedImage = image; var allocatedDescriptors = descriptors;
@@ -251,7 +275,8 @@ public final class CloudlyVolumeBake {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var format = VkFormatProperties2.calloc(stack).sType$Default();
             VK11.vkGetPhysicalDeviceFormatProperties2(gpu.vk().getPhysicalDevice(), spec.format(), format);
-            int features = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK11.VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+            int features = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT
+                    | VK11.VK_FORMAT_FEATURE_TRANSFER_DST_BIT | VK11.VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
             if (spec.linearFiltering()) features |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
             if ((format.formatProperties().optimalTilingFeatures() & features) != features) {
                 throw new UnsupportedOperationException("Original Cloudly texture format unavailable: " + spec.name());
@@ -283,7 +308,7 @@ public final class CloudlyVolumeBake {
         }
     }
 
-    private static void record(VkCommandBuffer commands, List<OwnedImage> images, List<RecordedDispatch> dispatches) {
+    private static void record(VkCommandBuffer commands, List<OwnedImage> images, List<RecordedStage> stages) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var transitions = VkImageMemoryBarrier2.calloc(images.size(), stack);
             for (int index = 0; index < images.size(); index++) {
@@ -307,8 +332,20 @@ public final class CloudlyVolumeBake {
                 vkCmdClearColorImage(commands, image.image().image(), VK_IMAGE_LAYOUT_GENERAL, value, range);
             }
             dependency(commands, stack);
-            for (RecordedDispatch dispatch : dispatches) {
+            for (RecordedStage stage : stages) {
                 try (MemoryStack dispatchStack = MemoryStack.stackPush()) {
+                    if (stage instanceof RecordedCopy copy) {
+                        var region = VkImageCopy.calloc(1, dispatchStack);
+                        region.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(copy.sourceMip()).baseArrayLayer(0).layerCount(1);
+                        region.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(copy.destinationMip()).baseArrayLayer(0).layerCount(1);
+                        region.extent().set(Math.max(1, copy.source().width() >> copy.sourceMip()),
+                                Math.max(1, copy.source().height() >> copy.sourceMip()), Math.max(1, copy.source().depth() >> copy.sourceMip()));
+                        vkCmdCopyImage(commands, copy.source().image(), VK_IMAGE_LAYOUT_GENERAL,
+                                copy.destination().image(), VK_IMAGE_LAYOUT_GENERAL, region);
+                        dependency(commands, dispatchStack);
+                        continue;
+                    }
+                    RecordedDispatch dispatch = (RecordedDispatch) stage;
                     ByteBuffer push = dispatchStack.malloc(dispatch.shader().program().pushLayout().byteSize()).order(ByteOrder.LITTLE_ENDIAN);
                     dispatch.shader().program().pushLayout().write(push, dispatch.push());
                     dispatch.shader().dispatch(commands, push, dispatch.x(), dispatch.y(), dispatch.z());
@@ -320,10 +357,11 @@ public final class CloudlyVolumeBake {
 
     private static void dependency(VkCommandBuffer commands, MemoryStack stack) {
         var barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
-                .srcStageMask(VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                .srcStageMask(VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT | VK13.VK_PIPELINE_STAGE_2_COPY_BIT | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
                 .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
-                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT
+                        | VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
         VK14.vkCmdPipelineBarrier2(commands, VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
     }
 
@@ -344,5 +382,18 @@ public final class CloudlyVolumeBake {
                                Texture texture) implements AutoCloseable {
         @Override public void close() { new ResourceLifetime(descriptors::destroy, image::close).close(); }
     }
-    private record RecordedDispatch(CloudlyShaderLibrary.Instance shader, Map<String, Long> push, int x, int y, int z) { }
+    static void validateCopy(CopySpec copy, Map<String, ImageSpec> images) {
+        ImageSpec source = images.get(copy.source()), destination = images.get(copy.destination());
+        if (source == null || destination == null || source.dimension() != destination.dimension()
+                || source.format() != destination.format() || copy.sourceMip() < 0 || copy.sourceMip() >= source.mipLevels()
+                || copy.destinationMip() < 0 || copy.destinationMip() >= destination.mipLevels()
+                || copy.source().equals(copy.destination())) throw new IllegalArgumentException("Invalid original same-format image copy " + copy);
+        int[] sourceSize = {source.width(), source.height(), source.depth()}, destinationSize = {destination.width(), destination.height(), destination.depth()};
+        for (int axis = 0; axis < 3; axis++) if (Math.max(1, sourceSize[axis] >> copy.sourceMip()) != Math.max(1, destinationSize[axis] >> copy.destinationMip())) {
+            throw new IllegalArgumentException("Original image copy extents differ " + copy);
+        }
+    }
+    private sealed interface RecordedStage permits RecordedDispatch, RecordedCopy { }
+    private record RecordedCopy(Texture source, int sourceMip, Texture destination, int destinationMip) implements RecordedStage { }
+    private record RecordedDispatch(CloudlyShaderLibrary.Instance shader, Map<String, Long> push, int x, int y, int z) implements RecordedStage { }
 }

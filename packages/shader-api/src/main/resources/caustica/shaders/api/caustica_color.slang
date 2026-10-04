@@ -17,6 +17,14 @@ public float3 bt709ToAcesCg(float3 color) {
             dot(color, BT709_TO_ACESCG_B));
 }
 
+/** Linear inverse at a BT.709 processing boundary; HDR values retain their signed gamut components. */
+public float3 acesCgToBt709(float3 color) {
+    return float3(
+            dot(color, float3( 1.70505095, -0.62179214, -0.08325887)),
+            dot(color, float3(-0.13025641,  1.14080477, -0.01054832)),
+            dot(color, float3(-0.02400336, -0.12896897,  1.15297234)));
+}
+
 /** sRGB electro-optical transfer function: encoded sRGB to linear BT.709, before bt709ToAcesCg. */
 public float3 srgbToLinear(float3 color) {
     float3 lo = color / 12.92;

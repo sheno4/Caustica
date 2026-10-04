@@ -36,7 +36,7 @@ def struct_fields(source: str, name: str) -> tuple[list[dict], int]:
 
 def host_camera_body(text: str) -> str:
     """Import host camera rays while retaining the source's metre/centimetre contract."""
-    function = re.search(r"float3\s+GetNormalizeRayWorldDirection\s*\(\s*float2\s+ScreenPosition\s*\)\s*\{", text)
+    function = re.search(r"float3\s+GetNormalizeRayWorldDirection\s*\(\s*(?:in\s+)?float2\s+ScreenPosition\s*\)\s*\{", text)
     if not function:
         raise ValueError("The source program does not expose its camera-ray interface")
     cursor, depth = function.end(), 1
@@ -61,6 +61,21 @@ def host_camera_body(text: str) -> str:
         raise ValueError("The source camera origin interface changed")
     text = text[:ray.start()] + ray[0].replace(origin,
         "((OriginalHostCamera*)originalPush.cameraAddress)->sourceOriginMeters * 100.0f") + text[ray.end():]
+    composite = re.search(r"Ray\s+GetViewRay_FIXED_For_CompositeWithScreenCS\s*\(\s*in\s+float2\s+uv\s*\)\s*\{.*?\n\}", text, re.S)
+    if composite:
+        text = text[:composite.start()] + """Ray GetViewRay_FIXED_For_CompositeWithScreenCS(in float2 uv)
+{
+    return GetViewRay(uv);
+}""" + text[composite.end():]
+        distance = re.search(r"float\s+GetDistanceFromSceneDepth\s*\(\s*in\s+float2\s+uv,\s*in\s+float\s+SceneDepth\s*\)\s*\{.*?\n\}", text, re.S)
+        if not distance:
+            raise ValueError("The source depth-to-distance camera interface changed")
+        text = text[:distance.start()] + """float GetDistanceFromSceneDepth(in float2 uv, in float SceneDepth)
+{
+    float3 direction = GetNormalizeRayWorldDirection(uv * 2.0f - 1.0f);
+    float3 forward = GetNormalizeRayWorldDirection(float2(0, 0));
+    return SceneDepth * 0.01f / dot(direction, forward);
+}""" + text[distance.end():]
     return text
 
 
@@ -164,7 +179,9 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
                 mathematicalFunctionsChanged=False,
                 cameraBridge=dict(enabled=host_camera, byteSize=80 if host_camera else 0,
                                   sourceAxes="host X, negative host Z, host Y",
-                                  replacedInterfaces=["GetNormalizeRayWorldDirection", "GetViewRay origin"] if host_camera else []))
+                                  replacedInterfaces=(["GetNormalizeRayWorldDirection", "GetViewRay origin"] +
+                                    (["GetViewRay_FIXED_For_CompositeWithScreenCS", "GetDistanceFromSceneDepth"]
+                                     if "GetViewRay_FIXED_For_CompositeWithScreenCS" in source else [])) if host_camera else []))
 
 
 def main() -> None:
