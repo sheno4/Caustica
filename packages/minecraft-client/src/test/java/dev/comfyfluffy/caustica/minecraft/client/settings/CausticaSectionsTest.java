@@ -68,8 +68,23 @@ final class CausticaSectionsTest {
     @Test
     void optionsWithoutNativeRowsDoNotCreateAnEmptySection() {
         SettingsRegistry registry = new SettingsRegistry();
-        FeatureSettings feature = registry.feature(PROVIDER_ONLY).option(Option.optionalString("path")).register();
+        FeatureSettings feature = registry.feature(PROVIDER_ONLY).option(Option.color("tint", 0xffffff)).register();
         assertNull(CausticaSections.feature(feature, options(registry)));
+    }
+
+    @Test
+    void aSourcePackPathCreatesAnEditableSectionRow() {
+        SettingsRegistry registry = new SettingsRegistry();
+        FeatureSettings feature = registry.feature(PROVIDER_ONLY).option(Option.optionalString("path")).register();
+        var store = options(registry);
+        var section = CausticaSections.feature(feature, store);
+        assertNotNull(section);
+        var rows = groupOf(section, "other").rows();
+        assertEquals(1, rows.size());
+        assertEquals("path", rows.getFirst().id());
+        var path = (SettingControl.TextControl) rows.getFirst();
+        path.set("C:/cloudly/manifest.json");
+        assertEquals("C:/cloudly/manifest.json", path.get());
     }
 
     @Test
