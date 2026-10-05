@@ -28,6 +28,17 @@ final class ShaderObjectComputeTest {
     }
 
     @Test
+    void indirectCommandsMustFitTheArgumentAllocation() {
+        assertDoesNotThrow(() -> ShaderObjectCompute.validateIndirectRange(60, 48));
+        assertDoesNotThrow(() -> ShaderObjectCompute.validateIndirectRange(12, 0));
+        assertThrows(IllegalArgumentException.class, () -> ShaderObjectCompute.validateIndirectRange(60, 52));
+        assertThrows(IllegalArgumentException.class, () -> ShaderObjectCompute.validateIndirectRange(60, 1));
+        assertThrows(IllegalArgumentException.class, () -> ShaderObjectCompute.validateIndirectRange(60, -4));
+        assertThrows(IllegalArgumentException.class, () -> ShaderObjectCompute.validateIndirectRange(8, 0));
+        assertThrows(IllegalArgumentException.class, () -> ShaderObjectCompute.validateIndirectRange(Long.MAX_VALUE, Long.MAX_VALUE - 3));
+    }
+
+    @Test
     void heapShadersRejectDescriptorSetDecorationsBeforeVulkanCreation() {
         assertDoesNotThrow(() -> ShaderObjectCompute.validateDescriptorHeapSpirv(module()));
         assertThrows(IllegalArgumentException.class,

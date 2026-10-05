@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.engine.vulkan;
 
 /** Feature booleans that the renderer enables on every logical device. */
 public enum VulkanFeature {
+    TEXTURE_COMPRESSION_BC("textureCompressionBC"),
     SHADER_INT64("shaderInt64"),
     SHADER_INT16("shaderInt16"),
     SHADER_FLOAT16("shaderFloat16"),

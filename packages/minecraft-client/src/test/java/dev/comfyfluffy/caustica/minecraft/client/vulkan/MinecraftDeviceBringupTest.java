@@ -90,6 +90,19 @@ final class MinecraftDeviceBringupTest {
     }
 
     @Test
+    void rejectsCompressedTextureUseWithoutLogicalDeviceFeatureSupport() {
+        var required = VulkanRequiredProfile.CAUSTICA_1_4;
+        var features = new HashSet<>(required.features());
+        features.remove(VulkanFeature.TEXTURE_COMPRESSION_BC);
+        var validation = MinecraftDeviceBringup.validateProfile(new VulkanProfileSupport(
+                required.apiVersion(), required.apiVersion(), required.apiVersion(),
+                required.deviceExtensions(), features));
+        assertFalse(validation.supported());
+        assertEquals(1, validation.issues().size());
+        assertTrue(validation.diagnostic().contains("textureCompressionBC"));
+    }
+
+    @Test
     void capsOverlaySamplesAtFourAndFallsBackInOrder() {
         assertEquals(VK10.VK_SAMPLE_COUNT_4_BIT, MinecraftDeviceBringup.preferredOverlaySampleCount(
                 VK10.VK_SAMPLE_COUNT_8_BIT | VK10.VK_SAMPLE_COUNT_4_BIT | VK10.VK_SAMPLE_COUNT_2_BIT));

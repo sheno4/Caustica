@@ -14,11 +14,12 @@
 - `CloudlyBakePlan` 读取私有配方，冻结经过哈希校验的完整常量、绑定和 push 输入，拒绝未解决执行依赖的配方。原版光学深度→多重散射→远处天空光三阶段配方通过真实 Java 加载、绑定及 push 编码检查。
 - 相机桥接以宿主逆投影恢复光线，并映射到原版 X/负宿主 Z/宿主 Y 坐标。云追踪、大气合成、时序重建的桥接变体已编译。`CloudlyFrameUniforms` 提供厘米矩阵、当前与上一帧视图、深度与抖动；已向 33 个真实原版 View 布局写入并核对字段类型与尺寸。
 - `CloudlyFrameArena` 仅在帧的最后 GPU 所有权释放后复用常量缓冲区。`CloudlyFramePrograms` 共享 shader object，用帧独立的不可变数据记录原版 dispatch 和阶段间依赖，避免逐帧覆写仍在读取的数据与反复分配内存。
+- 原版瓦片追踪支持 GPU 间接调度：参数缓冲随帧保留，分类后的 storage 写入在 `DRAW_INDIRECT` 读取前建立依赖。设备初始化明确查询并启用 `textureCompressionBC`，支持原始 BC6H 月球 cubemap；仅物理设备支持压缩格式不足以证明逻辑设备已启用该能力。
 - `CloudlySourceBuffer` 区分结构化组件缓冲与原版天空采样点的 float4 texel 缓冲。`CloudlyColorBridge` 在原版线性 BT.709 合成器与宿主 ACEScg 之间转换，保留 HDR 与预曝光值；桥接程序已编译并通过 SPIR-V 验证。
 - `CloudlyStatisticsBuffer` 提供原版 uint texel min/max 输出与完成后的映射读回；生成任务记录 GPU→宿主依赖，读回时 invalidate 非一致缓存。`CloudlyUniformExpressions` 执行私有字段配方，保留 float32 运算、延迟分支与整数掩码。
 - `CloudlyOriginalBakeResources` 将私有生成配方连接到已上传源纹理、不可变组件缓冲、统计缓冲和完成地址。当前配方的 46 张纹理、141 个有序阶段通过 CPU 绑定检查。统计读取实际生成通道，CPU float4 的未用通道保留原版回调的 −1；GPU 完成后才发布输出。尚未在 GPU 执行该配方。
 - `CloudlyFrameRecipe` 冻结私有帧参数，按原版顺序发布已更新参数的别名，检查各字段的类型与偏移。阶段只读取自己消费的 uniform；不读取未选择阶段或分支的依赖。4 项数值测试与实际大气合成、时序重建程序的 13,584 字节参数、View、完整 heap 表和 push 编码检查通过。未完成的帧计划不能标记为可执行。
-- 67 个真实程序的私有资源哈希、完整 typed heap 表及无隐式 bound uniform 已检查。相机数值测试 3 项、配方冻结与复制测试 3 项通过；原有程序库 ABI 测试 6 项已通过。没有执行 GPU 画面测试。
+- 72 个真实程序的私有资源哈希、完整 typed heap 表及无隐式 bound uniform 已检查，覆盖 64,333,944 字节 SPIR-V 与 35 个 View 布局。原始帧纹理的真实 Java 加载核对 19 个 mip、109 个上传区域及 4,980,880 字节，其中 cubemap 占 108 个区域。相机数值测试 3 项、配方冻结与复制测试 3 项通过；原有程序库 ABI 测试 6 项已通过。没有执行 GPU 画面测试。
 
 ## 原生参数恢复
 

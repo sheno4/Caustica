@@ -175,6 +175,7 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
         def expectedResources = [
                 "caustica/shaders/minecraft/sky/caustica_cloudly_types.slang",
                 "caustica/shaders/minecraft/sky/caustica_cloudly_clouds.slang",
+                "caustica/shaders/minecraft/sky/caustica_cloudly_composite.slang",
                 "caustica/shaders/minecraft/surface/caustica_minecraft_coverage.slang",
                 "caustica/shaders/minecraft/surface/caustica_minecraft_material.slang",
                 "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",
@@ -185,6 +186,7 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "caustica/shaders/minecraft/sky/caustica_minecraft_overworld_sky.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_sky_atmosphere.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_sky_bindings.slang",
+                "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_ambient.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_multiscatter.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_transmittance.slang",
                 "caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_types.slang",

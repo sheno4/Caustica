@@ -87,6 +87,28 @@ public final class ShaderObjectCompute implements AutoCloseable {
         Objects.requireNonNull(commandBuffer, "commandBuffer");
         validatePushData(pushData);
         validateGroupCounts(groupCountX, groupCountY, groupCountZ);
+        bindAndPush(commandBuffer, pushData);
+        VK10.vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
+    }
+
+    /** The caller retains an INDIRECT_BUFFER allocation and makes its GPU-produced arguments visible. */
+    public void dispatchIndirect(VkCommandBuffer commandBuffer, ByteBuffer pushData,
+                                 long indirectBuffer, long bufferBytes, long byteOffset) {
+        Objects.requireNonNull(commandBuffer, "commandBuffer");
+        validatePushData(pushData);
+        validateIndirectRange(bufferBytes, byteOffset);
+        if (indirectBuffer == 0) throw new IllegalArgumentException("Indirect buffer handle must be present");
+        bindAndPush(commandBuffer, pushData);
+        VK10.vkCmdDispatchIndirect(commandBuffer, indirectBuffer, byteOffset);
+    }
+
+    static void validateIndirectRange(long bufferBytes, long byteOffset) {
+        if (byteOffset < 0 || (byteOffset & 3) != 0 || bufferBytes < 12 || byteOffset > bufferBytes - 12) {
+            throw new IllegalArgumentException("Indirect dispatch requires an aligned, contained 12-byte command");
+        }
+    }
+
+    private void bindAndPush(VkCommandBuffer commandBuffer, ByteBuffer pushData) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             IntBuffer stages = stack.ints(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
             LongBuffer shaders = stack.longs(shader);
@@ -95,7 +117,6 @@ public final class ShaderObjectCompute implements AutoCloseable {
             VkPushDataInfoEXT push = VkPushDataInfoEXT.calloc(stack).sType$Default()
                     .offset(0).data(range);
             EXTDescriptorHeap.vkCmdPushDataEXT(commandBuffer, push);
-            VK10.vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
         }
     }
 

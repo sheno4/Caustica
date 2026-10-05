@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 /** Original frame programs share shader objects; their parameters retire with each recorded frame. */
 public final class CloudlyFramePrograms implements AutoCloseable {
@@ -40,6 +41,33 @@ public final class CloudlyFramePrograms implements AutoCloseable {
     public void record(PassFrame frame, String programId, ByteBuffer constants,
                        Map<String, ? extends GpuDescriptorIndex> descriptors, Map<String, Long> sourcePush,
                        CloudlyFrameCamera camera, List<ResourceOwner> dependencies, int x, int y, int z) {
+        recordDispatch(frame, programId, constants, descriptors, sourcePush, camera, dependencies,
+                (shader, push) -> shader.dispatch(frame.commandBuffer(), push, x, y, z));
+    }
+
+    /** Original tile classification writes commands on the GPU; no host count readback is needed. */
+    public void recordIndirect(PassFrame frame, String programId, ByteBuffer constants,
+                               Map<String, ? extends GpuDescriptorIndex> descriptors, Map<String, Long> sourcePush,
+                               CloudlyFrameCamera camera, List<ResourceOwner> dependencies,
+                               long argumentBuffer, long argumentBytes, long argumentOffset, ResourceOwner argumentOwner) {
+        frame.retain(argumentOwner);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                    .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    .dstAccessMask(VK13.VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK13.VK_ACCESS_2_SHADER_READ_BIT);
+            VK14.vkCmdPipelineBarrier2(frame.commandBuffer(), VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
+        }
+        recordDispatch(frame, programId, constants, descriptors, sourcePush, camera, dependencies,
+                (shader, push) -> shader.shader().dispatchIndirect(frame.commandBuffer(), push,
+                        argumentBuffer, argumentBytes, argumentOffset));
+    }
+
+    private void recordDispatch(PassFrame frame, String programId, ByteBuffer constants,
+                                Map<String, ? extends GpuDescriptorIndex> descriptors, Map<String, Long> sourcePush,
+                                CloudlyFrameCamera camera, List<ResourceOwner> dependencies,
+                                BiConsumer<CloudlyShaderLibrary.Instance, ByteBuffer> dispatch) {
         var shader = programs.get(programId);
         var program = shader.program();
         if (constants.remaining() != program.parametersByteSize()) throw new IllegalArgumentException("Wrong original frame constants size");
@@ -62,7 +90,7 @@ public final class CloudlyFramePrograms implements AutoCloseable {
             if (usesCamera) push.put("cameraAddress", upload.addressAt(cameraOffset));
             ByteBuffer payload = stack.malloc(program.pushLayout().byteSize()).order(ByteOrder.LITTLE_ENDIAN);
             program.pushLayout().write(payload, push);
-            shader.dispatch(frame.commandBuffer(), payload, x, y, z);
+            dispatch.accept(shader, payload);
             var barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
                     .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
                     .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)

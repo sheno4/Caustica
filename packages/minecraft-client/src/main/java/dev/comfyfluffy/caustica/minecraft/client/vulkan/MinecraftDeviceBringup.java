@@ -142,6 +142,8 @@ public final class MinecraftDeviceBringup {
             "dynamicRendering", VkPhysicalDeviceDynamicRenderingFeatures.DYNAMICRENDERING);
     private static final VulkanFeature SHADER_INT64 = new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT,
             "shaderInt64", VkPhysicalDeviceFeatures.SHADERINT64);
+    private static final VulkanFeature TEXTURE_COMPRESSION_BC = new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT,
+            "textureCompressionBC", VkPhysicalDeviceFeatures.TEXTURECOMPRESSIONBC);
     private static final VulkanFeature SHADER_INT16 = new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT,
             "shaderInt16", VkPhysicalDeviceFeatures.SHADERINT16);
     private static final VulkanFeature UNIFIED_IMAGE_LAYOUTS = new VulkanFeature(UNIFIED_LAYOUTS_STRUCT,
@@ -174,6 +176,7 @@ public final class MinecraftDeviceBringup {
     }
 
     private static final List<ProfileFeature> PROFILE_FEATURES = List.of(
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.TEXTURE_COMPRESSION_BC, TEXTURE_COMPRESSION_BC),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_INT64, SHADER_INT64),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_INT16, SHADER_INT16),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_FLOAT16, SHADER_FLOAT16),
