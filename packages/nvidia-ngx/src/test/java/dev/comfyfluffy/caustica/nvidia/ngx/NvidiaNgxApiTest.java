@@ -1,7 +1,8 @@
 package dev.comfyfluffy.caustica.nvidia.ngx;
 
 import org.junit.jupiter.api.Test;
-import org.lwjgl.vulkan.VkDevice;
+import java.nio.file.Path;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -10,8 +11,19 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class NvidiaNgxApiTest {
     @Test
-    void runtimeRetainsTheTypedVulkanDevice() throws NoSuchFieldException {
-        assertEquals(VkDevice.class, NgxRuntime.class.getDeclaredField("initializedDevice").getType());
+    void runtimeRequiresADeviceContext() {
+        var settings = new NgxRuntime.Settings(Path.of("ngx-data"), Optional.empty());
+        var failure = assertThrows(NullPointerException.class, () -> new NgxRuntime(null, settings));
+        assertEquals("context", failure.getMessage());
+    }
+
+    @Test
+    void runtimeSettingsResolvePathsBeforeNativeInitialization() {
+        var data = Path.of("ngx-data", "..", "ngx-cache");
+        var shim = Path.of("native", "..", "ngxshim.dll");
+        var settings = new NgxRuntime.Settings(data, Optional.of(shim));
+        assertEquals(data.toAbsolutePath().normalize(), settings.dataDirectory());
+        assertEquals(Optional.of(shim.toAbsolutePath().normalize()), settings.shimOverride());
     }
 
     @Test

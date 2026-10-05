@@ -28,6 +28,8 @@ import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCloudPass;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySourcePack;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyLighting;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCompositePass;
 import dev.comfyfluffy.caustica.renderer.presentation.fog.FogPass;
 import dev.comfyfluffy.caustica.renderer.presentation.fog.FogVolume;
 import dev.comfyfluffy.caustica.api.view.Camera;
@@ -41,6 +43,7 @@ import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Owns replaceable Minecraft programs, material epochs, and retained world producers for one session. */
 public final class MinecraftProgramSession implements MinecraftWorldSessionContribution {
@@ -63,7 +66,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final PassRegistration overlayRegistration;
     private final PassRegistration fogRegistration;
     private final PassRegistration cloudRegistration;
+    private final PassRegistration cloudCompositeRegistration;
     private final CloudlySkyPreset cloudlySky;
+    private final AtomicReference<CloudlySkyLighting> cloudlyLighting;
     private final RtEntities entities;
     private final RtEntityTextures entityTextures;
     private final RtTerrain terrain;
@@ -82,7 +87,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     RtEntities entities,
                                     RtEntityTextures entityTextures,
                                     RtTerrain terrain, OptionLookup options,
-                                    PassRegistration cloudRegistration, CloudlySkyPreset cloudlySky) {
+                                    PassRegistration cloudRegistration, PassRegistration cloudCompositeRegistration,
+                                    CloudlySkyPreset cloudlySky,
+                                    AtomicReference<CloudlySkyLighting> cloudlyLighting) {
         this.context = context;
         this.resources = resources;
         this.materialEpochs = materialEpochs;
@@ -94,7 +101,9 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         this.overlayRegistration = overlayRegistration;
         this.fogRegistration = fogRegistration;
         this.cloudRegistration = cloudRegistration;
+        this.cloudCompositeRegistration = cloudCompositeRegistration;
         this.cloudlySky = cloudlySky;
+        this.cloudlyLighting = cloudlyLighting;
         this.entities = entities;
         this.entityTextures = entityTextures;
         this.terrain = terrain;
@@ -125,12 +134,15 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                 context.renderSession().gpu(), context.renderSession().compute(),
                 context.renderSession().resources());
         MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
+        var cloudlyLighting = new AtomicReference<CloudlySkyLighting>();
+        var cloudPass = new AtomicReference<CloudlyCloudPass>();
         MinecraftFrameCaptureInstaller.Lease frameCapture = null;
         MinecraftLightProvider lights = null;
         PassRegistration lightRegistration = null;
         PassRegistration overlayRegistration = null;
         PassRegistration fogRegistration = null;
         PassRegistration cloudRegistration = null;
+        PassRegistration cloudCompositeRegistration = null;
         FogVolume fogVolume = null;
         try {
             fogVolume = new FogVolume(context.renderSession().gpu(), context.renderSession().resources());
@@ -147,15 +159,21 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                             () -> options.snapshot().options(MinecraftProvidersExtension.ID)));
             if (context.dimension().id().equals(OVERWORLD)) {
                 cloudRegistration = context.renderSession().passes().addSceneEffectPass(CloudlyCloudPass.ID,
-                        setup -> new CloudlyCloudPass(setup,
+                        setup -> {
+                            var pass = new CloudlyCloudPass(setup,
                                 context.renderSession().compute(), context.renderSession().resources(),
                                 () -> options.snapshot().options(MinecraftProvidersExtension.ID),
-                                frames::skyFrame, cloudlySource));
+                                frames::skyFrame, cloudlySource, cloudlyLighting::get);
+                            cloudPass.set(pass);
+                            return pass;
+                        });
+                cloudCompositeRegistration = context.renderSession().passes().addReconstructionEffectPass(CloudlyCompositePass.ID,
+                        setup -> new CloudlyCompositePass(setup, context.renderSession().resources(), cloudPass::get));
             }
             MinecraftProgramSession session = new MinecraftProgramSession(
                     context, resources, materialEpochs, frameSelections, frames, fogVolume,
                     lights, lightRegistration, overlayRegistration, fogRegistration, entities, entityTextures, terrain, options,
-                    cloudRegistration, cloudlySky);
+                    cloudRegistration, cloudCompositeRegistration, cloudlySky, cloudlyLighting);
             frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(new MinecraftFrameCaptureInstaller.Sink() {
                 @Override public void update(MinecraftCapturedFrame frame) { frames.update(frame); }
 
@@ -171,6 +189,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             var releases = new ArrayList<Runnable>();
             if (frameCapture != null) releases.add(frameCapture::close);
             if (cloudRegistration != null) releases.add(cloudRegistration::close);
+            if (cloudCompositeRegistration != null) releases.add(cloudCompositeRegistration::close);
             if (fogRegistration != null) releases.add(fogRegistration::close);
             if (overlayRegistration != null) releases.add(overlayRegistration::close);
             if (lightRegistration != null) releases.add(lightRegistration::close);
@@ -334,7 +353,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         return context.renderSession().passes().addWorldResourcePass(setup -> {
             SkyLutPass sky = new SkyLutPass(setup.gpu(), this::options,
                     frames::skyFrame, programs.environment(), context.environment(),
-                    context.renderSession().resources(), generation, cloudlySky);
+                    context.renderSession().resources(), generation, cloudlySky, cloudlyLighting::set);
             return new FirstRecordPass(sky, () -> skySelected(generation));
         });
     }
@@ -432,6 +451,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         active = null;
         new ResourceLifetime(frameCapture::close,
                 () -> { if (cloudRegistration != null) cloudRegistration.close(); },
+                () -> { if (cloudCompositeRegistration != null) cloudCompositeRegistration.close(); },
                 fogRegistration::close, overlayRegistration::close, lightRegistration::close,
                 () -> { if (retiring != null && retiring.sky != null) retiring.sky.close(); },
                 () -> { if (retiring != null) retiring.stopSceneProducers(); },

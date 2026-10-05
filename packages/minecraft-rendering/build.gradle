@@ -70,7 +70,7 @@ def verifyMinecraftSkyShaders = tasks.register("verifyMinecraftSkyShaders") {
             throw new GradleException("sky shaders target ${task.spirvProfile.get()}/${task.vulkanTarget.get()}")
         }
         def names = fileTree(generatedShaderResources.map { it.dir("caustica/shaders/pipelines/sky") }).matching { include "**/*.spv" }.files*.name.sort()
-        if (names != ["multiscatter.comp.spv", "transmittance.comp.spv", "view.comp.spv"]) {
+        if (names != ["ambient.comp.spv", "multiscatter.comp.spv", "transmittance.comp.spv", "view.comp.spv"]) {
             throw new GradleException("sky SPIR-V outputs drifted: ${names}")
         }
     }
@@ -91,7 +91,8 @@ def minecraftRenderingRecordSpecs = [
         "push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyLutPushData|false",
         "buffer|cloudlyComponentLayoutProbe|CloudlyCloudComponent|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCloudComponentData|false",
         "buffer|cloudlyNoiseLayoutProbe|CloudlyNoiseProfile|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyNoiseProfileData|false",
-        "push|cloudlyPushProbe|CloudlyCloudPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCloudPushData|false"
+        "push|cloudlyPushProbe|CloudlyCloudPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCloudPushData|false",
+        "push|cloudlyCompositePushProbe|CloudlyCompositePush|dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen|CloudlyCompositePushData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateMinecraftRenderingRecords = tasks.register("generateMinecraftRenderingRecords", GenerateShaderRecords) {

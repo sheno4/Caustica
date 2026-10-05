@@ -10,6 +10,7 @@ struct CloudlyNoiseLayoutProbe { CloudlyNoiseProfile values[2]; };
 [[vk::binding(10, 0)]] StructuredBuffer<CloudlyComponentLayoutProbe, Std430DataLayout> cloudlyComponentLayoutProbe;
 
 [[vk::push_constant]] CloudlyCloudPush cloudlyPushProbe;
+[[vk::push_constant]] CloudlyCompositePush cloudlyCompositePushProbe;
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void probeCloudlyPush(uint3 id : SV_DispatchThreadID) {

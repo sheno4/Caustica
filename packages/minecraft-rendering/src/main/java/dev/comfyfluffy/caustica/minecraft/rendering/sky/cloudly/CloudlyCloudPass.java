@@ -23,6 +23,8 @@ import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
+import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
+import dev.comfyfluffy.caustica.vulkan.ComputeSynchronization;
 import org.lwjgl.system.MemoryStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,7 @@ import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+import static org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
 
 /** Camera-ray scattering through original source volumes under an explicit local approximation adapter. */
 public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
@@ -56,6 +59,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     private final ResourceFactory resources;
     private final Supplier<OptionValues> options;
     private final Supplier<MinecraftSkyFrame> frames;
+    private final Supplier<CloudlySkyLighting> atmosphere;
     private final SourceModel model;
     private final ShaderObjectCompute shader;
     private final ResourceOwner shaderOwner;
@@ -63,6 +67,8 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     private final Thread worker;
     private GpuComputeJob uploadJob;
     private Published published;
+    private Layer layer;
+    private long layerFrame = -1;
     private boolean closed;
 
     /** Validates this camera adapter's supported source subset before the session allocates GPU state. */
@@ -77,10 +83,17 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     public CloudlyCloudPass(PostEffectSetup setup, GpuComputeQueue compute, ResourceFactory resources,
                             Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames,
                             CloudlySourcePack source) {
+        this(setup, compute, resources, options, frames, source, () -> null);
+    }
+
+    public CloudlyCloudPass(PostEffectSetup setup, GpuComputeQueue compute, ResourceFactory resources,
+                            Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames,
+                            CloudlySourcePack source, Supplier<CloudlySkyLighting> atmosphere) {
         this.gpu = setup.gpu();
         this.resources = resources;
         this.options = options;
         this.frames = frames;
+        this.atmosphere = atmosphere;
         if (source == null) {
             model = null;
             shader = null;
@@ -171,6 +184,9 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
         if (!values.get(ENABLED) || !(frame.view().medium() instanceof ViewMedium.Vacuum)) return;
         MinecraftSkyFrame captured = frames.get();
         if (captured == null) return;
+        CloudlySkyLighting sky = atmosphere.get();
+        if (sky == null || sky.frameIndex() != frame.frameIndex()) return;
+        frame.retain(sky.owner());
         Published revision;
         synchronized (this) {
             if (closed || published == null) return;
@@ -184,38 +200,78 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
         float sunX = (float) -Math.sin(angle);
         float sunY = (float) (Math.cos(tilt) * Math.cos(angle));
         float sunZ = (float) (Math.sin(tilt) * Math.cos(angle));
-        float illuminance = sunY > 0 ? (model.sun() == null ? celestial.lighting().sunIlluminanceLux()
-                : (float) model.sun().sunIlluminanceLux()) : 0;
+        float illuminance = model.sun() == null ? celestial.lighting().sunIlluminanceLux()
+                : (float) model.sun().sunIlluminanceLux();
         float[] sunColor = model.sun() == null ? new float[]{1, 1, 1} : model.sun().sunColorAcesCg();
+        double moonAngle = celestial.moonAngleRadians();
+        float moonX = (float)-Math.sin(moonAngle);
+        float moonY = (float)(Math.cos(tilt) * Math.cos(moonAngle));
+        float moonZ = (float)(Math.sin(tilt) * Math.cos(moonAngle));
+        double fraction = celestial.lighting().moonPhaseFixedFraction();
+        float moonIlluminance = (float)((model.sun() == null ? celestial.lighting().moonIlluminanceLux()
+                : model.sun().moonIlluminanceLux()) * (fraction + (1 - fraction)
+                * Math.abs(celestial.moonPhaseIndex() - 4.0) / 4.0));
         var camera = frame.view().camera();
         float units = (float) frame.metersPerSceneUnit();
         float[] matrix = frame.cameraRelativeFromClip();
         float[] jitter = frame.traceJitter();
-        var scene = frame.sceneColor();
-        var output = frame.acquireSceneColorOutput();
+        Layer target = layerFor(frame);
+        var output = target.image();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var push = stack.malloc(CloudlyCloudPushData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
             new CloudlyCloudPushData(revision.buffer().deviceAddressAt(0).value(), revision.componentCount(),
-                    revision.samplerIndex(), output.descriptor(GpuImageDescriptorKind.STORAGE).index().value(),
-                    scene.descriptor(GpuImageDescriptorKind.SAMPLED).index().value(),
+                    revision.samplerIndex(), output.storageIndex().value(),
+                    0,
                     frame.primaryDepth().descriptor(GpuImageDescriptorKind.SAMPLED).index().value(),
                     Math.round(values.get(SAMPLES)), column(matrix, 0), column(matrix, 4), column(matrix, 8), column(matrix, 12),
                     new Float4((float) (camera.x() * units), (float) ((camera.y() - celestial.seaLevel()) * units),
                             (float) (camera.z() * units), units),
                     new Float4(sunX, sunY, sunZ, illuminance),
                     new Float4(model.extinction(), model.phaseG1(), model.phaseG2(), model.phaseMix()),
-                    new Float4(model.ambientRadiance(), model.phaseScale(), model.albedo(), frame.preExposure()),
+                    new Float4(model.ambientScale(), model.phaseScale(), model.albedo(), frame.preExposure()),
                     new Float4(jitter[0], jitter[1], values.get(MAX_DISTANCE_KM) * 1000, model.shadowFirstStep()),
                     new Float4(model.shadowStepBase(), model.voxelStep(), model.targetOpticalDepth(), model.emptyStepMultiplier()),
                     new Float4(sunColor[0], sunColor[1], sunColor[2], 0),
                     new Float4(model.ambientColor()[0], model.ambientColor()[1], model.ambientColor()[2], 0),
                     new Float4(model.scatteringOrders(), model.scatteringAttenuation(), model.scatteringContribution(), model.scatteringEccentricity()),
-                    new Float4(model.maxShapeLod(), model.details().size(), 0, 0)).write(push);
+                    new Float4(model.maxShapeLod(), model.details().size(), 0, 0),
+                    new Float4(moonX, moonY, moonZ, moonIlluminance),
+                    new Float4(model.sun() == null ? (float)Math.toRadians(values.get(SkyLutPass.SUN_ANGULAR_RADIUS_DEGREES))
+                            : (float)model.sun().sunAngularRadiusRadians(),
+                            (float)Math.toRadians(values.get(SkyLutPass.MOON_ANGULAR_RADIUS_DEGREES)), 0, 0),
+                    sky.ambientIndex(), sky.transmittanceIndex(), sky.samplerIndex(), 0).write(push);
             int measurement = timing.begin(frame, output.width(), output.height());
             shader.dispatch(frame.commandBuffer(), push, (output.width() + 7) / 8, (output.height() + 7) / 8, 1);
             timing.end(frame, measurement);
         }
+        layerFrame = frame.frameIndex();
     }
+
+    private synchronized Layer layerFor(PostEffectFrame frame) {
+        if (layer == null || layer.image().width() != frame.renderWidth() || layer.image().height() != frame.renderHeight()) {
+            VmaImage2D image = VmaImage2D.create(gpu, frame.renderWidth(), frame.renderHeight(),
+                    VK_FORMAT_R16G16B16A16_SFLOAT, "Cloudly separate scattering and transmittance");
+            ResourceOwner owner;
+            try { owner = resources.create(image::close); }
+            catch (RuntimeException | Error failure) { image.close(); throw failure; }
+            Layer previous = layer;
+            layer = new Layer(image, owner);
+            layerFrame = -1;
+            ComputeSynchronization.initializeImages(frame.commandBuffer(), List.of(image));
+            if (previous != null) previous.owner().close();
+        }
+        frame.retain(layer.owner());
+        return layer;
+    }
+
+    /** Borrow the current frame's separate medium layer after tracing, retaining its image through composition. */
+    synchronized Layer composedLayer(PostEffectFrame frame) {
+        if (closed || layerFrame != frame.frameIndex()) return null;
+        frame.retain(layer.owner());
+        return layer;
+    }
+
+    record Layer(VmaImage2D image, ResourceOwner owner) { }
 
     private static Float4 column(float[] matrix, int offset) {
         return new Float4(matrix[offset], matrix[offset + 1], matrix[offset + 2], matrix[offset + 3]);
@@ -235,6 +291,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                 () -> { if (pending != null) pending.close(); },
                 this::drainPreparation,
                 () -> { if (previous != null) previous.owner().close(); },
+                () -> { if (layer != null) layer.owner().close(); },
                 () -> { if (shaderOwner != null) shaderOwner.close(); },
                 () -> { if (timing != null) timing.close(); }).close();
     }
@@ -258,7 +315,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
 
     /** Source values stay separate from adapter assumptions; no omitted native field receives an implicit value. */
     record SourceModel(List<SourceComponent> components, CloudlySkyPreset sun, float extinction,
-                               float phaseG1, float phaseG2, float phaseMix, float phaseScale, float ambientRadiance,
+                               float phaseG1, float phaseG2, float phaseMix, float phaseScale, float ambientScale,
                                float albedo, float shadowFirstStep, float shadowStepBase,
                                float[] ambientColor, float scatteringOrders, float scatteringAttenuation,
                                float scatteringContribution, float scatteringEccentricity,
@@ -292,7 +349,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                 throw new IllegalArgumentException("Cloudly phase or single-scattering adapter value is outside its physical range");
             }
             float sigma = number(extinction, "Factor");
-            float ambient = number(adapter, "ambientRadianceCdM2") * number(sky, "CloudSkyAmbientLightIntensity");
+            float ambient = number(sky, "CloudSkyAmbientLightIntensity");
             float firstStep = number(trace, "SunRayStepFirstLen");
             float stepBase = number(trace, "SunRayStepBase");
             if (sigma < 0 || ambient < 0 || firstStep <= 0 || stepBase <= 0) {

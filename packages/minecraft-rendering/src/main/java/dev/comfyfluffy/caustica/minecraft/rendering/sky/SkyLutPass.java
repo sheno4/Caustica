@@ -16,6 +16,7 @@ import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.*;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCloudPass;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyLighting;
 import dev.comfyfluffy.caustica.settings.*;
 import dev.comfyfluffy.caustica.support.SharedResource;
 import dev.comfyfluffy.caustica.vulkan.*;
@@ -26,6 +27,7 @@ import java.nio.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.VK10.*;
 import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure;
@@ -37,7 +39,8 @@ public final class SkyLutPass implements Pass<PassFrame> {
     static final int TRANSMITTANCE_WIDTH = 256, TRANSMITTANCE_HEIGHT = 64;
     static final int MULTISCATTER_WIDTH = 32, MULTISCATTER_HEIGHT = 32;
     static final int SKY_VIEW_WIDTH = 192, SKY_VIEW_HEIGHT = 216;
-    static final long PRIOR_SKY_READ_STAGE = KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+    static final long PRIOR_SKY_READ_STAGE = KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
+            | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     static final long PRIOR_SKY_READ_ACCESS = VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
             | VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     static final long SKY_WRITE_STAGE = VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -62,10 +65,11 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private final MinecraftEnvironmentSelector selector;
     private final ResourceFactory resourceFactory;
     private final CloudlySkyPreset preset;
-    private final VmaImage2D transmittance, multiScatter, skyView;
+    private final Consumer<CloudlySkyLighting> lighting;
+    private final VmaImage2D transmittance, multiScatter, skyView, ambient;
     private final VulkanSampler lutSampler, celestialSampler;
     private final VmaMappedBuffer skyInputs;
-    private final ShaderObjectCompute transmittanceShader, multiScatterShader, skyViewShader;
+    private final ShaderObjectCompute transmittanceShader, multiScatterShader, skyViewShader, ambientShader;
     private final SharedResource<ResourceLifetime> resources;
     private final AtomicLong resourcePackEpoch;
     private ResourceOwner bindingOwner;
@@ -85,6 +89,14 @@ public final class SkyLutPass implements Pass<PassFrame> {
                       EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
                       MinecraftEnvironmentSelector selector, ResourceFactory resourceFactory, long epoch,
                       CloudlySkyPreset preset) {
+        this(gpu, options, frames, environment, selector, resourceFactory, epoch, preset, ignored -> { });
+    }
+
+    public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
+                      Supplier<MinecraftSkyFrame> frames,
+                      EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
+                      MinecraftEnvironmentSelector selector, ResourceFactory resourceFactory, long epoch,
+                      CloudlySkyPreset preset, Consumer<CloudlySkyLighting> lighting) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
         this.options = Objects.requireNonNull(options, "options");
         this.frames = Objects.requireNonNull(frames, "frames");
@@ -92,6 +104,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
         this.selector = Objects.requireNonNull(selector, "selector");
         this.resourceFactory = Objects.requireNonNull(resourceFactory, "resourceFactory");
         this.preset = preset;
+        this.lighting = Objects.requireNonNull(lighting, "lighting");
         resourcePackEpoch = new AtomicLong(epoch);
         List<Runnable> allocated = new ArrayList<>();
         try {
@@ -104,6 +117,8 @@ public final class SkyLutPass implements Pass<PassFrame> {
             skyView = VmaImage2D.create(gpu, SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT,
                     VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
             allocated.add(skyView::close);
+            ambient = VmaImage2D.create(gpu, 1, 1, VK_FORMAT_R16G16B16A16_SFLOAT, ID + " incident sky radiance");
+            allocated.add(ambient::close);
             lutSampler = VulkanSampler.linearClamp(gpu);
             allocated.add(lutSampler::close);
             celestialSampler = VulkanSampler.nearestClamp(gpu);
@@ -116,7 +131,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
             allocated.add(multiScatterShader::close);
             skyViewShader = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "view.comp.spv");
             allocated.add(skyViewShader::close);
-            resources = SharedResource.owned(new ResourceLifetime(skyInputs::close, skyView::close,
+            ambientShader = ShaderObjectCompute.load(gpu, SkyLutPass.class, SHADER_ROOT + "ambient.comp.spv");
+            allocated.add(ambientShader::close);
+            resources = SharedResource.owned(new ResourceLifetime(skyInputs::close, ambient::close, skyView::close,
                     multiScatter::close, transmittance::close, celestialSampler::close, lutSampler::close),
                     ResourceLifetime::close);
         } catch (RuntimeException | Error failure) {
@@ -130,7 +147,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     @Override public void record(PassFrame frame) {
         boolean hasPriorGpuUse = initialized;
         if (!initialized) {
-            ComputeSynchronization.initializeImages(frame.commandBuffer(), List.of(transmittance, multiScatter, skyView));
+            ComputeSynchronization.initializeImages(frame.commandBuffer(), List.of(transmittance, multiScatter, skyView, ambient));
             initialized = true;
         }
         MinecraftSkyFrame captured = frames.get();
@@ -150,6 +167,18 @@ public final class SkyLutPass implements Pass<PassFrame> {
             baked = true;
         }
         dispatch(skyViewShader, frame, skyView, inputs, skyInputsAddress());
+        ComputeSynchronization.betweenDispatches(frame.commandBuffer());
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer push = stack.malloc(SkyLutPushData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
+            new SkyLutPushData(ambient.storageIndex().value(),
+                    new SkyLutPushData.SampledTexture2DIndex(transmittance.sampledIndex().value()),
+                    new SkyLutPushData.SampledTexture2DIndex(skyView.sampledIndex().value()),
+                    new SkyLutPushData.SamplerIndex(lutSampler.index().value()), pushInputs(inputs),
+                    skyInputsAddress()).write(push);
+            ambientShader.dispatch(frame.commandBuffer(), push, 1, 1, 1);
+        }
+        lighting.accept(new CloudlySkyLighting(frame.frameIndex(), ambient.sampledIndex().value(),
+                transmittance.sampledIndex().value(), lutSampler.index().value(), bindingOwner));
     }
 
     private void ensureBinding(AtlasSnapshot snapshot) {
@@ -298,11 +327,12 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 captured.moonAngleRadians(),
                 captured.starAngleRadians(), captured.starBrightness(),
                 preset == null ? l.sunIlluminanceLux() : (float) preset.sunIlluminanceLux(),
-                l.moonIlluminanceLux(), l.nightAirglowLuminanceCdM2(), l.starLuminanceCdM2(),
+                preset == null ? l.moonIlluminanceLux() : (float) preset.moonIlluminanceLux(),
+                l.nightAirglowLuminanceCdM2(), l.starLuminanceCdM2(),
                 options.get(SUN_NOON_SOUTH_TILT_DEGREES) * r,
                 preset == null ? options.get(SUN_ANGULAR_RADIUS_DEGREES) * r : (float) preset.sunAngularRadiusRadians(),
                 options.get(MOON_ANGULAR_RADIUS_DEGREES) * r, l.moonPhaseFixedFraction(),
-                preset == null ? options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r : (float) preset.sunDiscHalfAngleRadians(),
+                options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r,
                 options.get(MOON_DISC_HALF_ANGLE_DEGREES) * r, altitude,
                 captured.moonPhaseIndex(), options.get(GROUND_ALBEDO),
                 options.get(HORIZON_SOFTEN_DEGREES) * r, preset != null,
@@ -361,7 +391,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
             if (owner != null) owner.close();
         }, () -> {
             if (previousAtlas != null) previousAtlas.close();
-        }, skyViewShader::close, multiScatterShader::close, transmittanceShader::close,
+        }, ambientShader::close, skyViewShader::close, multiScatterShader::close, transmittanceShader::close,
                 resources::close).close();
     }
 

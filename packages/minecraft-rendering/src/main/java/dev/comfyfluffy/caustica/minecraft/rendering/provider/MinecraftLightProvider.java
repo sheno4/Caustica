@@ -107,7 +107,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
                 settings.sunAngleRadians().orElse(captured.sunAngleRadians()), captured.moonAngleRadians(),
                 settings.noonTiltDegrees() * TO_RADIANS,
                 sun.illuminanceLux(),
-                lighting.moonIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE,
+                settings.moonIlluminanceLux().orElse(lighting.moonIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE),
                 captured.moonPhaseIndex(),
                 lighting.moonPhaseFixedFraction(),
                 settings.sunAngularRadiusDegrees() * TO_RADIANS,
@@ -160,7 +160,13 @@ public final class MinecraftLightProvider implements AutoCloseable {
     /** Sky-owned angular settings sampled by this contribution without process-global option access. */
     public record CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
                                     double moonAngularRadiusDegrees, OptionalDouble sunAngleRadians,
-                                    Optional<SunLightOverride> sunLight) {
+                                    Optional<SunLightOverride> sunLight, OptionalDouble moonIlluminanceLux) {
+        public CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
+                                 double moonAngularRadiusDegrees, OptionalDouble sunAngleRadians,
+                                 Optional<SunLightOverride> sunLight) {
+            this(noonTiltDegrees, sunAngularRadiusDegrees, moonAngularRadiusDegrees, sunAngleRadians,
+                    sunLight, OptionalDouble.empty());
+        }
         public CelestialSettings(double noonTiltDegrees, double sunAngularRadiusDegrees,
                                  double moonAngularRadiusDegrees, OptionalDouble sunAngleRadians) {
             this(noonTiltDegrees, sunAngularRadiusDegrees, moonAngularRadiusDegrees, sunAngleRadians, Optional.empty());

@@ -157,6 +157,31 @@ final class CloudlySkyPresetTest {
         assertEquals(night.sunAngleRadians(), SkyLutPass.gather(configured, night, preset).sunAngleRadians());
     }
 
+    @Test void nativeMoonEnergyFollowsCapturedPhaseAndDisplaySizeStaysIndependent(@TempDir Path directory) throws Exception {
+        var preset = CloudlySkyPreset.from(source(directory, 30, 90, "sourceX"));
+        OptionValues sizes = new OptionValues() {
+            @Override public <T> T get(Option<T> option) {
+                if (option.equals(CloudlyCloudPass.ENABLED)) return option.normalize(true);
+                if (option.equals(SkyLutPass.SUN_DISC_HALF_ANGLE_DEGREES)) return option.normalize(2f);
+                if (option.equals(SkyLutPass.MOON_DISC_HALF_ANGLE_DEGREES)) return option.normalize(3f);
+                return option.defaultValue();
+            }
+        };
+        var settings = preset.lightSettings(new MinecraftLightProvider.CelestialSettings(30, .6, 1.5));
+        var full = new MinecraftCelestialFrame((float)Math.PI, 0, 0, 1, 0, 63, 80, 1, LIGHTING);
+        var newMoon = new MinecraftCelestialFrame((float)Math.PI, 0, 0, 1, 4, 63, 80, 1, LIGHTING);
+        var fullLights = MinecraftLightProvider.celestialLights(full, settings);
+        var newLights = MinecraftLightProvider.celestialLights(newMoon, settings);
+        var sky = SkyLutPass.gather(sizes, full, preset);
+        assertTrue(fullLights.sun().isEmpty());
+        assertEquals(.25, fullLights.moon().orElseThrow().illuminanceRedLux(), 1e-7);
+        assertEquals(.025, newLights.moon().orElseThrow().illuminanceRedLux(), 1e-7);
+        assertEquals(preset.moonIlluminanceLux(), sky.moonIlluminanceLux(), 1e-7);
+        assertEquals(Math.toRadians(2), sky.sunDiscHalfAngleRadians(), 1e-7);
+        assertEquals(Math.toRadians(3), sky.moonDiscHalfAngleRadians(), 1e-7);
+        assertEquals(preset.sunAngularRadiusRadians(), sky.sunAngularRadiusRadians(), 1e-7);
+    }
+
     private static CloudlySourcePack source(Path directory, double elevation, double azimuth, String axis) throws Exception {
         Files.write(directory.resolve("mip.bc1"), new byte[8]);
         Path manifest = directory.resolve("manifest.json");
@@ -165,6 +190,7 @@ final class CloudlySkyPresetTest {
                  "SunElevationAngleInDegrees[108]":%s,"SunAzimuthAngleInDegrees[109]":%s},
                  "nativeDefaults":{"source":{},"skyParameters":{"bUseUnrealSunData":true,
                   "SunIntensity":{"Factor":100000,"RGB":{"X":1,"Y":1,"Z":1}},
+                  "MoonFractionOfSunIntensity":0.0000025,
                   "SunDiskAngleInDegrees":0.535700023,"SunDiskVisibleAngleInDegrees":0.535700023}},
                  "components":[],"rendererAdapter":{"target":"Caustica","approximation":true,"sunAzimuthAxis":"%s",
                    "sunAngleMeaning":"fullDiameter","sunIntensityUnits":"lux","sunColorSpace":"linearBt709"},

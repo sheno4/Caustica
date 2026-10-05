@@ -61,7 +61,8 @@ final class SkyLutPassTest {
     }
 
     @Test void persistentSkyResourcesWaitForPriorRayReadsBeforeComputeWrites() {
-        assertEquals(KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        assertEquals(KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
+                        | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 SkyLutPass.PRIOR_SKY_READ_STAGE);
         assertEquals(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                 SkyLutPass.PRIOR_SKY_READ_ACCESS);

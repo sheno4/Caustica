@@ -16,6 +16,15 @@ public struct CloudlyCloudComponent {
     public float4 textureDimensions;
 };
 
+/** Reconstructed scene color is composed with a separately traced medium layer after world denoising. */
+public struct CloudlyCompositePush {
+    public uint destinationIndex;
+    public uint sceneIndex;
+    public uint cloudIndex;
+    public uint depthIndex;
+    public float4 traceParameters;
+};
+
 /** Authored world-cell sizes and fractal parameters under the declared procedural-detail approximation. */
 public struct CloudlyNoiseProfile {
     public float4 cellAndOctaves;
@@ -47,4 +56,10 @@ public struct CloudlyCloudPush {
     public float4 ambientColor;
     public float4 multipleScattering;
     public float4 detailParameters;
+    public float4 moonDirectionAndIlluminance;
+    public float4 lightAngularRadii;
+    public uint ambientIndex;
+    public uint transmittanceIndex;
+    public uint atmosphereSamplerIndex;
+    public uint padding2;
 };

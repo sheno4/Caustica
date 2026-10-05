@@ -35,4 +35,17 @@ class CloudlyUniformExpressionsTest {
         assertArrayEquals(new double[]{(float)0.45,1}, CloudlyUniformExpressions.evaluate(recipe,Map.of("fov",new double[]{90})),1e-7);
         assertArrayEquals(new double[]{(float)0.55,(float)0.925}, CloudlyUniformExpressions.evaluate(recipe,Map.of("fov",new double[]{27.5})),1e-7);
     }
+
+    @Test void viewportAndTraceRatiosComposeInSourceFloat4Order() {
+        var expression = JsonParser.parseString("""
+                {"op":"vector","args":[
+                {"op":"divide","args":[1,1920]},
+                {"op":"divide","args":[1,1080]},
+                {"op":"divide","args":[{"input":"nativeTrace"},[1920,1080]]}]}
+                """);
+        assertArrayEquals(new double[]{1f/1920f,1f/1080f,960f/1920f,540f/1080f},
+                CloudlyUniformExpressions.evaluate(expression, Map.of("nativeTrace",new double[]{960,540})));
+        assertThrows(IllegalArgumentException.class, () -> CloudlyUniformExpressions.evaluate(
+                JsonParser.parseString("{\"op\":\"vector\",\"args\":[[1,2,3],[4,5]]}"), Map.of()));
+    }
 }

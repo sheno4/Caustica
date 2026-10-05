@@ -33,6 +33,15 @@ public final class CloudlyUniformExpressions {
         }
         String op = object.get("op").getAsString();
         var args = object.getAsJsonArray("args");
+        if (op.equals("vector")) {
+            var parts = args.asList().stream().map(value -> evaluate(value, inputs)).toList();
+            int width = parts.stream().mapToInt(part -> part.length).sum();
+            if (width < 1 || width > 4) throw new IllegalArgumentException("Original floating-point constructor needs one to four components");
+            double[] result = new double[width];
+            int at = 0;
+            for (double[] part : parts) for (double component : part) result[at++] = (float)component;
+            return result;
+        }
         double[] first = evaluate(args.get(0), inputs);
         if (op.equals("select")) return evaluate(args.get(scalar(first) != 0 ? 1 : 2), inputs);
         if (op.equals("and")) return new double[]{scalar(first) != 0 && scalar(evaluate(args.get(1), inputs)) != 0 ? 1 : 0};

@@ -50,13 +50,15 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
                 resolvedNumber(rgb, rgbDefaults, "Y"), resolvedNumber(rgb, rgbDefaults, "Z"));
         double physicalRadius = Math.toRadians(resolvedNumber(source, "SunDiskAngleInDegrees") * .5);
         double visibleRadius = Math.toRadians(resolvedNumber(source, "SunDiskVisibleAngleInDegrees") * .5);
+        double moonFraction = resolvedNumber(source, "MoonFractionOfSunIntensity");
         if (illuminance < 0 || color.red() < 0 || color.green() < 0 || color.blue() < 0
                 || physicalRadius <= 0 || physicalRadius >= Math.PI / 2
-                || visibleRadius <= 0 || visibleRadius >= Math.PI / 2) {
+                || visibleRadius <= 0 || visibleRadius >= Math.PI / 2 || moonFraction < 0) {
             throw new IllegalArgumentException("Cloudly sun radiance and angular diameters must be physically valid");
         }
         return new CloudlySkyPreset(-Math.asin(x), Math.toDegrees(Math.atan2(z, y)),
-                new Sunlight(illuminance, physicalRadius, visibleRadius, color));
+                new Sunlight(illuminance, physicalRadius, visibleRadius, color,
+                        illuminance * moonFraction));
     }
 
     public MinecraftLightProvider.CelestialSettings lightSettings(MinecraftLightProvider.CelestialSettings base) {
@@ -64,13 +66,15 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
         return new MinecraftLightProvider.CelestialSettings(base.noonTiltDegrees(),
                 Math.toDegrees(sunAngularRadiusRadians()), base.moonAngularRadiusDegrees(),
                 base.sunAngleRadians(), Optional.of(new MinecraftLightProvider.SunLightOverride(
-                        sunIlluminanceLux(), color[0], color[1], color[2])));
+                        sunIlluminanceLux(), color[0], color[1], color[2])),
+                java.util.OptionalDouble.of(moonIlluminanceLux()));
     }
 
     public double sunIlluminanceLux() { return sunlight.illuminanceLux(); }
     public double sunAngularRadiusRadians() { return sunlight.angularRadiusRadians(); }
     public double sunDiscHalfAngleRadians() { return sunlight.discHalfAngleRadians(); }
     public Color sunColorLinearBt709() { return sunlight.colorLinearBt709(); }
+    public double moonIlluminanceLux() { return sunlight.moonIlluminanceLux(); }
     public float[] sunColorAcesCg() {
         Color color = sunColorLinearBt709();
         return ColorSpaces.linearBt709ToAcesCg(color.red(), color.green(), color.blue());
@@ -78,7 +82,7 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
 
     /** The diameter and lux interpretations are declared by rendererAdapter, separate from native defaults. */
     public record Sunlight(double illuminanceLux, double angularRadiusRadians,
-                           double discHalfAngleRadians, Color colorLinearBt709) { }
+                           double discHalfAngleRadians, Color colorLinearBt709, double moonIlluminanceLux) { }
     public record Color(double red, double green, double blue) { }
 
     public static double discRadiance(double illuminanceLux, double halfAngleRadians) {

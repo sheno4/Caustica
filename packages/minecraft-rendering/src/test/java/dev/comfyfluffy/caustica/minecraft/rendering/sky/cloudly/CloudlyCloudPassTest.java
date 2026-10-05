@@ -51,7 +51,8 @@ class CloudlyCloudPassTest {
         assertEquals(2.419435f, detail.fractal().x());
         assertEquals(.630939f, detail.fractal().y());
         assertEquals(0, model.components().getFirst().layer());
-        assertEquals(256, dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloudPushData.BYTE_SIZE);
+        assertEquals(304, dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloudPushData.BYTE_SIZE);
+        assertEquals(32, dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCompositePushData.BYTE_SIZE);
     }
 
     @Test void sourceTransformsAndParentPlacementSelectActualDensity() throws Exception {
@@ -76,7 +77,7 @@ class CloudlyCloudPassTest {
         assertEquals(0.2f, model.phaseG1());
         assertEquals(0.3f, model.phaseG2());
         assertEquals(0.3f, model.phaseMix());
-        assertEquals(7.437036f, model.ambientRadiance(), 1.0e-6);
+        assertEquals(3.718518f, model.ambientScale(), 1.0e-6);
         assertEquals(12.209689f, model.shadowFirstStep());
     }
 

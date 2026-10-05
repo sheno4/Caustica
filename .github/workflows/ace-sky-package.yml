@@ -6,7 +6,14 @@ on:
     paths:
       - "packages/**"
       - ".github/workflows/ace-sky-package.yml"
+      - "build.gradle"
+      - "settings.gradle"
       - "gradle.properties"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - ".gitmodules"
+      - "third_party/NRD"
   workflow_dispatch:
 
 permissions:
@@ -62,6 +69,14 @@ jobs:
           if ((Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant() -ne $env:SLANG_SHA256) { throw 'Slang SDK hash mismatch' }
           Expand-Archive -LiteralPath $archivePath -DestinationPath $sdkPath
           "SLANG_SDK=$sdkPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Resolve checked-out native revisions
+        id: native-revisions
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath 'third_party/NRD/.git')) { throw 'NRD submodule is not initialized' }
+          $nrdCommit = git -C third_party/NRD rev-parse HEAD
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "nrd=$nrdCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       - uses: actions/cache/restore@v4
         id: native-cache
         with:
@@ -69,7 +84,7 @@ jobs:
             build/native/ngx_shim/release
             build/native/slang_shim/release
             packages/nvidia-nrd/build/generated/nrd-natives
-          key: ace-sky-native-windows-x64-slang2026.14.1-dlss310.7.0-vulkan1.4.350-${{ hashFiles('packages/nvidia-ngx/native/**', 'packages/slang-runtime/native/**', 'packages/nvidia-nrd/native/**', 'packages/nvidia-nrd/build.gradle') }}
+          key: ace-sky-native-v2-windows-x64-slang2026.14.1-dlss310.7.0-vulkan1.4.350-nrd${{ steps.native-revisions.outputs.nrd }}-${{ hashFiles('packages/nvidia-ngx/native/**', 'packages/slang-runtime/native/**', 'packages/nvidia-nrd/native/**', 'packages/nvidia-nrd/build.gradle') }}
       - name: Build Windows runtime libraries
         if: steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
@@ -92,10 +107,28 @@ jobs:
             build/native/slang_shim/release
             packages/nvidia-nrd/build/generated/nrd-natives
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
-      - name: Compile and package Fabric mod
+      - name: Build and test Fabric mod
         shell: pwsh
-        run: ./gradlew.bat :packages:minecraft-client:jar -Ploader=fabric -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
+        run: >
+          ./gradlew.bat build
+          -Ploader=fabric
+          -PngxPlatforms=windows-x64
+          -PslangPlatforms=windows-x64
+          -PnrdNativeInputRoot=packages/nvidia-nrd/build/generated/nrd-natives
+          --console=plain
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ace-sky-test-reports-${{ github.sha }}
+          path: |
+            build/test-results/**
+            build/reports/tests/**
+            packages/**/build/test-results/**
+            packages/**/build/reports/tests/**
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: ace-sky-fabric-${{ github.sha }}
           path: |

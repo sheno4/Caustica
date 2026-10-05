@@ -1,5 +1,9 @@
 module caustica_cloudly_clouds;
 import caustica_cloudly_types;
+import caustica_minecraft_sky_atmosphere;
+import caustica_color;
+import caustica_resources;
+import caustica_types;
 
 [[vk::push_constant]] CloudlyCloudPush pc;
 static const uint CLOUDLY_MAX_COMPONENTS = 64;
@@ -160,8 +164,6 @@ public void runCloudlyClouds(uint3 id) {
     RWTexture2D<float4> output = ResourceDescriptorHeap[pc.destinationIndex];
     uint width, height; output.GetDimensions(width, height);
     if (any(id.xy >= uint2(width, height))) return;
-    Texture2D<float4> scene = ResourceDescriptorHeap[pc.sceneIndex];
-    float4 background = scene.Load(int3(id.xy, 0));
     float2 uv = (float2(id.xy) + 0.5 + pc.traceParameters.xy) / float2(width, height);
     float3 direction = normalize(cloudlyUnproject(uv, 1.0));
     float3 rayDeltaX = normalize(cloudlyUnproject(uv + float2(1.0 / float(width), 0), 1.0)) - direction;
@@ -191,7 +193,7 @@ public void runCloudlyClouds(uint3 id) {
         intervals[at] = interval;
         count++;
     }
-    if (count == 0) { output[id.xy] = background; return; }
+    if (count == 0) { output[id.xy] = float4(0, 0, 0, 1); return; }
     uint merged = 0;
     for (uint interval = 0; interval < count; interval++) {
         if (merged > 0 && intervals[interval].x <= intervals[merged - 1].y) {
@@ -201,6 +203,10 @@ public void runCloudlyClouds(uint3 id) {
         }
     }
     float cosine = dot(direction, pc.sunDirectionAndIlluminance.xyz);
+    float moonCosine = dot(direction, pc.moonDirectionAndIlluminance.xyz);
+    Texture2D<float4> ambient = ResourceDescriptorHeap[pc.ambientIndex];
+    float3 skyAmbient = bt709ToAcesCg(ambient.Load(int3(0)).rgb)
+            * pc.ambientColor.rgb * pc.lightingParameters.x;
     float transmittance = 1.0;
     float3 scattering = 0.0;
     uint sampleIndex = 0;
@@ -225,16 +231,31 @@ public void runCloudlyClouds(uint3 id) {
             }
             if (density > 0.0) {
                 float segmentT = exp(-min(density * pc.opticalParameters.x * segment, 80.0));
-                float opticalDepth = pc.sunDirectionAndIlluminance.w > 0.0
+                float radius = ATMOS_BOTTOM_KM + max(point.y * 0.001, MIN_VIEWER_ALTITUDE_KM);
+                float3 sunlight = pc.sunColor.rgb * pc.sunDirectionAndIlluminance.w
+                        * bt709ToAcesCg(transmittanceToSpace(SampledTexture2DIndex(pc.transmittanceIndex),
+                        SamplerIndex(pc.atmosphereSamplerIndex), radius, pc.sunDirectionAndIlluminance.xyz,
+                        pc.lightAngularRadii.x));
+                float3 moonlight = pc.moonDirectionAndIlluminance.w
+                        * bt709ToAcesCg(transmittanceToSpace(SampledTexture2DIndex(pc.transmittanceIndex),
+                        SamplerIndex(pc.atmosphereSamplerIndex), radius, pc.moonDirectionAndIlluminance.xyz,
+                        pc.lightAngularRadii.y));
+                float opticalDepth = any(sunlight > 0.0)
                         ? cloudlyShadow(point, pc.sunDirectionAndIlluminance.xyz) : 0.0;
+                float moonOpticalDepth = any(moonlight > 0.0)
+                        ? cloudlyShadow(point, pc.moonDirectionAndIlluminance.xyz) : 0.0;
                 float3 illumination = 0.0;
                 float attenuation = 1.0, contribution = 1.0, eccentricity = 1.0;
                 for (uint order = 0; order < uint(pc.multipleScattering.x); order++) {
                     float phase = lerp(cloudlyHG(cosine, pc.opticalParameters.y * eccentricity),
                             cloudlyHG(cosine, pc.opticalParameters.z * eccentricity), pc.opticalParameters.w)
                             * pc.lightingParameters.y;
-                    illumination += contribution * (pc.ambientColor.rgb * pc.lightingParameters.x
-                            + pc.sunColor.rgb * pc.sunDirectionAndIlluminance.w * phase * exp(-min(opticalDepth * attenuation, 80.0)));
+                    float moonPhase = lerp(cloudlyHG(moonCosine, pc.opticalParameters.y * eccentricity),
+                            cloudlyHG(moonCosine, pc.opticalParameters.z * eccentricity), pc.opticalParameters.w)
+                            * pc.lightingParameters.y;
+                    illumination += contribution * (skyAmbient
+                            + sunlight * phase * exp(-min(opticalDepth * attenuation, 80.0))
+                            + moonlight * moonPhase * exp(-min(moonOpticalDepth * attenuation, 80.0)));
                     attenuation *= pc.multipleScattering.y; contribution *= pc.multipleScattering.z;
                     eccentricity *= pc.multipleScattering.w;
                 }
@@ -244,5 +265,5 @@ public void runCloudlyClouds(uint3 id) {
             at += segment; sampleIndex++;
         }
     }
-    output[id.xy] = float4(background.rgb * transmittance + scattering * pc.lightingParameters.w, background.a);
+    output[id.xy] = float4(scattering * pc.lightingParameters.w, transmittance);
 }
