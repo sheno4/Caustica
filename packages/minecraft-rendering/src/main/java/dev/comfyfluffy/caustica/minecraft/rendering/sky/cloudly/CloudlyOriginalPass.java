@@ -234,26 +234,31 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         }
         Epoch target = epoch;
         frame.retain(target.owner);
-        CloudlyFrameCamera previousCamera = target.previous == null ? current : target.previous;
-        put(inputs, "frame.previousPreExposure", target.previous == null ? frame.preExposure() : target.previousExposure);
-        put(inputs, "frame.historyAvailable", target.previous == null ? 0 : 1);
-        put(inputs, "frame.cameraReset", target.previous == null ? 1 : 0);
+        double cloudDistance = inputs.get("frame.cloudTraceDistanceMeters")[0];
+        double cirrusDistance = inputs.get("frame.cirrusTraceDistanceMeters")[0];
+        boolean reuseHistory = target.previous != null && target.previousFrame == frame.frameIndex() - 1
+                && target.previousCloudDistance == cloudDistance && target.previousCirrusDistance == cirrusDistance;
+        CloudlyFrameCamera previousCamera = reuseHistory ? target.previous : current;
+        put(inputs, "frame.previousPreExposure", reuseHistory ? target.previousExposure : frame.preExposure());
+        put(inputs, "frame.historyAvailable", reuseHistory ? 1 : 0);
+        put(inputs, "frame.cameraReset", reuseHistory ? 0 : 1);
         double speed = 0;
-        if (target.previous != null) {
+        if (reuseHistory) {
             float[] a = current.sourceOriginMeters(), b = target.previous.sourceOriginMeters();
             speed = Math.sqrt(Math.pow(a[0]-b[0],2)+Math.pow(a[1]-b[1],2)+Math.pow(a[2]-b[2],2));
         }
         put(inputs, "frame.cameraSpeedMeters", speed);
         float[] origin = current.sourceOriginMeters();
         var cameraCm = new CloudlyShadowState.CameraCentimeters(origin[0]*100., origin[1]*100., origin[2]*100.);
-        int number = (int)frame.frameIndex();
+        long frameNumber = frame.frameIndex();
+        int number = (int)frameNumber;
         var shadow0 = CloudlyShadowState.plan(target.shadow0, source, choices, angles, geometry, 0, number, cameraCm, target.previous == null, target.previous == null);
         var shadow1 = CloudlyShadowState.plan(target.shadow1, source, choices, angles, geometry, 1, number, cameraCm, target.previous == null, target.previous == null);
         inputs.putAll(CloudlyShadowState.samplingInputs(geometry, shadow0.stateAfterGpuCompletion(), shadow1.stateAfterGpuCompletion(), number));
         Map<String, String> roles = roles(target, shadow0.stateAfterGpuCompletion(), shadow1.stateAfterGpuCompletion());
         CloudlyFrameRecipe.ViewWriter writer = (layout, bytes) -> CloudlyFrameUniforms.writeView(layout, bytes, current, previousCamera,
                 frame.sceneColor().width(), frame.sceneColor().height(), 0,0,0,0, frame.preExposure(), (float)frame.timeSeconds(),
-                target.previous == null ? (float)frame.timeSeconds() : target.previousTime, number);
+                reuseHistory ? target.previousTime : (float)frame.timeSeconds(), number);
         List<Draw> shadows = new ArrayList<>();
         prepareShadows(ready, target, shadow0, 0, inputs, writer, current, shadows);
         prepareShadows(ready, target, shadow1, 1, inputs, writer, current, shadows);
@@ -269,6 +274,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             target.shadow0 = shadow0.stateAfterGpuCompletion(); target.shadow1 = shadow1.stateAfterGpuCompletion();
             target.flipped = !target.flipped; target.previous = current;
             target.previousExposure = exposure; target.previousTime = time;
+            target.previousFrame = frameNumber;
+            target.previousCloudDistance = cloudDistance; target.previousCirrusDistance = cirrusDistance;
         };
         CloudlyFrameExecutor.Plan plan = CloudlyFrameExecutor.preflight(ready.project.schedule(), resolved, selected, retainedDependencies,
                 new CloudlyFrameExecutor.Inputs() {
@@ -438,7 +445,10 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         put(result,"frame.preExposure",frame.preExposure()); put(result,"frame.originalCloudAnimationTimeSeconds",frame.timeSeconds());
         put(result,"frame.originalRenderType",1); put(result,"frame.originalTileBasedHalfPixels",1); put(result,"frame.originalTraceSubpassIndex",1);
         put(result,"frame.allHighResTiles",1); put(result,"frame.betterEdgeClassification",1);
-        put(result,"frame.maxDistanceMeters",ready.project.scalar("CloudMaxTraceDistanceInKm")*1000);
+        put(result,"frame.maxDistanceMeters",ready.project.scalar("distanceNormalizationMeters"));
+        double requestedDistance = values.get(CloudlyCloudPass.MAX_DISTANCE_KM) * 1000.;
+        put(result,"frame.cloudTraceDistanceMeters",Math.min(requestedDistance,ready.project.scalar("CloudMaxTraceDistanceInKm")*1000));
+        put(result,"frame.cirrusTraceDistanceMeters",Math.min(requestedDistance,ready.project.scalar("CloudMaxTraceDistanceCirrusInKm")*1000));
         put(result,"frame.sceneDepthTextureSize",w,h); put(result,"frame.sceneDepthViewportMax",w,h);
         put(result,"renderFovDegrees",Math.toDegrees(camera.verticalFieldOfView()));
         double tilt=Math.toRadians(values.get(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES)),a=captured.celestial().sunAngleRadians(),m=captured.celestial().moonAngleRadians();
@@ -507,6 +517,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         final ResourceOwner owner;
         CloudlyShadowState.Cache<String> shadow0=emptyCache(0),shadow1=emptyCache(1);
         CloudlyFrameCamera previous; float previousExposure,previousTime; boolean initializationRecorded,initialized,flipped,reported;
+        long previousFrame = Long.MIN_VALUE;
+        double previousCloudDistance,previousCirrusDistance;
         Epoch(ResourceFactory resources,CloudlyFrameResources buffers,CloudlyFrameSchedule.Resolved extents,VmaImage2D depth,VmaImage2D white) {
             this.buffers=buffers;this.extents=extents;this.depth=depth;this.white=white;
             this.owner=resources.create(() -> new ResourceLifetime(buffers::close,depth::close,white::close).close());

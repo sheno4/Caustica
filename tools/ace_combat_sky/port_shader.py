@@ -76,6 +76,65 @@ def host_camera_body(text: str) -> str:
     float3 forward = GetNormalizeRayWorldDirection(float2(0, 0));
     return SceneDepth * 0.01f / dot(direction, forward);
 }""" + text[distance.end():]
+    if "void GetCompositedSceneColor(" in text:
+        # A missing Minecraft surface below the virtual planet continues the native sky-side
+        # horizon radiance. Real surface depth and the later cloud composition remain unchanged.
+        horizon_extension = """
+        if (depth == 0.0f && RayIntersectGround(rAndMub.x, rAndMub.y))
+        {
+            const float horizonHeight = max(h, GetRBot() + 0.3f);
+            const float tangentMu = -sqrt(max(0.0f, horizonHeight * horizonHeight - GetRBot() * GetRBot())) / horizonHeight;
+            const float2 horizontal = view_ray.d.xy;
+            const float horizontalLengthSquared = dot(horizontal, horizontal);
+            const float2 azimuth = horizontalLengthSquared > 1.0e-12f
+                ? horizontal * rsqrt(horizontalLengthSquared) : float2(1.0f, 0.0f);
+            const float3 tangentDirection = float3(azimuth * sqrt(max(0.0f, 1.0f - tangentMu * tangentMu)), tangentMu);
+            float2 horizonUv;
+            ATMViewLutParamsToUv(false, tangentMu, tangentDirection, horizonHeight, GetRBot(), ATMViewLutSizeAndInvSize, horizonUv);
+            const float3 horizonRadiance = ATMViewLut.SampleLevel(SkyTraceOutputTextureSampler, saturate(horizonUv), 0) * UnrealPreExposure;
+            AtmColor = lerp(horizonRadiance * fog.a + fog.rgb * UnrealPreExposure, horizonRadiance, _blend_factor);
+        }
+        """
+        marker = "float4 SceneColorWithAtm = 0;"
+        if text.count(marker) != 1:
+            raise ValueError("The native atmosphere composition boundary changed")
+        text = text.replace(marker, horizon_extension + marker, 1)
+        for radicand in (
+            "ViewHeight * ViewHeight - BottomRadius * BottomRadius",
+            "h * h - GetRBot() * GetRBot()",
+            "dot(view_ray.o - GetEarthCenter(), view_ray.o - GetEarthCenter()) - GetRBot() * GetRBot()",
+        ):
+            text = text.replace("sqrt(" + radicand + ")", "sqrt(max(0.0f, " + radicand + "))")
+        # The sky-side tangent maps to the common horizon row, including float rounding at the boundary.
+        text = text.replace("Coord = sqrt(Coord);", "Coord = sqrt(max(0.0f, Coord));")
+    return text
+
+
+def host_environment_depth(text: str) -> str:
+    """A zero reverse-depth value denotes environment, with normalized far distance one."""
+    function = re.search(r"float\s+GetDistanceFromSceneDepth\s*\(\s*float2\s+uv\s*,\s*float\s+DeviceZ\s*,\s*float\s+h_real\s*,\s*float\s+tan_dist\s*\)\s*\{", text)
+    if function:
+        text = text[:function.end()] + "\n    if (DeviceZ <= 0.0f) return MaxDistance;" + text[function.end():]
+    return text
+
+
+def host_view_trace_ranges(text: str) -> str:
+    """View limits leave atmosphere lookup coordinates and light/shadow ranges unchanged."""
+    if re.search(r"\bvoid\s+SkyTraceCS\s*\(", text):
+        text = text.replace("float tracable_cloud_range_max = CloudConstantsUniform.Data_CloudMaxTraceDistance;",
+                            "float tracable_cloud_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistance, HostCloudTraceDistanceMeters);")
+        text = text.replace("float tracable_cirrus_range_max = CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus;",
+                            "float tracable_cirrus_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus, HostCirrusTraceDistanceMeters);")
+    else:
+        text = text.replace("cloud_cone_trace_range.y = max(0,cloud_cone_trace_range.y);",
+                            "cloud_cone_trace_range.y = max(0, min(cloud_cone_trace_range.y, max(HostCloudTraceDistanceMeters, HostCirrusTraceDistanceMeters)));")
+    return text
+
+
+def host_background_lut(text: str) -> str:
+    """The host's missing-terrain horizon requires this LUT alongside the godray output."""
+    if re.search(r"\bvoid\s+ATMViewLutCS\s*\(", text):
+        text = re.sub(r"\s*if\s*\(SumGodrayFlag\s*>\s*0\s*&&\s*EnableHighQualityGodRays\s*>\s*0\)\s*\{\s*RWATMViewLut\[id\.xy\]\s*=\s*0\.0;\s*return;\s*\}", "", text, count=1)
     return text
 
 
@@ -98,6 +157,13 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
         raise ValueError("Root parameter declarations were not fully decoded")
     common.sort(key=lambda field: field["offset"])
     common_size = (max((field["offset"] + field["size"] for field in common), default=16) + 15) & ~15
+    view_trace_ranges = bool(host_camera and re.search(r"\bvoid\s+(?:SkyTraceCS|CoarseTraceCS)\s*\(", source))
+    if view_trace_ranges:
+        if any(field["offset"] < 8 for field in common):
+            raise ValueError("The host trace-range interface requires eight unused root bytes")
+        common.extend([dict(name="HostCloudTraceDistanceMeters", type="float", offset=0, size=4, elements=0),
+                       dict(name="HostCirrusTraceDistanceMeters", type="float", offset=4, size=4, elements=0)])
+        common.sort(key=lambda field: field["offset"])
     lines = ["struct OriginalRootParameters {"]
     cursor = 0
     for field in common:
@@ -170,6 +236,10 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
     text = re.sub(r"uint16_t\s+width,\s*height;(?=\s*tex.GetDimensions)", "uint width, height;", text)
     if host_camera:
         text = host_camera_body(text)
+        text = host_environment_depth(text)
+        text = host_background_lut(text)
+        if view_trace_ranges:
+            text = host_view_trace_ranges(text)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return dict(schemaVersion=1, sourceSha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
@@ -179,7 +249,7 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
                 pushFields=[dict(name="parametersAddress", offset=0, size=8),
                             dict(name="bindingsAddress", offset=8, size=8)] +
                            ([dict(name="cameraAddress", offset=16, size=8)] if host_camera else []),
-                mathematicalFunctionsChanged=False,
+                mathematicalFunctionsChanged=False, viewTraceRangesCapped=view_trace_ranges,
                 cameraBridge=dict(enabled=host_camera, byteSize=80 if host_camera else 0,
                                   sourceAxes="host X, negative host Z, host Y",
                                   replacedInterfaces=(["GetNormalizeRayWorldDirection", "source ray origin"] +
