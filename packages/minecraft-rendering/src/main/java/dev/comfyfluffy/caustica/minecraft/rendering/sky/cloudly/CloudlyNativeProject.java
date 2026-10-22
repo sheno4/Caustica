@@ -37,7 +37,7 @@ public record CloudlyNativeProject(CloudlyShaderLibrary library, CloudlyOriginal
                 JsonObject program = value.getAsJsonObject();
                 String id = program.get("programId").getAsString();
                 ids.put(id, program.has("runtimeProgramId") ? program.get("runtimeProgramId").getAsString()
-                        : List.of("62", "97", "406", "3930", "3928").contains(id) ? id + "-host-camera" : id);
+                        : List.of("62", "97", "406", "3930", "3928", "58", "4820", "4821").contains(id) ? id + "-host-camera" : id);
             }
             var decoded = CloudlyFrameRecipe.load(file, library, ids);
             for (String id : ids.keySet()) if (recipes.put(id, decoded) != null) throw new IOException("Repeated native frame recipe " + id);

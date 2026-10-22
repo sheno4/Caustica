@@ -56,7 +56,7 @@ def host_camera_body(text: str) -> str:
 }"""
     text = text[:function.start()] + replacement + text[cursor:]
     origin = "(DFDemote(GetPrimaryView().WorldCameraOrigin)).xyz"
-    ray = re.search(r"Ray\s+GetViewRay\s*\(.*?\n\}", text, re.S)
+    ray = re.search(r"Ray\s+GetViewRay(?:ForCoarseTrace)?\s*\(.*?\n\}", text, re.S)
     if not ray or ray[0].count(origin) != 1:
         raise ValueError("The source camera origin interface changed")
     text = text[:ray.start()] + ray[0].replace(origin,
@@ -158,6 +158,9 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
                        f"#define {name} getOriginal_{name}()\n")
         text = text.replace(match[0], replacement)
         bindings.append(dict(name=name, type=kind, originalType=original_kind, slot=slot, byteOffset=slot * 4, heap=heap))
+    # Helper parameters must use the same typed integer texel format as heap getters.
+    text = re.sub(r"\bRWBuffer\s*<\s*uint\s*>", "RWBuffer<uint,37>", text)
+    text = re.sub(r"\bRWBuffer\s*<\s*int\s*>", "RWBuffer<int,27>", text)
     text = re.sub(r"^#(?:line|pragma).*?$", "", text, flags=re.M)
     # Slang resolves structure declarations irrespective of source order.
     text = re.sub(r"(?m)^\s*struct\s+\w+\s*;\s*$", "", text)
@@ -179,7 +182,7 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
                 mathematicalFunctionsChanged=False,
                 cameraBridge=dict(enabled=host_camera, byteSize=80 if host_camera else 0,
                                   sourceAxes="host X, negative host Z, host Y",
-                                  replacedInterfaces=(["GetNormalizeRayWorldDirection", "GetViewRay origin"] +
+                                  replacedInterfaces=(["GetNormalizeRayWorldDirection", "source ray origin"] +
                                     (["GetViewRay_FIXED_For_CompositeWithScreenCS", "GetDistanceFromSceneDepth"]
                                      if "GetViewRay_FIXED_For_CompositeWithScreenCS" in source else [])) if host_camera else []))
 
