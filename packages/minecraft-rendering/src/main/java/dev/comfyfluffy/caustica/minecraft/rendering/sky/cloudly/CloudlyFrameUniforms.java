@@ -35,6 +35,13 @@ public final class CloudlyFrameUniforms {
         layout.putFloats(target, "View.TranslatedWorldToClip", current.cameraToClipForSourceUniform());
         layout.putFloats(target, "View.ClipToTranslatedWorld", current.cameraFromClipForSourceUniform());
         layout.putFloats(target, "View.TranslatedWorldToView", current.viewFromTranslatedWorldForSourceUniform());
+        layout.putFloats(target, "View.ScreenToRelativeWorld", current.screenToWorldForSourceUniform());
+        layout.putFloats(target, "View.ScreenToTranslatedWorld", current.screenToTranslatedWorldForSourceUniform());
+        layout.putFloats(target, "View.ViewToClip", current.viewToClipForSourceUniform());
+        layout.putFloats(target, "View.ViewToClipNoAA", current.viewToClipForSourceUniform());
+        layout.putFloats(target, "View.PrevViewToClip", previous.viewToClipForSourceUniform());
+        layout.putFloats(target, "View.PrevScreenToTranslatedWorld", previous.screenToTranslatedWorldForSourceUniform());
+        layout.putFloats(target, "View.SkyViewLutReferential", current.skyReferentialForSourceUniform());
         layout.putFloats(target, "View.PrevClipToRelativeWorld", previous.worldFromClipForSourceUniform());
         layout.putFloats(target, "View.ClipToPrevClip", current.clipToPreviousForSourceUniform(previous));
         layout.putFloats(target, "View.InvDeviceZToWorldZTransform", current.deviceDepthToViewCentimeters());

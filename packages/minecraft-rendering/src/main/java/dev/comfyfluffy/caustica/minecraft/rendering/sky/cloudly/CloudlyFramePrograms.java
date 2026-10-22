@@ -37,6 +37,15 @@ public final class CloudlyFramePrograms implements AutoCloseable {
         }
     }
 
+    /** Validate a complete selected frame before recording any commands against this shader revision. */
+    public void requirePrograms(Set<String> programIds) {
+        if (!programs.keySet().containsAll(programIds)) {
+            var missing = new java.util.LinkedHashSet<>(programIds);
+            missing.removeAll(programs.keySet());
+            throw new IllegalStateException("Original frame programs are not loaded: " + missing);
+        }
+    }
+
     /** All images and buffers reachable through the supplied heap table accompany this frame as explicit owners. */
     public void record(PassFrame frame, String programId, ByteBuffer constants,
                        Map<String, ? extends GpuDescriptorIndex> descriptors, Map<String, Long> sourcePush,

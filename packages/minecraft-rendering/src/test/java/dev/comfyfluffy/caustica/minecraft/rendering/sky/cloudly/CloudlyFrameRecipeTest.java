@@ -59,7 +59,7 @@ class CloudlyFrameRecipeTest {
                 .putInt(0x07230203).putInt(0x00010600).putInt(0).putInt(1).putInt(0).array();
         Files.write(directory.resolve("host.spv"), code);
         Files.writeString(directory.resolve("library.json"), """
-                {"schemaVersion":1,"programs":[{"id":"host","entryPoint":"main","spirv":"host.spv",
+                {"schemaVersion":1,"unifiedResourceHeapStride":true,"programs":[{"id":"host","entryPoint":"main","spirv":"host.spv",
                 "sha256":"%s","sourceSha256":"%s","parametersByteSize":32,"bindingByteSize":0,
                 "pushByteSize":8,"pushFields":[{"name":"parametersAddress","offset":0,"size":8}],
                 "commonFields":[{"name":"frameNumber","type":"uint","offset":0,"size":4}],

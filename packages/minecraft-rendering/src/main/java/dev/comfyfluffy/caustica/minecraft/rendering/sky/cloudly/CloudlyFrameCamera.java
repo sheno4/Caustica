@@ -78,6 +78,34 @@ public final class CloudlyFrameCamera {
 
     public float[] sourceUp() { return orthogonal(direction(0, -1), direction(0, 0)); }
 
+    /** Screen XY and unit view depth produce a source-space ray before centimetre depth scaling. */
+    public float[] screenToWorldForSourceUniform() {
+        float[] right = sourceRight(), up = sourceUp(), forward = direction(0, 0);
+        float tx = (float)Math.tan(horizontalFieldOfView() * 0.5), ty = (float)Math.tan(verticalFieldOfView() * 0.5);
+        return transpose(new float[]{right[0]*tx, right[1]*tx, right[2]*tx, 0,
+                up[0]*ty, up[1]*ty, up[2]*ty, 0,
+                forward[0], forward[1], forward[2], 0,
+                sourceOrigin[0]*100, sourceOrigin[1]*100, sourceOrigin[2]*100, 1});
+    }
+
+    public float[] viewToClipForSourceUniform() {
+        float[] depth = deviceDepthToViewCentimeters();
+        return new float[]{1f/(float)Math.tan(horizontalFieldOfView()*0.5),0,0,0,
+                0,1f/(float)Math.tan(verticalFieldOfView()*0.5),0,0,
+                0,0,depth[3]/depth[2],1f/depth[2],0,0,1,0};
+    }
+
+    public float[] screenToTranslatedWorldForSourceUniform() {
+        float[] matrix = screenToWorldForSourceUniform();
+        matrix[3] = matrix[7] = matrix[11] = 0;
+        return matrix;
+    }
+
+    /** Flat-map atmosphere longitude uses source X/Y around the source Z-up zenith. */
+    public float[] skyReferentialForSourceUniform() {
+        return new float[]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    }
+
     private static float[] orthogonal(float[] direction, float[] forward) {
         double projection = (double) direction[0] * forward[0] + (double) direction[1] * forward[1] + (double) direction[2] * forward[2];
         double x = direction[0] - projection * forward[0], y = direction[1] - projection * forward[1], z = direction[2] - projection * forward[2];

@@ -471,6 +471,8 @@ final class PassSessionTest {
     };
 
     private static final PassFrame FRAME = new PassFrame() {
+        @Override public void whenSubmitted(Runnable callback) { callback.run(); }
+        @Override public void whenRetired(Runnable callback) { callback.run(); }
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) { throw new AssertionError(); }
         @Override public long frameIndex() { return 1; }
@@ -482,6 +484,8 @@ final class PassSessionTest {
     };
 
     private static final PostEffectFrame POST_FRAME = new PostEffectFrame() {
+        @Override public void whenSubmitted(Runnable callback) { callback.run(); }
+        @Override public void whenRetired(Runnable callback) { callback.run(); }
         @Override public boolean spatialMediumActive() { return false; }
         @Override public void traceVisibility(dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress rays,
                 dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress results, int width, int height) { }
@@ -508,6 +512,8 @@ final class PassSessionTest {
     };
 
     private static final UiFrame UI_FRAME = new UiFrame() {
+        @Override public void whenSubmitted(Runnable callback) { callback.run(); }
+        @Override public void whenRetired(Runnable callback) { callback.run(); }
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage layer() { return null; }
         @Override public float[] worldViewProjection() { return new float[16]; }
         @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }

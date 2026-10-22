@@ -264,6 +264,8 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             state.resources().retain(resource);
         }
         @Override public long frameIndex() { requireLive(); return state.frameIndex(); }
+        @Override public void whenSubmitted(Runnable callback) { requireLive(); state.gpuUse().whenSubmitted(callback); }
+        @Override public void whenRetired(Runnable callback) { requireLive(); state.gpuUse().whenComplete(callback); }
         @Override public SceneView view() { requireLive(); return state.view(); }
         @Override public double timeSeconds() { requireLive(); return state.timeSeconds(); }
         @Override public double metersPerSceneUnit() { requireLive(); return state.metersPerSceneUnit(); }

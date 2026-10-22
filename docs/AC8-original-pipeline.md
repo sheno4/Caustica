@@ -1,6 +1,16 @@
 # AC8 原始天空管线移植
 
-目标是使用安装版本中 Cloudly 的原始算法、纹理、参数换算和时序重建。当前开发代码尚未完成游戏内接入，不作为效果已还原的交付版本。
+目标是使用安装版本中 Cloudly 的原始算法、纹理、参数换算和时序重建。`.7` 已将原版着色器帧图连接到 Fabric 的重建后通道；游戏内外观尚未验收，不能仅凭 GPU 执行完成宣称效果已还原。
+
+## sky.7 实际执行与交付
+
+`CloudlyOriginalPass` 使用源包中的 `source.nativePipelineManifest` 选择原版管线。源体积纹理、蓝噪声和月球等纹理完成上传后，先生成原版大气及密度，再执行原版阴影、深度处理、瓦片分类、云追踪、时序重建和大气合成。宿主场景颜色在世界重建后进入原版合成，最终从线性 BT.709 转回 ACEScg；世界 RR 的 guides 保持对应原来的世界渲染。
+
+2026-10-22，独立的 Java/Vulkan 执行器在 RTX 5090 上完成了源纹理上传、三个原版大气生成阶段、完整 141 阶段密度生成，以及 640×384 的连续 20 帧原版帧图。Vulkan 校验没有报错。没有图像读取、图像识别或游戏进程。此后修正了有限远投影深度符号，并为两个大气程序加入与主云管线一致的宿主相机桥接；按用户要求不再追加测试，直接打包。这些证据不包含 Minecraft 内的视觉验收或目标分辨率性能测量。
+
+所有私有 Slang 程序必须使用 `-spirv-unified-descriptor-heap-stride`。引擎以统一 slot 存放混合描述符，按单独 buffer 大小索引会访问错误地址；真实设备上 image descriptor 为 32 字节、buffer descriptor 为 16 字节。私有库导出器核对 SPIR-V 的统一 stride，公开加载器要求 `unifiedResourceHeapStride=true`。
+
+原版程序及游戏资源只作为用户本机的私有源包部署，不进入公开 Fabric jar、GitHub 或 Actions 产物。当前速度输入选择原版相机和距离重投影分支；动态物体速度尚未单独导入，遮挡边缘的时序表现仍有待游戏内确认。
 
 ## 已有实现
 
@@ -17,7 +27,7 @@
 - 原版瓦片追踪支持 GPU 间接调度：参数缓冲随帧保留，分类后的 storage 写入在 `DRAW_INDIRECT` 读取前建立依赖。设备初始化明确查询并启用 `textureCompressionBC`，支持原始 BC6H 月球 cubemap；仅物理设备支持压缩格式不足以证明逻辑设备已启用该能力。
 - `CloudlySourceBuffer` 区分结构化组件缓冲与原版天空采样点的 float4 texel 缓冲。`CloudlyColorBridge` 在原版线性 BT.709 合成器与宿主 ACEScg 之间转换，保留 HDR 与预曝光值；桥接程序已编译并通过 SPIR-V 验证。
 - `CloudlyStatisticsBuffer` 提供原版 uint texel min/max 输出与完成后的映射读回；生成任务记录 GPU→宿主依赖，读回时 invalidate 非一致缓存。`CloudlyUniformExpressions` 执行私有字段配方，保留 float32 运算、延迟分支与整数掩码。
-- `CloudlyOriginalBakeResources` 将私有生成配方连接到已上传源纹理、不可变组件缓冲、统计缓冲和完成地址。当前配方的 46 张纹理、141 个有序阶段通过 CPU 绑定检查。统计读取实际生成通道，CPU float4 的未用通道保留原版回调的 −1；GPU 完成后才发布输出。尚未在 GPU 执行该配方。
+- `CloudlyOriginalBakeResources` 将私有生成配方连接到已上传源纹理、不可变组件缓冲、统计缓冲和完成地址。当前配方包含 46 张纹理、141 个有序阶段。统计读取实际生成通道，CPU float4 的未用通道保留原版回调的 −1；GPU 完成后才发布输出。
 - `CloudlyFrameRecipe` 冻结私有帧参数，按原版顺序发布已更新参数的别名，检查各字段的类型与偏移。阶段只读取自己消费的 uniform；不读取未选择阶段或分支的依赖。4 项数值测试与实际大气合成、时序重建程序的 13,584 字节参数、View、完整 heap 表和 push 编码检查通过。未完成的帧计划不能标记为可执行。
 - `CloudlyFrameSchedule` 读取原始阶段和资源配方，校验有序依赖、实际图像尺寸、typed heap 表、每次原生 subpass 覆盖及间接调度缓冲范围。真实私有帧图的 28 个阶段、23 个计算绑定表、394 个绑定项、50 张图像和 6 个缓冲通过 CPU 数值检查。云自身的原始历史独立维护，97/109 在世界 RR 后的独立工作图像完成源合成，避免把云颜色送入仍描述地面的 RR guide。此框架尚未在 GPU 运行。
 - 72 个真实程序的私有资源哈希、完整 typed heap 表及无隐式 bound uniform 已检查，覆盖 64,333,944 字节 SPIR-V 与 35 个 View 布局。原始帧纹理的真实 Java 加载核对 19 个 mip、109 个上传区域及 4,980,880 字节，其中 cubemap 占 108 个区域。相机数值测试 3 项、配方冻结与复制测试 3 项通过；原有程序库 ABI 测试 6 项已通过。没有执行 GPU 画面测试。

@@ -22,7 +22,7 @@ class CloudlyBakePlanTest {
                 .putInt(0x07230203).putInt(0x00010600).putInt(0).putInt(1).putInt(0).array();
         Files.write(directory.resolve("test.spv"), code);
         Files.writeString(directory.resolve("library.json"), """
-                {"schemaVersion":1,"programs":[{"id":"test","entryPoint":"main","spirv":"test.spv",
+                {"schemaVersion":1,"unifiedResourceHeapStride":true,"programs":[{"id":"test","entryPoint":"main","spirv":"test.spv",
                 "sha256":"%s","sourceSha256":"%s","parametersByteSize":16,"bindingByteSize":0,
                 "pushByteSize":16,"pushFields":[{"name":"parametersAddress","offset":0,"size":8},
                 {"name":"bindingsAddress","offset":8,"size":8}]}]}

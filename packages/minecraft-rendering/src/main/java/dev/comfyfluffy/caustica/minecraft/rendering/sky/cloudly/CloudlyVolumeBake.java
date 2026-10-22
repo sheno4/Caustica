@@ -200,7 +200,7 @@ public final class CloudlyVolumeBake {
             acceptedClaims.add(outputOwner.retain()); acceptedClaims.add(workOwner.retain());
             for (ResourceOwner input : plan.inputs()) acceptedClaims.add(input.retain());
             ResourceOwner preparationClaim = workOwner;
-            return queue.submit(commands -> record(commands, images, stages), acceptedClaims, result -> {
+            return queue.submit(commands -> record(gpu, commands, images, stages), acceptedClaims, result -> {
                 preparationClaim.close();
                 if (result instanceof GpuComputeCompletion.Succeeded) {
                     try { completion.accept(ready); }
@@ -314,7 +314,7 @@ public final class CloudlyVolumeBake {
         }
     }
 
-    private static void record(VkCommandBuffer commands, List<OwnedImage> images, List<RecordedStage> stages) {
+    private static void record(GpuDevice gpu, VkCommandBuffer commands, List<OwnedImage> images, List<RecordedStage> stages) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var transitions = VkImageMemoryBarrier2.calloc(images.size(), stack);
             for (int index = 0; index < images.size(); index++) {
@@ -338,7 +338,14 @@ public final class CloudlyVolumeBake {
                 vkCmdClearColorImage(commands, image.image().image(), VK_IMAGE_LAYOUT_GENERAL, value, range);
             }
             dependency(commands, stack);
+            boolean checkpoints = gpu.vk().getCapabilities().VK_NV_device_diagnostic_checkpoints;
+            int ordinal = 0;
             for (RecordedStage stage : stages) {
+                ordinal++;
+                if (checkpoints) {
+                    long program = stage instanceof RecordedDispatch dispatch ? Long.parseLong(dispatch.shader().program().id()) : 0;
+                    org.lwjgl.vulkan.NVDeviceDiagnosticCheckpoints.vkCmdSetCheckpointNV(commands, ((long)ordinal << 32) | program);
+                }
                 try (MemoryStack dispatchStack = MemoryStack.stackPush()) {
                     if (stage instanceof RecordedCopy copy) {
                         var region = VkImageCopy.calloc(1, dispatchStack);

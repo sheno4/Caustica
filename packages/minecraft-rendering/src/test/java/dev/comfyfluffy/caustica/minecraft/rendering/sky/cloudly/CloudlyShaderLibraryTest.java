@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly;
 
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -66,6 +67,21 @@ class CloudlyShaderLibraryTest {
         assertThrows(java.io.IOException.class, () -> CloudlyShaderLibrary.load(manifest));
     }
 
+    @Test void incompatibleHeapIndexAbiIsRejectedBeforeProgramLoading() throws Exception {
+        Path manifest = directory.resolve("library.json");
+        var library = JsonParser.parseString(description("0".repeat(64), "not-loaded.spv")).getAsJsonObject();
+        library.remove("unifiedResourceHeapStride");
+        Files.writeString(manifest, library.toString());
+        var legacy = assertThrows(java.io.IOException.class, () -> CloudlyShaderLibrary.load(manifest));
+        assertTrue(legacy.getMessage().contains(manifest.toRealPath().toString()));
+        assertTrue(legacy.getMessage().contains("-spirv-unified-descriptor-heap-stride"));
+        library.addProperty("unifiedResourceHeapStride", false);
+        Files.writeString(manifest, library.toString());
+        var typedStride = assertThrows(java.io.IOException.class, () -> CloudlyShaderLibrary.load(manifest));
+        assertTrue(typedStride.getMessage().contains("unifiedResourceHeapStride=true"));
+        assertFalse(Files.exists(directory.resolve("not-loaded.spv")));
+    }
+
     @Test void reflectedCameraPatchesPreserveOtherSourceParameters() {
         var layout = new CloudlyShaderLibrary.ParameterLayout(64, Map.of(
                 "View.camera", new CloudlyShaderLibrary.ParameterField("float3", 16, 12),
@@ -99,7 +115,7 @@ class CloudlyShaderLibraryTest {
 
     private static String description(String hash, String path) {
         return """
-                {"schemaVersion":1,"programs":[{"id":"test","entryPoint":"main",
+                {"schemaVersion":1,"unifiedResourceHeapStride":true,"programs":[{"id":"test","entryPoint":"main",
                 "spirv":"%s","sha256":"%s","parametersByteSize":256,"bindingByteSize":8,
                 "pushByteSize":16,"sourceSha256":"%s","pushFields":[
                 {"name":"parametersAddress","offset":0,"size":8},

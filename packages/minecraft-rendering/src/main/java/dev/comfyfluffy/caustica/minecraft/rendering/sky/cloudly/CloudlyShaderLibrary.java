@@ -36,6 +36,10 @@ public final class CloudlyShaderLibrary {
         Path actual = manifest.toRealPath();
         JsonObject root = JsonParser.parseString(Files.readString(actual)).getAsJsonObject();
         if (root.get("schemaVersion").getAsInt() != 1) throw new IOException("Unsupported Cloudly shader library schema");
+        if (!root.has("unifiedResourceHeapStride") || !root.get("unifiedResourceHeapStride").getAsBoolean()) {
+            throw new IOException("Cloudly private library must declare unifiedResourceHeapStride=true: " + actual
+                    + "; recompile every program with -spirv-unified-descriptor-heap-stride and export the library again");
+        }
         Map<String, Program> programs = new LinkedHashMap<>();
         for (JsonElement item : root.getAsJsonArray("programs")) {
             JsonObject entry = item.getAsJsonObject();

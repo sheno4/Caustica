@@ -30,6 +30,7 @@ import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySourcePack;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyLighting;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCompositePass;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyOriginalPass;
 import dev.comfyfluffy.caustica.renderer.presentation.fog.FogPass;
 import dev.comfyfluffy.caustica.renderer.presentation.fog.FogVolume;
 import dev.comfyfluffy.caustica.api.view.Camera;
@@ -158,6 +159,11 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     setup -> new FogPass(setup, context.renderSession().resources(),
                             () -> options.snapshot().options(MinecraftProvidersExtension.ID)));
             if (context.dimension().id().equals(OVERWORLD)) {
+                if (cloudlySource != null && CloudlyOriginalPass.projectManifest(cloudlySource).isPresent()) {
+                    cloudCompositeRegistration = context.renderSession().passes().addReconstructionEffectPass(CloudlyCloudPass.ID,
+                            setup -> new CloudlyOriginalPass(setup, context.renderSession().compute(), context.renderSession().resources(),
+                                    () -> options.snapshot().options(MinecraftProvidersExtension.ID), frames::skyFrame, cloudlySource));
+                } else {
                 cloudRegistration = context.renderSession().passes().addSceneEffectPass(CloudlyCloudPass.ID,
                         setup -> {
                             var pass = new CloudlyCloudPass(setup,
@@ -169,6 +175,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                         });
                 cloudCompositeRegistration = context.renderSession().passes().addReconstructionEffectPass(CloudlyCompositePass.ID,
                         setup -> new CloudlyCompositePass(setup, context.renderSession().resources(), cloudPass::get));
+                }
             }
             MinecraftProgramSession session = new MinecraftProgramSession(
                     context, resources, materialEpochs, frameSelections, frames, fogVolume,

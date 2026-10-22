@@ -31,6 +31,12 @@ public interface PassFrame extends FrameResources {
      */
     long frameIndex();
 
+    /** Commit view history after command acceptance. Never called for an abandoned frame; must not block or throw. */
+    void whenSubmitted(Runnable callback);
+
+    /** Retire frame-local state after GPU completion or safe abandonment. Must not block or throw. */
+    void whenRetired(Runnable callback);
+
     /** The immutable camera, entry scene, and containing medium sampled for this rendered frame. */
     SceneView view();
 

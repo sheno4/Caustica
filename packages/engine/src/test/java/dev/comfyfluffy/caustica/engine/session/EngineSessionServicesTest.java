@@ -194,6 +194,8 @@ final class EngineSessionServicesTest {
     };
 
     private static final PassFrame FRAME = new PassFrame() {
+        @Override public void whenSubmitted(Runnable callback) { callback.run(); }
+        @Override public void whenRetired(Runnable callback) { callback.run(); }
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public void retain(dev.comfyfluffy.caustica.api.resource.ResourceOwner resource) { throw new AssertionError(); }
         @Override public long frameIndex() { return 1; }
