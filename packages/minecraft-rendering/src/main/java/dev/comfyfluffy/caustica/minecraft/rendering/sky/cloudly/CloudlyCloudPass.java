@@ -202,7 +202,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                     revision.samplerIndex(), output.storageIndex().value(),
                     0,
                     frame.primaryDepth().descriptor(GpuImageDescriptorKind.SAMPLED).index().value(),
-                    Math.round(values.get(CloudlyOptions.SAMPLES)), column(matrix, 0), column(matrix, 4), column(matrix, 8), column(matrix, 12),
+                    128, column(matrix, 0), column(matrix, 4), column(matrix, 8), column(matrix, 12),
                     new Float4((float) (camera.x() * units), (float) ((camera.y() - celestial.seaLevel()) * units),
                             (float) (camera.z() * units), units),
                     new Float4(sunX, sunY, sunZ, illuminance),

@@ -406,15 +406,16 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private static CloudlySourcePack cloudlySource(OptionValues values) {
         if (!values.get(CloudlyOptions.ENABLED)) return null;
         try {
-            CloudlySourcePack pack = CloudlyBundledPreset.load();
+            CloudlyOptions.Scene scene = values.get(CloudlyOptions.SCENE);
+            CloudlySourcePack pack = CloudlyBundledPreset.load(scene);
             var nativeManifest = CloudlyOriginalPass.projectManifest(pack).orElseThrow(
                     () -> new IllegalArgumentException("Bundled Cloudly preset has no original pipeline manifest"));
             if (!java.nio.file.Files.isRegularFile(nativeManifest)) {
                 throw new java.io.IOException("Bundled Cloudly original pipeline is missing: " + nativeManifest);
             }
             CloudlySkyPreset.from(pack);
-            CausticaMod.LOGGER.info("Loaded bundled original ACE COMBAT sky: {} source components, {} volume textures",
-                    pack.components().size(), pack.textures().size());
+            CausticaMod.LOGGER.info("Loaded bundled original ACE COMBAT sky {}: {} source components, {} volume textures",
+                    scene, pack.components().size(), pack.textures().size());
             return pack;
         } catch (java.io.IOException | IllegalArgumentException failure) {
             CausticaMod.LOGGER.error("Bundled original Cloudly preset could not be loaded", failure);

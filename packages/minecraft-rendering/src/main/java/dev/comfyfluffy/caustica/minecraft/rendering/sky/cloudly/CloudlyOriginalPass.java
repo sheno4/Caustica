@@ -238,10 +238,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         frame.retain(target.owner);
         double cloudDistance = inputs.get("frame.cloudTraceDistanceMeters")[0];
         double cirrusDistance = inputs.get("frame.cirrusTraceDistanceMeters")[0];
-        int cloudSampleBudget = (int)inputs.get("frame.cloudSampleBudget")[0];
         boolean reuseHistory = target.previous != null && target.previousFrame == frame.frameIndex() - 1
-                && target.previousCloudDistance == cloudDistance && target.previousCirrusDistance == cirrusDistance
-                && target.previousCloudSampleBudget == cloudSampleBudget;
+                && target.previousCloudDistance == cloudDistance && target.previousCirrusDistance == cirrusDistance;
         CloudlyFrameCamera previousCamera = reuseHistory ? target.previous : current;
         put(inputs, "frame.previousPreExposure", reuseHistory ? target.previousExposure : frame.preExposure());
         put(inputs, "frame.historyAvailable", reuseHistory ? 1 : 0);
@@ -266,10 +264,12 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         List<Draw> shadows = new ArrayList<>();
         prepareShadows(ready, target, shadow0, 0, inputs, writer, current, shadows);
         prepareShadows(ready, target, shadow1, 1, inputs, writer, current, shadows);
+        List<AmbientOcclusionDraw> ambientOcclusion = prepareAmbientOcclusion(ready, target, inputs, writer, current);
         Set<String> selected = new LinkedHashSet<>();
         Map<String, ResourceOwner> retainedDependencies = new LinkedHashMap<>();
         for (var stage : ready.project.schedule().stages()) {
-            if (stage.name().startsWith("Shadow")) retainedDependencies.put(stage.name(), target.buffers.owner());
+            if (stage.name().startsWith("Shadow") || stage.name().startsWith("CloudAOTrace"))
+                retainedDependencies.put(stage.name(), target.buffers.owner());
             else selected.add(stage.name());
         }
         GpuImage destination = frame.acquireSceneColorOutput();
@@ -280,7 +280,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             target.previousExposure = exposure; target.previousTime = time;
             target.previousFrame = frameNumber;
             target.previousCloudDistance = cloudDistance; target.previousCirrusDistance = cirrusDistance;
-            target.previousCloudSampleBudget = cloudSampleBudget;
+            for (var draw : ambientOcclusion) target.ambientOcclusion[draw.level()] = draw.update().afterSubmission();
+            if (!ambientOcclusion.isEmpty()) target.ambientOcclusionInitialized = true;
         };
         CloudlyFrameExecutor.Plan plan = CloudlyFrameExecutor.preflight(ready.project.schedule(), resolved, selected, retainedDependencies,
                 new CloudlyFrameExecutor.Inputs() {
@@ -310,6 +311,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         try (plan) {
             Set<String> requiredPrograms = new LinkedHashSet<>(plan.programIds());
             shadows.forEach(draw -> requiredPrograms.add(draw.program()));
+            ambientOcclusion.forEach(draw -> requiredPrograms.add(draw.draw().program()));
             ready.programs.requirePrograms(requiredPrograms);
             if (!target.initialized) {
                 target.initializationRecorded = true;
@@ -320,13 +322,17 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             }
             int measurement = ready.timing.begin(frame, destination.width(), destination.height());
             for (Draw draw : shadows) draw.record(frame, ready.programs);
+            for (var draw : ambientOcclusion) {
+                draw.draw().record(frame, ready.programs);
+                if (draw.update().publish()) copyAmbientOcclusion(frame, target, draw.level());
+            }
             plan.record(frame, ready.programs);
             ready.timing.end(frame, measurement);
             if (!target.reported) {
                 frame.whenSubmitted(() -> {
                     target.reported = true;
-                    LOGGER.info("Original Cloudly frame accepted: {} native stages, {} shadow dispatches, {}x{}; separate cloud history, world RR guides unchanged",
-                            plan.steps().size(), shadows.size(), destination.width(), destination.height());
+                    LOGGER.info("Original Cloudly frame accepted: {} native stages, {} shadow dispatches, {} cloud AO dispatches, {}x{}; separate cloud history, world RR guides unchanged",
+                            plan.steps().size(), shadows.size(), ambientOcclusion.size(), destination.width(), destination.height());
                 });
             }
         }
@@ -381,6 +387,61 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         }
     }
 
+    private List<AmbientOcclusionDraw> prepareAmbientOcclusion(Assets ready, Epoch target, Map<String, double[]> inputs,
+                                                              CloudlyFrameRecipe.ViewWriter writer, CloudlyFrameCamera camera) {
+        if (ready.project.schedule().stages().stream().noneMatch(stage -> stage.name().equals("CloudAOTrace0"))) return List.of();
+        var draws = new ArrayList<AmbientOcclusionDraw>();
+        put(inputs, "frame.cloudAOTextureSize", 512, 512, 96);
+        for (int level = 0; level < 3; level++) {
+            var stage = ready.project.schedule().stage("CloudAOTrace" + level);
+            var state = target.ambientOcclusion[level];
+            // Every initial history texel is produced by the original kernel before the first visible trace.
+            int iterations = target.ambientOcclusionInitialized ? 1 : level == 0 ? 32 : 64;
+            for (int iteration = 0; iteration < iterations; iteration++) {
+                var update = CloudlyAmbientOcclusionState.plan(state, level, camera.sourceOriginMeters());
+                Map<String, double[]> patched = new LinkedHashMap<>(inputs);
+                put(patched, "frame.cloudAOLevel", level);
+                put(patched, "frame.cloudAOLockedCenter", update.traceCenter().values());
+                put(patched, "frame.cloudAOTileOffset", update.tileX(), update.tileY());
+                put(patched, "frame.cloudAOSplitFrame", level == 0 ? 32 : 64);
+                var constants = ready.project.recipes().get("65").encode(Set.of("65"), patched, writer).parameters("65");
+                var bindings = ready.project.schedule().bindings(stage.name(),
+                        (name, field) -> descriptor(ready, target, Map.of(), name, field));
+                var draw = new Draw(stage.program().id(), constants, bindings.descriptors(), camera, target.buffers.owner(),
+                        update.groupsX(), update.groupsY(), 1);
+                draws.add(new AmbientOcclusionDraw(draw, level, update));
+                state = update.afterSubmission();
+            }
+            put(inputs, "frame.cloudAOPlaneCenterLevel" + level, state.historyCenter().values());
+        }
+        return draws;
+    }
+
+    private static void copyAmbientOcclusion(PostEffectFrame frame, Epoch target, int level) {
+        var source = target.buffers.image("CloudAO" + level + "Work");
+        var destination = target.buffers.image("CloudAO" + level + "History");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var before = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                    .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
+                    .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VK14.vkCmdPipelineBarrier2(frame.commandBuffer(), VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(before));
+            var region = VkImageCopy.calloc(1, stack);
+            region.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            region.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            region.extent().set(source.width(), source.height(), source.depth());
+            vkCmdCopyImage(frame.commandBuffer(), source.handle(), VK_IMAGE_LAYOUT_GENERAL,
+                    destination.handle(), VK_IMAGE_LAYOUT_GENERAL, region);
+            var after = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                    .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+            VK14.vkCmdPipelineBarrier2(frame.commandBuffer(), VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(after));
+        }
+    }
+
     private GpuDescriptorIndex descriptor(Assets ready, Epoch target, Map<String,String> roles, String name, CloudlyShaderLibrary.BindingField field) {
         String actual = roles.getOrDefault(name, name);
         if (target.buffers.images().containsKey(actual) || target.buffers.buffers().containsKey(actual)
@@ -399,6 +460,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             case "BASE_SDF", "InactiveAO", "InactiveRain", "InactiveFogVolume" -> ready.density.texture("CloudTex_BASE_SDF_Tex").sampledIndex();
             case "CIRRUS_SDF" -> ready.density.texture("CloudTex_CIRRUS_SDF_Tex").sampledIndex();
             case "DISP1", "InactiveAlto" -> ready.density.texture("CloudTex_DISP1_DensityTex").sampledIndex();
+            case "ActualAltoDisplacement" -> ready.density.texture("CloudTex_ALTO_DISP1_DensityTex").sampledIndex();
             case "DISP2" -> ready.density.texture("CloudTex_DISP2_DensityTex").sampledIndex();
             case "DISP_CIRRUS" -> ready.density.texture("CloudTex_DISP_CIRRUS_DensityTex").sampledIndex();
             case "InactiveAPHistory" -> target.buffers.image("AerialCurrent").sampled();
@@ -452,7 +514,6 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         put(result,"frame.preExposure",frame.preExposure()); put(result,"frame.originalCloudAnimationTimeSeconds",frame.timeSeconds());
         put(result,"frame.originalRenderType",1); put(result,"frame.originalTileBasedHalfPixels",1); put(result,"frame.originalTraceSubpassIndex",1);
         put(result,"frame.allHighResTiles",1); put(result,"frame.betterEdgeClassification",1);
-        put(result,"frame.cloudSampleBudget",Math.round(values.get(CloudlyOptions.SAMPLES)));
         put(result,"frame.maxDistanceMeters",ready.project.scalar("distanceNormalizationMeters"));
         double requestedDistance = values.get(CloudlyOptions.MAX_DISTANCE_KM) * 1000.;
         put(result,"frame.cloudTraceDistanceMeters",Math.min(requestedDistance,ready.project.scalar("CloudMaxTraceDistanceInKm")*1000));
@@ -481,9 +542,11 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                 * (1-captured.rainStrength()) * (1-captured.thunderStrength());
         put(result,"frame.starsEnabled",starVisibility > 0 ? 1 : 0);
         put(result,"frame.starsBackgroundIntensity",ready.project.scalar("StarsIntensity") * starVisibility);
-        for (var pair : Map.of("B","NoiseTexParamsB","C","NoiseTexParamsC","THINB_DISP","NoiseTexParams_THINB_DISP").entrySet()) {
-            var stat=Objects.requireNonNull(ready.density.statistics().get(pair.getValue()),"Original density reduction has no "+pair.getValue());
-            put(result,"noiseStatistics."+pair.getKey()+".min",stat.minimum().toDoubles()); put(result,"noiseStatistics."+pair.getKey()+".max",stat.maximum().toDoubles());
+        for (var entry : ready.density.statistics().entrySet()) {
+            String category = entry.getKey().substring("NoiseTexParams".length());
+            if (category.startsWith("_")) category = category.substring(1);
+            put(result,"noiseStatistics."+category+".min",entry.getValue().minimum().toDoubles());
+            put(result,"noiseStatistics."+category+".max",entry.getValue().maximum().toDoubles());
         }
         return result;
     }
@@ -523,6 +586,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     private record Draw(String program,ByteBuffer constants,Map<String,GpuDescriptorIndex> descriptors,CloudlyFrameCamera camera,ResourceOwner owner,int x,int y,int z) {
         void record(PostEffectFrame frame,CloudlyFramePrograms programs) { programs.record(frame,program,constants,descriptors,Map.of(),camera,List.of(owner),x,y,z); }
     }
+    private record AmbientOcclusionDraw(Draw draw, int level, CloudlyAmbientOcclusionState.Update update) { }
     private record Assets(CloudlyNativeProject project,CloudlyOriginalBakeResources.Ready density,CloudlyOriginalBakeResources.Ready atmosphere,
                           CloudlyFrameTextures.Ready textures,CloudlySourceBuffer sphere,CloudlyFramePrograms programs,CloudlyColorBridge color,
                           ShaderObjectCompute input,CloudlyGpuTiming timing,ResourceOwner owner) { }
@@ -533,7 +597,10 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         CloudlyFrameCamera previous; float previousExposure,previousTime; boolean initializationRecorded,initialized,flipped,reported;
         long previousFrame = Long.MIN_VALUE;
         double previousCloudDistance,previousCirrusDistance;
-        int previousCloudSampleBudget;
+        boolean ambientOcclusionInitialized;
+        final CloudlyAmbientOcclusionState.Level[] ambientOcclusion = {
+                CloudlyAmbientOcclusionState.Level.initial(), CloudlyAmbientOcclusionState.Level.initial(),
+                CloudlyAmbientOcclusionState.Level.initial()};
         Epoch(ResourceFactory resources,CloudlyFrameResources buffers,CloudlyFrameSchedule.Resolved extents,VmaImage2D depth,VmaImage2D white) {
             this.buffers=buffers;this.extents=extents;this.depth=depth;this.white=white;
             this.owner=resources.create(() -> new ResourceLifetime(buffers::close,depth::close,white::close).close());

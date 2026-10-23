@@ -145,10 +145,6 @@ def host_view_trace_ranges(text: str) -> str:
              "float tracable_cloud_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistance, HostCloudTraceDistanceMeters);"),
             ("float tracable_cirrus_range_max = CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus;",
              "float tracable_cirrus_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus, HostCirrusTraceDistanceMeters);"),
-            ("const float max_steps_count = float(128);",
-             "const float max_steps_count = float(clamp(HostCloudSampleBudget, 64u, 1024u));"),
-            ("const float max_steps_count_with_empty = float(256);",
-             "const float max_steps_count_with_empty = 2.0f * max_steps_count;"),
             ("const float CirrusDensity = GetCloudDensityCirrus( pp, cst, view_dist, log2_view_dist_x_sin_alpha, sdf_eval, mips_flags, skip_keep_density );",
              """const float hostCirrusCap = min(CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus, HostCirrusTraceDistanceMeters);
         const float hostCirrusFade = 1.0f - smoothstep(0.95f * hostCirrusCap, hostCirrusCap, view_dist);
@@ -174,6 +170,17 @@ def host_view_trace_ranges(text: str) -> str:
         text = text.replace(original,
                             "cloud_cone_trace_range.y = max(0, min(cloud_cone_trace_range.y, min(CloudConstantsUniform.Data_CloudMaxTraceDistance, HostCloudTraceDistanceMeters)));", 1)
     return text
+
+
+def host_native_feature_selection(text: str) -> str:
+    """Select the original alto displacement branch using its native modelling flag."""
+    if not re.search(r"\bvoid\s+SkyTraceCS\s*\(", text):
+        return text
+    original = "const bool EnableAltoDisplacement1Texture = (0 == 1);"
+    replacement = "const bool EnableAltoDisplacement1Texture = IsBitSet( SkyConstantsUniform.Data_CloudModellingFlags, 7 );"
+    if text.count(original) != 1:
+        raise ValueError("The native alto displacement selection interface changed")
+    return text.replace(original, replacement, 1)
 
 
 def host_background_lut(text: str) -> str:
@@ -264,15 +271,13 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
     common.sort(key=lambda field: field["offset"])
     common_size = (max((field["offset"] + field["size"] for field in common), default=16) + 15) & ~15
     view_trace_ranges = bool(host_camera and re.search(r"\bvoid\s+(?:SkyTraceCS|CoarseTraceCS)\s*\(", source))
-    cloud_sample_budget = bool(host_camera and re.search(r"\bvoid\s+SkyTraceCS\s*\(", source))
+    cloud_view_trace = bool(host_camera and re.search(r"\bvoid\s+SkyTraceCS\s*\(", source))
     if view_trace_ranges:
-        required_bytes = 12 if cloud_sample_budget else 8
+        required_bytes = 8
         if any(field["offset"] < required_bytes for field in common):
             raise ValueError(f"The host tracing interface requires {required_bytes} unused root bytes")
         common.extend([dict(name="HostCloudTraceDistanceMeters", type="float", offset=0, size=4, elements=0),
                        dict(name="HostCirrusTraceDistanceMeters", type="float", offset=4, size=4, elements=0)])
-        if cloud_sample_budget:
-            common.append(dict(name="HostCloudSampleBudget", type="uint", offset=8, size=4, elements=0))
         common.sort(key=lambda field: field["offset"])
     stars_rotation = bool(host_camera and re.search(r"\bvoid\s+CompositeAtmosphereCS\s*\(", source))
     if stars_rotation:
@@ -355,6 +360,7 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
         text = host_environment_depth(text)
         text = host_stars_background(text)
         text = host_background_lut(text)
+        text = host_native_feature_selection(text)
         if view_trace_ranges:
             text = host_view_trace_ranges(text)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -368,10 +374,13 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
                            ([dict(name="cameraAddress", offset=16, size=8)] if host_camera else []),
                 mathematicalFunctionsChanged=host_camera, viewTraceRangesCapped=view_trace_ranges,
                 hostCloudTracing=dict(enabled=view_trace_ranges,
-                    distanceFadeBeginFraction=0.95 if cloud_sample_budget else None,
-                    sampleBudgetField="HostCloudSampleBudget" if cloud_sample_budget else None,
-                    emptyStepBudgetMultiplier=2 if cloud_sample_budget else None,
+                    distanceFadeBeginFraction=0.95 if cloud_view_trace else None,
+                    originalStepBudgetsPreserved=True,
                     originalAtmosphereDistanceUniformsPreserved=True),
+                hostNativeFeatureSelection=dict(enabled=cloud_view_trace,
+                    altoDisplacement1FlagBit=7 if cloud_view_trace else None,
+                    selectionSource="Original CloudsAOTraceCS GetCloudSDF" if cloud_view_trace else None,
+                    originalBranchAlgorithmsPreserved=True),
                 hostStarsBackground=dict(enabled=stars_rotation,
                     rotationField="HostStarsRotationRadians" if stars_rotation else None,
                     rotationAxis="source Z" if stars_rotation else None,
