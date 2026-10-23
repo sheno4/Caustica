@@ -71,9 +71,11 @@ public final class CloudlySourcePack {
                     ? object(root.getAsJsonObject("sceneParameters")) : Map.of();
             Map<String, Object> adapter = root.has("rendererAdapter")
                     ? object(root.getAsJsonObject("rendererAdapter")) : Map.of();
+            boolean originalPipeline = Boolean.TRUE.equals(adapter.get("originalPipeline"))
+                    && source.get("nativePipelineManifest") instanceof String path && !path.isBlank();
             if (!adapter.isEmpty() && (!"Caustica".equals(adapter.get("target"))
-                    || !Boolean.TRUE.equals(adapter.get("approximation")))) {
-                throw new IOException("Cloudly renderer adapter must name Caustica and declare approximation=true");
+                    || (!originalPipeline && !Boolean.TRUE.equals(adapter.get("approximation"))))) {
+                throw new IOException("Cloudly renderer adapter must name Caustica and declare an original pipeline manifest or approximation=true");
             }
             List<Map<String, Object>> components = new ArrayList<>();
             for (JsonElement component : root.getAsJsonArray("components")) {
