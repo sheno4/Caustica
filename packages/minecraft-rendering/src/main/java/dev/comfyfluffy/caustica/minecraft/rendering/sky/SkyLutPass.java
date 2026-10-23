@@ -15,7 +15,7 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.*;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
-import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCloudPass;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyOptions;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyLighting;
 import dev.comfyfluffy.caustica.settings.*;
 import dev.comfyfluffy.caustica.support.SharedResource;
@@ -318,7 +318,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     static SkyState gather(OptionValues options, MinecraftCelestialFrame captured, CloudlySkyPreset preset) {
-        if (preset != null && !options.get(CloudlyCloudPass.ENABLED)) preset = null;
+        if (preset != null && !options.get(CloudlyOptions.ENABLED)) preset = null;
         float altitude = viewerAltitudeKm(captured.cameraY(), captured.seaLevel(),
                 captured.metersPerSceneUnit());
         float r = (float) (Math.PI / 180.0);

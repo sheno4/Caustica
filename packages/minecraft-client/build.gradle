@@ -278,6 +278,17 @@ tasks.named("jar", Jar).configure {
 	from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
 		into "META-INF"
 	}
+	def cloudlyBundleInputRoot = providers.gradleProperty("cloudlyBundleInputRoot")
+	if (cloudlyBundleInputRoot.isPresent()) {
+		if (cloudlyBundleInputRoot.get().isBlank()) throw new GradleException("cloudlyBundleInputRoot must name the prepared private preset directory")
+		def bundleRoot = rootProject.file(cloudlyBundleInputRoot.get())
+		from(bundleRoot) { into "caustica/cloudly" }
+		doFirst {
+			if (!new File(bundleRoot, "manifest.json").isFile()) {
+				throw new GradleException("cloudlyBundleInputRoot has no manifest.json: ${bundleRoot}")
+			}
+		}
+	}
 }
 
 tasks.named("sourcesJar", Jar).configure {

@@ -115,7 +115,7 @@ public final class CloudlySourcePack {
                     }
                     String hash = mip.get("sha256").getAsString();
                     if (!hash.matches("[0-9a-f]{64}")) throw new IOException("Invalid mip SHA-256 for texture " + id);
-                    Path relative = Path.of(mip.get("path").getAsString());
+                    Path relative = directory.getFileSystem().getPath(mip.get("path").getAsString());
                     if (relative.getRoot() != null) throw new IOException("Cloudly mip paths must be relative");
                     Path resolved = directory.resolve(relative).normalize();
                     if (!resolved.startsWith(directory)) throw new IOException("Cloudly mip path leaves the source pack");

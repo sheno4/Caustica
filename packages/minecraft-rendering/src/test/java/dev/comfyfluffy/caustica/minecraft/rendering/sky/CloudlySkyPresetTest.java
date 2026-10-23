@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration
 import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
-import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyCloudPass;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlyOptions;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySourcePack;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
@@ -25,7 +25,7 @@ final class CloudlySkyPresetTest {
     };
     private static final OptionValues IMPORT_ENABLED = new OptionValues() {
         @Override public <T> T get(Option<T> option) {
-            return option.equals(CloudlyCloudPass.ENABLED) ? option.normalize(true) : option.defaultValue();
+            return option.equals(CloudlyOptions.ENABLED) ? option.normalize(true) : option.defaultValue();
         }
     };
     private static final MinecraftLightingCalibration LIGHTING =
@@ -66,7 +66,12 @@ final class CloudlySkyPresetTest {
 
     @Test void disablingImportRestoresCapturedSunAndConfiguredTilt(@TempDir Path directory) throws Exception {
         var preset = CloudlySkyPreset.from(source(directory, 30, 90, "sourceX"));
-        var disabled = SkyLutPass.gather(DEFAULT_OPTIONS, CAPTURED, preset);
+        OptionValues importDisabled = new OptionValues() {
+            @Override public <T> T get(Option<T> option) {
+                return option.equals(CloudlyOptions.ENABLED) ? option.normalize(false) : option.defaultValue();
+            }
+        };
+        var disabled = SkyLutPass.gather(importDisabled, CAPTURED, preset);
         assertEquals(CAPTURED.sunAngleRadians(), disabled.sunAngleRadians());
         assertEquals(Math.toRadians(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES.defaultValue()),
                 disabled.noonTiltRadians(), 1e-7);
@@ -135,7 +140,7 @@ final class CloudlySkyPresetTest {
         var preset = CloudlySkyPreset.from(source(directory, 30, 90, "sourceX"));
         OptionValues configured = new OptionValues() {
             @Override public <T> T get(Option<T> option) {
-                if (option.equals(CloudlyCloudPass.ENABLED)) return option.normalize(true);
+                if (option.equals(CloudlyOptions.ENABLED)) return option.normalize(true);
                 if (option.equals(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES)) return option.normalize(50f);
                 return option.defaultValue();
             }
@@ -161,7 +166,7 @@ final class CloudlySkyPresetTest {
         var preset = CloudlySkyPreset.from(source(directory, 30, 90, "sourceX"));
         OptionValues sizes = new OptionValues() {
             @Override public <T> T get(Option<T> option) {
-                if (option.equals(CloudlyCloudPass.ENABLED)) return option.normalize(true);
+                if (option.equals(CloudlyOptions.ENABLED)) return option.normalize(true);
                 if (option.equals(SkyLutPass.SUN_DISC_HALF_ANGLE_DEGREES)) return option.normalize(2f);
                 if (option.equals(SkyLutPass.MOON_DISC_HALF_ANGLE_DEGREES)) return option.normalize(3f);
                 return option.defaultValue();

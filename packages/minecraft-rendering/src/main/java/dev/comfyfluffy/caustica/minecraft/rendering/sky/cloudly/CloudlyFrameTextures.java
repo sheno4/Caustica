@@ -26,7 +26,7 @@ import java.util.function.Consumer;
 import static dev.comfyfluffy.caustica.vulkan.ResourceLifetime.closeAfterFailure;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Hash-captured original 2D and cube mip payloads, uploaded without decoding or resampling. */
+/** Hash-captured 2D and cube mip payloads, uploaded without decoding or resampling. */
 public final class CloudlyFrameTextures {
     private static final int USAGE = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     private static final List<String> CUBE_FACES = List.of("+X", "-X", "+Y", "-Y", "+Z", "-Z");
@@ -45,6 +45,7 @@ public final class CloudlyFrameTextures {
     /** Block geometry determines byte counts even for cube mip levels smaller than a compressed block. */
     public enum Format {
         BGRA8("PF_B8G8R8A8", VK_FORMAT_B8G8R8A8_UNORM, 1, 4),
+        R32F("PF_R32_FLOAT", VK_FORMAT_R32_SFLOAT, 1, 4),
         RGBA16F("PF_FloatRGBA", VK_FORMAT_R16G16B16A16_SFLOAT, 1, 8),
         BC6H("PF_BC6H", VK_FORMAT_BC6H_UFLOAT_BLOCK, 4, 16);
         private final String nativeName;
@@ -149,7 +150,7 @@ public final class CloudlyFrameTextures {
                     long faceBytes = format.faceByteSize(sx, sy), size = Math.multiplyExact(faceBytes, kind.layers);
                     totalBytes = Math.addExact(totalBytes, size);
                     require(totalBytes <= MAX_BYTES && mip.get("bytes").getAsLong() == size, "Frame texture mip byte count differs from block geometry");
-                    Path relative = Path.of(mip.get("path").getAsString());
+                    Path relative = actual.getFileSystem().getPath(mip.get("path").getAsString());
                     require(!relative.isAbsolute(), "Frame mip path must be relative");
                     Path resolved = actual.getParent().resolve(relative).normalize();
                     require(resolved.startsWith(actual.getParent()), "Frame mip path leaves its manifest directory");

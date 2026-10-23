@@ -130,7 +130,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: ace-sky-fabric-${{ github.sha }}
+          name: caustica-fabric-core-without-private-sky-${{ github.sha }}
           path: |
             build/libs/*-fabric.jar
           if-no-files-found: error

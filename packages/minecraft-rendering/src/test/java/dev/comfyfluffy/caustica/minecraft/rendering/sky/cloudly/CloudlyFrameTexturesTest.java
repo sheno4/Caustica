@@ -116,6 +116,7 @@ final class CloudlyFrameTexturesTest {
                                     int width, int levels) throws Exception {
         String nativeFormat = switch (format) {
             case BGRA8 -> "PF_B8G8R8A8";
+            case R32F -> "PF_R32_FLOAT";
             case RGBA16F -> "PF_FloatRGBA";
             case BC6H -> "PF_BC6H";
         };

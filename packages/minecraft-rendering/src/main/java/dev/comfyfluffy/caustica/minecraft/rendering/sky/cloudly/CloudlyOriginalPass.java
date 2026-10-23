@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly;
 
 import dev.comfyfluffy.caustica.api.pass.Pass;
+import dev.comfyfluffy.caustica.api.pass.PassId;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
@@ -28,6 +29,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Original density generation and independent cloud reconstruction, composed after world reconstruction. */
 public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
+    public static final PassId ID = new PassId("caustica", "cloudly_original");
     private static final Logger LOGGER = LoggerFactory.getLogger(CloudlyOriginalPass.class);
     private final GpuDevice gpu;
     private final GpuComputeQueue compute;
@@ -207,7 +209,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         Assets ready = assets;
         MinecraftSkyFrame captured = frames.get();
         OptionValues values = options.get();
-        if (closed || ready == null || captured == null || !values.get(CloudlyCloudPass.ENABLED)) return;
+        if (closed || ready == null || captured == null || !values.get(CloudlyOptions.ENABLED)) return;
         frame.retain(ready.owner);
         var view = frame.view().camera();
         var current = new CloudlyFrameCamera(frame.cameraRelativeFromClip(), view.x(), view.y(), view.z(),
@@ -236,8 +238,10 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         frame.retain(target.owner);
         double cloudDistance = inputs.get("frame.cloudTraceDistanceMeters")[0];
         double cirrusDistance = inputs.get("frame.cirrusTraceDistanceMeters")[0];
+        int cloudSampleBudget = (int)inputs.get("frame.cloudSampleBudget")[0];
         boolean reuseHistory = target.previous != null && target.previousFrame == frame.frameIndex() - 1
-                && target.previousCloudDistance == cloudDistance && target.previousCirrusDistance == cirrusDistance;
+                && target.previousCloudDistance == cloudDistance && target.previousCirrusDistance == cirrusDistance
+                && target.previousCloudSampleBudget == cloudSampleBudget;
         CloudlyFrameCamera previousCamera = reuseHistory ? target.previous : current;
         put(inputs, "frame.previousPreExposure", reuseHistory ? target.previousExposure : frame.preExposure());
         put(inputs, "frame.historyAvailable", reuseHistory ? 1 : 0);
@@ -276,6 +280,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             target.previousExposure = exposure; target.previousTime = time;
             target.previousFrame = frameNumber;
             target.previousCloudDistance = cloudDistance; target.previousCirrusDistance = cirrusDistance;
+            target.previousCloudSampleBudget = cloudSampleBudget;
         };
         CloudlyFrameExecutor.Plan plan = CloudlyFrameExecutor.preflight(ready.project.schedule(), resolved, selected, retainedDependencies,
                 new CloudlyFrameExecutor.Inputs() {
@@ -385,7 +390,9 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         return switch (actual) {
             case "SceneDepth" -> target.depth.sampledIndex();
             case "OriginalBlueNoise", "InactiveStars", "InactiveGround2D", "InactiveGBuffer", "InactiveHeterogeneous", "InactiveSkyGodrayHistory" -> ready.textures.descriptors().get("BlueNoise");
-            case "OriginalMoonTexture", "InactiveStarMoonCube", "InactiveFogCube" -> ready.textures.descriptors().get("MoonTexture");
+            case "OriginalMoonTexture", "InactiveFogCube" -> ready.textures.descriptors().get("MoonTexture");
+            case "OriginalStarsBackground", "InactiveStarMoonCube" -> ready.textures.descriptors().get("StarsBackground");
+            case "HostRainCoverage" -> ready.textures.descriptors().get("HostRainCoverage");
             case "OriginalSphereSamples" -> ready.sphere.descriptor();
             case "OpticalDepth" -> ready.atmosphere.texture("OpticalDepthTex").sampledIndex();
             case "MultiScattering" -> ready.atmosphere.texture("MultiScatteringLut").sampledIndex();
@@ -445,8 +452,9 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         put(result,"frame.preExposure",frame.preExposure()); put(result,"frame.originalCloudAnimationTimeSeconds",frame.timeSeconds());
         put(result,"frame.originalRenderType",1); put(result,"frame.originalTileBasedHalfPixels",1); put(result,"frame.originalTraceSubpassIndex",1);
         put(result,"frame.allHighResTiles",1); put(result,"frame.betterEdgeClassification",1);
+        put(result,"frame.cloudSampleBudget",Math.round(values.get(CloudlyOptions.SAMPLES)));
         put(result,"frame.maxDistanceMeters",ready.project.scalar("distanceNormalizationMeters"));
-        double requestedDistance = values.get(CloudlyCloudPass.MAX_DISTANCE_KM) * 1000.;
+        double requestedDistance = values.get(CloudlyOptions.MAX_DISTANCE_KM) * 1000.;
         put(result,"frame.cloudTraceDistanceMeters",Math.min(requestedDistance,ready.project.scalar("CloudMaxTraceDistanceInKm")*1000));
         put(result,"frame.cirrusTraceDistanceMeters",Math.min(requestedDistance,ready.project.scalar("CloudMaxTraceDistanceCirrusInKm")*1000));
         put(result,"frame.sceneDepthTextureSize",w,h); put(result,"frame.sceneDepthViewportMax",w,h);
@@ -463,10 +471,16 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         put(result,"frame.sunDirectionSource",sun); put(result,"frame.sunSourceRadiance",solar); put(result,"frame.sunElevationDegrees",elevation);
         put(result,"frame.lightDirectionSource",useSun?sun:moon); put(result,"frame.lightSourceRadiance",useSun?solar:new double[]{moonEnergy,moonEnergy,moonEnergy});
         put(result,"frame.lightElevationDegrees",Math.toDegrees(Math.asin((useSun?sun:moon)[2])));
-        put(result,"frame.moonEnabled",ready.project.scalar("EnableMoon")); put(result,"frame.moonDirectionSource",moon);
+        put(result,"frame.moonEnabled",1); put(result,"frame.moonDirectionSource",moon);
         put(result,"frame.moonSourceRadiance",sky.moonIlluminanceLux()); put(result,"frame.moonPhase",captured.celestial().moonPhaseIndex()/8.);
         put(result,"frame.moonPhaseAngleRadians",ready.project.scalar("MoonPhaseAngle")); put(result,"frame.moonDiskBrightness",ready.project.scalar("MoonDiskBrightness"));
         put(result,"frame.moonDiscCosHalfAngle",Math.cos(Math.toRadians(ready.project.scalar("MoonDiskAngleInDegrees"))*0.5));
+        put(result,"frame.rainStrength",captured.rainStrength()); put(result,"frame.thunderStrength",captured.thunderStrength());
+        put(result,"frame.starAngleRadians",captured.celestial().starAngleRadians());
+        double starVisibility = Math.max(0, captured.celestial().starBrightness())
+                * (1-captured.rainStrength()) * (1-captured.thunderStrength());
+        put(result,"frame.starsEnabled",starVisibility > 0 ? 1 : 0);
+        put(result,"frame.starsBackgroundIntensity",ready.project.scalar("StarsIntensity") * starVisibility);
         for (var pair : Map.of("B","NoiseTexParamsB","C","NoiseTexParamsC","THINB_DISP","NoiseTexParams_THINB_DISP").entrySet()) {
             var stat=Objects.requireNonNull(ready.density.statistics().get(pair.getValue()),"Original density reduction has no "+pair.getValue());
             put(result,"noiseStatistics."+pair.getKey()+".min",stat.minimum().toDoubles()); put(result,"noiseStatistics."+pair.getKey()+".max",stat.maximum().toDoubles());
@@ -519,6 +533,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         CloudlyFrameCamera previous; float previousExposure,previousTime; boolean initializationRecorded,initialized,flipped,reported;
         long previousFrame = Long.MIN_VALUE;
         double previousCloudDistance,previousCirrusDistance;
+        int previousCloudSampleBudget;
         Epoch(ResourceFactory resources,CloudlyFrameResources buffers,CloudlyFrameSchedule.Resolved extents,VmaImage2D depth,VmaImage2D white) {
             this.buffers=buffers;this.extents=extents;this.depth=depth;this.white=white;
             this.owner=resources.create(() -> new ResourceLifetime(buffers::close,depth::close,white::close).close());

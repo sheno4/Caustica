@@ -18,7 +18,6 @@ import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloud
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyCloudPushData.Float4;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.gen.CloudlyNoiseProfileData;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
-import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.vulkan.ResourceLifetime;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
@@ -30,13 +29,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteOrder;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -46,12 +42,6 @@ import static org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
 /** Camera-ray scattering through original source volumes under an explicit local approximation adapter. */
 public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     public static final PassId ID = new PassId("caustica", "cloudly_clouds");
-    public static final String GROUP = "sky-cloudly";
-    public static final Option<Boolean> ENABLED = Option.bool("sky.cloudly.enabled", false).inGroupAsHeader(GROUP);
-    public static final Option<Optional<String>> SOURCE_PACK = Option.optionalString("sky.cloudly.source-pack").inGroup(GROUP);
-    public static final Option<Float> SAMPLES = Option.range("sky.cloudly.samples", 64, 1024, 512).inGroup(GROUP).step(32);
-    public static final Option<Float> MAX_DISTANCE_KM = Option.range("sky.cloudly.max-distance-km", 1, 200, 200).inGroup(GROUP);
-    public static final List<Option<?>> OPTIONS = List.of(ENABLED, SOURCE_PACK, SAMPLES, MAX_DISTANCE_KM);
     private static final Logger LOGGER = LoggerFactory.getLogger(CloudlyCloudPass.class);
     private static final int MAX_COMPONENTS = 64;
 
@@ -73,11 +63,6 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
 
     /** Validates this camera adapter's supported source subset before the session allocates GPU state. */
     public static void validateSource(CloudlySourcePack source) { SourceModel.from(source); }
-
-    public CloudlyCloudPass(PostEffectSetup setup, GpuComputeQueue compute, ResourceFactory resources,
-                            Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames) {
-        this(setup, compute, resources, options, frames, configuredSource(options.get()));
-    }
 
     /** Shares the session's immutable source pack with sky LUT and retained-light preparation. */
     public CloudlyCloudPass(PostEffectSetup setup, GpuComputeQueue compute, ResourceFactory resources,
@@ -110,12 +95,6 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
         catch (RuntimeException | Error failure) { shaderOwner.close(); throw failure; }
         worker = Thread.ofVirtual().name("Caustica Cloudly source upload").unstarted(() -> prepare(compute, source));
         worker.start();
-    }
-
-    private static CloudlySourcePack configuredSource(OptionValues values) {
-        if (!values.get(ENABLED) || values.get(SOURCE_PACK).isEmpty()) return null;
-        try { return CloudlySourcePack.load(Path.of(values.get(SOURCE_PACK).orElseThrow())); }
-        catch (IOException failure) { throw new UncheckedIOException("Unable to load the configured Cloudly source pack", failure); }
     }
 
     private void prepare(GpuComputeQueue compute, CloudlySourcePack source) {
@@ -181,7 +160,7 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
     @Override public void record(PostEffectFrame frame) {
         if (model == null) return;
         OptionValues values = options.get();
-        if (!values.get(ENABLED) || !(frame.view().medium() instanceof ViewMedium.Vacuum)) return;
+        if (!values.get(CloudlyOptions.ENABLED) || !(frame.view().medium() instanceof ViewMedium.Vacuum)) return;
         MinecraftSkyFrame captured = frames.get();
         if (captured == null) return;
         CloudlySkyLighting sky = atmosphere.get();
@@ -223,13 +202,13 @@ public final class CloudlyCloudPass implements Pass<PostEffectFrame> {
                     revision.samplerIndex(), output.storageIndex().value(),
                     0,
                     frame.primaryDepth().descriptor(GpuImageDescriptorKind.SAMPLED).index().value(),
-                    Math.round(values.get(SAMPLES)), column(matrix, 0), column(matrix, 4), column(matrix, 8), column(matrix, 12),
+                    Math.round(values.get(CloudlyOptions.SAMPLES)), column(matrix, 0), column(matrix, 4), column(matrix, 8), column(matrix, 12),
                     new Float4((float) (camera.x() * units), (float) ((camera.y() - celestial.seaLevel()) * units),
                             (float) (camera.z() * units), units),
                     new Float4(sunX, sunY, sunZ, illuminance),
                     new Float4(model.extinction(), model.phaseG1(), model.phaseG2(), model.phaseMix()),
                     new Float4(model.ambientScale(), model.phaseScale(), model.albedo(), frame.preExposure()),
-                    new Float4(jitter[0], jitter[1], values.get(MAX_DISTANCE_KM) * 1000, model.shadowFirstStep()),
+                    new Float4(jitter[0], jitter[1], values.get(CloudlyOptions.MAX_DISTANCE_KM) * 1000, model.shadowFirstStep()),
                     new Float4(model.shadowStepBase(), model.voxelStep(), model.targetOpticalDepth(), model.emptyStepMultiplier()),
                     new Float4(sunColor[0], sunColor[1], sunColor[2], 0),
                     new Float4(model.ambientColor()[0], model.ambientColor()[1], model.ambientColor()[2], 0),

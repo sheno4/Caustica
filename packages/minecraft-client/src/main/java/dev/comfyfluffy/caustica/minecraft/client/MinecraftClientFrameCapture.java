@@ -40,8 +40,10 @@ final class MinecraftClientFrameCapture {
         Optional<MinecraftCelestialFrame> celestial = celestial(
                 minecraft, cameraY, metersPerSceneUnit, calibration);
         MinecraftLightFrame light = new MinecraftLightFrame(celestial, helmet(minecraft));
+        float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         Optional<MinecraftSkyFrame> sky = celestial.flatMap(value -> atlas(minecraft, value)
-                .map(atlas -> new MinecraftSkyFrame(value, atlas)));
+                .map(atlas -> new MinecraftSkyFrame(value, atlas,
+                        minecraft.level.getRainLevel(partial), minecraft.level.getThunderLevel(partial))));
         Optional<MinecraftFogFrame> fog = fogGrid == null ? Optional.empty() : celestial.map(value ->
                 new MinecraftFogFrame(value,
                         ((double) minecraft.level.getGameTime()

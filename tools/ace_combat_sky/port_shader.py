@@ -1,8 +1,9 @@
 """Adapt a privately extracted HLSL compute program to Caustica's Vulkan ABI.
 
 Input and generated shaders belong in a private source pack outside the checkout.
-The adapter preserves function bodies, constant byte offsets and resource types.
-It does not bundle original source or infer omitted runtime parameter values.
+The adapter preserves the original cloud scattering and uniform byte layouts.
+Explicit host adaptations bridge cameras, tracing controls and missing-terrain
+atmosphere boundaries. Original source and runtime resources stay private.
 """
 
 from __future__ import annotations
@@ -77,22 +78,15 @@ def host_camera_body(text: str) -> str:
     return SceneDepth * 0.01f / dot(direction, forward);
 }""" + text[distance.end():]
     if "void GetCompositedSceneColor(" in text:
-        # A missing Minecraft surface below the virtual planet continues the native sky-side
-        # horizon radiance. Real surface depth and the later cloud composition remain unchanged.
+        # Missing Minecraft terrain reads the direction-dependent native air continuation.
+        # Real surface depth and the later cloud composition remain unchanged.
         horizon_extension = """
         if (depth == 0.0f && RayIntersectGround(rAndMub.x, rAndMub.y))
         {
-            const float horizonHeight = max(h, GetRBot() + 0.3f);
-            const float tangentMu = -sqrt(max(0.0f, horizonHeight * horizonHeight - GetRBot() * GetRBot())) / horizonHeight;
-            const float2 horizontal = view_ray.d.xy;
-            const float horizontalLengthSquared = dot(horizontal, horizontal);
-            const float2 azimuth = horizontalLengthSquared > 1.0e-12f
-                ? horizontal * rsqrt(horizontalLengthSquared) : float2(1.0f, 0.0f);
-            const float3 tangentDirection = float3(azimuth * sqrt(max(0.0f, 1.0f - tangentMu * tangentMu)), tangentMu);
-            float2 horizonUv;
-            ATMViewLutParamsToUv(false, tangentMu, tangentDirection, horizonHeight, GetRBot(), ATMViewLutSizeAndInvSize, horizonUv);
-            const float3 horizonRadiance = ATMViewLut.SampleLevel(SkyTraceOutputTextureSampler, saturate(horizonUv), 0) * UnrealPreExposure;
-            AtmColor = lerp(horizonRadiance * fog.a + fog.rgb * UnrealPreExposure, horizonRadiance, _blend_factor);
+            float2 continuationUv;
+            ATMViewLutParamsToUv(true, rAndMub.y, view_ray.d, h, GetRBot(), ATMViewLutSizeAndInvSize, continuationUv);
+            const float3 continuationRadiance = ATMViewLut.SampleLevel(SkyTraceOutputTextureSampler, saturate(continuationUv), 0) * UnrealPreExposure;
+            AtmColor = lerp(continuationRadiance * fog.a + fog.rgb * UnrealPreExposure, continuationRadiance, _blend_factor);
         }
         """
         marker = "float4 SceneColorWithAtm = 0;"
@@ -118,23 +112,135 @@ def host_environment_depth(text: str) -> str:
     return text
 
 
+def host_stars_background(text: str) -> str:
+    """The host has the native cubemap, without the source's separate star catalogue pass."""
+    if not re.search(r"\bvoid\s+CompositeAtmosphereCS\s*\(", text):
+        return text
+    sample = re.compile(
+        r"const\s+float2\s+uv_viewport\s*=\s*[^;\n]+;\s*"
+        r"const\s+float4\s+stars_tex_val\s*=\s*StarsTexture\.SampleLevel\(StarsTextureSampler,\s*uv_viewport,\s*0\);\s*"
+        r"Star\s*=\s*float4\(UnNormalizeStarsValue\(StarsNoColorMode\s*\?\s*stars_tex_val\.xxx\s*:\s*stars_tex_val\.xyz\),\s*1\.0f\s*\)"
+        r"\s*\*\s*StarsIntensityMask\(view_ray\.d,\s*MoonDirection\)\s*"
+        r"\+\s*StarsBackgroundIntensity\s*\*\s*StarsBackground\.SampleLevel\(StarsTextureSampler,\s*view_ray\.d,\s*0\);"
+    )
+    replacement = """// Native source Z is the sky's vertical axis; catalogue stars have no host producer.
+                float hostStarsSin, hostStarsCos;
+                sincos(HostStarsRotationRadians, hostStarsSin, hostStarsCos);
+                const float3 hostStarsDirection = float3(
+                    hostStarsCos * view_ray.d.x - hostStarsSin * view_ray.d.y,
+                    hostStarsSin * view_ray.d.x + hostStarsCos * view_ray.d.y,
+                    view_ray.d.z);
+                Star = StarsBackgroundIntensity * StarsBackground.SampleLevel(StarsTextureSampler, hostStarsDirection, 0);"""
+    text, count = sample.subn(replacement, text)
+    if count != 1:
+        raise ValueError("The native star-background composition interface changed")
+    return text
+
+
 def host_view_trace_ranges(text: str) -> str:
     """View limits leave atmosphere lookup coordinates and light/shadow ranges unchanged."""
     if re.search(r"\bvoid\s+SkyTraceCS\s*\(", text):
-        text = text.replace("float tracable_cloud_range_max = CloudConstantsUniform.Data_CloudMaxTraceDistance;",
-                            "float tracable_cloud_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistance, HostCloudTraceDistanceMeters);")
-        text = text.replace("float tracable_cirrus_range_max = CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus;",
-                            "float tracable_cirrus_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus, HostCirrusTraceDistanceMeters);")
+        replacements = (
+            ("float tracable_cloud_range_max = CloudConstantsUniform.Data_CloudMaxTraceDistance;",
+             "float tracable_cloud_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistance, HostCloudTraceDistanceMeters);"),
+            ("float tracable_cirrus_range_max = CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus;",
+             "float tracable_cirrus_range_max = min(CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus, HostCirrusTraceDistanceMeters);"),
+            ("const float max_steps_count = float(128);",
+             "const float max_steps_count = float(clamp(HostCloudSampleBudget, 64u, 1024u));"),
+            ("const float max_steps_count_with_empty = float(256);",
+             "const float max_steps_count_with_empty = 2.0f * max_steps_count;"),
+            ("const float CirrusDensity = GetCloudDensityCirrus( pp, cst, view_dist, log2_view_dist_x_sin_alpha, sdf_eval, mips_flags, skip_keep_density );",
+             """const float hostCirrusCap = min(CloudConstantsUniform.Data_CloudMaxTraceDistanceCirrus, HostCirrusTraceDistanceMeters);
+        const float hostCirrusFade = 1.0f - smoothstep(0.95f * hostCirrusCap, hostCirrusCap, view_dist);
+        const float CirrusDensity = GetCloudDensityCirrus( pp, cst, view_dist, log2_view_dist_x_sin_alpha, sdf_eval, mips_flags, skip_keep_density ) * pow2(hostCirrusFade);"""),
+        )
+        for original, replacement in replacements:
+            if text.count(original) != 1:
+                raise ValueError("The native cloud view tracing interface changed")
+            text = text.replace(original, replacement, 1)
+        fade = re.compile(r"float\s+GetCloudDistanceFade\s*\(\s*const\s+float\s+t\s*\)\s*\{.*?\n\}", re.S)
+        text, count = fade.subn("""float GetCloudDistanceFade(const float t)
+{
+    const float hostCloudCap = min(CloudConstantsUniform.Data_CloudMaxTraceDistance, HostCloudTraceDistanceMeters);
+    return 1.0f - smoothstep(0.95f * hostCloudCap, hostCloudCap, t);
+}""", text)
+        if count != 1:
+            raise ValueError("The native cloud view distance fade interface changed")
     else:
-        text = text.replace("cloud_cone_trace_range.y = max(0,cloud_cone_trace_range.y);",
-                            "cloud_cone_trace_range.y = max(0, min(cloud_cone_trace_range.y, max(HostCloudTraceDistanceMeters, HostCirrusTraceDistanceMeters)));")
+        original = "cloud_cone_trace_range.y = max(0,cloud_cone_trace_range.y);"
+        if text.count(original) != 1:
+            raise ValueError("The native coarse cloud tracing interface changed")
+        # Coarse tracing covers base and alto layers; the independent cirrus range is irrelevant.
+        text = text.replace(original,
+                            "cloud_cone_trace_range.y = max(0, min(cloud_cone_trace_range.y, min(CloudConstantsUniform.Data_CloudMaxTraceDistance, HostCloudTraceDistanceMeters)));", 1)
     return text
 
 
 def host_background_lut(text: str) -> str:
-    """The host's missing-terrain horizon requires this LUT alongside the godray output."""
+    """Missing terrain receives direction-dependent native air transport, not virtual planet radiance."""
     if re.search(r"\bvoid\s+ATMViewLutCS\s*\(", text):
         text = re.sub(r"\s*if\s*\(SumGodrayFlag\s*>\s*0\s*&&\s*EnableHighQualityGodRays\s*>\s*0\)\s*\{\s*RWATMViewLut\[id\.xy\]\s*=\s*0\.0;\s*return;\s*\}", "", text, count=1)
+        function = re.search(r"ResultSingleScattering\s+IntegrateSingleScattering\s*\(", text)
+        if not function:
+            raise ValueError("The native atmosphere integration interface changed")
+        start = text.index("{", function.end())
+        cursor, depth = start + 1, 1
+        while depth:
+            if text[cursor] == "{":
+                depth += 1
+            elif text[cursor] == "}":
+                depth -= 1
+            cursor += 1
+        body = text[start:cursor]
+        distance = "trace_distance = min(trace_distance, trace_distance_max);"
+        if body.count(distance) != 1:
+            raise ValueError("The native atmosphere integration range changed")
+        # AP's horizon bias and ground-range padding define a host boundary policy for absent
+        # terrain. The ray, atmosphere coefficients and source quadrature remain native.
+        body = body.replace(distance, distance + """
+    const bool hostAirContinuation = tBot >= 0.0f;
+    float hostGroundWeight = 0.0f;
+    if (hostAirContinuation)
+    {
+        const float hostTangentDistance = sqrt(max(0.0f, h * h - rBot * rBot));
+        const float hostHorizonBias = lerp(0.1f, 0.7f, smoothstep(0.0f, 5000.0f, h - rBot));
+        const float hostHorizonFactor = sqrt(smoothstep(0.0f, max(1.0e-6f, hostTangentDistance * hostHorizonBias), tBot));
+        hostGroundWeight = 1.0f - hostHorizonFactor;
+        const float hostFarDistance = min(tTop, trace_distance_max);
+        const float hostGroundPadding = lerp(5000.0f, 50000.0f, saturate(tBot / max(1.0e-6f, hostTangentDistance * 0.2f)));
+        const float hostFiniteDistance = min(hostFarDistance, tBot + hostGroundPadding);
+        trace_distance = lerp(hostFarDistance, hostFiniteDistance, hostGroundWeight);
+    }
+""", 1)
+        sample = "float3 p_i = view_ray.o + t * view_ray.d;"
+        if body.count(sample) != 1:
+            raise ValueError("The native atmosphere sampling position changed")
+        body = body.replace(sample, sample + """
+        if (hostAirContinuation)
+        {
+            const float3 hostRadial = p_i - earth_center;
+            const float hostRadius = length(hostRadial);
+            if (hostRadius < rBot + 0.3f)
+                p_i = earth_center + hostRadial * ((rBot + 0.3f) / max(hostRadius, 1.0e-6f));
+        }
+""", 1)
+        body = body.replace("if(bUseCloudShadow && t < shadow_fade_dist )",
+                            "if((bUseCloudShadow || hostGroundWeight > 0.0f) && t < shadow_fade_dist )", 1)
+        shadow = "tr_cloud_sun_ray = exp(-pow(step_cloud_shadow_op, max(1, ShadowTraceConstants_HackGodRayStrength)));"
+        if body.count(shadow) != 1:
+            raise ValueError("The native atmosphere cloud-shadow integration changed")
+        body = body.replace(shadow,
+                            "step_cloud_shadow_op *= bUseCloudShadow ? 1.0f : hostGroundWeight;\n\t\t\t" + shadow, 1)
+        scattering = "float factor_ms = ComputeHorizonMultipleScatteringFactor(length_pc, rBot, rTop, tTop, tBot);"
+        if body.count(scattering) != 1:
+            raise ValueError("The native atmosphere horizon multiple-scattering interface changed")
+        body = body.replace(scattering, scattering + """
+        if (hostAirContinuation)
+            factor_ms = lerp(ComputeHorizonMultipleScatteringFactor(length_pc, rBot, rTop, tTop, -1.0f), factor_ms, hostGroundWeight);
+""", 1)
+        text = text[:start] + body + text[cursor:]
+        text = text.replace("sqrt(ViewHeight * ViewHeight - GetRBot() * GetRBot())",
+                            "sqrt(max(0.0f, ViewHeight * ViewHeight - GetRBot() * GetRBot()))")
     return text
 
 
@@ -158,11 +264,21 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
     common.sort(key=lambda field: field["offset"])
     common_size = (max((field["offset"] + field["size"] for field in common), default=16) + 15) & ~15
     view_trace_ranges = bool(host_camera and re.search(r"\bvoid\s+(?:SkyTraceCS|CoarseTraceCS)\s*\(", source))
+    cloud_sample_budget = bool(host_camera and re.search(r"\bvoid\s+SkyTraceCS\s*\(", source))
     if view_trace_ranges:
-        if any(field["offset"] < 8 for field in common):
-            raise ValueError("The host trace-range interface requires eight unused root bytes")
+        required_bytes = 12 if cloud_sample_budget else 8
+        if any(field["offset"] < required_bytes for field in common):
+            raise ValueError(f"The host tracing interface requires {required_bytes} unused root bytes")
         common.extend([dict(name="HostCloudTraceDistanceMeters", type="float", offset=0, size=4, elements=0),
                        dict(name="HostCirrusTraceDistanceMeters", type="float", offset=4, size=4, elements=0)])
+        if cloud_sample_budget:
+            common.append(dict(name="HostCloudSampleBudget", type="uint", offset=8, size=4, elements=0))
+        common.sort(key=lambda field: field["offset"])
+    stars_rotation = bool(host_camera and re.search(r"\bvoid\s+CompositeAtmosphereCS\s*\(", source))
+    if stars_rotation:
+        if any(field["offset"] < 4 for field in common):
+            raise ValueError("The host star rotation interface requires four unused root bytes")
+        common.append(dict(name="HostStarsRotationRadians", type="float", offset=0, size=4, elements=0))
         common.sort(key=lambda field: field["offset"])
     lines = ["struct OriginalRootParameters {"]
     cursor = 0
@@ -237,6 +353,7 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
     if host_camera:
         text = host_camera_body(text)
         text = host_environment_depth(text)
+        text = host_stars_background(text)
         text = host_background_lut(text)
         if view_trace_ranges:
             text = host_view_trace_ranges(text)
@@ -249,7 +366,17 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
                 pushFields=[dict(name="parametersAddress", offset=0, size=8),
                             dict(name="bindingsAddress", offset=8, size=8)] +
                            ([dict(name="cameraAddress", offset=16, size=8)] if host_camera else []),
-                mathematicalFunctionsChanged=False, viewTraceRangesCapped=view_trace_ranges,
+                mathematicalFunctionsChanged=host_camera, viewTraceRangesCapped=view_trace_ranges,
+                hostCloudTracing=dict(enabled=view_trace_ranges,
+                    distanceFadeBeginFraction=0.95 if cloud_sample_budget else None,
+                    sampleBudgetField="HostCloudSampleBudget" if cloud_sample_budget else None,
+                    emptyStepBudgetMultiplier=2 if cloud_sample_budget else None,
+                    originalAtmosphereDistanceUniformsPreserved=True),
+                hostStarsBackground=dict(enabled=stars_rotation,
+                    rotationField="HostStarsRotationRadians" if stars_rotation else None,
+                    rotationAxis="source Z" if stars_rotation else None,
+                    catalogueTextureSampled=False if stars_rotation else None,
+                    originalDescriptorSlotsPreserved=True),
                 cameraBridge=dict(enabled=host_camera, byteSize=80 if host_camera else 0,
                                   sourceAxes="host X, negative host Z, host Y",
                                   replacedInterfaces=(["GetNormalizeRayWorldDirection", "source ray origin"] +
