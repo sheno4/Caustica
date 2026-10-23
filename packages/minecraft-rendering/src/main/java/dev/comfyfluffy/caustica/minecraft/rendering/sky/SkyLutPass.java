@@ -64,7 +64,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private final EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment;
     private final MinecraftEnvironmentSelector selector;
     private final ResourceFactory resourceFactory;
-    private final CloudlySkyPreset preset;
+    private final Supplier<CloudlySkyPreset> preset;
     private final Consumer<CloudlySkyLighting> lighting;
     private final VmaImage2D transmittance, multiScatter, skyView, ambient;
     private final VulkanSampler lutSampler, celestialSampler;
@@ -97,13 +97,21 @@ public final class SkyLutPass implements Pass<PassFrame> {
                       EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
                       MinecraftEnvironmentSelector selector, ResourceFactory resourceFactory, long epoch,
                       CloudlySkyPreset preset, Consumer<CloudlySkyLighting> lighting) {
+        this(gpu, options, frames, environment, selector, resourceFactory, epoch, () -> preset, lighting);
+    }
+
+    public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
+                      Supplier<MinecraftSkyFrame> frames,
+                      EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
+                      MinecraftEnvironmentSelector selector, ResourceFactory resourceFactory, long epoch,
+                      Supplier<CloudlySkyPreset> preset, Consumer<CloudlySkyLighting> lighting) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
         this.options = Objects.requireNonNull(options, "options");
         this.frames = Objects.requireNonNull(frames, "frames");
         this.environment = Objects.requireNonNull(environment, "environment");
         this.selector = Objects.requireNonNull(selector, "selector");
         this.resourceFactory = Objects.requireNonNull(resourceFactory, "resourceFactory");
-        this.preset = preset;
+        this.preset = Objects.requireNonNull(preset, "preset");
         this.lighting = Objects.requireNonNull(lighting, "lighting");
         resourcePackEpoch = new AtomicLong(epoch);
         List<Runnable> allocated = new ArrayList<>();
@@ -153,7 +161,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
         MinecraftSkyFrame captured = frames.get();
         if (captured == null) return;
         if (hasPriorGpuUse) priorRayReadsToSkyWrites(frame.commandBuffer());
-        SkyState state = gather(options.get(), captured.celestial(), preset);
+        SkyState state = gather(options.get(), captured.celestial(), preset.get());
         AtlasSnapshot snapshot = atlasSnapshot(captured.atlas());
         SkyInputsData inputs = skyInputs(state, snapshot);
         ensureBinding(snapshot);

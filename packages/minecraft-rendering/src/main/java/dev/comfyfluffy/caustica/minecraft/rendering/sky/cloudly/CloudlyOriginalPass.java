@@ -36,7 +36,6 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     private final ResourceFactory resources;
     private final Supplier<OptionValues> options;
     private final Supplier<MinecraftSkyFrame> frames;
-    private final CloudlySkyPreset sky;
     private final List<GpuComputeJob> jobs = new ArrayList<>();
     private final List<AutoCloseable> staged = new ArrayList<>();
     private final Thread worker;
@@ -62,8 +61,20 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     public CloudlyOriginalPass(PostEffectSetup setup, GpuComputeQueue compute, ResourceFactory resources,
                               Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames,
                               CloudlySourcePack source, Path manifest) {
-        gpu = setup.gpu(); this.compute = compute; this.resources = resources;
-        this.options = options; this.frames = frames; sky = CloudlySkyPreset.from(source);
+        this(setup.gpu(), compute, resources, options, frames, () -> source, manifest);
+    }
+
+    CloudlyOriginalPass(GpuDevice gpu, GpuComputeQueue compute, ResourceFactory resources,
+                        Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames,
+                        CloudlyOptions.Scene scene) {
+        this(gpu, compute, resources, options, frames, () -> CloudlyBundledPreset.load(scene), null);
+    }
+
+    private CloudlyOriginalPass(GpuDevice gpu, GpuComputeQueue compute, ResourceFactory resources,
+                               Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames,
+                               SourceLoader source, Path manifest) {
+        this.gpu = gpu; this.compute = compute; this.resources = resources;
+        this.options = options; this.frames = frames;
         worker = Thread.ofVirtual().name("Caustica original Cloudly GPU preparation").unstarted(() -> prepare(source, manifest));
         synchronized (this) {
             preparationLifetime = resources.create(this::retirePreparation);
@@ -77,6 +88,10 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
 
     public boolean resourcesReady() { return assets != null; }
     public Optional<Throwable> preparationFailure() { return Optional.ofNullable(preparationFailure); }
+    public CloudlySkyPreset skyPreset() { Assets ready = assets; return ready == null ? null : ready.sky; }
+
+    @FunctionalInterface
+    private interface SourceLoader { CloudlySourcePack load() throws IOException; }
 
     private synchronized <T extends AutoCloseable> void stage(CompletableFuture<T> future, T value) {
         if (closed || preparationFinished) { closeAll(List.of(value)); future.cancel(false); }
@@ -101,12 +116,17 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         if (closed || preparationFinished || Thread.currentThread().isInterrupted()) throw new InterruptedException();
     }
 
-    private void prepare(CloudlySourcePack source, Path manifest) {
+    private void prepare(SourceLoader loader, Path manifest) {
         List<AutoCloseable> acquired = new ArrayList<>();
         try {
+            CloudlySourcePack source = loader.load();
+            CloudlySkyPreset sky = CloudlySkyPreset.from(source);
+            if (manifest == null) manifest = projectManifest(source).orElseThrow(
+                    () -> new IllegalArgumentException("Bundled Cloudly preset has no original pipeline manifest"));
             var project = CloudlyNativeProject.load(manifest);
             requirePreparing();
-            LOGGER.info("Original Cloudly: preparing source volume upload, density bake, atmosphere and native textures");
+            LOGGER.info("Original Cloudly: preparing {} source components, {} volume textures, density bake and atmosphere",
+                    source.components().size(), source.textures().size());
             var volumeFuture = new CompletableFuture<CloudlyCloudResources>();
             track(CloudlyVolumeUpload.prepare(gpu, compute, resources, source, result -> {
                 if (result instanceof CloudlyVolumeUpload.Ready ready) stage(volumeFuture, ready.resources());
@@ -153,7 +173,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             List<AutoCloseable> owned = List.copyOf(acquired);
             ResourceOwner owner = resources.create(() -> closeAll(owned));
             acquired.clear();
-            var completed = new Assets(project, density, atmosphere, textures, sphere, programs, color, input, timing, owner);
+            var completed = new Assets(sky, project, density, atmosphere, textures, sphere, programs, color, input, timing, owner);
             synchronized (this) {
                 preparationFinished = true;
                 jobs.clear();
@@ -454,12 +474,13 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             case "OriginalMoonTexture", "InactiveFogCube" -> ready.textures.descriptors().get("MoonTexture");
             case "OriginalStarsBackground", "InactiveStarMoonCube" -> ready.textures.descriptors().get("StarsBackground");
             case "HostRainCoverage" -> ready.textures.descriptors().get("HostRainCoverage");
+            case "OriginalRainPillarSDF" -> ready.density.texture("CloudTex_RainPillar_SDF_Tex").sampledIndex();
             case "OriginalSphereSamples" -> ready.sphere.descriptor();
             case "OpticalDepth" -> ready.atmosphere.texture("OpticalDepthTex").sampledIndex();
             case "MultiScattering" -> ready.atmosphere.texture("MultiScatteringLut").sampledIndex();
             case "BASE_SDF", "InactiveAO", "InactiveRain", "InactiveFogVolume" -> ready.density.texture("CloudTex_BASE_SDF_Tex").sampledIndex();
             case "CIRRUS_SDF" -> ready.density.texture("CloudTex_CIRRUS_SDF_Tex").sampledIndex();
-            case "DISP1", "InactiveAlto" -> ready.density.texture("CloudTex_DISP1_DensityTex").sampledIndex();
+            case "DISP1", "InactiveAlto", "InactiveCirrusDisplacement" -> ready.density.texture("CloudTex_DISP1_DensityTex").sampledIndex();
             case "ActualAltoDisplacement" -> ready.density.texture("CloudTex_ALTO_DISP1_DensityTex").sampledIndex();
             case "DISP2" -> ready.density.texture("CloudTex_DISP2_DensityTex").sampledIndex();
             case "DISP_CIRRUS" -> ready.density.texture("CloudTex_DISP_CIRRUS_DensityTex").sampledIndex();
@@ -502,6 +523,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     }
 
     private Map<String, double[]> frameInputs(PostEffectFrame frame, MinecraftSkyFrame captured, OptionValues values, Assets ready, CloudlyFrameCamera camera) {
+        CloudlySkyPreset sky = ready.sky;
         var result = new LinkedHashMap<String,double[]>();
         int w=frame.sceneColor().width(),h=frame.sceneColor().height(),tw=w,th=h,hw=Math.ceilDiv(tw,2),hh=Math.ceilDiv(th,2),cw=Math.ceilDiv(tw,16),ch=Math.ceilDiv(th,16);
         put(result,"frame.outputSize",w,h); put(result,"frame.viewport",0,0,w,h); put(result,"frame.nativeSkyTraceSize",tw,th);
@@ -587,7 +609,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         void record(PostEffectFrame frame,CloudlyFramePrograms programs) { programs.record(frame,program,constants,descriptors,Map.of(),camera,List.of(owner),x,y,z); }
     }
     private record AmbientOcclusionDraw(Draw draw, int level, CloudlyAmbientOcclusionState.Update update) { }
-    private record Assets(CloudlyNativeProject project,CloudlyOriginalBakeResources.Ready density,CloudlyOriginalBakeResources.Ready atmosphere,
+    private record Assets(CloudlySkyPreset sky,CloudlyNativeProject project,CloudlyOriginalBakeResources.Ready density,CloudlyOriginalBakeResources.Ready atmosphere,
                           CloudlyFrameTextures.Ready textures,CloudlySourceBuffer sphere,CloudlyFramePrograms programs,CloudlyColorBridge color,
                           ShaderObjectCompute input,CloudlyGpuTiming timing,ResourceOwner owner) { }
     private static final class Epoch implements AutoCloseable {
