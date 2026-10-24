@@ -6,7 +6,7 @@ import java.util.List;
 
 /** Shared user controls for the native Cloudly renderer and its source-volume adapter. */
 public final class CloudlyOptions {
-    public enum Scene { HANGAR, MISSION3 }
+    public enum Scene { HANGAR, MISSION3, MISSION11 }
 
     public static final String GROUP = "sky-cloudly";
     public static final Option<Boolean> ENABLED = Option.bool("sky.cloudly.enabled", true).inGroupAsHeader(GROUP);

@@ -28,6 +28,7 @@ public final class CloudlyBundledPreset {
         String manifest = switch (scene) {
             case HANGAR -> "/caustica/cloudly/manifest.json";
             case MISSION3 -> "/caustica/cloudly/scenes/mission3/manifest.json";
+            case MISSION11 -> "/caustica/cloudly/scenes/mission11/manifest.json";
         };
         URL resource = CloudlyBundledPreset.class.getResource(manifest);
         if (resource == null) throw new FileNotFoundException("The mod does not contain its bundled Cloudly preset: " + manifest);
