@@ -287,6 +287,24 @@ tasks.named("jar", Jar).configure {
 			if (!new File(bundleRoot, "manifest.json").isFile()) {
 				throw new GradleException("cloudlyBundleInputRoot has no manifest.json: ${bundleRoot}")
 			}
+			def presets = [new File(bundleRoot, "manifest.json")]
+			presets.addAll(fileTree(new File(bundleRoot, "scenes")) { include "*/manifest.json" }.files)
+			presets.each { presetFile ->
+				def preset = new groovy.json.JsonSlurper().parse(presetFile)
+				def nativeManifest = preset.source?.nativePipelineManifest
+				if (nativeManifest) {
+					def projectFile = new File(presetFile.parentFile, nativeManifest)
+					def nativeProject = new groovy.json.JsonSlurper().parse(projectFile)
+					def libraryFile = new File(projectFile.parentFile, nativeProject.library)
+					def library = new groovy.json.JsonSlurper().parse(libraryFile)
+					def programIds = new HashSet<String>()
+					library.programs.each { program ->
+						if (!programIds.add(program.id)) {
+							throw new GradleException("Bundled Cloudly library repeats shader program ${program.id}: ${libraryFile}")
+						}
+					}
+				}
+			}
 		}
 	}
 }
