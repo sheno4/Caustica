@@ -78,21 +78,12 @@ def host_camera_body(text: str) -> str:
     return SceneDepth * 0.01f / dot(direction, forward);
 }""" + text[distance.end():]
     if "void GetCompositedSceneColor(" in text:
-        # Missing Minecraft terrain reads the direction-dependent native air continuation.
-        # Real surface depth and the later cloud composition remain unchanged.
-        horizon_extension = """
-        if (depth == 0.0f && RayIntersectGround(rAndMub.x, rAndMub.y))
-        {
-            float2 continuationUv;
-            ATMViewLutParamsToUv(true, rAndMub.y, view_ray.d, h, GetRBot(), ATMViewLutSizeAndInvSize, continuationUv);
-            const float3 continuationRadiance = ATMViewLut.SampleLevel(SkyTraceOutputTextureSampler, saturate(continuationUv), 0) * UnrealPreExposure;
-            AtmColor = lerp(continuationRadiance * fog.a + fog.rgb * UnrealPreExposure, continuationRadiance, _blend_factor);
-        }
-        """
-        marker = "float4 SceneColorWithAtm = 0;"
+        # Background keeps the source's LUT/godray producer selection on both sides of
+        # the horizon. The surface AP volume must not replace that extended background.
+        marker = "AtmColor = lerp(AtmColor, AP.xyz * UnrealPreExposure, falloff);"
         if text.count(marker) != 1:
-            raise ValueError("The native atmosphere composition boundary changed")
-        text = text.replace(marker, horizon_extension + marker, 1)
+            raise ValueError("The native atmosphere/AP composition boundary changed")
+        text = text.replace(marker, "if (depth > 0.0f) " + marker, 1)
         for radicand in (
             "ViewHeight * ViewHeight - BottomRadius * BottomRadius",
             "h * h - GetRBot() * GetRBot()",
@@ -104,11 +95,48 @@ def host_camera_body(text: str) -> str:
     return text
 
 
+def host_terrain_fade_boundary(text: str) -> str:
+    """Match the host's cylindrical terrain boundary without changing physical ray depth."""
+    marker = "terrain_blend_factor = 1 - smoothstep(fade_distance * FadeStartFactor, fade_distance, dist);"
+    if text.count(marker) != 1:
+        raise ValueError("The native terrain-fade distance interface changed")
+    distance = re.compile(r"float fade_distance = clamp\([^;]+;")
+    text, count = distance.subn("float fade_distance = MaxVisibleDistance;", text)
+    if count != 1:
+        raise ValueError("The native terrain-fade range interface changed")
+    text = text.replace(marker,
+        "terrain_blend_factor = 1 - smoothstep(fade_distance * FadeStartFactor, fade_distance, "
+        "dist * max(length(view_ray.d.xy), abs(view_ray.d.z)));", 1)
+    condition = re.compile(r"if\((depth|InputParameters\.DeviceZ) && EnableTerrainFade\)")
+    text, count = condition.subn(r"if(\1 && EnableTerrainFade && MaxVisibleDistance > 0.0f)", text)
+    if count != 1:
+        raise ValueError("The native terrain-fade enable interface changed")
+    return text
+
+
 def host_environment_depth(text: str) -> str:
-    """A zero reverse-depth value denotes environment, with normalized far distance one."""
+    """Classify environment and terrain using the same host boundary as composition."""
     function = re.search(r"float\s+GetDistanceFromSceneDepth\s*\(\s*float2\s+uv\s*,\s*float\s+DeviceZ\s*,\s*float\s+h_real\s*,\s*float\s+tan_dist\s*\)\s*\{", text)
     if function:
-        text = text[:function.end()] + "\n    if (DeviceZ <= 0.0f) return MaxDistance;" + text[function.end():]
+        end = braced_end(text, function.end() - 1)
+        body = text[function.end():end]
+        marker = "terrain_blend_factor = 1 - smoothstep(fade_distance * FadeStartFactor, fade_distance, dist);"
+        if body.count(marker) != 1 or body.count("if(EnableTerrainFade)") != 1:
+            raise ValueError("The native depth-classification terrain boundary changed")
+        distance = re.compile(r"float fade_distance = clamp\([^;]+;")
+        body, count = distance.subn("const float3 hostTerrainRay = normalize(ScreenVector);\n            float fade_distance = MaxVisibleDistance;", body)
+        if count != 1:
+            raise ValueError("The native depth-classification fade range changed")
+        body = body.replace(marker,
+            "terrain_blend_factor = 1 - smoothstep(fade_distance * FadeStartFactor, fade_distance, "
+            "dist * max(length(hostTerrainRay.xy), abs(hostTerrainRay.z)));", 1)
+        body = body.replace("if(EnableTerrainFade)", "if(EnableTerrainFade && MaxVisibleDistance > 0.0f)", 1)
+        text = text[:function.end()] + "\n    if (DeviceZ <= 0.0f) return MaxDistance;" + body + text[end:]
+        # Height/tangent preparation remains ABI-compatible and is unused by
+        # the fixed host fade range. A missing host window disables its branch too.
+        if text.count("if(EnableTerrainFade)") != 1:
+            raise ValueError("The native depth-classification range preparation changed")
+        text = text.replace("if(EnableTerrainFade)", "if(EnableTerrainFade && MaxVisibleDistance > 0.0f)", 1)
     return text
 
 
@@ -183,21 +211,115 @@ def host_native_feature_selection(text: str) -> str:
     return text.replace(original, replacement, 1)
 
 
+def host_air_background_helpers() -> str:
+    """One host boundary policy shared by native background producers."""
+    return """
+float HostAirBackgroundDistance(float h, float rBot, float tTop, float tBot,
+                                float trace_distance_max, out float groundWeight)
+{
+    groundWeight = 0.0f;
+    const float farDistance = min(tTop, trace_distance_max);
+    if (tBot < 0.0f) return farDistance;
+    const float tangentDistance = sqrt(max(0.0f, h * h - rBot * rBot));
+    const float horizonBias = lerp(0.1f, 0.7f, smoothstep(0.0f, 5000.0f, h - rBot));
+    const float horizonFactor = sqrt(smoothstep(0.0f, max(1.0e-6f, tangentDistance * horizonBias), tBot));
+    groundWeight = 1.0f - horizonFactor;
+    const float groundPadding = lerp(5000.0f, 50000.0f, saturate(tBot / max(1.0e-6f, tangentDistance * 0.2f)));
+    const float finiteDistance = min(farDistance, tBot + groundPadding);
+    return lerp(farDistance, finiteDistance, groundWeight);
+}
+float3 HostAirBackgroundPosition(float3 position, float3 earth_center, float rBot, bool continueAir)
+{
+    if (continueAir)
+    {
+        const float3 radial = position - earth_center;
+        const float radius = length(radial);
+        if (radius < rBot + 0.3f)
+            return earth_center + radial * ((rBot + 0.3f) / max(radius, 1.0e-6f));
+    }
+    return position;
+}
+"""
+
+
+def braced_end(text: str, opening: int) -> int:
+    """Return the exclusive end of an already located native block."""
+    cursor, depth = opening + 1, 1
+    while depth:
+        if text[cursor] == "{":
+            depth += 1
+        elif text[cursor] == "}":
+            depth -= 1
+        cursor += 1
+    return cursor
+
+
+def host_godray_background(text: str) -> str:
+    """Clone the native unscaled quadrature privately; leave the surface AP loop intact."""
+    entry = re.search(r"\[numthreads\s*\([^)]*\)\]\s*void\s+AerialPerspectiveLutCS\s*\(", text)
+    if not entry:
+        return text
+    loop = re.search(r"\[loop\]\s*for\(uint i = 0; i < godray_loop_num \+ sub_loop_num; i\+\+\)", text[entry.end():])
+    if not loop:
+        raise ValueError("The native godray quadrature loop changed")
+    loop_start = entry.end() + loop.start()
+    opening = text.index("{", entry.end() + loop.end())
+    closing = braced_end(text, opening)
+    body = text[opening:closing]
+    # Everything before AP's artistic scaling is the original unscaled sky integral.
+    # Extract it from the private input instead of copying recovered source into Git.
+    scale = "MultiScattering = MultipleScatteringScaleAP"
+    if body.count(scale) != 1:
+        raise ValueError("The native godray/surface scattering split changed")
+    background = text[loop_start:opening] + body[:body.index(scale)] + "\n            t_prev = t;\n        }\n    }\n"
+    background = re.sub(r"\btracable_length\b", "hostBackgroundDistance", background)
+    background = re.sub(r"\bt_prev\b", "hostBackgroundPrevious", background)
+    background = re.sub(r"\bsub_loop_delta_t\b", "hostBackgroundDelta", background)
+    bias = re.compile(r"if\(tTop > 0\.0f && tBot >= 0\.0f && \(h > GetRBot\(\)\)\)\s*tracable_length_with_bias = [^;]+;")
+    background, count = bias.subn("", background)
+    if count != 1:
+        raise ValueError("The native godray ground-range clamp changed")
+    sample = "float3 p_i = start_pos + t * view_ray.d;"
+    if background.count(sample) != 1:
+        raise ValueError("The native godray sample position changed")
+    background = background.replace(sample, sample + "\n        p_i = HostAirBackgroundPosition(p_i, earth_center, GetRBot(), true);", 1)
+    scattering = "float factor_ms = ComputeHorizonMultipleScatteringFactor(length_pc, GetRBot(), GetRTop(), tTop,tBot);"
+    if background.count(scattering) != 1:
+        raise ValueError("The native godray multiple-scattering interface changed")
+    background = background.replace(scattering, scattering + """
+            factor_ms = lerp(ComputeHorizonMultipleScatteringFactor(length_pc, GetRBot(), GetRTop(), tTop, -1.0f), factor_ms, hostGroundWeight);
+""", 1)
+    extension = """
+    // Surface AP above retains its native positions, range, scale and volume writes.
+    // Only the ground-side sky background repeats the native unscaled quadrature.
+    if (EnableHighQualityGodRays > 0 && tBot >= 0.0f)
+    {
+        float hostGroundWeight;
+        const float hostBackgroundDistance = HostAirBackgroundDistance(h, GetRBot(), tTop, tBot, 1e+12, hostGroundWeight);
+        const float hostBackgroundDelta = max(4000.0f, (hostBackgroundDistance - base_length) / sub_loop_num);
+        float hostBackgroundPrevious = 0.0f;
+        total_inscattering_without_scale = 0.0f;
+        tr_total_without_scale = 1.0f;
+""" + background + "\n    }\n"
+    output = re.search(r"\n\s*if\(EnableHighQualityGodRays > 0\)", text[closing:])
+    if not output:
+        raise ValueError("The native godray background output changed")
+    output_start = closing + output.start()
+    text = text[:output_start] + extension + text[output_start:]
+    return text[:entry.start()] + host_air_background_helpers() + text[entry.start():]
+
+
 def host_background_lut(text: str) -> str:
     """Missing terrain receives direction-dependent native air transport, not virtual planet radiance."""
+    if re.search(r"\bvoid\s+AerialPerspectiveLutCS\s*\(", text):
+        return host_godray_background(text)
     if re.search(r"\bvoid\s+ATMViewLutCS\s*\(", text):
         text = re.sub(r"\s*if\s*\(SumGodrayFlag\s*>\s*0\s*&&\s*EnableHighQualityGodRays\s*>\s*0\)\s*\{\s*RWATMViewLut\[id\.xy\]\s*=\s*0\.0;\s*return;\s*\}", "", text, count=1)
         function = re.search(r"ResultSingleScattering\s+IntegrateSingleScattering\s*\(", text)
         if not function:
             raise ValueError("The native atmosphere integration interface changed")
         start = text.index("{", function.end())
-        cursor, depth = start + 1, 1
-        while depth:
-            if text[cursor] == "{":
-                depth += 1
-            elif text[cursor] == "}":
-                depth -= 1
-            cursor += 1
+        cursor = braced_end(text, start)
         body = text[start:cursor]
         distance = "trace_distance = min(trace_distance, trace_distance_max);"
         if body.count(distance) != 1:
@@ -206,31 +328,13 @@ def host_background_lut(text: str) -> str:
         # terrain. The ray, atmosphere coefficients and source quadrature remain native.
         body = body.replace(distance, distance + """
     const bool hostAirContinuation = tBot >= 0.0f;
-    float hostGroundWeight = 0.0f;
-    if (hostAirContinuation)
-    {
-        const float hostTangentDistance = sqrt(max(0.0f, h * h - rBot * rBot));
-        const float hostHorizonBias = lerp(0.1f, 0.7f, smoothstep(0.0f, 5000.0f, h - rBot));
-        const float hostHorizonFactor = sqrt(smoothstep(0.0f, max(1.0e-6f, hostTangentDistance * hostHorizonBias), tBot));
-        hostGroundWeight = 1.0f - hostHorizonFactor;
-        const float hostFarDistance = min(tTop, trace_distance_max);
-        const float hostGroundPadding = lerp(5000.0f, 50000.0f, saturate(tBot / max(1.0e-6f, hostTangentDistance * 0.2f)));
-        const float hostFiniteDistance = min(hostFarDistance, tBot + hostGroundPadding);
-        trace_distance = lerp(hostFarDistance, hostFiniteDistance, hostGroundWeight);
-    }
+    float hostGroundWeight;
+    trace_distance = HostAirBackgroundDistance(h, rBot, tTop, tBot, trace_distance_max, hostGroundWeight);
 """, 1)
         sample = "float3 p_i = view_ray.o + t * view_ray.d;"
         if body.count(sample) != 1:
             raise ValueError("The native atmosphere sampling position changed")
-        body = body.replace(sample, sample + """
-        if (hostAirContinuation)
-        {
-            const float3 hostRadial = p_i - earth_center;
-            const float hostRadius = length(hostRadial);
-            if (hostRadius < rBot + 0.3f)
-                p_i = earth_center + hostRadial * ((rBot + 0.3f) / max(hostRadius, 1.0e-6f));
-        }
-""", 1)
+        body = body.replace(sample, sample + "\n        p_i = HostAirBackgroundPosition(p_i, earth_center, rBot, hostAirContinuation);\n", 1)
         body = body.replace("if(bUseCloudShadow && t < shadow_fade_dist )",
                             "if((bUseCloudShadow || hostGroundWeight > 0.0f) && t < shadow_fade_dist )", 1)
         shadow = "tr_cloud_sun_ray = exp(-pow(step_cloud_shadow_op, max(1, ShadowTraceConstants_HackGodRayStrength)));"
@@ -246,12 +350,14 @@ def host_background_lut(text: str) -> str:
             factor_ms = lerp(ComputeHorizonMultipleScatteringFactor(length_pc, rBot, rTop, tTop, -1.0f), factor_ms, hostGroundWeight);
 """, 1)
         text = text[:start] + body + text[cursor:]
+        text = text[:function.start()] + host_air_background_helpers() + text[function.start():]
         text = text.replace("sqrt(ViewHeight * ViewHeight - GetRBot() * GetRBot())",
                             "sqrt(max(0.0f, ViewHeight * ViewHeight - GetRBot() * GetRBot()))")
     return text
 
 
-def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> dict:
+def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
+          host_terrain_boundary: bool = False) -> dict:
     source = source_path.read_text(encoding="utf-8")
     root = re.search(r"cbuffer\s+_RootShaderParameters\s*\{(.*?)\}", source, re.S)
     if not root:
@@ -363,6 +469,10 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
         text = host_native_feature_selection(text)
         if view_trace_ranges:
             text = host_view_trace_ranges(text)
+    terrain_boundary = host_terrain_boundary or bool(host_camera and "void GetCompositedSceneColor(" in source)
+    depth_terrain_boundary = bool(host_camera and re.search(r"float\s+GetDistanceFromSceneDepth\s*\(\s*float2\s+uv\s*,\s*float\s+DeviceZ\s*,", source))
+    if terrain_boundary:
+        text = host_terrain_fade_boundary(text)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return dict(schemaVersion=1, sourceSha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
@@ -372,7 +482,10 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False) -> di
                 pushFields=[dict(name="parametersAddress", offset=0, size=8),
                             dict(name="bindingsAddress", offset=8, size=8)] +
                            ([dict(name="cameraAddress", offset=16, size=8)] if host_camera else []),
-                mathematicalFunctionsChanged=host_camera, viewTraceRangesCapped=view_trace_ranges,
+                mathematicalFunctionsChanged=host_camera or terrain_boundary, viewTraceRangesCapped=view_trace_ranges,
+                hostTerrainBoundary=dict(enabled=terrain_boundary or depth_terrain_boundary,
+                    distanceMetric="dist * max(length(nativeRay.xy), abs(nativeRay.z))" if terrain_boundary or depth_terrain_boundary else None,
+                    physicalRayDistanceChanged=False, additionalUniformBytes=0),
                 hostCloudTracing=dict(enabled=view_trace_ranges,
                     distanceFadeBeginFraction=0.95 if cloud_view_trace else None,
                     originalStepBudgetsPreserved=True,
@@ -399,12 +512,14 @@ def main() -> None:
     parser.add_argument("output", type=Path)
     parser.add_argument("--host-camera", action="store_true",
                         help="Import host inverse-projection rays instead of the original Unreal view basis")
+    parser.add_argument("--host-terrain-boundary", action="store_true",
+                        help="Use the host cylindrical terrain fade, retaining the source camera and push ABI")
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parents[2]
     for path in (args.source, args.output):
         if path.resolve().is_relative_to(checkout):
             parser.error("Original and generated shaders must stay outside the Git checkout")
-    report = adapt(args.source, args.output, args.host_camera)
+    report = adapt(args.source, args.output, args.host_camera, args.host_terrain_boundary)
     args.output.with_suffix(".bindings.private.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({key: report[key] for key in ("sourceSha256", "parametersByteSize", "pushByteSize")}))
 

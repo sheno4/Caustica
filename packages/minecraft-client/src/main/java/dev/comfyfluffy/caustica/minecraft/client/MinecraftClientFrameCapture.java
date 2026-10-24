@@ -43,13 +43,20 @@ final class MinecraftClientFrameCapture {
         float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         Optional<MinecraftSkyFrame> sky = celestial.flatMap(value -> atlas(minecraft, value)
                 .map(atlas -> new MinecraftSkyFrame(value, atlas,
-                        minecraft.level.getRainLevel(partial), minecraft.level.getThunderLevel(partial))));
+                        minecraft.level.getRainLevel(partial), minecraft.level.getThunderLevel(partial),
+                        terrainFade(minecraft, metersPerSceneUnit))));
         Optional<MinecraftFogFrame> fog = fogGrid == null ? Optional.empty() : celestial.map(value ->
                 new MinecraftFogFrame(value,
                         ((double) minecraft.level.getGameTime()
                                 + minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false)) / 20.0,
                         fogGrid));
         return new MinecraftCapturedFrame(light, sky, fog);
+    }
+
+    private static MinecraftSkyFrame.TerrainFade terrainFade(Minecraft minecraft, double metersPerSceneUnit) {
+        var fog = minecraft.gameRenderer.gameRenderState().levelRenderState.cameraRenderState.fogData;
+        return new MinecraftSkyFrame.TerrainFade(fog.renderDistanceStart * metersPerSceneUnit,
+                fog.renderDistanceEnd * metersPerSceneUnit);
     }
 
     private static Optional<MinecraftCelestialFrame> celestial(

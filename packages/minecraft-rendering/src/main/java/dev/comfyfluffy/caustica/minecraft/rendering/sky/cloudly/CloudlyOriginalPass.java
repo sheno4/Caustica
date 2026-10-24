@@ -258,8 +258,11 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         frame.retain(target.owner);
         double cloudDistance = inputs.get("frame.cloudTraceDistanceMeters")[0];
         double cirrusDistance = inputs.get("frame.cirrusTraceDistanceMeters")[0];
+        double terrainFadeStart = inputs.get("frame.terrainFadeStartMeters")[0];
+        double terrainFadeEnd = inputs.get("frame.terrainFadeEndMeters")[0];
         boolean reuseHistory = target.previous != null && target.previousFrame == frame.frameIndex() - 1
-                && target.previousCloudDistance == cloudDistance && target.previousCirrusDistance == cirrusDistance;
+                && target.previousCloudDistance == cloudDistance && target.previousCirrusDistance == cirrusDistance
+                && target.previousTerrainFadeStart == terrainFadeStart && target.previousTerrainFadeEnd == terrainFadeEnd;
         CloudlyFrameCamera previousCamera = reuseHistory ? target.previous : current;
         put(inputs, "frame.previousPreExposure", reuseHistory ? target.previousExposure : frame.preExposure());
         put(inputs, "frame.historyAvailable", reuseHistory ? 1 : 0);
@@ -300,6 +303,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             target.previousExposure = exposure; target.previousTime = time;
             target.previousFrame = frameNumber;
             target.previousCloudDistance = cloudDistance; target.previousCirrusDistance = cirrusDistance;
+            target.previousTerrainFadeStart = terrainFadeStart; target.previousTerrainFadeEnd = terrainFadeEnd;
             for (var draw : ambientOcclusion) target.ambientOcclusion[draw.level()] = draw.update().afterSubmission();
             if (!ambientOcclusion.isEmpty()) target.ambientOcclusionInitialized = true;
         };
@@ -351,8 +355,9 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             if (!target.reported) {
                 frame.whenSubmitted(() -> {
                     target.reported = true;
-                    LOGGER.info("Original Cloudly frame accepted: {} native stages, {} shadow dispatches, {} cloud AO dispatches, {}x{}; separate cloud history, world RR guides unchanged",
-                            plan.steps().size(), shadows.size(), ambientOcclusion.size(), destination.width(), destination.height());
+                    LOGGER.info("Original Cloudly frame accepted: {} native stages, {} shadow dispatches, {} cloud AO dispatches, {}x{}; terrain fade={}..{}m, atmosphere normalization={}m; separate cloud history, world RR guides unchanged",
+                            plan.steps().size(), shadows.size(), ambientOcclusion.size(), destination.width(), destination.height(),
+                            terrainFadeStart, terrainFadeEnd, ready.project.scalar("distanceNormalizationMeters"));
                 });
             }
         }
@@ -537,6 +542,11 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         put(result,"frame.originalRenderType",1); put(result,"frame.originalTileBasedHalfPixels",1); put(result,"frame.originalTraceSubpassIndex",1);
         put(result,"frame.allHighResTiles",1); put(result,"frame.betterEdgeClassification",1);
         put(result,"frame.maxDistanceMeters",ready.project.scalar("distanceNormalizationMeters"));
+        var terrainFade = captured.terrainFade();
+        put(result,"frame.terrainFadeStartMeters",terrainFade.startMeters());
+        put(result,"frame.terrainFadeEndMeters",terrainFade.endMeters());
+        put(result,"frame.terrainFadeStartFactor",terrainFade.endMeters() > 0
+                ? terrainFade.startMeters() / terrainFade.endMeters() : 0);
         double requestedDistance = values.get(CloudlyOptions.MAX_DISTANCE_KM) * 1000.;
         put(result,"frame.cloudTraceDistanceMeters",Math.min(requestedDistance,ready.project.scalar("CloudMaxTraceDistanceInKm")*1000));
         put(result,"frame.cirrusTraceDistanceMeters",Math.min(requestedDistance,ready.project.scalar("CloudMaxTraceDistanceCirrusInKm")*1000));
@@ -618,7 +628,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         CloudlyShadowState.Cache<String> shadow0=emptyCache(0),shadow1=emptyCache(1);
         CloudlyFrameCamera previous; float previousExposure,previousTime; boolean initializationRecorded,initialized,flipped,reported;
         long previousFrame = Long.MIN_VALUE;
-        double previousCloudDistance,previousCirrusDistance;
+        double previousCloudDistance,previousCirrusDistance,previousTerrainFadeStart,previousTerrainFadeEnd;
         boolean ambientOcclusionInitialized;
         final CloudlyAmbientOcclusionState.Level[] ambientOcclusion = {
                 CloudlyAmbientOcclusionState.Level.initial(), CloudlyAmbientOcclusionState.Level.initial(),
