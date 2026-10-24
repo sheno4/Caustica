@@ -254,6 +254,26 @@ def braced_end(text: str, opening: int) -> int:
     return cursor
 
 
+def host_cloud_scene_occlusion(text: str) -> str:
+    """Only captured host scene depth may occlude clouds; the atmosphere sphere is not terrain."""
+    function = re.search(r"TraceSkyRanges\s+TraceRangeSetup\s*\([^{}]*\)\s*\{", text)
+    if not function:
+        raise ValueError("The native cloud view-range interface changed")
+    end = braced_end(text, function.end() - 1)
+    body = text[function.end():end]
+    patterns = (
+        r"\bconst\s+float\s+r2_earth\s*=\s*pow2\(\s*GetEarthRadius\(\s*\)\s*\)\s*;",
+        r"\bfloat2\s+earth_t\s*=\s*float2\(\s*1e\+12\s*,\s*1e\+12\s*\)\s*;",
+        r"\bif\s*\(\s*r2_earth\s*>=\s*h_sqr\s*\)\s*\{\s*earth_t\s*=\s*raw_sphere_trace\(\s*tt\s*,\s*r2_earth\s*\)\s*;\s*\}",
+        r"\bif\s*\(\s*SphereFrontVisible\(\s*earth_t\s*\)\s*\)\s*\{\s*ret1\.first_occluder_depth\s*=\s*earth_t\.x\s*;\s*\}",
+    )
+    for pattern in patterns:
+        body, count = re.subn(pattern, "", body)
+        if count != 1:
+            raise ValueError("The native virtual-ground cloud occluder interface changed")
+    return text[:function.end()] + body + text[end:]
+
+
 def host_cloud_height(text: str) -> str:
     """Translate cloud coordinates while keeping the camera and atmosphere in host space."""
     local_functions = (
@@ -543,6 +563,8 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
         text = host_native_feature_selection(text)
         if view_trace_ranges:
             text = host_view_trace_ranges(text)
+        if cloud_view_trace:
+            text = host_cloud_scene_occlusion(text)
     terrain_boundary = host_terrain_boundary or bool(host_camera and "void GetCompositedSceneColor(" in source)
     depth_terrain_boundary = bool(host_camera and re.search(r"float\s+GetDistanceFromSceneDepth\s*\(\s*float2\s+uv\s*,\s*float\s+DeviceZ\s*,", source))
     if terrain_boundary:
@@ -562,6 +584,9 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
                 hostCloudHeight=dict(enabled=cloud_height, field="HostCloudHeightOffsetMeters" if cloud_height else None,
                     nativeDensityCoordinatesPreserved=True, atmosphereCoordinatesPreserved=True,
                     additionalUniformBytes=0),
+                hostCloudOcclusion=dict(enabled=cloud_view_trace,
+                    occluder="captured host scene depth" if cloud_view_trace else None,
+                    virtualGroundClipsClouds=False if cloud_view_trace else None),
                 hostTerrainBoundary=dict(enabled=terrain_boundary or depth_terrain_boundary,
                     distanceMetric="dist * max(length(nativeRay.xy), abs(nativeRay.z))" if terrain_boundary or depth_terrain_boundary else None,
                     physicalRayDistanceChanged=False, additionalUniformBytes=0),
