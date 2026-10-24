@@ -98,6 +98,8 @@
 	"caustica.option.caustica.minecraft.sky.cloudly.scene.HANGAR": "机库",
 	"caustica.option.caustica.minecraft.sky.cloudly.scene.MISSION3": "任务 3",
 	"caustica.option.caustica.minecraft.sky.cloudly.scene.MISSION11": "任务 11",
+	"caustica.option.caustica.minecraft.sky.cloudly.height-offset-blocks": "云层高度偏移（格）",
+	"caustica.option.caustica.minecraft.sky.cloudly.height-offset-blocks.tooltip": "0 为原始高度，正值升高，负值降低。所有云层整体平移，厚度保持不变，在游戏内立即生效。先拖动粗调，再用方向键逐格微调。",
 	"caustica.option.caustica.minecraft.sky.cloudly.max-distance-km": "云层渲染距离（千米）",
 	"caustica.option.caustica.minecraft.sky.cloudly.max-distance-km.tooltip": "云层的最远追踪距离，最后 5% 的范围逐渐淡出；修改后会重置云层历史。",
 	"caustica.option.caustica.bloom.bloom.enabled": "泛光",

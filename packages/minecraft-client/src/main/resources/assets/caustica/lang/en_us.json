@@ -97,6 +97,8 @@
 	"caustica.option.caustica.minecraft.sky.cloudly.scene.HANGAR": "Hangar",
 	"caustica.option.caustica.minecraft.sky.cloudly.scene.MISSION3": "Mission 3",
 	"caustica.option.caustica.minecraft.sky.cloudly.scene.MISSION11": "Mission 11",
+	"caustica.option.caustica.minecraft.sky.cloudly.height-offset-blocks": "Cloud Height Offset (blocks)",
+	"caustica.option.caustica.minecraft.sky.cloudly.height-offset-blocks.tooltip": "0 keeps the original height. Positive values raise all cloud layers; negative values lower them without changing their thickness. Takes effect immediately in the current world. Drag for coarse adjustment, then use the arrow keys to adjust one block at a time.",
 	"caustica.option.caustica.minecraft.sky.cloudly.max-distance-km": "Cloud View Distance (km)",
 	"caustica.option.caustica.minecraft.sky.cloudly.max-distance-km.tooltip": "Maximum cloud tracing distance. Clouds fade out over the final 5% of this range. Changing this resets cloud history.",
 	"caustica.option.caustica.bloom.bloom.enabled": "Bloom",

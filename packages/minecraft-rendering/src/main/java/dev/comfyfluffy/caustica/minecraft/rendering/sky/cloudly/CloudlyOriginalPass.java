@@ -45,6 +45,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     private volatile Throwable preparationFailure;
     private boolean preparationFinished;
     private Epoch epoch;
+    private int requestedHeightOffset, appliedHeightOffset;
+    private long heightRequestNanos;
 
     public static Optional<Path> projectManifest(CloudlySourcePack source) {
         Object value = source.source().get("nativePipelineManifest");
@@ -230,12 +232,14 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         MinecraftSkyFrame captured = frames.get();
         OptionValues values = options.get();
         if (closed || ready == null || captured == null || !values.get(CloudlyOptions.ENABLED)) return;
+        int heightOffset = cloudHeightOffset(values.get(CloudlyOptions.HEIGHT_OFFSET_BLOCKS));
         frame.retain(ready.owner);
         var view = frame.view().camera();
         var current = new CloudlyFrameCamera(frame.cameraRelativeFromClip(), view.x(), view.y(), view.z(),
                 captured.celestial().seaLevel(), frame.metersPerSceneUnit());
         Map<String, double[]> inputs = frameInputs(frame, captured, values, ready, current);
-        var source = shadowSettings(ready.project);
+        put(inputs, "frame.cloudHeightOffsetMeters", heightOffset * frame.metersPerSceneUnit());
+        var source = shadowSettings(ready.project, heightOffset * frame.metersPerSceneUnit());
         double[] sun = inputs.get("frame.sunDirectionSource"), light = inputs.get("frame.lightDirectionSource");
         float sunElevation = (float)Math.toDegrees(Math.asin(sun[2]));
         var angles = new CloudlyShadowState.LightAngles(sunElevation, (float)Math.toDegrees(Math.asin(light[2])),
@@ -256,6 +260,14 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         }
         Epoch target = epoch;
         frame.retain(target.owner);
+        if (target.previous != null && target.previousHeightOffset != heightOffset) {
+            target.previous = null;
+            target.shadow0 = emptyCache(0);
+            target.shadow1 = emptyCache(1);
+            target.ambientOcclusionInitialized = false;
+            Arrays.fill(target.ambientOcclusion, CloudlyAmbientOcclusionState.Level.initial());
+            LOGGER.info("Cloud height offset applied: {} blocks; rebuilding cloud history, shadows and AO", heightOffset);
+        }
         double cloudDistance = inputs.get("frame.cloudTraceDistanceMeters")[0];
         double cirrusDistance = inputs.get("frame.cirrusTraceDistanceMeters")[0];
         double terrainFadeStart = inputs.get("frame.terrainFadeStartMeters")[0];
@@ -302,6 +314,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             target.flipped = !target.flipped; target.previous = current;
             target.previousExposure = exposure; target.previousTime = time;
             target.previousFrame = frameNumber;
+            target.previousHeightOffset = heightOffset;
             target.previousCloudDistance = cloudDistance; target.previousCirrusDistance = cirrusDistance;
             target.previousTerrainFadeStart = terrainFadeStart; target.previousTerrainFadeEnd = terrainFadeEnd;
             for (var draw : ambientOcclusion) target.ambientOcclusion[draw.level()] = draw.update().afterSubmission();
@@ -361,6 +374,21 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                 });
             }
         }
+    }
+
+    /** Apply a settled edit once so dragging does not regenerate the full AO volume every frame. */
+    private int cloudHeightOffset(int requested) {
+        long now = System.nanoTime();
+        if (epoch == null) {
+            requestedHeightOffset = appliedHeightOffset = requested;
+            heightRequestNanos = now;
+        } else if (requested != requestedHeightOffset) {
+            requestedHeightOffset = requested;
+            heightRequestNanos = now;
+        } else if (now - heightRequestNanos >= 250_000_000L) {
+            appliedHeightOffset = requestedHeightOffset;
+        }
+        return appliedHeightOffset;
     }
 
     private Epoch allocateEpoch(PostEffectFrame frame, CloudlyFrameSchedule schedule, CloudlyFrameSchedule.Resolved resolved) {
@@ -583,8 +611,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         return result;
     }
 
-    private static CloudlyShadowState.SourceSettings shadowSettings(CloudlyNativeProject p) {
-        return new CloudlyShadowState.SourceSettings((float)p.scalar("EarthRadiusInKm"),(float)p.scalar("CloudStartHeightInKm"),(float)p.scalar("cloudMaxHeightMeters"),
+    private static CloudlyShadowState.SourceSettings shadowSettings(CloudlyNativeProject p, double heightOffsetMeters) {
+        return new CloudlyShadowState.SourceSettings((float)p.scalar("EarthRadiusInKm"),(float)(p.scalar("CloudStartHeightInKm") + heightOffsetMeters / 1000.),(float)(p.scalar("cloudMaxHeightMeters") + heightOffsetMeters),
                 (float)p.scalar("CloudMaxTraceDistanceInKm"),p.scalar("FlatGameMap")!=0,p.scalar("EnableShadowParamsLowSunElevation")!=0,(float)p.scalar("ShadowParamsLowSunElevationSwitchAngleInDegrees"),
                 new CloudlyShadowState.Extent((int)p.scalar("shadowWidth"),(int)p.scalar("shadowHeight"),(int)p.scalar("shadowDepth")),
                 new CloudlyShadowState.Extent((int)p.scalar("lowShadowWidth"),(int)p.scalar("lowShadowHeight"),(int)p.scalar("lowShadowDepth")),
@@ -628,6 +656,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         CloudlyShadowState.Cache<String> shadow0=emptyCache(0),shadow1=emptyCache(1);
         CloudlyFrameCamera previous; float previousExposure,previousTime; boolean initializationRecorded,initialized,flipped,reported;
         long previousFrame = Long.MIN_VALUE;
+        int previousHeightOffset;
         double previousCloudDistance,previousCirrusDistance,previousTerrainFadeStart,previousTerrainFadeEnd;
         boolean ambientOcclusionInitialized;
         final CloudlyAmbientOcclusionState.Level[] ambientOcclusion = {

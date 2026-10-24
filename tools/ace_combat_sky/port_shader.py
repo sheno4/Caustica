@@ -254,6 +254,72 @@ def braced_end(text: str, opening: int) -> int:
     return cursor
 
 
+def host_cloud_height(text: str) -> str:
+    """Translate cloud coordinates while keeping the camera and atmosphere in host space."""
+    local_functions = (
+        "GetCloudSDF", "GetCloudDensity", "GetCloudSDF_Cirrus",
+        "CalculateHotsureEffectAdditiveDensity", "GetCloudLayerMinClampHeight",
+        "GetNormalizedRainDepth", "GetCloudsAO", "CloudsAOTraceCS",
+    )
+    saved = []
+    for name in local_functions:
+        function = re.search(r"\b(?:void|float[1-4]?|SDFEval|DensityEval)\s+" + name
+                             + r"\s*\([^{}]*\)\s*\{", text)
+        if not function:
+            continue
+        opening = function.end() - 1
+        end = braced_end(text, opening)
+        signature, body = text[function.start():opening], text[opening:end]
+        if name in ("GetCloudSDF", "GetCloudDensity"):
+            signature, positions = re.subn(r"\bflat_world_position\b", "hostCloudWorldPosition", signature)
+            signature, heights = re.subn(r"\bh\b", "hostCloudWorldAltitude", signature)
+            if positions != 1 or heights != 1:
+                raise ValueError("The native cloud density coordinate interface changed: " + name)
+            body = """{
+    const float3 flat_world_position = hostCloudWorldPosition - float3(0, 0, HostCloudHeightOffsetMeters);
+    const float h = hostCloudWorldAltitude - HostCloudHeightOffsetMeters;
+""" + body[1:]
+        elif name == "GetCloudsAO":
+            body = "{\n    WorldPos.z -= HostCloudHeightOffsetMeters;\n" + body[1:]
+        elif name == "CloudsAOTraceCS":
+            body, count = re.subn(r"cst\.view_ray\.o\s*=\s*float3\(world_pos\.xy,\s*0\s*\)",
+                                 "cst.view_ray.o = float3(world_pos.xy, HostCloudHeightOffsetMeters)", body)
+            if count != 1:
+                raise ValueError("The native cloud AO ray origin changed")
+        # These helpers are called by both cloud-local density and world-space tracing.
+        for helper in ("GetCloudLayerMinClampHeight", "GetNormalizedRainDepth"):
+            signature = re.sub(r"\b" + helper + r"\b", helper + "Local", signature)
+            body = re.sub(r"\b" + helper + r"\b", helper + "Local", body)
+        block = signature + body
+        if name == "GetCloudLayerMinClampHeight":
+            block += """
+float2 GetCloudLayerMinClampHeight()
+{
+    return GetCloudLayerMinClampHeightLocal() + HostCloudHeightOffsetMeters;
+}
+"""
+        elif name == "GetNormalizedRainDepth":
+            block += """
+float GetNormalizedRainDepth(const float hostCloudWorldAltitude)
+{
+    return GetNormalizedRainDepthLocal(hostCloudWorldAltitude - HostCloudHeightOffsetMeters);
+}
+"""
+        token = "__HOST_CLOUD_NATIVE_FUNCTION_" + str(len(saved)) + "__"
+        saved.append((token, block))
+        text = text[:function.start()] + token + text[end:]
+    # Unmasked references belong to world-space shell bounds, stepping, light/shadow
+    # ranges, or shading. Native density functions retain their authored heights.
+    heights = re.compile(r"\bCloudConstantsUniform\.Data_(?:CloudMinHeightWithCurvature|"
+                         r"CloudMaxHeightForBaseAltoTrace|CloudMinHeight|CloudMaxHeight|CloudLayersStartHeight)\b")
+    text = heights.sub(lambda match: "(" + match[0] + " + HostCloudHeightOffsetMeters)", text)
+    # AO integrates along a translated ray while retaining native positive ray
+    # distances and volume spacing, including when clouds move below altitude zero.
+    for token, block in saved:
+        text = text.replace(token, block)
+    return text
+
+
 def host_godray_background(text: str) -> str:
     """Clone the native unscaled quadrature privately; leave the surface AP loop intact."""
     entry = re.search(r"\[numthreads\s*\([^)]*\)\]\s*void\s+AerialPerspectiveLutCS\s*\(", text)
@@ -357,7 +423,7 @@ def host_background_lut(text: str) -> str:
 
 
 def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
-          host_terrain_boundary: bool = False) -> dict:
+          host_terrain_boundary: bool = False, cloud_height: bool = False) -> dict:
     source = source_path.read_text(encoding="utf-8")
     root = re.search(r"cbuffer\s+_RootShaderParameters\s*\{(.*?)\}", source, re.S)
     if not root:
@@ -390,6 +456,14 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
         if any(field["offset"] < 4 for field in common):
             raise ValueError("The host star rotation interface requires four unused root bytes")
         common.append(dict(name="HostStarsRotationRadians", type="float", offset=0, size=4, elements=0))
+        common.sort(key=lambda field: field["offset"])
+    if cloud_height:
+        offset = next((offset for offset in range(0, common_size, 4)
+                       if all(offset + 4 <= field["offset"] or offset >= field["offset"] + field["size"]
+                              for field in common)), None)
+        if offset is None:
+            raise ValueError("The host cloud-height interface requires four unused root bytes")
+        common.append(dict(name="HostCloudHeightOffsetMeters", type="float", offset=offset, size=4, elements=0))
         common.sort(key=lambda field: field["offset"])
     lines = ["struct OriginalRootParameters {"]
     cursor = 0
@@ -473,6 +547,8 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
     depth_terrain_boundary = bool(host_camera and re.search(r"float\s+GetDistanceFromSceneDepth\s*\(\s*float2\s+uv\s*,\s*float\s+DeviceZ\s*,", source))
     if terrain_boundary:
         text = host_terrain_fade_boundary(text)
+    if cloud_height:
+        text = host_cloud_height(text)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return dict(schemaVersion=1, sourceSha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
@@ -482,7 +558,10 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
                 pushFields=[dict(name="parametersAddress", offset=0, size=8),
                             dict(name="bindingsAddress", offset=8, size=8)] +
                            ([dict(name="cameraAddress", offset=16, size=8)] if host_camera else []),
-                mathematicalFunctionsChanged=host_camera or terrain_boundary, viewTraceRangesCapped=view_trace_ranges,
+                mathematicalFunctionsChanged=host_camera or terrain_boundary or cloud_height, viewTraceRangesCapped=view_trace_ranges,
+                hostCloudHeight=dict(enabled=cloud_height, field="HostCloudHeightOffsetMeters" if cloud_height else None,
+                    nativeDensityCoordinatesPreserved=True, atmosphereCoordinatesPreserved=True,
+                    additionalUniformBytes=0),
                 hostTerrainBoundary=dict(enabled=terrain_boundary or depth_terrain_boundary,
                     distanceMetric="dist * max(length(nativeRay.xy), abs(nativeRay.z))" if terrain_boundary or depth_terrain_boundary else None,
                     physicalRayDistanceChanged=False, additionalUniformBytes=0),
@@ -514,12 +593,14 @@ def main() -> None:
                         help="Import host inverse-projection rays instead of the original Unreal view basis")
     parser.add_argument("--host-terrain-boundary", action="store_true",
                         help="Use the host cylindrical terrain fade, retaining the source camera and push ABI")
+    parser.add_argument("--host-cloud-height", action="store_true",
+                        help="Translate cloud density, bounds, shadows and AO without moving the atmosphere")
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parents[2]
     for path in (args.source, args.output):
         if path.resolve().is_relative_to(checkout):
             parser.error("Original and generated shaders must stay outside the Git checkout")
-    report = adapt(args.source, args.output, args.host_camera, args.host_terrain_boundary)
+    report = adapt(args.source, args.output, args.host_camera, args.host_terrain_boundary, args.host_cloud_height)
     args.output.with_suffix(".bindings.private.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({key: report[key] for key in ("sourceSha256", "parametersByteSize", "pushByteSize")}))
 

@@ -166,6 +166,9 @@ public final class CloudlyFrameRecipe {
             }
             for (CommonPatch patch : template.common()) write(layout, bytes, patch.name(), CloudlyUniformExpressions.evaluate(patch.expression(), resolver::resolve));
             if (template.blocks().containsKey("View")) viewWriter.write(layout, bytes);
+            if (layout.fields().containsKey("HostCloudHeightOffsetMeters")) {
+                write(layout, bytes, "HostCloudHeightOffsetMeters", inputs.get("frame.cloudHeightOffsetMeters"));
+            }
             encoded.put(id, bytes.asReadOnlyBuffer().order(ByteOrder.LITTLE_ENDIAN));
             runtimeIds.put(id, template.program().id());
         }
