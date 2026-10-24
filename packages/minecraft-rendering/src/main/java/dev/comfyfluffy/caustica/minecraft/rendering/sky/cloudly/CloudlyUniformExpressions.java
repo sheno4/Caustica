@@ -44,7 +44,13 @@ public final class CloudlyUniformExpressions {
         }
         double[] first = evaluate(args.get(0), inputs);
         if (op.equals("select")) return evaluate(args.get(scalar(first) != 0 ? 1 : 2), inputs);
-        if (op.equals("and")) return new double[]{scalar(first) != 0 && scalar(evaluate(args.get(1), inputs)) != 0 ? 1 : 0};
+        if (op.equals("and")) {
+            if (scalar(first) == 0) return new double[]{0};
+            for (int index = 1; index < args.size(); index++) {
+                if (scalar(evaluate(args.get(index), inputs)) == 0) return new double[]{0};
+            }
+            return new double[]{1};
+        }
         if (op.equals("saturate")) {
             for (int index = 0; index < first.length; index++) first[index] = Math.clamp((float)first[index], 0f, 1f);
             return first;
