@@ -78,12 +78,7 @@ def host_camera_body(text: str) -> str:
     return SceneDepth * 0.01f / dot(direction, forward);
 }""" + text[distance.end():]
     if "void GetCompositedSceneColor(" in text:
-        # Background keeps the source's LUT/godray producer selection on both sides of
-        # the horizon. The surface AP volume must not replace that extended background.
-        marker = "AtmColor = lerp(AtmColor, AP.xyz * UnrealPreExposure, falloff);"
-        if text.count(marker) != 1:
-            raise ValueError("The native atmosphere/AP composition boundary changed")
-        text = text.replace(marker, "if (depth > 0.0f) " + marker, 1)
+        text = host_atmosphere_composition(text)
         for radicand in (
             "ViewHeight * ViewHeight - BottomRadius * BottomRadius",
             "h * h - GetRBot() * GetRBot()",
@@ -92,6 +87,29 @@ def host_camera_body(text: str) -> str:
             text = text.replace("sqrt(" + radicand + ")", "sqrt(max(0.0f, " + radicand + "))")
         # The sky-side tangent maps to the common horizon row, including float rounding at the boundary.
         text = text.replace("Coord = sqrt(Coord);", "Coord = sqrt(max(0.0f, Coord));")
+    return text
+
+
+def host_atmosphere_composition(text: str) -> str:
+    """Fade real surfaces into the same directional background used without terrain."""
+    # Surface AP carries scene-specific artistic scaling. It cannot also be the
+    # background fade target: that target must not depend on a terrain depth hit.
+    blocks = (
+        (r"if\(\(EnableHighQualityGodRays == 0 \|\| EnableBetterHorizonTransition == 0\)"
+         r" && \(bFadeHorizonByAP \|\| terrain_blend_factor != 1\)\)\s*\{",
+         "AtmColor = lerp(AtmColor, AP.xyz * UnrealPreExposure, falloff);"),
+        (r"if\(terrain_blend_factor < 1\)\s*\{",
+         "dist_adjusted = max(dist_adjusted, lerp(dist_adjusted, CloudConstantsUniform.Data_CloudMaxTraceDistance, pow2(1 - terrain_blend_factor)));"),
+    )
+    for pattern, marker in blocks:
+        matches = list(re.finditer(pattern, text))
+        if len(matches) != 1:
+            raise ValueError("The native atmosphere terrain composition interface changed")
+        match = matches[0]
+        end = braced_end(text, match.end() - 1)
+        if text[match.end():end].count(marker) != 1:
+            raise ValueError("The native atmosphere terrain composition body changed")
+        text = text[:match.start()] + text[end:]
     return text
 
 
@@ -590,6 +608,10 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
                 hostTerrainBoundary=dict(enabled=terrain_boundary or depth_terrain_boundary,
                     distanceMetric="dist * max(length(nativeRay.xy), abs(nativeRay.z))" if terrain_boundary or depth_terrain_boundary else None,
                     physicalRayDistanceChanged=False, additionalUniformBytes=0),
+                hostAtmosphereComposition=dict(enabled=stars_rotation,
+                    sharedTerrainSkyBackground=stars_rotation,
+                    surfaceApUsesPhysicalDistance=stars_rotation,
+                    backgroundOverwrittenBySurfaceAp=False if stars_rotation else None),
                 hostCloudTracing=dict(enabled=view_trace_ranges,
                     distanceFadeBeginFraction=0.95 if cloud_view_trace else None,
                     originalStepBudgetsPreserved=True,

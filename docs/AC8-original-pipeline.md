@@ -4,6 +4,10 @@
 
 ## 当前交付与历史记录
 
+`.21` 修正 97 中地形淡出目标与无地形背景不一致的问题。表面 AP 有独立的艺术缩放，而天空由方向相关的 LUT/GodRay 生成；仅在 `depth > 0` 时用 AP 覆盖 `AtmColor`，会让地形权重即使降到零也无法收敛到相邻无地形天空。本版移除该覆盖，并取消按地形淡出比例将表面 AP 距离扩大到云追踪范围的处理。表面仍按真实距离接受 AP，最终以原有权重混入共同天空背景。云合成、深度分类、背景积分及高度偏移未改动。对当前关闭原版高度雾的配方，地形颜色 `b² * surfaceWithAP + (1-b²) * sky` 在 `b→0` 时与无地形背景一致。仅完成必要编译、SPIR-V 格式和 JAR 完整性检查，实机画面尚未验收。
+
+设计核对参考：[Godot 天空雾合成](https://github.com/godotengine/godot/blob/e810f3f7af27a7d3915b0f6f04d89d3c6f195a0b/servers/rendering/renderer_rd/shaders/environment/sky.glsl)（MIT）和 [Iris 下半天空覆盖](https://github.com/IrisShaders/Iris/blob/bff1e69cb6c5519d8745784aa9c8b92984de67e7/common/src/main/java/net/irisshaders/iris/pathways/HorizonRenderer.java)（LGPL-3.0）。前者验证共享背景与透射/散射的合成语义，后者说明 MC 无几何背景须独立覆盖且视距须取宿主值。没有复制其代码，也没有引入其渲染依赖或固定色天空壳。
+
 `.20` 移除 62 主追踪向 `first_occluder_depth` 注入虚拟地球表面交点的逻辑，保留 `DownScaledDistanceTexture` 的真实宿主深度限制。58 粗追踪只有云层包围壳求交，4821 无地形时返回最远距离，二者无需修改。云的球壳范围、大气积分、地球昼夜阴影及原始采样预算保持。此修改针对几何裁切，不证明当前玩家水平位置必然有云，也不能让已移到真实 MC 地形下方的云穿过地形可见。
 
 `.19` 新增以方块为单位的云层高度偏移，默认 0、范围 −16000～16000；所有场景共享该实例设置。云采样坐标、追踪包围范围、阴影及 AO 的高度同时平移，大气和实际相机坐标不动。编辑停下 250 毫秒后应用，复用已有纹理分配并重新生成云历史、两级阴影及 AO。此功能完成编译和打包后，实际游戏内效果仍需运行确认。
