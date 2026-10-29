@@ -82,6 +82,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
     }
 
     public synchronized CloudlySkyPreset skyPreset() { return active == null ? null : active.skyPreset(); }
+    public synchronized CloudlySurfaceShadow.Snapshot surfaceShadow() { return active == null ? null : active.surfaceShadow(); }
 
     @Override public synchronized void record(PostEffectFrame frame) {
         if (!closed && active != null) active.record(frame);

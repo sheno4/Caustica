@@ -23,6 +23,7 @@ public struct DirectLightSample {
     public float proposalPdf;
     public float shapePdf;
     public bool linkedEmitter;
+    public bool distant;
     public bool valid;
 };
 
@@ -152,6 +153,7 @@ DirectLightSample sampleRetainedLightIndex(NeeAtState state, uint lightIndex,
     sample.maximumDistance = 1.0e20;
 
     if (light.type == RETAINED_LIGHT_DISTANT) {
+        sample.distant = true;
         float3 sourceDirection = normalize(light.positionOrDirection.xyz);
         float radius = max(light.angularRadius, 0.0);
         if (radius == 0.0) {

@@ -69,7 +69,7 @@ public void runFillStablePlanes<TComposition : IComposition, TTrace : IRetainedR
         }
         if (!first && !missed) signalDistance += distance;
         // Keep the material closure out of the medium integration's live state.
-        WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, previousPdf);
+        WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, previousPdf, path.depth == 0u);
         float3 emission = float3(0.0);
         if (!first) {
             emission = missed ? hit.radiance : hit.surface.emissionRadiance;

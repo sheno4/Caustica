@@ -35,14 +35,14 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
 }
 
 public WorldHit resolveWorldHit<TComposition : IComposition>(WorldPayload intersection,
-        RayDesc ray, float previousBsdfPdf) {
+        RayDesc ray, float previousBsdfPdf, bool primaryCameraRay) {
     WorldHit payload = {};
     payload.pathFlags = intersection.pathFlags;
     payload.hitDistance = intersection.hitDistance;
     if ((intersection.pathFlags & WORLD_PATH_MISS) != 0u) {
         TComposition.Environments environments = {};
         payload.radiance = max(environments.evaluateEnvironment(worldEnvironmentImplementation(),
-                worldEnvironmentQuery(ray.Direction, previousBsdfPdf <= 0.0)), float3(0.0));
+                worldEnvironmentQuery(ray.Origin, ray.Direction, previousBsdfPdf <= 0.0, primaryCameraRay)), float3(0.0));
         return payload;
     }
     RetainedGeometryRecord record = ((ConstPtr<RetainedGeometryRecord>)worldBindings.geometryTableAddress)

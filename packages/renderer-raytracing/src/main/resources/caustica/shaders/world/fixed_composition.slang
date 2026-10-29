@@ -49,6 +49,11 @@ public struct FixedEnvironments : IEnvironmentDispatch {
         BuiltinEnvironment environment;
         return environment.evaluateEnvironment(query);
     }
+
+    public float3 evaluateDistantTransmittance(uint implementation, EnvironmentLightQuery query) {
+        BuiltinEnvironment environment;
+        return environment.evaluateDistantTransmittance(query);
+    }
 };
 
 public struct FixedComposition : IComposition {

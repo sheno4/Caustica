@@ -126,7 +126,7 @@ public void runBuildStablePlanes<TComposition : IComposition>() {
             restart.throughput = branch.path.throughput;
             branch.length += distance;
             // Material closures need not remain live across medium sampling and its shadow traversal.
-            WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, 0.0);
+            WorldHit hit = resolveWorldHit<TComposition>(intersection, ray, 0.0, branch.path.depth == 0u);
             if (plane == 0u && step == 0u) {
                 // Camera-segment media stop at the physical boundary, before delta branches continue.
                 float4 clip = mul(frame.curViewProj, float4(hit.position - frame.camOffset, 1.0));

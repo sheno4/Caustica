@@ -69,6 +69,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final RtEntityTextures entityTextures;
     private final RtTerrain terrain;
     private final OptionLookup options;
+    private final ArrayList<SkyLutPass> skyPasses = new ArrayList<>();
     private Pending pending;
     private Active active;
     private boolean stopped;
@@ -336,13 +337,23 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             SkyLutPass sky = new SkyLutPass(setup.gpu(), this::options,
                     frames::skyFrame, programs.environment(), context.environment(),
                     context.renderSession().resources(), generation,
-                    () -> cloudlyScenes == null ? null : cloudlyScenes.skyPreset(), ignored -> { });
-            return new FirstRecordPass(sky, () -> skySelected(generation));
+                    () -> cloudlyScenes == null ? null : cloudlyScenes.skyPreset(), ignored -> { },
+                    () -> cloudlyScenes == null ? null : cloudlyScenes.surfaceShadow());
+            synchronized (this) { skyPasses.add(sky); }
+            return new FirstRecordPass(sky, frame -> skySelected(generation, sky, frame));
         });
     }
 
-    private synchronized void skySelected(long generation) {
-        if (active != null && active.generation == generation) active.releaseDisplacedPrograms();
+    private synchronized void skySelected(long generation, SkyLutPass selected, PassFrame frame) {
+        if (active == null || active.generation != generation) return;
+        for (SkyLutPass sky : skyPasses) if (sky != selected) sky.retireSurfaceShadow(frame);
+        frame.whenSubmitted(() -> skySubmitted(generation, selected));
+    }
+
+    private synchronized void skySubmitted(long generation, SkyLutPass selected) {
+        if (active == null || active.generation != generation) return;
+        skyPasses.removeIf(sky -> sky != selected);
+        active.releaseDisplacedPrograms();
     }
 
     private static Roots roots(MinecraftProgramResources.Epoch epoch) {
@@ -546,17 +557,25 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     static final class FirstRecordPass implements Pass<PassFrame> {
         private final Pass<PassFrame> delegate;
-        private final Runnable firstRecord;
+        private final java.util.function.Consumer<PassFrame> firstRecord;
+        private final boolean waitForSubmission;
         private boolean recorded;
         FirstRecordPass(Pass<PassFrame> delegate, Runnable firstRecord) {
             this.delegate = delegate;
+            this.firstRecord = ignored -> firstRecord.run();
+            this.waitForSubmission = false;
+        }
+        FirstRecordPass(Pass<PassFrame> delegate, java.util.function.Consumer<PassFrame> firstRecord) {
+            this.delegate = delegate;
             this.firstRecord = firstRecord;
+            this.waitForSubmission = true;
         }
         @Override public void record(PassFrame frame) {
             delegate.record(frame);
             if (!recorded) {
-                recorded = true;
-                firstRecord.run();
+                firstRecord.accept(frame);
+                if (waitForSubmission) frame.whenSubmitted(() -> recorded = true);
+                else recorded = true;
             }
         }
         @Override public void close() { delegate.close(); }

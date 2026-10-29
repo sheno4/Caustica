@@ -121,6 +121,9 @@ final class CloudlySkyPresetTest {
         assertEquals(120_000 * preset.sunColorAcesCg()[0], sun.illuminanceRedLux(), .01);
         assertEquals(Math.toRadians(.535700023 * .5), preset.sunAngularRadiusRadians(), 1e-12);
         assertEquals(Math.toRadians(.7 * .5), preset.sunDiscHalfAngleRadians(), 1e-12);
+        assertEquals(preset.sunDiscHalfAngleRadians(), sun.angularRadiusRadians(), 1e-12);
+        assertEquals(preset.sunDiscHalfAngleRadians(), sky.sunDiscHalfAngleRadians(), 1e-7);
+        assertEquals(preset.sunAngularRadiusRadians(), sky.sunAngularRadiusRadians(), 1e-7);
         assertEquals(1, inputs.skyLook3().z());
         assertEquals(.8f, inputs.sunColor().x());
         assertFalse(pack.skyParameters().containsKey("SunDiskAngleInDegrees"));
@@ -162,8 +165,8 @@ final class CloudlySkyPresetTest {
         assertEquals(night.sunAngleRadians(), SkyLutPass.gather(configured, night, preset).sunAngleRadians());
     }
 
-    @Test void nativeMoonEnergyFollowsCapturedPhaseAndDisplaySizeStaysIndependent(@TempDir Path directory) throws Exception {
-        var preset = CloudlySkyPreset.from(source(directory, 30, 90, "sourceX"));
+    @Test void nativeEmittersShareVisibleSizeWithRetainedLightsAndMoonEnergyFollowsPhase(@TempDir Path directory) throws Exception {
+        var preset = CloudlySkyPreset.from(source(directory, 30, 90, "sourceX"), .5683);
         OptionValues sizes = new OptionValues() {
             @Override public <T> T get(Option<T> option) {
                 if (option.equals(CloudlyOptions.ENABLED)) return option.normalize(true);
@@ -182,9 +185,25 @@ final class CloudlySkyPresetTest {
         assertEquals(.25, fullLights.moon().orElseThrow().illuminanceRedLux(), 1e-7);
         assertEquals(.025, newLights.moon().orElseThrow().illuminanceRedLux(), 1e-7);
         assertEquals(preset.moonIlluminanceLux(), sky.moonIlluminanceLux(), 1e-7);
-        assertEquals(Math.toRadians(2), sky.sunDiscHalfAngleRadians(), 1e-7);
-        assertEquals(Math.toRadians(3), sky.moonDiscHalfAngleRadians(), 1e-7);
+        assertEquals(preset.sunDiscHalfAngleRadians(), sky.sunDiscHalfAngleRadians(), 1e-7);
+        assertEquals(Math.toRadians(.5683 * .5), sky.moonDiscHalfAngleRadians(), 1e-7);
+        assertEquals(sky.moonDiscHalfAngleRadians(), sky.moonAngularRadiusRadians(), 1e-7);
+        assertEquals(sky.moonDiscHalfAngleRadians(), fullLights.moon().orElseThrow().angularRadiusRadians(), 1e-7);
         assertEquals(preset.sunAngularRadiusRadians(), sky.sunAngularRadiusRadians(), 1e-7);
+    }
+
+    @Test void sharedVisibleSunAngleUsesPhysicalDiameterWhenNativeSeparationIsDisabled(@TempDir Path directory) throws Exception {
+        Path path = source(directory, 30, 90, "sourceX").manifest();
+        JsonObject manifest = JsonParser.parseString(Files.readString(path)).getAsJsonObject();
+        var skyParameters = manifest.getAsJsonObject("skyParameters");
+        skyParameters.addProperty("UseSeparateVisibleAngle", false);
+        skyParameters.addProperty("SunDiskVisibleAngleInDegrees", 20.0);
+        Files.writeString(path, manifest.toString());
+
+        var preset = CloudlySkyPreset.from(CloudlySourcePack.load(path), .5683);
+        var selected = preset.lightSettings(new MinecraftLightProvider.CelestialSettings(30, .6, 1.5));
+        assertEquals(preset.sunAngularRadiusRadians(), preset.sunDiscHalfAngleRadians(), 1e-12);
+        assertEquals(Math.toDegrees(preset.sunDiscHalfAngleRadians()), selected.sunAngularRadiusDegrees(), 1e-12);
     }
 
     private static CloudlySourcePack source(Path directory, double elevation, double azimuth, String axis) throws Exception {
@@ -196,7 +215,8 @@ final class CloudlySkyPresetTest {
                  "nativeDefaults":{"source":{},"skyParameters":{"bUseUnrealSunData":true,
                   "SunIntensity":{"Factor":100000,"RGB":{"X":1,"Y":1,"Z":1}},
                   "MoonFractionOfSunIntensity":0.0000025,
-                  "SunDiskAngleInDegrees":0.535700023,"SunDiskVisibleAngleInDegrees":0.535700023}},
+                  "SunDiskAngleInDegrees":0.535700023,"UseSeparateVisibleAngle":true,
+                  "SunDiskVisibleAngleInDegrees":0.535700023}},
                  "components":[],"rendererAdapter":{"target":"Caustica","approximation":true,"sunAzimuthAxis":"%s",
                    "sunAngleMeaning":"fullDiameter","sunIntensityUnits":"lux","sunColorSpace":"linearBt709"},
                  "textures":[{"textureId":0,"sourceAsset":"fixture","format":"PF_DXT1",

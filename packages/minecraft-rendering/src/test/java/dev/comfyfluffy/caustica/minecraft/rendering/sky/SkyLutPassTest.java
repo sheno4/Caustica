@@ -49,7 +49,7 @@ final class SkyLutPassTest {
 
     @Test void generatedRootsMatchDescriptorHeapAbi() {
         assertEquals(160, SkyLutPushData.BYTE_SIZE);
-        assertEquals(32, MinecraftEnvironmentBindingData.BYTE_SIZE);
+        assertEquals(40, MinecraftEnvironmentBindingData.BYTE_SIZE);
         assertEquals(1, SkyLutPass.groups(1));
         assertEquals(2, SkyLutPass.groups(9));
     }

@@ -5,6 +5,11 @@ import caustica_types;
 /** Distant radiance arriving from every direction the scene's geometry does not cover. */
 public interface IEnvironmentModel {
     public float3 evaluateEnvironment(EnvironmentQuery query);
+
+    /** Incident RGB transmittance in [0, 1] for direct distant lighting at this position. */
+    public float3 evaluateDistantTransmittance(EnvironmentLightQuery query) {
+        return float3(1.0);
+    }
 };
 
 /**
@@ -14,4 +19,5 @@ public interface IEnvironmentModel {
  */
 public interface IEnvironmentDispatch {
     public float3 evaluateEnvironment(uint implementation, EnvironmentQuery query);
+    public float3 evaluateDistantTransmittance(uint implementation, EnvironmentLightQuery query);
 };

@@ -306,7 +306,12 @@ public struct VolumeBoundaryLightingInput {
 
 public struct EnvironmentQuery {
     public ShaderRootData shaderRoot;
+    /** Ray origin relative to the captured camera, in scene units. */
+    public float3 position;
     public float3 direction;
+    public float metersPerSceneUnit;
+    /** Direct camera segments are distinct from reflected, transmitted, and scattered segments. */
+    public bool primaryCameraRay;
     /** Whether discrete environment-emitter lobes represented by direct-light sampling remain visible. */
     public bool showEnvironmentEmitters;
     /**
@@ -314,5 +319,17 @@ public struct EnvironmentQuery {
      * no meaning: it is whatever the extension put there — a bindless slot, packed bits, or the address of
      * a buffer holding this scene's atmosphere.
      */
+    public uint64_t bindingData;
+};
+
+/** Environment-owned attenuation along a sampled distant emitter's incident direction. */
+public struct EnvironmentLightQuery {
+    public ShaderRootData shaderRoot;
+    /** Shading position relative to the captured camera, in scene units. */
+    public float3 position;
+    /** Normalized scene-space direction from the shading position toward the distant emitter. */
+    public float3 direction;
+    public float metersPerSceneUnit;
+    /** The scene-selected environment binding word, forwarded unchanged. */
     public uint64_t bindingData;
 };

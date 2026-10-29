@@ -270,11 +270,15 @@ public CoverageInput worldCoverageInput(BuiltInTriangleIntersectionAttributes at
     return input;
 }
 
-public EnvironmentQuery worldEnvironmentQuery(float3 direction, bool showEmitters) {
+public EnvironmentQuery worldEnvironmentQuery(float3 position, float3 direction, bool showEmitters,
+        bool primaryCameraRay) {
     ConstPtr<WorldPush> frame = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
     EnvironmentQuery query = {};
     query.shaderRoot = worldShaderRoot();
+    query.position = position - frame[0].camOffset;
     query.direction = normalize(direction);
+    query.metersPerSceneUnit = neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit;
+    query.primaryCameraRay = primaryCameraRay;
     query.showEnvironmentEmitters = showEmitters
             || (neeAtState(worldBindings.neeAtStateAddress)[0].flags
             & NEE_AT_ENVIRONMENT_EMITTERS_SAMPLED) == 0u;

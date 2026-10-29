@@ -4,6 +4,12 @@
 
 ## 当前交付与历史记录
 
+`.22` 将原版云阴影连接到宿主地面和体积的日月直接照明。独立的 `62-surface-shadow` 程序复用原版 CSM 光学深度采样，将 `exp(-opticalDepth * SigmaScatCloud)` 写入相机附近的 64³ 透射场；原有 `62-host-camera` 云追踪程序不变。下一帧按受光点的世界位置采样该场，仅衰减对应的远光源。完美反射和透射中的显式日月盘也使用相同透射率；主相机天空继续由原版大气/云合成负责，避免重复遮挡。有限灯、发光面和环境散射不统一乘云影。
+
+可见太阳角直径遵循原场景 `UseSeparateVisibleAngle`，月亮取原项目 `MoonDiskAngleInDegrees`；天空、反射和宿主远光源的采样范围统一，太阳大气散射参数仍独立保留。自动曝光增益上限调整为 +8 EV，夜间计量曲线仍为 -3 EV 补偿，不增加源月光能量，也不强制使用最大增益。实际画面、运行性能和与 AC8 的一致性仍需游戏内验收。
+
+云影接入设计核对了活跃的 [WickedEngine 方向光照明](https://github.com/turanszkij/WickedEngine/blob/53fba508ca04256ba3d14368ec31357727892c11/WickedEngine/shaders/lightingHF.hlsli)及其[云阴影生成](https://github.com/turanszkij/WickedEngine/blob/53fba508ca04256ba3d14368ec31357727892c11/WickedEngine/shaders/volumetricCloud_shadow_renderCS.hlsl)（[MIT](https://github.com/turanszkij/WickedEngine/blob/53fba508ca04256ba3d14368ec31357727892c11/LICENSE.txt)）。参考其仅衰减方向光而不压暗总合成色的职责划分；WickedEngine 使用自身的光空间二维阴影，这里保留 AC8 原始分层阴影采样，再适配宿主空间，未复制其代码或引入引擎依赖。透射场分辨率、有限空间范围及一帧延迟是宿主适配的限制，不能宣称整条光照路径与 AC8 原版逐字节相同。
+
 `.21` 修正 97 中地形淡出目标与无地形背景不一致的问题。表面 AP 有独立的艺术缩放，而天空由方向相关的 LUT/GodRay 生成；仅在 `depth > 0` 时用 AP 覆盖 `AtmColor`，会让地形权重即使降到零也无法收敛到相邻无地形天空。本版移除该覆盖，并取消按地形淡出比例将表面 AP 距离扩大到云追踪范围的处理。表面仍按真实距离接受 AP，最终以原有权重混入共同天空背景。云合成、深度分类、背景积分及高度偏移未改动。对当前关闭原版高度雾的配方，地形颜色 `b² * surfaceWithAP + (1-b²) * sky` 在 `b→0` 时与无地形背景一致。仅完成必要编译、SPIR-V 格式和 JAR 完整性检查，实机画面尚未验收。
 
 设计核对参考：[Godot 天空雾合成](https://github.com/godotengine/godot/blob/e810f3f7af27a7d3915b0f6f04d89d3c6f195a0b/servers/rendering/renderer_rd/shaders/environment/sky.glsl)（MIT）和 [Iris 下半天空覆盖](https://github.com/IrisShaders/Iris/blob/bff1e69cb6c5519d8745784aa9c8b92984de67e7/common/src/main/java/net/irisshaders/iris/pathways/HorizonRenderer.java)（LGPL-3.0）。前者验证共享背景与透射/散射的合成语义，后者说明 MC 无几何背景须独立覆盖且视距须取宿主值。没有复制其代码，也没有引入其渲染依赖或固定色天空壳。

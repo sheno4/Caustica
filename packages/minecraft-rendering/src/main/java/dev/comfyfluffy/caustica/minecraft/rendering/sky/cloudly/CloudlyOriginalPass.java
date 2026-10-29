@@ -36,6 +36,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     private final ResourceFactory resources;
     private final Supplier<OptionValues> options;
     private final Supplier<MinecraftSkyFrame> frames;
+    private final CloudlySurfaceShadow surfaceShadow;
     private final List<GpuComputeJob> jobs = new ArrayList<>();
     private final List<AutoCloseable> staged = new ArrayList<>();
     private final Thread worker;
@@ -77,6 +78,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                                SourceLoader source, Path manifest) {
         this.gpu = gpu; this.compute = compute; this.resources = resources;
         this.options = options; this.frames = frames;
+        this.surfaceShadow = new CloudlySurfaceShadow(gpu, resources);
         worker = Thread.ofVirtual().name("Caustica original Cloudly GPU preparation").unstarted(() -> prepare(source, manifest));
         synchronized (this) {
             preparationLifetime = resources.create(this::retirePreparation);
@@ -91,6 +93,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     public boolean resourcesReady() { return assets != null; }
     public Optional<Throwable> preparationFailure() { return Optional.ofNullable(preparationFailure); }
     public CloudlySkyPreset skyPreset() { Assets ready = assets; return ready == null ? null : ready.sky; }
+    public CloudlySurfaceShadow.Snapshot surfaceShadow() { return surfaceShadow.capture(); }
 
     @FunctionalInterface
     private interface SourceLoader { CloudlySourcePack load() throws IOException; }
@@ -122,10 +125,10 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         List<AutoCloseable> acquired = new ArrayList<>();
         try {
             CloudlySourcePack source = loader.load();
-            CloudlySkyPreset sky = CloudlySkyPreset.from(source);
             if (manifest == null) manifest = projectManifest(source).orElseThrow(
                     () -> new IllegalArgumentException("Bundled Cloudly preset has no original pipeline manifest"));
             var project = CloudlyNativeProject.load(manifest);
+            CloudlySkyPreset sky = CloudlySkyPreset.from(source, project.scalar("MoonDiskAngleInDegrees"));
             requirePreparing();
             LOGGER.info("Original Cloudly: preparing {} source components, {} volume textures, density bake and atmosphere",
                     source.components().size(), source.textures().size());
@@ -164,6 +167,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             acquired.add(sphere);
             Set<String> programIds = new LinkedHashSet<>();
             project.schedule().stages().stream().filter(stage -> stage.program() != null).forEach(stage -> programIds.add(stage.program().id()));
+            programIds.add(CloudlySurfaceShadow.PROGRAM);
             requirePreparing();
             var programs = new CloudlyFramePrograms(gpu, resources, project.library(), programIds); acquired.add(programs);
             requirePreparing();
@@ -349,6 +353,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             Set<String> requiredPrograms = new LinkedHashSet<>(plan.programIds());
             shadows.forEach(draw -> requiredPrograms.add(draw.program()));
             ambientOcclusion.forEach(draw -> requiredPrograms.add(draw.draw().program()));
+            requiredPrograms.add(CloudlySurfaceShadow.PROGRAM);
             ready.programs.requirePrograms(requiredPrograms);
             if (!target.initialized) {
                 target.initializationRecorded = true;
@@ -359,6 +364,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             }
             int measurement = ready.timing.begin(frame, destination.width(), destination.height());
             for (Draw draw : shadows) draw.record(frame, ready.programs);
+            recordSurfaceShadow(frame, ready, target, inputs, writer, current, roles);
             for (var draw : ambientOcclusion) {
                 draw.draw().record(frame, ready.programs);
                 if (draw.update().publish()) copyAmbientOcclusion(frame, target, draw.level());
@@ -404,6 +410,31 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             ResourceLifetime.closeAfterFailure(failure, () -> closeAll(acquired));
             throw failure;
         }
+    }
+
+    private void recordSurfaceShadow(PostEffectFrame frame, Assets ready, Epoch target,
+                                     Map<String, double[]> inputs, CloudlyFrameRecipe.ViewWriter writer,
+                                     CloudlyFrameCamera camera, Map<String, String> roles) {
+        var snapshot = surfaceShadow.acquire(frame, camera.sourceOriginMeters(),
+                inputs.get("frame.terrainFadeEndMeters")[0], inputs.get("frame.lightDirectionSource"));
+        var grid = snapshot.grid();
+        ByteBuffer source = ready.project.recipes().get("62").encode(Set.of("62"), inputs, writer).parameters("62");
+        ByteBuffer constants = ByteBuffer.allocate(source.remaining()).order(ByteOrder.LITTLE_ENDIAN).put(source.duplicate()).flip();
+        var layout = ready.project.library().program(CloudlySurfaceShadow.PROGRAM).parametersLayout();
+        layout.putFloats(constants, "HostSurfaceMinX", grid.minX());
+        layout.putFloats(constants, "HostSurfaceMinY", grid.minY());
+        layout.putFloats(constants, "HostSurfaceMinZ", grid.minZ());
+        layout.putFloats(constants, "HostSurfaceExtentX", grid.width());
+        layout.putFloats(constants, "HostSurfaceExtentY", grid.height());
+        layout.putFloats(constants, "HostSurfaceExtentZ", grid.depth());
+        var original = ready.project.schedule().bindings("TraceHigh",
+                (name, field) -> descriptor(ready, target, roles, name, field));
+        Map<String, GpuDescriptorIndex> descriptors = new LinkedHashMap<>(original.descriptors());
+        descriptors.put("HostSurfaceTransmittance", snapshot.storage());
+        ready.programs.record(frame, CloudlySurfaceShadow.PROGRAM, constants, descriptors, Map.of(), camera,
+                List.of(ready.owner, target.buffers.owner()), CloudlySurfaceShadow.SIZE / 4,
+                CloudlySurfaceShadow.SIZE / 4, CloudlySurfaceShadow.SIZE / 4);
+        frame.whenSubmitted(() -> surfaceShadow.publish(snapshot));
     }
 
     private void prepareShadows(Assets ready, Epoch target, CloudlyShadowState.Update<String> update, int cascade,
@@ -683,6 +714,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             release.addAll(staged); staged.clear();
             if(epoch!=null) { release.add(epoch); epoch=null; }
             if(assets!=null) { release.add(assets.owner); assets=null; }
+            release.add(surfaceShadow);
             release.add(preparationLifetime);
         }
         try { closeAll(release); }

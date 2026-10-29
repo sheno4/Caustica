@@ -55,6 +55,10 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
             if (dot(dir, state.sunDir) >= cos(state.sunDiscHalfAngle)) {
                 float3 sunExtinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
                         state.viewerRadiusKm, state.sunDir, state.sunAngularRadius);
+                if (!query.primaryCameraRay) {
+                    sunExtinction *= minecraftSurfaceCloudTransmittance(query.bindingData, query.position,
+                            state.sunDir, query.metersPerSceneUnit);
+                }
                 color += circularDiscRadiance(state.sunIlluminance, state.sunDiscHalfAngle)
                         * state.sunColor * sunExtinction;
             }
@@ -67,6 +71,10 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
             float3 sunExtinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
                     state.viewerRadiusKm,
                     state.sunDir, state.sunAngularRadius);
+            if (!query.primaryCameraRay) {
+                sunExtinction *= minecraftSurfaceCloudTransmittance(query.bindingData, query.position,
+                        state.sunDir, query.metersPerSceneUnit);
+            }
             float2 uv = lerp(state.sunUv.xy, state.sunUv.zw, local * 0.5 + 0.5);
             float3 texel = sampleTexture2DLod(binding.celestialsAtlas,
                     binding.celestialSampler, uv, 0.0).rgb;
@@ -77,7 +85,8 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
             float core = pow(clamp(dot(texel, texel) * 0.45, 0.0, 1.0), 6.0);
             color += discRadiance(state.sunIlluminance, state.sunDiscHalfAngle) * sunExtinction * core;
         }
-        if (celestialSquareLocal(dir, state.moonDir, state.moonDiscHalfAngle, local)) {
+        if ((!state.analyticSun || dot(dir, state.moonDir) >= cos(state.moonDiscHalfAngle))
+                && celestialSquareLocal(dir, state.moonDir, state.moonDiscHalfAngle, local)) {
             float2 uv = lerp(state.moonUv.xy, state.moonUv.zw, local * 0.5 + 0.5);
             float3 texel = srgbToLinear(
                     sampleTexture2DLod(binding.celestialsAtlas,
@@ -85,11 +94,17 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
             float3 moonExtinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
                     state.viewerRadiusKm,
                     state.moonDir, state.moonAngularRadius);
+            if (!query.primaryCameraRay) {
+                moonExtinction *= minecraftSurfaceCloudTransmittance(query.bindingData, query.position,
+                        state.moonDir, query.metersPerSceneUnit);
+            }
             // The phase sprite already carries the lit shape; a contrast ramp suppresses its faint
             // painted halo while keeping that shape.
             float shape = smoothstep(0.0, 1.0, min(length(texel), 1.0));
-            color += discRadiance(state.moonIlluminance, state.moonDiscHalfAngle)
-                   * moonExtinction * texel * shape;
+            float3 moonRadiance = state.analyticSun
+                    ? circularDiscRadiance(state.moonIlluminance, state.moonDiscHalfAngle)
+                    : discRadiance(state.moonIlluminance, state.moonDiscHalfAngle);
+            color += moonRadiance * moonExtinction * texel * shape;
         }
         // No separate horizon gate on either body. A set sun or moon goes dark because its extinction is
         // zero below the horizon.
@@ -99,8 +114,27 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
     return bt709ToAcesCg(max(color, float3(0.0)));
 }
 
+/** Native cloud visibility for the effective distant light, evaluated at a camera-relative scene position. */
+public float3 minecraftSurfaceCloudTransmittance(uint64_t bindingData, float3 position,
+        float3 direction, float metersPerSceneUnit) {
+    MinecraftEnvironmentBinding binding = ShaderDataPtr<MinecraftEnvironmentBinding>(bindingData)[0];
+    MinecraftSurfaceShadowInputs shadow = ShaderDataPtr<MinecraftSurfaceShadowInputs>(binding.surfaceShadowInputsAddress)[0];
+    if (shadow.enabled == 0
+            || dot(direction, shadow.lightDirection.xyz) < 0.999) return float3(1.0);
+    float3 sourceOffsetMeters = float3(position.x, -position.z, position.y) * metersPerSceneUnit;
+    float3 uv = shadow.origin.xyz + sourceOffsetMeters * shadow.scale.xyz;
+    if (any(uv < 0.0) || any(uv > 1.0)) return float3(1.0);
+    Texture3D<float4> field = ResourceDescriptorHeap[NonUniformResourceIndex(shadow.textureIndex)];
+    float3 transmittance = field.SampleLevel(sampler(binding.lutSampler), uv, 0.0).rgb;
+    return saturate(transmittance);
+}
+
 public struct MinecraftOverworldSky : IEnvironmentModel {
     public float3 evaluateEnvironment(EnvironmentQuery query) {
         return lutSkyEvaluateEnvironment(query);
+    }
+    public override float3 evaluateDistantTransmittance(EnvironmentLightQuery query) {
+        return minecraftSurfaceCloudTransmittance(query.bindingData, query.position,
+                query.direction, query.metersPerSceneUnit);
     }
 };

@@ -32,7 +32,9 @@ public final class RtExposure {
     /** {@code log2(100 / 12.5)} maps scene luminance in cd/m² onto the EV100 metering scale. */
     private static final float EV100_OFFSET = (float) (Math.log(8.0) / Math.log(2.0));
     private static final float AUTO_MIN_EV = -15.0f;
-    private static final float AUTO_MAX_EV = -2.0f;
+    // Absolute exposure multiplies radiance; physical moonlight and airglow require gains above unity.
+    // The metering curve keeps its separate night compensation rather than raising the light energy.
+    private static final float AUTO_MAX_EV = 8.0f;
     private Settings settings;
     private GpuImage image;
     private GpuBuffer histogram;

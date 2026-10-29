@@ -305,6 +305,17 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                     .append(" value; return value.evaluateEnvironment(query); }\n");
         }
         source.append("            default: { ErrorEnvironment value; return value.evaluateEnvironment(query); }\n")
+                .append("        }\n    }\n\n")
+                .append("    public float3 evaluateDistantTransmittance(uint implementation, EnvironmentLightQuery query) {\n")
+                .append("        switch (implementation) {\n")
+                .append("            case 0u: { BuiltinEnvironment value; return value.evaluateDistantTransmittance(query); }\n");
+        for (ProgramComposition.Environment value : environments) {
+            source.append("            case ").append(value.key().implementationIndex())
+                    .append("u: { ")
+                    .append(value.definition().implementation().type())
+                    .append(" value; return value.evaluateDistantTransmittance(query); }\n");
+        }
+        source.append("            default: { ErrorEnvironment value; return value.evaluateDistantTransmittance(query); }\n")
                 .append("        }\n    }\n};\n\n")
                 .append("public struct Composition : IComposition {\n")
                 .append("    public typealias Surfaces = SurfaceDispatch;\n")

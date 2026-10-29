@@ -290,6 +290,18 @@ public float3 traceVisibilityRay<TComposition : IComposition>(RayDesc ray, float
     return visibility * exp(-absorption * ray.TMax);
 }
 
+public float3 traceDistantTransmittance<TComposition : IComposition>(float3 position, float3 direction) {
+    WorldPush frame = ((ConstPtr<WorldPush>)worldBindings.worldPushAddress)[0];
+    EnvironmentLightQuery query = {};
+    query.shaderRoot = worldShaderRoot();
+    query.position = position - frame.camOffset;
+    query.direction = direction;
+    query.metersPerSceneUnit = neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit;
+    query.bindingData = frame.environmentBinding;
+    TComposition.Environments environments = {};
+    return environments.evaluateDistantTransmittance(frame.environmentImplementation, query);
+}
+
 public float3 traceVisibility<TComposition : IComposition>(PackedPathSegment path, WorldHit hit,
         DirectLightSample selected, inout uint seed) {
     RayDesc ray;
@@ -298,7 +310,9 @@ public float3 traceVisibility<TComposition : IComposition>(PackedPathSegment pat
     ray.Direction = selected.direction;
     ray.TMin = traceEpsilon();
     ray.TMax = selected.maximumDistance;
-    return traceVisibilityRay<TComposition>(ray, path.absorption, path.ior, seed);
+    float3 visibility = traceVisibilityRay<TComposition>(ray, path.absorption, path.ior, seed);
+    if (selected.distant) visibility *= traceDistantTransmittance<TComposition>(hit.position, selected.direction);
+    return visibility;
 }
 
 public struct TraceSpatialMedium {
@@ -365,6 +379,7 @@ public float3 traceVolumeLighting<TComposition : IComposition>(float3 position, 
         float weight = traceLuminance(radiance);
         totalWeight += weight;
         if (weight > 0.0 && retainedLightRandom(seed) * totalWeight < weight) {
+            selected = invalidDirectLight();
             selected.valid = true;
             selected.direction = ambientDirection;
             selected.maximumDistance = maximumDistance;
@@ -379,6 +394,7 @@ public float3 traceVolumeLighting<TComposition : IComposition>(float3 position, 
     ray.TMin = minimumDistance;
     ray.TMax = min(selected.maximumDistance, maximumDistance);
     float3 visibility = traceVisibilityRay<TComposition>(ray, float3(0.0), 1.0, seed);
+    if (selected.distant) visibility *= traceDistantTransmittance<TComposition>(position, selected.direction);
     return selectedRadiance * visibility * (totalWeight / (float(candidates) * selectedWeight));
 }
 

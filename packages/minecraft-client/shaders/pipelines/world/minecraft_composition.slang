@@ -72,6 +72,15 @@ public struct MinecraftEnvironments : IEnvironmentDispatch {
             default: { BuiltinEnvironment value; return value.evaluateEnvironment(query); }
         }
     }
+
+    public float3 evaluateDistantTransmittance(uint implementation, EnvironmentLightQuery query) {
+        switch (implementation) {
+            case 1u: { MinecraftOverworldSky value; return value.evaluateDistantTransmittance(query); }
+            case 2u: { MinecraftNetherSky value; return value.evaluateDistantTransmittance(query); }
+            case 3u: { MinecraftEndSky value; return value.evaluateDistantTransmittance(query); }
+            default: { BuiltinEnvironment value; return value.evaluateDistantTransmittance(query); }
+        }
+    }
 };
 
 public struct MinecraftComposition : IComposition {
