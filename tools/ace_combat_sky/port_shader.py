@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -461,7 +462,8 @@ def host_background_lut(text: str) -> str:
 
 
 def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
-          host_terrain_boundary: bool = False, cloud_height: bool = False) -> dict:
+          host_terrain_boundary: bool = False, cloud_height: bool = False,
+          cloud_foreground: bool = False) -> dict:
     source = source_path.read_text(encoding="utf-8")
     root = re.search(r"cbuffer\s+_RootShaderParameters\s*\{(.*?)\}", source, re.S)
     if not root:
@@ -589,6 +591,32 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
         text = host_terrain_fade_boundary(text)
     if cloud_height:
         text = host_cloud_height(text)
+    if cloud_foreground:
+        for module_name in ("host_cloud_prefix_depth", "host_cloud_prefix",
+                            "host_cloud_prefix_transport", "host_cloud_prefix_composite"):
+            spec = importlib.util.spec_from_file_location(module_name, Path(__file__).with_name(module_name + ".py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            transform = getattr(module, "host_cloud_prefix_trace" if module_name == "host_cloud_prefix" else module_name)
+            text = transform(text)
+            if module_name == "host_cloud_prefix" and cloud_view_trace:
+                text = module.HOST_CLOUD_PREFIX_DECLARATIONS + "\n" + text
+        resource_source = text
+        for match in list(re.finditer(resource_pattern, resource_source)):
+            prefix = resource_source[:match.start()]
+            if prefix.count("{") != prefix.count("}"):
+                continue
+            kind, name = match.groups()
+            kind = re.sub(r"\s+", "", kind)
+            slot = len(bindings)
+            heap = "Sampler" if kind == "SamplerState" else "Resource"
+            replacement = (f"\n{kind} getOriginal_{name}() {{ return {heap}DescriptorHeap[((uint*)originalPush.bindingsAddress)[{slot}]]; }}\n"
+                           f"#define {name} getOriginal_{name}()\n")
+            # Accessors must follow the push declaration and precede every helper use.
+            text = text.replace(match[0], "", 1)
+            push_marker = "[[vk::push_constant]] OriginalProgramPush originalPush;"
+            text = text.replace(push_marker, push_marker + replacement, 1)
+            bindings.append(dict(name=name, type=kind, originalType=kind, slot=slot, byteOffset=slot * 4, heap=heap))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return dict(schemaVersion=1, sourceSha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
@@ -598,7 +626,10 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
                 pushFields=[dict(name="parametersAddress", offset=0, size=8),
                             dict(name="bindingsAddress", offset=8, size=8)] +
                            ([dict(name="cameraAddress", offset=16, size=8)] if host_camera else []),
-                mathematicalFunctionsChanged=host_camera or terrain_boundary or cloud_height, viewTraceRangesCapped=view_trace_ranges,
+                mathematicalFunctionsChanged=host_camera or terrain_boundary or cloud_height or cloud_foreground, viewTraceRangesCapped=view_trace_ranges,
+                hostCloudForeground=dict(enabled=cloud_foreground, physicalDistanceUnit="metres",
+                    separateSurfacePrefix=True if cloud_foreground else None,
+                    duplicateRaymarch=False if cloud_foreground else None),
                 hostCloudHeight=dict(enabled=cloud_height, field="HostCloudHeightOffsetMeters" if cloud_height else None,
                     nativeDensityCoordinatesPreserved=True, atmosphereCoordinatesPreserved=True,
                     additionalUniformBytes=0),
@@ -642,12 +673,15 @@ def main() -> None:
                         help="Use the host cylindrical terrain fade, retaining the source camera and push ABI")
     parser.add_argument("--host-cloud-height", action="store_true",
                         help="Translate cloud density, bounds, shadows and AO without moving the atmosphere")
+    parser.add_argument("--host-cloud-foreground", action="store_true",
+                        help="Transport the physical surface prefix independently of the full cloud integral")
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parents[2]
     for path in (args.source, args.output):
         if path.resolve().is_relative_to(checkout):
             parser.error("Original and generated shaders must stay outside the Git checkout")
-    report = adapt(args.source, args.output, args.host_camera, args.host_terrain_boundary, args.host_cloud_height)
+    report = adapt(args.source, args.output, args.host_camera, args.host_terrain_boundary, args.host_cloud_height,
+                   args.host_cloud_foreground)
     args.output.with_suffix(".bindings.private.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({key: report[key] for key in ("sourceSha256", "parametersByteSize", "pushByteSize")}))
 

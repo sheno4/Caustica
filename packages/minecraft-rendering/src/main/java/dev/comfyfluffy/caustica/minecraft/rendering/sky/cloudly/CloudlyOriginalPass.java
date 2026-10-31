@@ -429,8 +429,11 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         layout.putFloats(constants, "HostSurfaceExtentZ", grid.depth());
         var original = ready.project.schedule().bindings("TraceHigh",
                 (name, field) -> descriptor(ready, target, roles, name, field));
-        Map<String, GpuDescriptorIndex> descriptors = new LinkedHashMap<>(original.descriptors());
-        descriptors.put("HostSurfaceTransmittance", snapshot.storage());
+        Map<String, GpuDescriptorIndex> descriptors = new LinkedHashMap<>();
+        for (var field : ready.project.library().program(CloudlySurfaceShadow.PROGRAM).bindingsLayout().fields()) {
+            descriptors.put(field.name(), field.name().equals("HostSurfaceTransmittance")
+                    ? snapshot.storage() : original.descriptors().get(field.name()));
+        }
         ready.programs.record(frame, CloudlySurfaceShadow.PROGRAM, constants, descriptors, Map.of(), camera,
                 List.of(ready.owner, target.buffers.owner()), CloudlySurfaceShadow.SIZE / 4,
                 CloudlySurfaceShadow.SIZE / 4, CloudlySurfaceShadow.SIZE / 4);
@@ -662,7 +665,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                 result.put("Shadow"+level+"Work"+suffix,cache.work().resources()+suffix);
             }
         }
-        if(target.flipped) for(String suffix:List.of("Color","Distance","Visibility","Aux","Info")) {
+        if(target.flipped) for(String suffix:List.of("Color","Distance","Visibility","Aux","Info","Foreground")) {
             result.put("ResolvedCurrent"+suffix,"ResolvedPrevious"+suffix); result.put("ResolvedPrevious"+suffix,"ResolvedCurrent"+suffix);
         }
         return result;
