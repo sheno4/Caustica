@@ -82,6 +82,7 @@ float4 HostCheckerForegroundMiddle(float4 a, float4 b, float4 c, float4 d,
                                    float4 fa, float4 fb, float4 fc, float4 fd)
 {
     float4 result;
+    const float4 total = fa + fb + fc + fd;
     for (uint channel = 0; channel < 4; channel++)
     {
         float ranks[4] = {a[channel], b[channel], c[channel], d[channel]};
@@ -92,7 +93,7 @@ float4 HostCheckerForegroundMiddle(float4 a, float4 b, float4 c, float4 d,
                 float rank = ranks[j]; ranks[j] = ranks[j - 1]; ranks[j - 1] = rank;
                 float value = values[j]; values[j] = values[j - 1]; values[j - 1] = value;
             }
-        result[channel] = 0.5f * (values[1] + values[2]);
+        result[channel] = 0.5f * (total[channel] - values[3] - values[0]);
     }
     return result;
 }

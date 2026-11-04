@@ -83,13 +83,31 @@ def _atmosphere_background(text: str) -> str:
         + prefix + pixel + suffix + "}\n\n"
     )
 
+    terrain_fade = re.search(r"else\s+if\s*\(\s*depth\s*\)\s*\{", body)
+    if not terrain_fade:
+        raise ValueError("The native atmosphere terrain fade changed")
+    terrain_fade_opening = body.index("{", terrain_fade.start(), terrain_fade.end())
+    terrain_fade_end = _block_end(body, terrain_fade_opening)
+    body = body[:terrain_fade.start()] + body[terrain_fade_end:]
+    result = re.search(r"float4\s+result\s*=\s*[^;]+;", body)
+    if not result:
+        raise ValueError("The native atmosphere result changed")
+    # The physical surface AP and optional water fade define Cs. Celestial
+    # emission and sky-depth fog belong to Cb and receive its terrain weight.
+    body = (
+        body[:result.start()]
+        + "const float3 hostBackground = HostCloudSharedBackground(hostAtmosphereSampleId, id);\n"
+        "            const float hostTerrainWeight = depth > 0.0f\n"
+        "                ? pow2(terrain_blend_factor) : 0.0f;\n"
+        "            float4 result = float4(lerp(hostBackground, SceneColorWithAtm.rgb,\n"
+        "                hostTerrainWeight), SceneColorWithAtm.a);"
+        + body[result.end():]
+    )
     body = "\n    const uint2 hostAtmosphereSampleId = id;" + body
     body = _once(
         body,
         "RWSceneColorTexture[id] = result;",
-        "HostAtmosphereBackground[id] = float4(\n"
-        "                HostCloudSharedBackground(hostAtmosphereSampleId, id),\n"
-        "                depth > 0.0f ? pow2(terrain_blend_factor) : 0.0f);\n"
+        "HostAtmosphereBackground[id] = float4(hostBackground, hostTerrainWeight);\n"
         "    RWSceneColorTexture[id] = result;",
     )
     return (
