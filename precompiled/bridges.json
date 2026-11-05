@@ -1,0 +1,14 @@
+{
+  "compiler": "Slang 2026.14.1",
+  "profile": "spirv_1_5",
+  "targetEnvironment": "vulkan1.2",
+  "sources": {
+    "color_bridge.comp.slang": "afb1110d6fd7cd5634e9e2fccc447a75954ead4ee3b2094bef94dc32049c274f",
+    "native_inputs.comp.slang": "60d51adce75d41f5df3b84070ef36d590950b7f4e60dd44eec40f087a16904fd",
+    "caustica_color.slang": "3a27feddc6d091ee081ada249934cb553b5e5ca772bfb4bbf0351d005492b2cd"
+  },
+  "binaries": {
+    "native_inputs.comp.spv": "62d65cb5b707bd249e20dd798e6b8c920b66fc6255c048097f0eefd6058e5af0",
+    "color_bridge.comp.spv": "6909a78cd7b74b0cced2e76d8bd80fc0fcd4f03de5634e6397ca4e9285c42d40"
+  }
+}

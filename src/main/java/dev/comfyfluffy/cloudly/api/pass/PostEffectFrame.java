@@ -1,0 +1,105 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ */
+package dev.comfyfluffy.cloudly.api.pass;
+
+import dev.comfyfluffy.cloudly.api.vulkan.GpuImage;
+
+/**
+ * Frame capabilities for a post-effect registration, adding what the post chain produces for it to read
+ * and the target that enrols it.
+ *
+ * <p>Scene-effect colour images are trace-resolution and retain trace jitter. Ordinary post-effect colour
+ * images and reconstruction-effect colour are display-resolution after reconstruction. Reconstruction
+ * effects run before exposure metering; ordinary post effects run after it. Depth is trace-resolution.
+ * Each image carries its own extent.
+ */
+public interface PostEffectFrame extends PassFrame {
+    /**
+     * The scene as it stands at this point in the chain: scene-linear ACEScg multiplied by preExposure(), not yet look
+     * transformed, or tone mapped. The first scene effect receives trace-resolution colour; the first ordinary
+     * reconstruction effect receives reconstructed colour. The first ordinary post effect receives the
+     * pre-exposure effects' composed colour. Later effects receive the previous participating pass's output.
+     *
+     * <p>Engine-produced and resolved fresh every frame — never cache the returned {@link GpuImage} across
+     * frames, since a resize recreates it.
+     */
+    GpuImage sceneColor();
+
+    /**
+     * Join the chain: the image this pass writes its version of the scene into. Calling this explicit
+     * acquisition method is what
+     * enrols the pass in the ordered post-effect chain.
+     *
+     * <p>Always distinct from {@link #sceneColor()}, so write every pixel, including the ones the effect
+     * does not change: the target holds the previous frame's chain contents, not a copy of the source.
+     * That separation is what lets an effect gather from neighbouring pixels safely, which reading and
+     * writing one image could not.
+     *
+     * <p>Two outputs rotate, so calling this twice in one {@code record} returns the same image; a pass
+     * needing its own intermediates allocates them itself.
+     */
+    GpuImage acquireSceneColorOutput();
+
+    /** Whether this frame's captured program resolves the selected spatial-medium implementation. */
+    boolean spatialMediumActive();
+
+    /** Physical first-hit Vulkan reverse depth at trace resolution; zero denotes environment. */
+    GpuImage primaryDepth();
+
+    /** Dominant virtual-endpoint Vulkan reverse depth at trace resolution; zero denotes environment. */
+    GpuImage depth();
+
+    /**
+     * Column-major inverse of the frame projection and scene-to-view rotation. Multiplying
+     * clip (x, y, depth, 1) and dividing by w gives camera-relative scene coordinates.
+     * For trace-depth reconstruction, add traceJitter() to the pixel center before mapping to clip XY.
+     */
+    float[] cameraRelativeFromClip();
+
+    /** Subpixel XY offset used by trace rays, in render-resolution pixels. */
+    float[] traceJitter();
+
+    /** Radiance multiplier already applied to sceneColor; apply it to added physical radiance as well. */
+    float preExposure();
+
+    /** Entry-scene acceleration structure, whose positions are relative to its current scene origin. */
+    dev.comfyfluffy.cloudly.api.vulkan.GpuAccelerationStructureDescriptor entrySceneTlasDescriptor();
+
+    /** Camera XYZ relative to the entry-scene acceleration structure's origin, in scene units. */
+    float[] cameraTlasPosition();
+
+    /**
+     * Trace material-aware straight-line visibility through this frame's captured entry scene.
+     * Rays and results contain width * height records, with X varying fastest. Each ray is 48 bytes:
+     * float4(origin XYZ, minimum distance), float4(normalized direction XYZ, maximum distance), then
+     * float4(initial absorption RGB per scene unit, initial IOR). Origins are TLAS-relative and distances
+     * use scene units. A ray with maximum distance no greater than its minimum returns full visibility.
+     * Each 16-byte result is float4(RGB transmittance, 1), without exposure scaling.
+     *
+     * <p>The caller retains both addressable buffers for this frame and records their input writes before
+     * calling. This method orders earlier GPU writes before tracing and makes results ready for subsequent
+     * compute reads. Buffers must not overlap. Width and height are positive.
+     */
+    void traceVisibility(dev.comfyfluffy.cloudly.api.vulkan.VulkanDeviceAddress rays,
+                         dev.comfyfluffy.cloudly.api.vulkan.VulkanDeviceAddress results,
+                         int width, int height);
+
+    /**
+     * Sample phase-weighted direct lighting from this frame's retained lights, including material-aware shadows.
+     * Each 64-byte input contains float4(TLAS-relative position, minimum shadow distance),
+     * float4(normalized camera-to-sample direction, Henyey-Greenstein anisotropy), and
+     * float4(normalized screen UV, random-seed bits, active flag), and
+     * float4(isotropic distant ambient radiance in ACEScg, unused). Ambient light is also shadowed.
+     * A zero active flag returns zero radiance.
+     * Each float4 result contains unexposed ACEScg incident radiance integrated against the phase function,
+     * with alpha one. The caller applies scattering coefficients and integrates along the view ray.
+     * Buffer ownership, extents and write/read ordering follow traceVisibility.
+     */
+    void sampleVolumeLighting(dev.comfyfluffy.cloudly.api.vulkan.VulkanDeviceAddress samples,
+                              dev.comfyfluffy.cloudly.api.vulkan.VulkanDeviceAddress results,
+                              int width, int height);
+
+    /** Current scalar exposure, available only to ordinary post effects after exposure metering. */
+    GpuImage exposureImage();
+}

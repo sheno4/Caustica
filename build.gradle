@@ -1,0 +1,103 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'dev.comfyfluffy.cloudly'
+version = '0.1.0-remix.1'
+
+repositories { mavenCentral() }
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    withSourcesJar()
+}
+
+dependencies {
+    api 'org.lwjgl:lwjgl:3.3.3'
+    api 'org.lwjgl:lwjgl-vulkan:3.3.3'
+    implementation 'org.lwjgl:lwjgl-vma:3.3.3'
+    implementation 'com.google.code.gson:gson:2.11.0'
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+}
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+
+def bridgeSources = file('shaders/pipelines/cloudly')
+def bridgeOutput = layout.buildDirectory.dir('generated/cloudly-shaders')
+def slangSdk = providers.environmentVariable('SLANG_SDK')
+def vulkanSdk = providers.environmentVariable('VULKAN_SDK')
+def slangc = slangSdk.map { "${it}/bin/slangc.exe" }.orElse('slangc.exe')
+def spirvVal = vulkanSdk.map { "${it}/Bin/spirv-val.exe" }.orElse('spirv-val.exe')
+tasks.register('compileCloudlyBridges') {
+    inputs.files(fileTree(bridgeSources) { include '**/*.slang' })
+    inputs.dir('precompiled')
+    inputs.property('slangc', slangc)
+    outputs.dir(bridgeOutput)
+    doLast {
+        def destination = bridgeOutput.get().dir('caustica/shaders/pipelines/cloudly').asFile
+        destination.mkdirs()
+        if (!slangSdk.isPresent()) {
+            def receipt = new groovy.json.JsonSlurper().parse(file('precompiled/bridges.json'))
+            def digest = { File input -> java.security.MessageDigest.getInstance('SHA-256')
+                    .digest(input.bytes).encodeHex().toString() }
+            receipt.sources.each { name, expected ->
+                if (digest(new File(bridgeSources, name)) != expected) {
+                    throw new GradleException('Cloudly bridge source changed; set SLANG_SDK and VULKAN_SDK to rebuild.')
+                }
+            }
+            receipt.binaries.each { name, expected ->
+                def binary = file("precompiled/${name}")
+                if (digest(binary) != expected) throw new GradleException("Cloudly bridge hash mismatch: ${name}")
+                new File(destination, name).bytes = binary.bytes
+            }
+            return
+        }
+        fileTree(bridgeSources) { include '*.comp.slang' }.sort().each { source ->
+            def binary = new File(destination, source.name.replace('.slang', '.spv'))
+            def result = providers.exec {
+                commandLine slangc.get(), source.absolutePath, '-target', 'spirv',
+                        '-profile', 'spirv_1_5', '-stage', 'compute', '-entry', 'main',
+                        '-matrix-layout-column-major', '-warnings-as-errors', 'all',
+                        '-I', bridgeSources.absolutePath, '-o', binary.absolutePath
+            }
+            result.result.get().assertNormalExitValue()
+            providers.exec {
+                commandLine spirvVal.get(), '--target-env', 'vulkan1.2', binary.absolutePath
+            }.result.get().assertNormalExitValue()
+        }
+    }
+}
+
+tasks.register('resolveBuildClasspath') {
+    doLast {
+        file('build').mkdirs()
+        file('build/compile-classpath.txt').text = configurations.compileClasspath.asPath
+    }
+}
+
+processResources {
+    dependsOn 'compileCloudlyBridges'
+    from(bridgeOutput)
+    from('.') { include 'LICENSE.md', 'COPYING', 'COPYING.LESSER', 'NOTICE.md' }
+    if (providers.gradleProperty('cloudlyBundleInputRoot').isPresent()) {
+        from(providers.gradleProperty('cloudlyBundleInputRoot')) { into 'caustica/cloudly' }
+    }
+}
+
+tasks.register('correspondingSource', Zip) {
+    archiveClassifier = 'corresponding-source'
+    from('.') {
+        include 'src/**', 'shaders/**', 'precompiled/**', 'build.gradle', 'settings.gradle', 'gradlew.bat', 'gradle/**'
+        include 'LICENSE.md', 'COPYING', 'COPYING.LESSER', 'NOTICE.md', 'README.md'
+    }
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+jar {
+    dependsOn 'correspondingSource'
+    from(tasks.named('correspondingSource').flatMap { it.archiveFile }) { into 'META-INF/cloudly-source' }
+    manifest.attributes('Automatic-Module-Name': 'dev.comfyfluffy.cloudly.runtime')
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
