@@ -14,6 +14,7 @@
 import world_common;
 import sky;
 import bindings;
+import cloudly_shadow;
 
 // Vanilla celestials atlas (sun + moon-phase sprites), bound by RtComposite. Sampled with an explicit LOD
 // (a miss shader has no derivatives). Keeping the real sprites means a resource pack's sun and moon still
@@ -29,6 +30,11 @@ import bindings;
 float3 discRadiance(float illuminance, float halfAngle) {
     float side = 2.0 * tan(halfAngle);      // the square spans this much on a side, gnomonically
     return float3(illuminance / max(side * side, 1.0e-8));
+}
+
+float3 circularDiscRadiance(float illuminance, float halfAngle) {
+    float sine = sin(halfAngle);
+    return float3(illuminance / max(SKY_PI * sine * sine, 1.0e-8));
 }
 
 // Dave Hoskins' hash13 (https://www.shadertoy.com/view/4djSRW): well-distributed and pattern-free.
@@ -120,13 +126,22 @@ void main(inout Payload payload) {
 
     if (showCelestial) {
         float2 local;
-        if (celestialSquareLocal(dir, state.sunDir, state.sunDiscHalfAngle, local)) {
+        if (state.nativeCloudly) {
+            if (dot(dir, state.sunDir) >= cos(state.sunDiscHalfAngle)) {
+                float3 sunExtinction = transmittanceToSpace(transmittanceLut, state.viewerRadiusKm,
+                        state.sunDir, state.sunAngularRadius);
+                sunExtinction *= cloudlyDistantTransmittance(worldPush, WorldRayOrigin(), state.sunDir);
+                color += circularDiscRadiance(state.sunIlluminance, state.sunDiscHalfAngle)
+                        * state.sunColor * sunExtinction;
+            }
+        } else if (celestialSquareLocal(dir, state.sunDir, state.sunDiscHalfAngle, local)) {
             // Tint from the body's CENTRE, not from this ray. The drawn quad spans ~33 degrees (vanilla's
             // size, not the real sun's half degree), so per-ray extinction would redden its lower limb by
             // several stops relative to its upper one — an accurate answer to a question about a body that
             // is 60x too large. The centre keeps the sprite one colour, as vanilla draws it.
             float3 sunExtinction = transmittanceToSpace(transmittanceLut, state.viewerRadiusKm,
                     state.sunDir, state.sunAngularRadius);
+            sunExtinction *= cloudlyDistantTransmittance(worldPush, WorldRayOrigin(), state.sunDir);
             float2 uv = lerp(state.sunUv.xy, state.sunUv.zw, local * 0.5 + 0.5);
             float3 texel = celestialsAtlas.SampleLevel(uv, 0.0).rgb;
             // Vanilla's sun sprite bakes a soft glow gradient into its texels; scaling that raw to HDR
@@ -136,16 +151,20 @@ void main(inout Payload payload) {
             float core = pow(clamp(dot(texel, texel) * 0.45, 0.0, 1.0), 6.0);
             color += discRadiance(state.sunIlluminance, state.sunDiscHalfAngle) * sunExtinction * core;
         }
-        if (celestialSquareLocal(dir, state.moonDir, state.moonDiscHalfAngle, local)) {
+        if ((!state.nativeCloudly || dot(dir, state.moonDir) >= cos(state.moonDiscHalfAngle))
+                && celestialSquareLocal(dir, state.moonDir, state.moonDiscHalfAngle, local)) {
             float2 uv = lerp(state.moonUv.xy, state.moonUv.zw, local * 0.5 + 0.5);
             float3 texel = srgbToLinear(celestialsAtlas.SampleLevel(uv, 0.0).rgb);
             float3 moonExtinction = transmittanceToSpace(transmittanceLut, state.viewerRadiusKm,
                     state.moonDir, state.moonAngularRadius);
+            moonExtinction *= cloudlyDistantTransmittance(worldPush, WorldRayOrigin(), state.moonDir);
             // The phase sprite already carries the lit shape; a contrast ramp suppresses its faint painted
             // halo while keeping that shape.
             float shape = smoothstep(0.0, 1.0, min(length(texel), 1.0));
-            color += discRadiance(state.moonIlluminance, state.moonDiscHalfAngle)
-                   * moonExtinction * texel * shape;
+            float3 moonRadiance = state.nativeCloudly
+                    ? circularDiscRadiance(state.moonIlluminance, state.moonDiscHalfAngle)
+                    : discRadiance(state.moonIlluminance, state.moonDiscHalfAngle);
+            color += moonRadiance * moonExtinction * texel * shape;
         }
         // No separate horizon gate on either body. A set sun or moon goes dark because its extinction is
         // zero below the horizon, matching the NEE visibility test.

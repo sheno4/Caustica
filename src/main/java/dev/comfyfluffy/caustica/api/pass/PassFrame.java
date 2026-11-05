@@ -1,0 +1,59 @@
+package dev.comfyfluffy.caustica.api.pass;
+
+import dev.comfyfluffy.caustica.api.resource.FrameResources;
+import dev.comfyfluffy.caustica.api.view.SceneView;
+import org.lwjgl.vulkan.VkCommandBuffer;
+
+/**
+ * What every pass gets while recording one frame, whatever stage it records in.
+ *
+ * <p>The command buffer is mid-recording: the engine owns submission and the barriers into and out of each
+ * stage, but barriers <em>between one pass's own dispatches</em> are that pass's job. Each compute dispatch
+ * binds its own pipeline and immutable descriptor set. Descriptors and their referenced resources must
+ * accompany the recorded frame until its GPU work retires.
+ *
+ * <p>Subtypes expose stage-specific resources: {@link PostEffectFrame} provides the scene image and effect
+ * chain, while {@link UiFrame} provides the UI layer and world-overlay resources.
+ *
+ * <p>The frame, command buffer, resource-retention capability, images, descriptor views, and subtype capabilities
+ * are borrowed only for the current {@link Pass#record} invocation on that thread. Do not retain any of
+ * them or call their methods after the callback returns. Commands recorded during the callback may continue
+ * using the borrowed GPU resources; the renderer owns that asynchronous lifetime.
+ */
+public interface PassFrame extends FrameResources {
+    /** The command buffer currently being recorded. Record work directly onto it. */
+    VkCommandBuffer commandBuffer();
+
+    /**
+     * The renderer's frame counter, increasing by one per rendered frame.
+     *
+     * <p>Use this value to share a stable snapshot across an extension's passes in the same frame.
+     */
+    long frameIndex();
+
+    /** Commit view history after command acceptance. Never called for an abandoned frame; must not block or throw. */
+    void whenSubmitted(Runnable callback);
+
+    /** Retire frame-local state after GPU completion or safe abandonment. Must not block or throw. */
+    void whenRetired(Runnable callback);
+
+    /** The immutable camera, entry scene, and containing medium sampled for this rendered frame. */
+    SceneView view();
+
+    /** Renderer time coherently sampled for this rendered frame, in seconds. */
+    double timeSeconds();
+
+    /** Physical metres represented by one coordinate unit in {@link #view()}'s entry scene. */
+    double metersPerSceneUnit();
+
+    /**
+     * The resolution the world was traced at this frame, which is not the display resolution: an upscaler
+     * reconstructs to display size afterwards.
+     *
+     * <p>The value may change after a display resize or an upscaler quality change. Rebuild trace-sized
+     * resources when it differs from the size used to create them.
+     */
+    int renderWidth();
+
+    int renderHeight();
+}

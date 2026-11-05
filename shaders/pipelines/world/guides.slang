@@ -21,6 +21,8 @@ public static float3 gv_albedo = float3(0.0, 0.0, 0.0);
 public static bool gv_emissive = false;
 public static float gv_rough = 0.0;
 public static float3 gv_hitCamRel = float3(0.0, 0.0, 0.0);       // primary-surface hit position relative to the current camera
+// Physical first hit stays separate when refraction replaces the RR guide endpoint; zero is environment.
+public static float gv_primaryDepth = 0.0;
 public static bool gv_motionUseRefracted = false; // true when the MV tracks the refracted hit (its own reprojection delta)
 // World-space displacement of the motion-guide surface since the previous frame (0 for static
 // terrain/sky, an entity's per-vertex/object motion for a dynamic hit).
@@ -278,6 +280,7 @@ public void writeGuides(int2 pix, float3 primaryDir, float2 jndc, float2 size, f
     gNormal[pix] = float4(gv_normal, gv_rough);
     gAlbedo[pix] = float4(gv_albedo, gv_emissive ? 1.0 : 0.0);
     gDepth[pix] = depth;
+    gCloudDepth[pix] = gv_primaryDepth;
     gMotion[pix] = motion;
     gSpecAlbedo[pix] = float4(specAlbedo, 1.0);
     gSpecMotion[pix] = specMotion;

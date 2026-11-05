@@ -31,6 +31,56 @@ import trace_ser;
 import lighting;
 import sky;
 import bindings;
+import cloudly_shadow;
+
+static CelestialLight cloudlySunLight = {};
+static CelestialLight cloudlyMoonLight = {};
+static float cloudlySunProbability = 1.0;
+
+// Uniform solid-angle caps have Ω = 2π(1-cos r), while a body's perpendicular illuminance is
+// L π sin²r. Their ratio converts the source illuminance into L/pdf without changing its energy.
+float capIlluminanceWeight(float halfAngle) {
+    return 2.0 / (1.0 + cos(halfAngle));
+}
+
+float finiteCelestialGgxD(float ndh, float alpha) {
+    if (worldPush.cloudlySunColor.w == 0.0) {
+        return ggxD(ndh, alpha);
+    }
+    float cosine = saturate(ndh);
+    float a2 = alpha * alpha;
+    float denominator = (1.0 - cosine) * (1.0 + cosine) + a2 * cosine * cosine;
+    return a2 / (PI * denominator * denominator);
+}
+
+CelestialLight sampleVertexCelestialLight(inout uint seed) {
+    if (worldPush.cloudlySunColor.w == 0.0) {
+        return celestialLight;
+    }
+    bool sun = rndf(seed) < cloudlySunProbability;
+    CelestialLight light;
+    if (sun) light = cloudlySunLight;
+    else light = cloudlyMoonLight;
+    float probability = sun ? cloudlySunProbability : 1.0 - cloudlySunProbability;
+    light.illuminance *= capIlluminanceWeight(light.halfAngle) / probability;
+    return light;
+}
+
+float3 sampleVertexCelestialDirection(CelestialLight light, inout uint seed) {
+    if (light.halfAngle <= 0.0) {
+        return light.dir;
+    }
+    if (worldPush.cloudlySunColor.w == 0.0) {
+        return sampleSquare(light.dir, light.halfAngle, seed);
+    }
+    float cosine = lerp(1.0, cos(light.halfAngle), rndf(seed));
+    float sine = sqrt(max(0.0, 1.0 - cosine * cosine));
+    float angle = 2.0 * PI * rndf(seed);
+    float3 right;
+    float3 up;
+    celestialSquareFrame(light.dir, right, up);
+    return cosine * light.dir + sine * (cos(angle) * right + sin(angle) * up);
+}
 
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
 // to colour the NEE sun/moonlight, the miss shader reads it to tint the visible discs and stars.
@@ -67,6 +117,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // diffuse-sampled continuation rays — those are already covered by the sun NEE, so the tiny disc
     // would be a double-counted firefly. Reset true on every specular/water bounce, false on a diffuse one.
     bool showCelestial = seg.showCelestial;
+    bool showNativeDiscs = seg.showCelestial;
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -83,13 +134,19 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // roulette, and paths guaranteed to end at the bounce cap in separate coherence groups.
         uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
         traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
-                               showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
+                               showCelestial && (worldPush.cloudlySunColor.w == 0.0 || showNativeDiscs),
+                               rayConeWidth, rayConeSpread, pathPhaseHint);
 #else
         traceRadiance(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
-                      showCelestial, rayConeWidth, rayConeSpread);
+                      showCelestial && (worldPush.cloudlySunColor.w == 0.0 || showNativeDiscs),
+                      rayConeWidth, rayConeSpread);
 #endif
 
         if (payload.hitT < 0.0) {
+            // The native atmosphere composes primary background rays after world reconstruction.
+            if (bounce == 0 && worldPush.cloudlySunColor.w != 0.0) {
+                break;
+            }
             // A ray still in water should leave through a water interface. A miss instead means the
             // streamed/open volume has no known exit; do not reinterpret that unknown region as air
             // and reveal sky.
@@ -183,6 +240,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 }
             }
             showCelestial = true; // specular interface: the continuation ray may see the sun/moon disc
+            showNativeDiscs = true;
             if (bounce >= rrStart) {
                 float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
                 if (rndf(seed) > q) {
@@ -199,11 +257,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         if (material == MATERIAL_PARTICLE) {
             float3 albedo = payloadAlbedo();
 
-            float3 lightDir = celestialLight.dir;
-            float lightHalfAngle = celestialLight.halfAngle;
-            if (lightHalfAngle > 0.0) {
-                lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
-            }
+            CelestialLight vertexLight = sampleVertexCelestialLight(seed);
+            float3 lightDir = sampleVertexCelestialDirection(vertexLight, seed);
             // Billboards are effectively two-sided receivers. Bias from the side facing the light; shadow
             // rays exclude particles anyway, but this keeps the origin sane when the light is behind the
             // camera side.
@@ -211,9 +266,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             float ndl = abs(signedNdl);
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
-                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
+                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance
+                        * cloudlyDistantTransmittance(worldPush, hitPos, vertexLight.dir);
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
-                    L += throughput * albedo * INV_PI * celestialLight.illuminance * ndl * vis;
+                    L += throughput * albedo * INV_PI * vertexLight.illuminance * ndl * vis;
                 }
             }
 
@@ -236,6 +292,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             rd = cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse receiver: direct sun/moon was handled by NEE above
+            showNativeDiscs = false;
             continue;
         }
 
@@ -274,20 +331,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             L += throughput * albedo * emission;
         }
 
-        // NEE: direct light from the dominant celestial body (sun by day, moon by night) — Lambert
-        // diffuse + GGX specular, one shadow ray. Jitter the light direction within its square angular
-        // extent (celestialLight.halfAngle) so the shadow ray samples the light's quad — soft penumbrae
-        // over accumulation. The same sampled direction drives ndl, the shadow ray, and the specular
-        // half-vector.
-        float3 lightDir = celestialLight.dir;
-        float lightHalfAngle = celestialLight.halfAngle;
-        if (lightHalfAngle > 0.0) {
-            lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
-        }
+        // Native NEE selects both bodies with their light-selection probability in the estimator.
+        // One direction drives the BRDF and visibility, including the native field's matching light.
+        CelestialLight vertexLight = sampleVertexCelestialLight(seed);
+        float3 lightDir = sampleVertexCelestialDirection(vertexLight, seed);
         float ndl = max(0.0, dot(n, lightDir));
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(p, lightDir, 10000.0);
-            float3 vis = shadow.transmittance;
+            float3 vis = shadow.transmittance
+                    * cloudlyDistantTransmittance(worldPush, hitPos, vertexLight.dir);
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
             // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
             // so it applies to the whole NEE term (diffuse + specular).
@@ -296,15 +348,17 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             }
             if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                 float3 brdf = diffAlb * INV_PI; // Lambertian diffuse (f = albedo/PI)
-                float3 h = normalize(lightDir + v);
-                float ndh = max(0.0, dot(n, h));
-                float ndv = max(1.0e-4, dot(n, v));
-                float vdh = max(0.0, dot(v, h));
-                float D = ggxD(ndh, rough);
-                float G = ggxG1(ndv, rough) * ggxG1(ndl, rough); // separable Smith masking
-                float3 F = fresnelSchlick(vdh, F0);
-                brdf += (D * G) * F / (4.0 * ndv * ndl); // Cook–Torrance specular
-                L += throughput * brdf * celestialLight.illuminance * ndl * vis;
+                if (!exactSpecular || worldPush.cloudlySunColor.w == 0.0) {
+                    float3 h = normalize(lightDir + v);
+                    float ndh = max(0.0, dot(n, h));
+                    float ndv = max(1.0e-4, dot(n, v));
+                    float vdh = max(0.0, dot(v, h));
+                    float D = finiteCelestialGgxD(ndh, rough);
+                    float G = ggxG1(ndv, rough) * ggxG1(ndl, rough);
+                    float3 F = fresnelSchlick(vdh, F0);
+                    brdf += (D * G) * F / (4.0 * ndv * ndl);
+                }
+                L += throughput * brdf * vertexLight.illuminance * ndl * vis;
             }
         }
 
@@ -330,7 +384,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
                 VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
-                float3 visB = shadowBack.transmittance;
+                float3 visB = shadowBack.transmittance
+                        * cloudlyDistantTransmittance(worldPush, hitPos, vertexLight.dir);
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
                 // flicker with the same light bands as the floor around it.
                 if (medium.current.water && waterWaves && shadowBack.waterHitT > 0.0) {
@@ -339,7 +394,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 }
                 if (max(visB.r, max(visB.g, visB.b)) > 0.0) {
                     float cosT = dot(lightDir, rd);
-                    L += throughput * diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * backNdl * celestialLight.illuminance * visB;
+                    L += throughput * diffAlb * sss * SSS_STRENGTH * hg(cosT, SSS_G) * backNdl * vertexLight.illuminance * visB;
                 }
             }
         }
@@ -376,13 +431,17 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             }
             ro = p;
             rd = l;
-            showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
+            // Native finite lobes receive the discs through NEE. Only delta paths sample their
+            // visible discs here, so the two estimators have disjoint emitter contributions.
+            showCelestial = true;
+            showNativeDiscs = exactSpecular;
         } else {
             throughput *= diffAlb / (1.0 - ps);
             ro = p;
             rd = cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
+            showNativeDiscs = false;
         }
 
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.
@@ -405,6 +464,26 @@ void main() {
     celestialLight = dominantCelestialLight(skyState(worldPush), transmittanceLut);
     // The path integral is ACEScg end to end; sky.slang works in linear BT.709, so this is the one seam.
     celestialLight.illuminance = bt709ToAcesCg(celestialLight.illuminance);
+    if (worldPush.cloudlySunColor.w != 0.0) {
+        SkyState state = skyState(worldPush);
+        cloudlySunLight = nativeCelestialLight(state, true, transmittanceLut);
+        cloudlyMoonLight = nativeCelestialLight(state, false, transmittanceLut);
+        float sunWeight = dot(cloudlySunLight.illuminance, float3(0.2126, 0.7152, 0.0722))
+                * capIlluminanceWeight(cloudlySunLight.halfAngle);
+        float moonWeight = dot(cloudlyMoonLight.illuminance, float3(0.2126, 0.7152, 0.0722))
+                * capIlluminanceWeight(cloudlyMoonLight.halfAngle);
+        if (sunWeight > 0.0 && moonWeight > 0.0) {
+            // rndf has exactly 2^24 outcomes; use a representable probability and retain support
+            // for both positive emitters even when one body is much dimmer than the other.
+            float outcomes = 16777216.0;
+            float choices = floor(sunWeight / (sunWeight + moonWeight) * outcomes + 0.5);
+            cloudlySunProbability = clamp(choices, 1.0, outcomes - 1.0) / outcomes;
+        } else {
+            cloudlySunProbability = moonWeight > 0.0 ? 0.0 : 1.0;
+        }
+        cloudlySunLight.illuminance = bt709ToAcesCg(cloudlySunLight.illuminance);
+        cloudlyMoonLight.illuminance = bt709ToAcesCg(cloudlyMoonLight.illuminance);
+    }
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;
     int2 pix = int2(dispatchIndex);

@@ -59,7 +59,7 @@ public final class CausticaConfig {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Reflex.ENABLED, Rt.Exposure.MODE, Rt.Tonemap.GAMMA, Rt.FrameStats.ENABLED,
-            Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
+            Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Rt.Cloudly.ENABLED, Ngx.PATH,
         };
     }
 
@@ -521,6 +521,21 @@ public final class CausticaConfig {
     }
 
     public static final class Rt {
+        public static final class Cloudly {
+            public static final BooleanSetting ENABLED = bool("caustica.rt.cloudly", "sky.cloudly.enabled", true);
+            public static final StringSetting SCENE = string("caustica.rt.cloudly.scene", "sky.cloudly.scene",
+                    "hangar", value -> {
+                        String name = value.toLowerCase(java.util.Locale.ROOT);
+                        return List.of("hangar", "mission3", "mission11").contains(name) ? name : "hangar";
+                    });
+            public static final IntSetting HEIGHT_OFFSET_BLOCKS = clampedInt("caustica.rt.cloudly.heightOffset",
+                    "sky.cloudly.height-offset-blocks", 0, -16000, 16000);
+            public static final FloatSetting MAX_DISTANCE_KM = clampedFloat("caustica.rt.cloudly.maxDistanceKm",
+                    "sky.cloudly.max-distance-km", 200.0f, 1.0f, 200.0f);
+
+            private Cloudly() { }
+        }
+
         public static final BooleanSetting ENABLED = bool("caustica.rt", "enabled", true);
         public static final IntSetting WORKER_THREADS =
                 intAtLeast("caustica.rt.workerThreads", "worker-threads", defaultWorkerThreads(), 1);

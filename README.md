@@ -7,6 +7,8 @@ features while keeping Minecraft's familiar UI and gameplay intact.
 Caustica is early software. Expect bugs, missing visual cases, and frequent
 changes while the renderer is being built.
 
+The `ace-combat-sky-main` branch adds the bundled AC8 Cloudly scenes to the main renderer. Local bundle requirements and validation scope are documented in [AC8 Cloudly on main](docs/ACE_COMBAT_SKY.md).
+
 ![Caustica ray-traced Minecraft scene](docs/gallery/2026-07-09_21.25.14.jpg)
 
 ## Links

@@ -88,6 +88,12 @@ public struct WorldPush {
     // near mid-grey at any scene brightness; the display pass divides it back out, so the two cancel
     // exactly and this cannot change the image. 1.0 disables it.
     public float    preExposure;
+    // Native sky selection and solar spectrum. RGB stays linear BT.709 until the transport boundary.
+    public float4   cloudlySunColor;      // xyz source solar RGB, w native sky active
+    // The submitted native cloud field is sampled from camera-relative host positions mapped to X,-Z,Y.
+    public float4   cloudlyShadowOrigin;  // xyz source UV at the camera, w field available
+    public float4   cloudlyShadowScale;   // xyz metres per block divided by source grid extent
+    public float4   cloudlyShadowLight;   // xyz the field's distant-light direction in host coordinates
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the

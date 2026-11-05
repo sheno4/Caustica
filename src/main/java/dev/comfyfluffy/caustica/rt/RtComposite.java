@@ -70,6 +70,10 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.rt.cloudly.RtCloudlyFrame;
+import dev.comfyfluffy.caustica.rt.cloudly.RtCloudlyRenderer;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySurfaceShadow;
 
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
@@ -122,7 +126,7 @@ public final class RtComposite {
     }
 
     private static final int WATER_ANCHOR_MASK = 4095;
-    // The versioned look package owns every photometric anchor and the sky geometry. Its sun illuminance is the
+    // The versioned look package supplies the default photometric anchors and sky geometry. Its sun illuminance is the
     // photometric solar constant at the top of the atmosphere; the shader's transmittance LUT brings that
     // to ~117,000 lux under a zenith sun and reddens/dims it through sunset, and because world.rmiss tints
     // the visible disc from the same LUT, the light on terrain and the sky's sunset are one number.
@@ -177,6 +181,8 @@ public final class RtComposite {
     // Atmosphere LUTs (transmittance + multiple scattering + this frame's sky view). Device-lifetime; the
     // two static tables are baked on the first frame that records the pass.
     private RtSkyLut skyLut;
+    private RtCloudlyRenderer cloudly;
+    private long cloudlyShadowSampler;
     private RtDebugPresentPipeline debugPresentPipeline;
     private RtToneLut sdrToneLut;
     private RtToneLut hdrToneLut;
@@ -241,6 +247,7 @@ public final class RtComposite {
     private RtImage gNormal;
     private RtImage gAlbedo;
     private RtImage gDepth;
+    private RtImage gCloudDepth;
     private RtImage gMotion;
     private RtImage gSpecAlbedo;
     private RtImage gSpecMotion;
@@ -666,6 +673,10 @@ public final class RtComposite {
                 return false;
             }
             refreshMaterialBindingsIfNeeded(ctx);
+            if (cloudly == null && CausticaConfig.Rt.Cloudly.ENABLED.value()) {
+                cloudly = new RtCloudlyRenderer(ctx);
+            }
+            if (cloudly != null) cloudly.prepare(camY);
             updateMotion();
             recordFrame(ctx, active, nativeColor);
             if (!loggedActive) {
@@ -857,6 +868,7 @@ public final class RtComposite {
         worldPipeline.setExtraStorageImage(3, gMotion.view);
         worldPipeline.setExtraStorageImage(4, gSpecAlbedo.view);
         worldPipeline.setExtraStorageImage(5, gSpecMotion.view);
+        worldPipeline.setCloudlyDepth(gCloudDepth.view);
     }
 
     private void destroyGuideImages() {
@@ -871,6 +883,10 @@ public final class RtComposite {
         if (gDepth != null) {
             gDepth.destroy();
             gDepth = null;
+        }
+        if (gCloudDepth != null) {
+            gCloudDepth.destroy();
+            gCloudDepth = null;
         }
         if (gMotion != null) {
             gMotion.destroy();
@@ -964,7 +980,8 @@ public final class RtComposite {
         // Guide buffers match the trace (render) resolution; DLSS-RR consumes them at render res.
         gNormal = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide normal roughness " + renderW + "x" + renderH);
         gAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide diffuse albedo " + renderW + "x" + renderH);
-        gDepth = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "guide linear depth " + renderW + "x" + renderH);
+        gDepth = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "guide reverse depth " + renderW + "x" + renderH);
+        gCloudDepth = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "physical primary reverse depth " + renderW + "x" + renderH);
         gMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderW + "x" + renderH);
         gSpecAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide specular albedo " + renderW + "x" + renderH);
         gSpecMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide specular motion " + renderW + "x" + renderH);
@@ -1031,6 +1048,7 @@ public final class RtComposite {
         RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
         // Reuse a completed readback slot, then latch one pre-exposure value for both raygen and resolve.
         // This belongs after the timeline snapshot and before any world push data is written.
+        exposure.cloudlySkyActive(cloudly != null && cloudly.skyPreset() != null);
         exposure.beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
         RtEntities.FrameEntities frameEntities = null;
@@ -1038,6 +1056,9 @@ public final class RtComposite {
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         RtTerrain terrain = RtTerrain.currentOrNull();
+        RtCloudlyFrame cloudFrame = null;
+        CloudlySurfaceShadow.Snapshot cloudShadow = null;
+        try {
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
             // A debug view observes this ordinary path; it never changes jitter or disables RR.
@@ -1060,6 +1081,13 @@ public final class RtComposite {
             RtBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
+            if (cloudly != null && cloudly.skyPreset() != null) {
+                cloudFrame = cloudly.frame(cmd, frameCounter, System.nanoTime() / 1.0e9,
+                        camX, camY, camZ, frameInvViewProj.get(new float[16]), jitterX, jitterY,
+                        exposure.preExposure(), rrOutput, gCloudDepth);
+                cloudShadow = cloudly.surfaceShadow();
+                if (cloudShadow != null) cloudShadow.prepareRead(cloudFrame);
+            }
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
             // submerged, fixing the air→water first-segment orientation) and animated water normals.
             // Bit 1 remains unused to avoid conflicting with stale external readers.
@@ -1121,6 +1149,7 @@ public final class RtComposite {
             // resolved slot rides along with the uploadPending() call right below.
             BreakEntry[] breaking = breakingEntries(terrain);
             SkyPush sky = skyPush();
+            CloudlyPush cloudPush = cloudlyPush(cloudShadow);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
@@ -1156,7 +1185,8 @@ public final class RtComposite {
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
-                    exposure.preExposure()
+                    exposure.preExposure(),
+                    cloudPush.sunColor(), cloudPush.shadowOrigin(), cloudPush.shadowScale(), cloudPush.shadowLight()
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
@@ -1175,6 +1205,9 @@ public final class RtComposite {
                         graphicsUse);
             }
             active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
+            if (cloudShadow != null) {
+                active.setCloudlyShadow(cloudly.imageView(cloudShadow.sampledIndex()), cloudlyShadowSampler(ctx));
+            }
             currentTlasHandle = frameTlas.accel.handle;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
                 RtAccel.recordTlasBuild(ctx, cmd, frameTlas);
@@ -1235,6 +1268,13 @@ public final class RtComposite {
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // rrOutput visible to exposure histogram
 
+            if (cloudFrame != null) {
+                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "native Cloudly reconstruction");
+                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.cloudly")) {
+                    cloudly.record(cloudFrame, rrOutput, stack);
+                }
+            }
+
             // Auto-exposure meters rrOutput (the post-RR, denoised/converged image), not the raw
             // pre-RR trace: RR has no notion of exposure (DLSS-RR Integration Guide §3.7 — ignore
             // exposure/auto-exposure/sharpness entirely for RR), so this is purely our own metering
@@ -1293,10 +1333,15 @@ public final class RtComposite {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
         encoder.execute(cmd); // deferred into the frame's submission — correct for per-frame work
+        if (cloudFrame != null) cloudFrame.submitted(gpuExecutor, graphicsUse);
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
         RtEntities.INSTANCE.markGraphicsUse(frameEntities, graphicsUse);
         exposure.markStateReadbackUse(graphicsUse);
+        } finally {
+            if (cloudFrame != null) cloudFrame.close();
+            if (cloudShadow != null) cloudShadow.close();
+        }
     }
 
     /**
@@ -1339,9 +1384,47 @@ public final class RtComposite {
 
     private record CelestialUv(Float4 sun, Float4 moon) {}
 
+    private record CloudlyPush(Float4 sunColor, Float4 shadowOrigin, Float4 shadowScale, Float4 shadowLight) {}
+
+    private CloudlyPush cloudlyPush(CloudlySurfaceShadow.Snapshot shadow) {
+        CloudlySkyPreset preset = cloudly == null ? null : cloudly.skyPreset();
+        Float4 color = preset == null ? new Float4(1f, 1f, 1f, 0f)
+                : new Float4((float) preset.sunColorLinearBt709().red(),
+                (float) preset.sunColorLinearBt709().green(), (float) preset.sunColorLinearBt709().blue(), 1f);
+        Float4 zero = new Float4(0f, 0f, 0f, 0f);
+        if (shadow == null) return new CloudlyPush(color, zero, zero, zero);
+        var grid = shadow.grid();
+        double units = RtCloudlyRenderer.METERS_PER_BLOCK;
+        var level = Minecraft.getInstance().level;
+        double seaLevel = level == null ? 0 : level.getSeaLevel();
+        return new CloudlyPush(color,
+                new Float4((float) ((camX * units - grid.minX()) / grid.width()),
+                        (float) ((-camZ * units - grid.minY()) / grid.height()),
+                        (float) (((camY - seaLevel) * units - grid.minZ()) / grid.depth()), 1f),
+                new Float4((float) (units / grid.width()), (float) (units / grid.height()),
+                        (float) (units / grid.depth()), 0f),
+                new Float4(shadow.lightX(), shadow.lightY(), shadow.lightZ(), 0f));
+    }
+
+    private long cloudlyShadowSampler(RtContext ctx) {
+        if (cloudlyShadowSampler != 0L) return cloudlyShadowSampler;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var create = VkSamplerCreateInfo.calloc(stack).sType$Default()
+                    .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
+                    .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                    .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                    .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                    .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxLod(0f);
+            var result = stack.longs(0L);
+            int status = VK10.vkCreateSampler(ctx.vk(), create, null, result);
+            if (status != VK10.VK_SUCCESS) throw new IllegalStateException("Cloudly shadow sampler creation failed: " + status);
+            return cloudlyShadowSampler = result.get(0);
+        }
+    }
+
     /**
-     * This frame's sky state: Minecraft's four eased celestial angles, its star brightness, the moon
-     * phase, and the look package's sky constants. Nothing else.
+     * This frame's sky state: Minecraft's eased celestial angles, star brightness and moon phase,
+     * with photometry and emitter angles from the active native preset or the look package.
      *
      * <p>Every direction, colour, level and atmospheric transmittance is derived in {@code sky.slang}
      * from these values, keeping atmospheric evaluation in one implementation.
@@ -1352,10 +1435,9 @@ public final class RtComposite {
      *
      * <p>The sky-view LUT's viewer altitude tracks the camera's real world height above sea level, not
      * the look package's fixed reference altitude: a build-limit mod or a rocket/space mod climbing
-     * toward the 100 km shell should see the atmosphere actually thin out. The block-to-km scale is
-     * exaggerated 10x (100 blocks = 1 km, not the literal 1000) — vanilla's build range is under half a
-     * real km, which would put the whole playable height range within a rounding error of one LUT texel
-     * row; at 100:1 the same climb is a few km, enough to see the horizon and zenith actually shift.
+     * toward the 100 km shell should see the atmosphere actually thin out. An active native preset uses
+     * the same metre-per-block scale as its composition pass. The default sky uses 100 blocks per
+     * kilometre, allowing the LUT's horizon and zenith to change across Minecraft's build range.
      * Clamped to [0, 99] km so an absurd Y (or one beyond the modelled 100 km shell) degrades to the
      * shell edge instead of an LUT sample outside its baked domain. The shader applies its own lower
      * floor — see {@code sky.MIN_VIEWER_ALTITUDE_KM}, which is set by what fp32 can resolve at planet
@@ -1366,7 +1448,9 @@ public final class RtComposite {
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         var probe = mc.gameRenderer.mainCamera().attributeProbe();
         int seaLevel = mc.level != null ? mc.level.getSeaLevel() : 0;
-        float viewerAltitudeKm = Math.clamp((float) ((camY - seaLevel) / 100.0), 0.0f, 99.0f);
+        CloudlySkyPreset preset = cloudly == null ? null : cloudly.skyPreset();
+        float altitudeScale = preset == null ? .01f : (float) (RtCloudlyRenderer.METERS_PER_BLOCK / 1000.0);
+        float viewerAltitudeKm = Math.clamp((float) (camY - seaLevel) * altitudeScale, 0.0f, 99.0f);
         float toRadians = (float) (Math.PI / 180.0);
         float sunAngle = probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * toRadians;
         float moonAngle = probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * toRadians;
@@ -1382,14 +1466,15 @@ public final class RtComposite {
         CelestialUv uv = celestialUv(moonPhase);
         return new SkyPush(
                 new Float4(sunAngle, moonAngle, starAngle, starBrightness),
-                new Float4(lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
+                new Float4(preset == null ? lighting.sunIlluminanceLux() : (float) preset.sunIlluminanceLux(),
+                        preset == null ? lighting.moonIlluminanceLux() : (float) preset.moonIlluminanceLux(),
                         lighting.nightAirglowLuminanceCdM2(), lighting.starLuminanceCdM2()),
-                new Float4(sky.sunNoonSouthTiltDegrees() * toRadians,
-                        sky.sunAngularRadiusDegrees() * toRadians,
-                        sky.moonAngularRadiusDegrees() * toRadians,
+                new Float4(preset == null ? sky.sunNoonSouthTiltDegrees() * toRadians : (float) Math.toRadians(preset.noonTiltDegrees()),
+                        preset == null ? sky.sunAngularRadiusDegrees() * toRadians : (float) preset.sunAngularRadiusRadians(),
+                        preset == null ? sky.moonAngularRadiusDegrees() * toRadians : (float) preset.moonDiscHalfAngleRadians().orElse(sky.moonAngularRadiusDegrees() * toRadians),
                         lighting.moonPhaseFixedFraction()),
-                new Float4(sky.sunDiscHalfAngleDegrees() * toRadians,
-                        sky.moonDiscHalfAngleDegrees() * toRadians,
+                new Float4(preset == null ? sky.sunDiscHalfAngleDegrees() * toRadians : (float) preset.sunDiscHalfAngleRadians(),
+                        preset == null ? sky.moonDiscHalfAngleDegrees() * toRadians : (float) preset.moonDiscHalfAngleRadians().orElse(sky.moonDiscHalfAngleDegrees() * toRadians),
                         viewerAltitudeKm, moonPhase),
                 new Float4(sky.groundAlbedo(), sky.horizonSoftenDegrees() * toRadians, 0f, 0f),
                 uv.sun(),
@@ -1464,6 +1549,11 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
+        if (cloudly != null) { cloudly.close(); cloudly = null; }
+        if (cloudlyShadowSampler != 0L) {
+            VK10.vkDestroySampler(RtContext.get().vk(), cloudlyShadowSampler, null);
+            cloudlyShadowSampler = 0L;
+        }
         if (RtDlssRr.enabled()) {
             RtDlssRr.INSTANCE.destroy();
         }

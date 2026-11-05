@@ -1,0 +1,25 @@
+# AC8 Cloudly on main
+
+This branch starts from `sheno4/Caustica` main commit `330acd2` and ports the native Cloudly implementation from `94bb0218`. It uses main's Vulkan descriptor sets, asynchronous GPU executor, world renderer and ACES 2.0 display pipeline.
+
+The bundled Fabric build contains the Hangar, Mission 3 and Mission 11 scenes. Video Settings offers Chinese and English controls for enabling the sky, changing scenes, moving cloud layers from −16000 to +16000 blocks, and setting cloud distance from 1 to 200 km. Scene preparation happens in the background. A ready scene replaces the previous scene at a frame boundary. Height edits settle for 250 ms before rebuilding cloud history, shadows and AO.
+
+The native density bake, atmosphere bake, cloud trace, reconstruction and foreground-cloud composition use the original recipes. All 81 private programs are compiled to SPIR-V 1.5 with fixed descriptor-set bindings. The noise generator's seven pushed resource indices have an explicit binding mapping. Parameter and camera byte layouts retain their source offsets. Pipeline subgroup size is fixed at 32 and the device checks the required arithmetic, storage-image and subgroup features.
+
+Cloud composition runs after world reconstruction and before exposure, bloom, ACES 2.0 mapping and frame generation. A separate physical first-hit depth image preserves cloud occlusion while the existing reconstruction depth continues to describe transmitted guide surfaces. Cloudy sky colors cross the BT.709/ACEScg boundary explicitly. The native cloud shadow volume attenuates matching sun or moon illumination at the receiving position. Finite lights retain the host lighting path. Automatic exposure for an active native sky has +8 EV headroom for physical moonlight.
+
+Frame constants, views, pipelines and descriptor sets remain owned until their GPU use retires. Retired invocation descriptor sets are reusable. Preparation outputs publish after compute completion. Scene changes, cloud settings and world changes invalidate their associated temporal data.
+
+## Local bundle
+
+Game-derived textures, programs and parameter templates stay outside the Git checkout. The local build reads a prepared descriptor-set bundle with the following property.
+
+```powershell
+./gradlew.bat jar -PngxPlatforms=windows-x64 '-PcloudlyBundleInputRoot=../analysis-game/bundle-main.1.private'
+```
+
+The build requires JDK 25, `SLANG_SDK`, `VULKAN_SDK`, the DLSS SDK and a matching compiled NGX shim. `SLANG_SDK` selects the build-time Slang compiler. The single Fabric JAR includes the prepared sky resources and Windows runtime libraries. An additional installed sky pack is unnecessary.
+
+The public source-only CI build has no private sky resources. Compilation and package checks cover Java, host shaders, all native programs, manifests, hashes and bindings. Game rendering, frame rate and visual agreement with AC8 require in-game acceptance. This port has not launched Minecraft or run GPU or image-recognition tests.
+
+The Windows bundled artifact is `caustica-0.1.0-ac8-main.1.jar`, 134507657 bytes, SHA-256 `08cc557bc19262c33cbea008218c98f6f17122d0146b3eff6f252435e7680a90`. Its three scenes each contain 81 unique programs and retain their foreground-cloud history pair. Local compilation and package receipts accompany the artifact outside the checkout.

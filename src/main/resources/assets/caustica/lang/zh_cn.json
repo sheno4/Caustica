@@ -53,5 +53,16 @@
 	"caustica.options.rt.debugView.4": "粗糙度",
 	"caustica.options.rt.debugView.5": "运动",
 	"caustica.options.rt.debugView.6": "高光",
-	"caustica.options.rt.debugView.7": "高光运动"
+	"caustica.options.rt.debugView.7": "高光运动",
+  "caustica.options.rt.cloudly": "皇牌空战8天空",
+  "caustica.options.rt.cloudly.tooltip": "使用模组内置的原版Cloudly天空。",
+  "caustica.options.rt.cloudlyScene": "天空场景",
+  "caustica.options.rt.cloudlyScene.tooltip": "在世界内准备并自动切换场景。",
+  "caustica.options.rt.cloudlyScene.hangar": "机库",
+  "caustica.options.rt.cloudlyScene.mission3": "任务3",
+  "caustica.options.rt.cloudlyScene.mission11": "任务11",
+  "caustica.options.rt.cloudlyHeight": "云层高度偏移（格）",
+  "caustica.options.rt.cloudlyHeight.tooltip": "整体移动云层，范围-16000至16000格，停止编辑后生效。",
+  "caustica.options.rt.cloudlyDistance": "云层渲染距离",
+  "caustica.options.rt.cloudlyDistance.tooltip": "云层在有效距离的最后5%逐渐消失。"
 }

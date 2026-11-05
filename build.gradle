@@ -83,6 +83,9 @@ def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath 
 
 def resolveVulkanTool = { String name ->
 	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
+	if (name == "slangc" && System.getenv("SLANG_SDK")) {
+		return file("${System.getenv('SLANG_SDK')}/bin/slangc${exe}").absolutePath
+	}
 	def sdk = System.getenv("VULKAN_SDK")
 	if (sdk) {
 		def fromSdk = file("${sdk}/Bin/${name}${exe}")
@@ -218,6 +221,29 @@ sourceSets.main.java.srcDir(files(rtBindingsGenRoot).builtBy(generateRtBindings)
 // Emit the .spv into the main resources so they land in the jar / on the runClient classpath at the
 // same /caustica/shaders/ path the pipeline loaders read. builtBy wires the dependency.
 sourceSets.main.resources.srcDir(files(shaderGenRoot).builtBy(compileShaders))
+
+def cloudlyBundleInput = providers.gradleProperty("cloudlyBundleInputRoot")
+if (cloudlyBundleInput.isPresent()) {
+	def cloudlyBundle = file(cloudlyBundleInput.get())
+	if (cloudlyBundle.toPath().toAbsolutePath().normalize().startsWith(projectDir.toPath().toAbsolutePath().normalize())) {
+		throw new GradleException("Private Cloudly resources must be supplied from outside the checkout")
+	}
+	processResources {
+		from(cloudlyBundle) { into "caustica/cloudly" }
+		doFirst {
+			["", "scenes/mission3/", "scenes/mission11/"].each { scene ->
+				def manifestFile = new File(cloudlyBundle, scene + "manifest.json")
+				def manifest = new groovy.json.JsonSlurper().parse(manifestFile)
+				def projectFile = new File(manifestFile.parentFile, manifest.source.nativePipelineManifest)
+				def nativeProject = new groovy.json.JsonSlurper().parse(projectFile)
+				def library = new groovy.json.JsonSlurper().parse(new File(projectFile.parentFile, nativeProject.library))
+				if (library.descriptorSetBindings != true || library.programs*.id.toSet().size() != library.programs.size()) {
+					throw new GradleException("Cloudly bundle requires unique programs with main descriptor-set bindings")
+				}
+			}
+		}
+	}
+}
 
 def ngxNativeGenRoot = layout.buildDirectory.dir("generated/ngx-natives")
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(java.util.Locale.ROOT) }

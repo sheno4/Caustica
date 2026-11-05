@@ -488,6 +488,8 @@ public struct SkyState {
     public float  moonPhaseIndex;      // 0 full .. 4 new
     public float4 sunUv;
     public float4 moonUv;
+    public float3 sunColor;
+    public bool nativeCloudly;
 };
 
 /** Minecraft's moon phases run 0 = full to 4 = new, then mirror back toward full through phase 7. */
@@ -519,6 +521,8 @@ public SkyState skyState(WorldPush push) {
     s.moonPhaseIndex = push.skyLook2.w;
     s.sunUv = push.sunUv;
     s.moonUv = push.moonUv;
+    s.nativeCloudly = push.cloudlySunColor.w != 0.0;
+    s.sunColor = s.nativeCloudly ? push.cloudlySunColor.xyz : float3(1.0);
     return s;
 }
 
@@ -527,6 +531,18 @@ public struct CelestialLight {
     public float3 illuminance;  // linear BT.709, lux at the viewer
     public float  halfAngle;
 };
+
+/** Each native body retains its own spectrum, atmospheric extinction, and visible sampling radius. */
+public CelestialLight nativeCelestialLight(SkyState s, bool sun, Sampler2D transmittanceLut) {
+    CelestialLight light;
+    light.dir = sun ? s.sunDir : s.moonDir;
+    light.halfAngle = sun ? s.sunDiscHalfAngle : s.moonDiscHalfAngle;
+    float atmosphericRadius = sun ? s.sunAngularRadius : s.moonAngularRadius;
+    float3 illuminance = sun ? s.sunIlluminance * s.sunColor : float3(s.moonIlluminance);
+    light.illuminance = illuminance
+            * transmittanceToSpace(transmittanceLut, s.viewerRadiusKm, light.dir, atmosphericRadius);
+    return light;
+}
 
 /**
  * The single directional light NEE samples: whichever of the two bodies actually delivers more light
@@ -537,7 +553,7 @@ public struct CelestialLight {
  * moment the choice flips, making the handoff invisible without an authored smoothstep.
  */
 public CelestialLight dominantCelestialLight(SkyState s, Sampler2D transmittanceLut) {
-    float3 sunLux = s.sunIlluminance
+    float3 sunLux = s.sunIlluminance * s.sunColor
             * transmittanceToSpace(transmittanceLut, s.viewerRadiusKm, s.sunDir, s.sunAngularRadius);
     // Moonlight is sunlight reflected off a grey body: its colour is the sun's, not a cool tint. The blue
     // cast of a moonlit night is the viewer's own scotopic response, which belongs in the look transform,
@@ -549,7 +565,7 @@ public CelestialLight dominantCelestialLight(SkyState s, Sampler2D transmittance
     if (dot(sunLux, float3(0.2126, 0.7152, 0.0722)) >= dot(moonLux, float3(0.2126, 0.7152, 0.0722))) {
         light.dir = s.sunDir;
         light.illuminance = sunLux;
-        light.halfAngle = s.sunAngularRadius;
+        light.halfAngle = s.nativeCloudly ? s.sunDiscHalfAngle : s.sunAngularRadius;
     } else {
         light.dir = s.moonDir;
         light.illuminance = moonLux;

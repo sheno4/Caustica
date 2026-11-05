@@ -40,6 +40,7 @@ public final class RtExposure {
     private String cachedCurveSpec;
     private ExposureCurve cachedCurve;
     private boolean resetRequested = true;
+    private boolean cloudlySkyActive;
     private int resetSequence;
     /** This frame's latched pre-exposure; see {@link #beginFrame(RtGpuExecutor.GraphicsUseWaiter)}. */
     private float framePreExposure = 1.0f;
@@ -64,6 +65,11 @@ public final class RtExposure {
 
     public boolean ready() {
         return image != null;
+    }
+
+    /** Physical moonlight needs exposure headroom beyond the default daytime look limit. */
+    public void cloudlySkyActive(boolean active) {
+        cloudlySkyActive = active;
     }
 
     public RtBuffer stateBuffer() {
@@ -400,7 +406,7 @@ public final class RtExposure {
         return new AutoConfig(
                 CausticaConfig.Rt.Exposure.KEY.value(),
                 CausticaConfig.Rt.Exposure.minEv(),
-                CausticaConfig.Rt.Exposure.maxEv(),
+                cloudlySkyActive ? Math.max(8.0f, CausticaConfig.Rt.Exposure.maxEv()) : CausticaConfig.Rt.Exposure.maxEv(),
                 CausticaConfig.Rt.Exposure.ADAPT_DARKEN.value(),
                 CausticaConfig.Rt.Exposure.ADAPT_BRIGHTEN.value(),
                 manualEv(),

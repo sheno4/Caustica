@@ -62,6 +62,10 @@ public PathSegment tracePrimary(PathSegment seg,
 
         float3 n = payloadNormal();
         float3 hitPos = ro + rd * payload.hitT;
+        if (bounce == 0) {
+            float4 primaryClip = mul(worldPush.curViewProj, float4(hitPos - worldPush.camOffset, 1.0));
+            gv_primaryDepth = primaryClip.w > 0.0 ? primaryClip.z / primaryClip.w : 0.0;
+        }
         uint material = payloadMaterial();
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) {
             float rough = material == MATERIAL_PARTICLE

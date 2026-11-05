@@ -49,7 +49,11 @@ public final class RtVideoOptions {
             entities(),
             particles(),
             waterWaves(),
-            dlssQuality()
+            dlssQuality(),
+            bool("caustica.options.rt.cloudly", CausticaConfig.Rt.Cloudly.ENABLED),
+            cloudlyScene(),
+            cloudlyHeight(),
+            cloudlyDistance()
         ));
         if (CausticaConfig.Rt.Hdr.swapchainPqAvailable()) {
             options.add(hdrEnabled());
@@ -71,6 +75,31 @@ public final class RtVideoOptions {
             new OptionInstance.Enum<>(List.of("auto", "manual"), Codec.STRING),
             setting.get(),
             setting::set);
+    }
+
+    private static OptionInstance<String> cloudlyScene() {
+        var setting = CausticaConfig.Rt.Cloudly.SCENE;
+        return new OptionInstance<>("caustica.options.rt.cloudlyScene",
+                OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.cloudlyScene.tooltip")),
+                (caption, value) -> Component.translatable("caustica.options.rt.cloudlyScene." + value),
+                new OptionInstance.Enum<>(List.of("hangar", "mission3", "mission11"), Codec.STRING),
+                setting.get(), setting::set);
+    }
+
+    private static OptionInstance<Integer> cloudlyHeight() {
+        var setting = CausticaConfig.Rt.Cloudly.HEIGHT_OFFSET_BLOCKS;
+        return new OptionInstance<>("caustica.options.rt.cloudlyHeight",
+                OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.cloudlyHeight.tooltip")),
+                Options::genericValueLabel, new OptionInstance.IntRange(-16000, 16000),
+                setting.value(), setting::set);
+    }
+
+    private static OptionInstance<Integer> cloudlyDistance() {
+        var setting = CausticaConfig.Rt.Cloudly.MAX_DISTANCE_KM;
+        return new OptionInstance<>("caustica.options.rt.cloudlyDistance",
+                OptionInstance.cachedConstantTooltip(Component.translatable("caustica.options.rt.cloudlyDistance.tooltip")),
+                (caption, value) -> Options.genericValueLabel(caption, Component.literal(value + " km")),
+                new OptionInstance.IntRange(1, 200), Math.round(setting.value()), value -> setting.set(value.floatValue()));
     }
 
     private static OptionInstance<Integer> manualEv() {

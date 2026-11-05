@@ -158,6 +158,9 @@ public final class RtPipeline {
                 binds.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                         .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
             }
+            binds.get(WORLD_CLOUD_DEPTH).binding(WORLD_CLOUD_DEPTH)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
             binds.get(WORLD_CELESTIALS).binding(WORLD_CELESTIALS)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1).stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR);
@@ -168,7 +171,16 @@ public final class RtPipeline {
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1)
                     .stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-            VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
+            binds.get(WORLD_CLOUD_SURFACE_TRANSMITTANCE).binding(WORLD_CLOUD_SURFACE_TRANSMITTANCE)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                    .descriptorCount(1)
+                    .stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+            var ordinaryBindingFlags = stack.callocInt(WORLD_SET_BINDING_COUNT);
+            ordinaryBindingFlags.put(WORLD_CLOUD_SURFACE_TRANSMITTANCE, VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT);
+            var ordinaryFlags = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack).sType$Default()
+                    .pBindingFlags(ordinaryBindingFlags);
+            VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default()
+                    .pNext(ordinaryFlags.address()).pBindings(binds);
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout");
             long dsl = p.get(0);
@@ -423,6 +435,20 @@ public final class RtPipeline {
         }
     }
 
+    /** Bind physical first-hit depth independently of the replaceable DLSS-RR guide endpoint. */
+    public void setCloudlyDepth(long imageView) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var info = VkDescriptorImageInfo.calloc(1, stack);
+            info.get(0).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            var write = VkWriteDescriptorSet.calloc(RING, stack);
+            for (int i = 0; i < RING; i++) {
+                write.get(i).sType$Default().dstSet(descriptorSets[i]).dstBinding(WORLD_CLOUD_DEPTH)
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(info);
+            }
+            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
+        }
+    }
+
     /** Bind the block albedo atlas into every ring slot. */
     public void setBlockAlbedoAtlas(long imageView, long sampler) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -450,6 +476,23 @@ public final class RtPipeline {
     public void setSkyLuts(long skyViewImageView, long transmittanceImageView, long sampler) {
         writeAtlasBinding(WORLD_SKY_VIEW, skyViewImageView, sampler);
         writeAtlasBinding(WORLD_TRANSMITTANCE, transmittanceImageView, sampler);
+    }
+
+    /**
+     * Writes the slot selected and waited by {@link #setTlas}. The caller keeps the sampled native
+     * field alive through that slot's graphics use; other in-flight slots retain their descriptors.
+     */
+    public void setCloudlyShadow(long imageView, long sampler) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var info = VkDescriptorImageInfo.calloc(1, stack);
+            info.get(0).sampler(sampler).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            var write = VkWriteDescriptorSet.calloc(1, stack);
+            write.get(0).sType$Default().dstSet(descriptorSets[currentSet])
+                    .dstBinding(WORLD_CLOUD_SURFACE_TRANSMITTANCE)
+                    .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                    .pImageInfo(info);
+            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
+        }
     }
 
     private void writeAtlasBinding(int binding, long imageView, long sampler) {

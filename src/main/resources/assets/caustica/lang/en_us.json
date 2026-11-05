@@ -58,5 +58,16 @@
 	"caustica.options.rt.debugView.6": "Specular",
 	"caustica.options.rt.debugView.7": "Specular Motion",
 	"caustica.options.rt.debugView.8": "Exposure False Color",
-	"caustica.options.rt.debugView.9": "Metering Weight"
+	"caustica.options.rt.debugView.9": "Metering Weight",
+  "caustica.options.rt.cloudly": "ACE COMBAT 8 sky",
+  "caustica.options.rt.cloudly.tooltip": "Render the bundled original Cloudly sky.",
+  "caustica.options.rt.cloudlyScene": "AC8 scene",
+  "caustica.options.rt.cloudlyScene.tooltip": "Prepare and switch sky scenes while the world remains open.",
+  "caustica.options.rt.cloudlyScene.hangar": "Hangar",
+  "caustica.options.rt.cloudlyScene.mission3": "Mission 3",
+  "caustica.options.rt.cloudlyScene.mission11": "Mission 11",
+  "caustica.options.rt.cloudlyHeight": "Cloud height offset",
+  "caustica.options.rt.cloudlyHeight.tooltip": "Move all cloud layers in blocks, from -16000 to 16000. Applies after editing pauses.",
+  "caustica.options.rt.cloudlyDistance": "Cloud render distance",
+  "caustica.options.rt.cloudlyDistance.tooltip": "Clouds fade over the last 5% of their configured distance."
 }

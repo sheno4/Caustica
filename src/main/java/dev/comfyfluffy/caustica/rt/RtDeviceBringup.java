@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VKCapabilitiesDevice;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
@@ -24,6 +25,9 @@ import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
+import org.lwjgl.vulkan.VkPhysicalDeviceSubgroupProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceSubgroupSizeControlFeaturesEXT;
+import org.lwjgl.vulkan.VkPhysicalDeviceSubgroupSizeControlPropertiesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapPropertiesEXT;
 import org.lwjgl.vulkan.VkPhysicalDevicePresentIdFeaturesKHR;
@@ -52,6 +56,8 @@ import static org.lwjgl.vulkan.KHRPresentId.VK_KHR_PRESENT_ID_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRPresentId.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR;
 import static org.lwjgl.vulkan.EXTRayTracingInvocationReorder.VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME;
 import static org.lwjgl.vulkan.EXTRayTracingInvocationReorder.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT;
+import static org.lwjgl.vulkan.EXTSubgroupSizeControl.VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME;
+import static org.lwjgl.vulkan.EXTSubgroupSizeControl.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
 
 /**
  * RT device bring-up. Enables the hardware ray-tracing device extensions and their
@@ -60,9 +66,9 @@ import static org.lwjgl.vulkan.EXTRayTracingInvocationReorder.VK_STRUCTURE_TYPE_
  * <p>Vanilla assembles a {@code VkPhysicalDeviceFeatures2} pNext chain from the
  * {@code Set<VulkanFeature>} (arg2) via {@code VulkanFeature.set} →
  * {@code findOrCreateStructInPNextChain} (dedup by sType), so {@code bufferDeviceAddress}
- * merges into the existing {@code VkPhysicalDeviceVulkan12Features} struct and the two
- * KHR structs are created fresh. BDA / descriptor-indexing / SPIR-V 1.4 are core on the
- * 1.4 device, so only three extension <i>names</i> are needed; the rest are feature enables.
+ * merges into the existing {@code VkPhysicalDeviceVulkan12Features} struct, while extension features
+ * create their matching structs. BDA, descriptor indexing, and SPIR-V 1.4 are core on the host device.
+ * Native sky programs also enable subgroup size control and require 32-lane compute subgroups.
  *
  * <p>Extension names are added to the device extension list separately; feature structs are added here.
  * Both are gated on the selected device actually supporting RT; if not, nothing is added
@@ -89,7 +95,8 @@ public final class RtDeviceBringup {
             VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
             VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
             VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME,
-            VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            VK_KHR_RAY_QUERY_EXTENSION_NAME,
+            VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
 
     /**
      * OPTIONAL RT extensions: enabled only when the selected device supports them AND the gate is on, but
@@ -146,6 +153,9 @@ public final class RtDeviceBringup {
     private static final VulkanPNextStruct PRESENT_ID_FEATURES_STRUCT = new VulkanPNextStruct(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
             VkPhysicalDevicePresentIdFeaturesKHR.SIZEOF);
+    private static final VulkanPNextStruct SUBGROUP_SIZE_CONTROL_FEATURES_STRUCT = new VulkanPNextStruct(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT,
+            VkPhysicalDeviceSubgroupSizeControlFeaturesEXT.SIZEOF);
 
     private static final VulkanFeature BUFFER_DEVICE_ADDRESS_FEATURE = new VulkanFeature(
             VulkanBackend.VK12_FEATURES_STRUCT, "bufferDeviceAddress",
@@ -164,6 +174,22 @@ public final class RtDeviceBringup {
             VkPhysicalDeviceVulkan12Features.DESCRIPTORBINDINGSAMPLEDIMAGEUPDATEAFTERBIND);
     private static final VulkanFeature SHADER_INT64_FEATURE = new VulkanFeature(
             VulkanBackend.VK10_FEATURES_STRUCT, "shaderInt64", VkPhysicalDeviceFeatures.SHADERINT64);
+    private static final VulkanFeature SHADER_INT16_FEATURE = new VulkanFeature(
+            VulkanBackend.VK10_FEATURES_STRUCT, "shaderInt16", VkPhysicalDeviceFeatures.SHADERINT16);
+    private static final VulkanFeature SHADER_FLOAT16_FEATURE = new VulkanFeature(
+            VulkanBackend.VK12_FEATURES_STRUCT, "shaderFloat16", VkPhysicalDeviceVulkan12Features.SHADERFLOAT16);
+    private static final VulkanFeature STORAGE_IMAGE_EXTENDED_FORMATS_FEATURE = new VulkanFeature(
+            VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageExtendedFormats",
+            VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEEXTENDEDFORMATS);
+    private static final VulkanFeature STORAGE_IMAGE_READ_WITHOUT_FORMAT_FEATURE = new VulkanFeature(
+            VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageReadWithoutFormat",
+            VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEREADWITHOUTFORMAT);
+    private static final VulkanFeature STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE = new VulkanFeature(
+            VulkanBackend.VK10_FEATURES_STRUCT, "shaderStorageImageWriteWithoutFormat",
+            VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEWRITEWITHOUTFORMAT);
+    private static final VulkanFeature SUBGROUP_SIZE_CONTROL_FEATURE = new VulkanFeature(
+            SUBGROUP_SIZE_CONTROL_FEATURES_STRUCT, "subgroupSizeControl",
+            VkPhysicalDeviceSubgroupSizeControlFeaturesEXT.SUBGROUPSIZECONTROL);
     private static final VulkanFeature ACCELERATION_STRUCTURE_FEATURE = new VulkanFeature(
             AS_FEATURES_STRUCT, "accelerationStructure",
             VkPhysicalDeviceAccelerationStructureFeaturesKHR.ACCELERATIONSTRUCTURE);
@@ -192,6 +218,12 @@ public final class RtDeviceBringup {
             DESCRIPTOR_PARTIALLY_BOUND_FEATURE,
             SAMPLED_IMAGE_UPDATE_AFTER_BIND_FEATURE,
             SHADER_INT64_FEATURE,
+            SHADER_INT16_FEATURE,
+            SHADER_FLOAT16_FEATURE,
+            STORAGE_IMAGE_EXTENDED_FORMATS_FEATURE,
+            STORAGE_IMAGE_READ_WITHOUT_FORMAT_FEATURE,
+            STORAGE_IMAGE_WRITE_WITHOUT_FORMAT_FEATURE,
+            SUBGROUP_SIZE_CONTROL_FEATURE,
             ACCELERATION_STRUCTURE_FEATURE,
             RAY_TRACING_PIPELINE_FEATURE,
             POSITION_FETCH_FEATURE,
@@ -465,6 +497,24 @@ public final class RtDeviceBringup {
                 if (!feature.get(available)) {
                     missing.add(feature.name());
                 }
+            }
+            var subgroupSize = VkPhysicalDeviceSubgroupSizeControlPropertiesEXT.calloc(stack).sType$Default();
+            var subgroup = VkPhysicalDeviceSubgroupProperties.calloc(stack).sType$Default().pNext(subgroupSize.address());
+            var properties = VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(subgroup.address());
+            VK11.vkGetPhysicalDeviceProperties2(physicalDevice.vkPhysicalDevice(), properties);
+            int requiredOperations = VK11.VK_SUBGROUP_FEATURE_BASIC_BIT | VK11.VK_SUBGROUP_FEATURE_ARITHMETIC_BIT
+                    | VK11.VK_SUBGROUP_FEATURE_BALLOT_BIT | VK11.VK_SUBGROUP_FEATURE_QUAD_BIT
+                    | VK11.VK_SUBGROUP_FEATURE_SHUFFLE_BIT | VK11.VK_SUBGROUP_FEATURE_VOTE_BIT;
+            if ((subgroup.supportedStages() & VK10.VK_SHADER_STAGE_COMPUTE_BIT) == 0
+                    || (subgroup.supportedOperations() & requiredOperations) != requiredOperations) {
+                missing.add("native sky compute subgroup operations");
+            }
+            if (subgroupSize.minSubgroupSize() > 32 || subgroupSize.maxSubgroupSize() < 32
+                    || (subgroupSize.requiredSubgroupSizeStages() & VK10.VK_SHADER_STAGE_COMPUTE_BIT) == 0) {
+                missing.add("native sky compute subgroup size 32");
+            }
+            if (subgroupSize.maxComputeWorkgroupSubgroups() < 32) {
+                missing.add("native sky 1024-invocation compute workgroups at subgroup size 32");
             }
             SerBackend supportedSer = hasSerExt && SER_EXT_FEATURE.get(available) ? SerBackend.EXT
                     : SerBackend.NONE;
