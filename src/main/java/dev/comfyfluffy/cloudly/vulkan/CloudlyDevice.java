@@ -340,15 +340,17 @@ public final class CloudlyDevice implements AutoCloseable {
         var count = stack.mallocInt(1);
         check(vkEnumerateDeviceExtensionProperties(physical, (ByteBuffer) null, count, null),
                 "count device extensions");
-        var properties = VkExtensionProperties.calloc(count.get(0), stack);
-        check(vkEnumerateDeviceExtensionProperties(physical, (ByteBuffer) null, count, properties),
-                "enumerate device extensions");
-        for (String required : EXTENSIONS) {
-            boolean supported = false;
-            for (int index = 0; index < properties.capacity(); index++) {
-                if (required.equals(properties.get(index).extensionNameString())) supported = true;
+        // Driver-sized inventories exceed the bounded per-thread MemoryStack on recent GPUs.
+        try (var properties = VkExtensionProperties.malloc(count.get(0))) {
+            check(vkEnumerateDeviceExtensionProperties(physical, (ByteBuffer) null, count, properties),
+                    "enumerate device extensions");
+            for (String required : EXTENSIONS) {
+                boolean supported = false;
+                for (int index = 0; index < count.get(0); index++) {
+                    if (required.equals(properties.get(index).extensionNameString())) supported = true;
+                }
+                if (!supported) throw new IllegalStateException("Cloudly GPU lacks " + required);
             }
-            if (!supported) throw new IllegalStateException("Cloudly GPU lacks " + required);
         }
         var semaphoreInfo = VkPhysicalDeviceExternalSemaphoreInfo.calloc(stack).sType$Default()
                 .handleType(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT);
