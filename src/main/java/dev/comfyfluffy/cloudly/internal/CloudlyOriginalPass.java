@@ -49,6 +49,12 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     private volatile Throwable preparationFailure;
     private boolean preparationFinished;
     private Epoch epoch;
+    private PreparedComposition preparedComposition;
+    private CloudlySurfaceShadow.Snapshot preparedSurfaceShadow;
+    private RayResources preparedRayResources;
+    public record RayResources(CloudlyFramePrograms.Export clouds, CloudlyFramePrograms.Export atmosphere,
+                               CloudlyFramePrograms.Export environment) { }
+    public synchronized RayResources preparedRayResources() { return preparedRayResources; }
     private int requestedHeightOffset, appliedHeightOffset;
     private long heightRequestNanos;
 
@@ -97,8 +103,13 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     public Optional<Throwable> preparationFailure() { return Optional.ofNullable(preparationFailure); }
     public CloudlySkyPreset skyPreset() { Assets ready = assets; return ready == null ? null : ready.sky; }
     public CloudlySurfaceShadow.Snapshot surfaceShadow() { return surfaceShadow.capture(); }
+    public synchronized CloudlySurfaceShadow.Snapshot preparedSurfaceShadow() {
+        return preparedSurfaceShadow == null ? null : preparedSurfaceShadow.retain();
+    }
 
     public synchronized void invalidateHistory() {
+        clearPreparedComposition();
+        if (preparedSurfaceShadow != null) { preparedSurfaceShadow.close(); preparedSurfaceShadow = null; }
         if (epoch != null) { epoch.close(); epoch = null; }
         surfaceShadow.clearPublished();
     }
@@ -179,6 +190,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             requirePreparing();
             var programs = new CloudlyFramePrograms(gpu, resources, project.library(), programIds); acquired.add(programs);
             requirePreparing();
+            var stars = CloudlyStars.create(gpu, resources, project.library(), project.starCatalogue()); acquired.add(stars);
+            requirePreparing();
             var color = new CloudlyColorBridge(gpu, resources); acquired.add(color);
             requirePreparing();
             var input = ShaderObjectCompute.load(gpu, CloudlyOriginalPass.class, "/caustica/shaders/pipelines/cloudly/native_inputs.comp.spv"); acquired.add(input);
@@ -187,7 +200,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             List<AutoCloseable> owned = List.copyOf(acquired);
             ResourceOwner owner = resources.create(() -> closeAll(owned));
             acquired.clear();
-            var completed = new Assets(sky, project, density, atmosphere, textures, sphere, programs, color, input, timing, owner);
+            var completed = new Assets(sky, project, density, atmosphere, textures, sphere, programs, stars, color, input, timing, owner);
             synchronized (this) {
                 preparationFinished = true;
                 jobs.clear();
@@ -241,7 +254,37 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         else future.cancel(false);
     }
 
+    /** Records density-dependent world shadows before the host traces its lights. */
+    public synchronized void prepareWorld(PostEffectFrame frame) {
+        clearPreparedComposition();
+        recordInternal(frame, true);
+    }
+
     @Override public synchronized void record(PostEffectFrame frame) {
+        if (preparedComposition != null) {
+            PreparedComposition prepared = preparedComposition;
+            preparedComposition = null;
+            if (prepared.frame != frame) {
+                prepared.plan.close();
+                throw new IllegalStateException("Cloudly composition must use its prepared world frame");
+            }
+            prepared.draw.run();
+        } else {
+            recordInternal(frame, false);
+        }
+    }
+
+    private record PreparedComposition(PostEffectFrame frame, CloudlyFrameExecutor.Plan plan, Runnable draw) { }
+
+    private void clearPreparedComposition() {
+        preparedRayResources = null;
+        if (preparedComposition != null) {
+            preparedComposition.plan.close();
+            preparedComposition = null;
+        }
+    }
+
+    private void recordInternal(PostEffectFrame frame, boolean earlyWorld) {
         Assets ready = assets;
         MinecraftSkyFrame captured = frames.get();
         OptionValues values = options.get();
@@ -251,6 +294,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         var view = frame.view().camera();
         var current = new CloudlyFrameCamera(frame.cameraRelativeFromClip(), view.x(), view.y(), view.z(),
                 captured.celestial().seaLevel(), frame.metersPerSceneUnit());
+        ready.stars.record(frame, current, (float) captured.celestial().starAngleRadians());
         Map<String, double[]> inputs = frameInputs(frame, captured, values, ready, current);
         put(inputs, "frame.cloudHeightOffsetMeters", heightOffset * frame.metersPerSceneUnit());
         var source = shadowSettings(ready.project, heightOffset * frame.metersPerSceneUnit());
@@ -352,18 +396,18 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                             case "CLEAR" -> new CloudlyFrameExecutor.HostOperation(f -> target.buffers.recordClear(f, stage.name()), List.of(target.buffers.owner()));
                             case "HOST_COMPOSITION_INPUTS" -> new CloudlyFrameExecutor.HostOperation(f -> importScene(frame, ready, target), List.of(target.buffers.owner()));
                             case "HOST_AFTER_RR_COMPOSITION" -> new CloudlyFrameExecutor.HostOperation(f -> ready.color.record(f, target.buffers.image("SceneColor").sampled(),
-                                    destination.descriptor(GpuImageDescriptorKind.STORAGE).index(), destination.width(), destination.height(), true,
+                                    destination.descriptor(GpuImageDescriptorKind.STORAGE).index(), destination.width(), destination.height(), true, frame.sceneLinearHdr(),
                                     List.of(ready.owner, target.buffers.owner())), List.of());
                             case "PING_PONG_SWAP" -> new CloudlyFrameExecutor.HostOperation(f -> f.whenSubmitted(advanceHistory), List.of());
                             default -> throw new IllegalArgumentException("Unimplemented original host operation " + stage.operation());
                         };
                     }
                 });
-        try (plan) {
+        try {
             Set<String> requiredPrograms = new LinkedHashSet<>(plan.programIds());
             shadows.forEach(draw -> requiredPrograms.add(draw.program()));
             ambientOcclusion.forEach(draw -> requiredPrograms.add(draw.draw().program()));
-            requiredPrograms.add(CloudlySurfaceShadow.PROGRAM);
+            if (!frame.sceneLinearHdr()) requiredPrograms.add(CloudlySurfaceShadow.PROGRAM);
             ready.programs.requirePrograms(requiredPrograms);
             if (!target.initialized) {
                 target.initializationRecorded = true;
@@ -372,23 +416,66 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                 clearWhite(frame, target.white);
                 frame.whenSubmitted(() -> target.initialized = true);
             }
-            int measurement = ready.timing.begin(frame, destination.width(), destination.height());
+            int measurement = earlyWorld ? -1 : ready.timing.begin(frame, destination.width(), destination.height());
             for (Draw draw : shadows) draw.record(frame, ready.programs);
-            recordSurfaceShadow(frame, ready, target, inputs, writer, current, roles);
+            if (!frame.sceneLinearHdr()) recordSurfaceShadow(frame, ready, target, inputs, writer, current, roles);
             for (var draw : ambientOcclusion) {
                 draw.draw().record(frame, ready.programs);
                 if (draw.update().publish()) copyAmbientOcclusion(frame, target, draw.level());
             }
-            plan.record(frame, ready.programs);
-            ready.timing.end(frame, measurement);
-            if (!target.reported) {
-                frame.whenSubmitted(() -> {
-                    target.reported = true;
-                    LOGGER.info("Original Cloudly frame accepted: {} native stages, {} shadow dispatches, {} cloud AO dispatches, {}x{}; terrain fade={}..{}m, atmosphere normalization={}m; separate cloud history, world RR guides unchanged",
-                            plan.steps().size(), shadows.size(), ambientOcclusion.size(), destination.width(), destination.height(),
-                            terrainFadeStart, terrainFadeEnd, ready.project.scalar("distanceNormalizationMeters"));
-                });
+            if (earlyWorld && frame.sceneLinearHdr()) {
+                var cloudDescriptors = ready.project.schedule().bindings("TraceHigh",
+                        (name, field) -> descriptor(ready, target, roles, name, field)).descriptors();
+                var atmosphereStage = ready.project.schedule().stages().stream()
+                        .filter(stage -> stage.program() != null && stage.program().id().equals("3928-host-camera"))
+                        .findFirst().orElseThrow(() -> new IllegalStateException("Original atmosphere segment program is missing"));
+                var atmosphereDescriptors = ready.project.schedule().bindings(atmosphereStage.name(),
+                        (name, field) -> descriptor(ready, target, roles, name, field)).descriptors();
+                var environmentStage = ready.project.schedule().stages().stream()
+                        .filter(stage -> stage.program() != null && stage.program().id().equals("97-host-camera"))
+                        .findFirst().orElseThrow(() -> new IllegalStateException("Original environment program is missing"));
+                var environmentDescriptors = ready.project.schedule().bindings(environmentStage.name(),
+                        (name, field) -> descriptor(ready, target, roles, name, field)).descriptors();
+                var cloudConstants = ready.project.recipes().get("62").encode(Set.of("62"), inputs, writer).parameters("62");
+                var atmosphereConstants = ready.project.recipes().get("3928").encode(Set.of("3928"), inputs, writer).parameters("3928");
+                var environmentConstants = ready.project.recipes().get("97").encode(Set.of("97"), inputs, writer).parameters("97");
+                preparedRayResources = new RayResources(
+                        ready.programs.export(frame, "62-host-camera", cloudConstants, cloudDescriptors, current,
+                                List.of(ready.owner, target.buffers.owner())),
+                        ready.programs.export(frame, "3928-host-camera", atmosphereConstants, atmosphereDescriptors, current,
+                                List.of(ready.owner, target.buffers.owner())),
+                        ready.programs.export(frame, "97-host-camera", environmentConstants, environmentDescriptors, current,
+                                List.of(ready.owner, target.buffers.owner())));
             }
+            Runnable compose = () -> {
+                try (plan) {
+                    int interval = earlyWorld ? ready.timing.begin(frame, destination.width(), destination.height()) : measurement;
+                    plan.record(frame, ready.programs);
+                    ready.timing.end(frame, interval);
+                    if (!target.reported) {
+                        frame.whenSubmitted(() -> {
+                            target.reported = true;
+                            LOGGER.info("Original Cloudly frame accepted: {} native stages, {} shadow dispatches, {} cloud AO dispatches, {}x{}; terrain fade={}..{}m, atmosphere normalization={}m; separate cloud history, world RR guides unchanged",
+                                    plan.steps().size(), shadows.size(), ambientOcclusion.size(), destination.width(), destination.height(),
+                                    terrainFadeStart, terrainFadeEnd, ready.project.scalar("distanceNormalizationMeters"));
+                        });
+                    }
+                }
+            };
+            if (earlyWorld) {
+                var prepared = new PreparedComposition(frame, plan, compose);
+                preparedComposition = prepared;
+                frame.whenRetired(() -> {
+                    synchronized (CloudlyOriginalPass.this) {
+                        if (preparedComposition == prepared) clearPreparedComposition();
+                    }
+                });
+            } else {
+                compose.run();
+            }
+        } catch (RuntimeException | Error failure) {
+            plan.close();
+            throw failure;
         }
     }
 
@@ -427,6 +514,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                                      CloudlyFrameCamera camera, Map<String, String> roles) {
         var snapshot = surfaceShadow.acquire(frame, camera.sourceOriginMeters(),
                 inputs.get("frame.terrainFadeEndMeters")[0], inputs.get("frame.lightDirectionSource"));
+        if (preparedSurfaceShadow != null) preparedSurfaceShadow.close();
+        preparedSurfaceShadow = snapshot.retain();
         var grid = snapshot.grid();
         ByteBuffer source = ready.project.recipes().get("62").encode(Set.of("62"), inputs, writer).parameters("62");
         ByteBuffer constants = ByteBuffer.allocate(source.remaining()).order(ByteOrder.LITTLE_ENDIAN).put(source.duplicate()).flip();
@@ -547,10 +636,12 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         }
         return switch (actual) {
             case "SceneDepth" -> target.depth.sampledIndex();
-            case "OriginalBlueNoise", "InactiveStars", "InactiveGround2D", "InactiveGBuffer", "InactiveHeterogeneous", "InactiveSkyGodrayHistory" -> ready.textures.descriptors().get("BlueNoise");
+            case "OriginalBlueNoise", "InactiveGround2D", "InactiveGBuffer", "InactiveHeterogeneous", "InactiveSkyGodrayHistory" -> ready.textures.descriptors().get("BlueNoise");
+            case "InactiveStars", "OriginalStarsTexture2D" -> ready.stars.cameraDescriptor();
             case "OriginalMoonTexture", "InactiveFogCube" -> ready.textures.descriptors().get("MoonTexture");
             case "OriginalStarsBackground", "InactiveStarMoonCube" -> ready.textures.descriptors().get("StarsBackground");
             case "HostRainCoverage" -> ready.textures.descriptors().get("HostRainCoverage");
+            case "HostStarsCatalogueCube", "OriginalStarsCatalogueCube" -> ready.stars.cubeDescriptor();
             case "OriginalRainPillarSDF" -> ready.density.texture("CloudTex_RainPillar_SDF_Tex").sampledIndex();
             case "OriginalSphereSamples" -> ready.sphere.descriptor();
             case "OpticalDepth" -> ready.atmosphere.texture("OpticalDepthTex").sampledIndex();
@@ -575,7 +666,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             push.putInt(frame.sceneColor().descriptor(GpuImageDescriptorKind.SAMPLED).index().value())
                     .putInt(frame.primaryDepth().descriptor(GpuImageDescriptorKind.SAMPLED).index().value())
                     .putInt(target.buffers.image("SceneColor").storage(0).value()).putInt(target.depth.storageIndex().value())
-                    .putInt(target.buffers.image("Velocity").storage(0).value()).putInt(0)
+                    .putInt(target.buffers.image("Velocity").storage(0).value()).putInt(frame.sceneLinearHdr() ? 1 : 0)
                     .putFloat(frame.traceJitter()[0]).putFloat(frame.traceJitter()[1]).flip();
             frame.whenRetired(ready.input.dispatch(frame.commandBuffer(), push,
                     Math.ceilDiv(frame.sceneColor().width(),8),Math.ceilDiv(frame.sceneColor().height(),8),1)::close);
@@ -631,14 +722,16 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         double elevation=Math.toDegrees(Math.asin(sun[2]));
         double fraction=captured.celestial().lighting().moonPhaseFixedFraction();
         double phaseScale=fraction+(1-fraction)*Math.abs(captured.celestial().moonPhaseIndex()-4.)/4.;
-        double moonEnergy=sky.moonIlluminanceLux()*phaseScale;
-        var color=sky.sunColorLinearBt709(); double[] solar={sky.sunIlluminanceLux()*color.red(),sky.sunIlluminanceLux()*color.green(),sky.sunIlluminanceLux()*color.blue()};
+        double moonLux = frame.sceneLinearHdr() ? captured.celestial().lighting().moonIlluminanceLux() : sky.moonIlluminanceLux();
+        double sunLux = frame.sceneLinearHdr() ? captured.celestial().lighting().sunIlluminanceLux() : sky.sunIlluminanceLux();
+        double moonEnergy=moonLux*phaseScale;
+        var color=sky.sunColorLinearBt709(); double[] solar={sunLux*color.red(),sunLux*color.green(),sunLux*color.blue()};
         boolean useSun=elevation>ready.project.scalar("SunMinElevationForLightSource");
         put(result,"frame.sunDirectionSource",sun); put(result,"frame.sunSourceRadiance",solar); put(result,"frame.sunElevationDegrees",elevation);
         put(result,"frame.lightDirectionSource",useSun?sun:moon); put(result,"frame.lightSourceRadiance",useSun?solar:new double[]{moonEnergy,moonEnergy,moonEnergy});
         put(result,"frame.lightElevationDegrees",Math.toDegrees(Math.asin((useSun?sun:moon)[2])));
         put(result,"frame.moonEnabled",1); put(result,"frame.moonDirectionSource",moon);
-        put(result,"frame.moonSourceRadiance",sky.moonIlluminanceLux()); put(result,"frame.moonPhase",captured.celestial().moonPhaseIndex()/8.);
+        put(result,"frame.moonSourceRadiance",moonLux); put(result,"frame.moonPhase",captured.celestial().moonPhaseIndex()/8.);
         put(result,"frame.moonPhaseAngleRadians",ready.project.scalar("MoonPhaseAngle")); put(result,"frame.moonDiskBrightness",ready.project.scalar("MoonDiskBrightness"));
         put(result,"frame.moonDiscCosHalfAngle",Math.cos(Math.toRadians(ready.project.scalar("MoonDiskAngleInDegrees"))*0.5));
         put(result,"frame.rainStrength",captured.rainStrength()); put(result,"frame.thunderStrength",captured.thunderStrength());
@@ -646,7 +739,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         double starVisibility = Math.max(0, captured.celestial().starBrightness())
                 * (1-captured.rainStrength()) * (1-captured.thunderStrength());
         put(result,"frame.starsEnabled",starVisibility > 0 ? 1 : 0);
-        put(result,"frame.starsBackgroundIntensity",ready.project.scalar("StarsIntensity") * starVisibility);
+        put(result,"frame.starsCatalogueScale",starVisibility);
+        put(result,"frame.starsBackgroundIntensity",ready.project.scalar("StarsBackgroundIntensity") * starVisibility);
         for (var entry : ready.density.statistics().entrySet()) {
             String category = entry.getKey().substring("NoiseTexParams".length());
             if (category.startsWith("_")) category = category.substring(1);
@@ -693,7 +787,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     }
     private record AmbientOcclusionDraw(Draw draw, int level, CloudlyAmbientOcclusionState.Update update) { }
     private record Assets(CloudlySkyPreset sky,CloudlyNativeProject project,CloudlyOriginalBakeResources.Ready density,CloudlyOriginalBakeResources.Ready atmosphere,
-                          CloudlyFrameTextures.Ready textures,CloudlySourceBuffer sphere,CloudlyFramePrograms programs,CloudlyColorBridge color,
+                          CloudlyFrameTextures.Ready textures,CloudlySourceBuffer sphere,CloudlyFramePrograms programs,CloudlyStars stars,CloudlyColorBridge color,
                           ShaderObjectCompute input,CloudlyGpuTiming timing,ResourceOwner owner) { }
     private static final class Epoch implements AutoCloseable {
         final CloudlyFrameResources buffers; final CloudlyFrameSchedule.Resolved extents; final VmaImage2D depth,white;
@@ -724,6 +818,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             if(closed)return;
             closed=true;
             worker.interrupt();
+            clearPreparedComposition();
+            if (preparedSurfaceShadow != null) { release.add(preparedSurfaceShadow); preparedSurfaceShadow = null; }
             release.addAll(jobs); jobs.clear();
             release.addAll(staged); staged.clear();
             if(epoch!=null) { release.add(epoch); epoch=null; }

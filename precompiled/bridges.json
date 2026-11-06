@@ -3,12 +3,12 @@
   "profile": "spirv_1_5",
   "targetEnvironment": "vulkan1.2",
   "sources": {
-    "color_bridge.comp.slang": "afb1110d6fd7cd5634e9e2fccc447a75954ead4ee3b2094bef94dc32049c274f",
-    "native_inputs.comp.slang": "60d51adce75d41f5df3b84070ef36d590950b7f4e60dd44eec40f087a16904fd",
+    "color_bridge.comp.slang": "107bb9db63082e37e2a433778deddcbf30b9c95eb16ea25f123435e0b9c64ef9",
+    "native_inputs.comp.slang": "3a0b3bce2ba666739de13d7175c5b65863bfc7dccdb7c59f47501fb53bd697d0",
     "caustica_color.slang": "3a27feddc6d091ee081ada249934cb553b5e5ca772bfb4bbf0351d005492b2cd"
   },
   "binaries": {
-    "native_inputs.comp.spv": "62d65cb5b707bd249e20dd798e6b8c920b66fc6255c048097f0eefd6058e5af0",
-    "color_bridge.comp.spv": "6909a78cd7b74b0cced2e76d8bd80fc0fcd4f03de5634e6397ca4e9285c42d40"
+    "native_inputs.comp.spv": "08fd356b2acf1114824e7bd4cc528d8905c38395bf43339a857fd400a14f29a2",
+    "color_bridge.comp.spv": "cf671f05cdb5ebe8ef1310e9680fc76d531cf5869e07f8c9eb1ec3ac458f3b1f"
   }
 }

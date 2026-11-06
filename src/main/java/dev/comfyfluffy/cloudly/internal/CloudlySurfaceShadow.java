@@ -68,7 +68,8 @@ public final class CloudlySurfaceShadow implements AutoCloseable {
     /** Texel centers remain fixed in source world metres while the camera moves inside a texel. */
     static Grid grid(float[] origin, double terrainDistance) {
         float horizontal = (float) Math.max(4096, terrainDistance * 2 + 256);
-        float vertical = 4096;
+        // Include sea-level terrain while looking down from tall custom worlds.
+        float vertical = (float) Math.max(horizontal, Math.abs(origin[2]) * 2.0 + 512);
         return new Grid(snappedMinimum(origin[0], horizontal), snappedMinimum(origin[1], horizontal),
                 snappedMinimum(origin[2], vertical), horizontal, horizontal, vertical);
     }
@@ -97,7 +98,7 @@ public final class CloudlySurfaceShadow implements AutoCloseable {
             gpu.descriptorHeap().writer().writeImages(descriptors, 0, List.of(
                     new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.SAMPLED, info),
                     new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.STORAGE, info)));
-            return new Image(allocation, descriptors);
+            return new Image(allocation, descriptors, gpu.descriptorHeap().imageView(descriptors.firstIndex()));
         } catch (RuntimeException | Error failure) {
             var allocated = allocation;
             var range = descriptors;
@@ -148,6 +149,8 @@ public final class CloudlySurfaceShadow implements AutoCloseable {
         public float lightY() { return lightY; }
         public float lightZ() { return lightZ; }
         public int sampledIndex() { return image.descriptors.firstIndex().value(); }
+        public long image() { return image.allocation.image(); }
+        public long view() { return image.view; }
         GpuDescriptorIndex.Resource storage() { return new GpuDescriptorIndex.Resource(sampledIndex() + 1); }
         Snapshot retain() { return new Snapshot(frameIndex, image, grid, lightX, lightY, lightZ, owner.retain()); }
 
@@ -172,7 +175,7 @@ public final class CloudlySurfaceShadow implements AutoCloseable {
         @Override public void close() { owner.close(); }
     }
 
-    private record Image(VmaImageAllocation allocation, GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors) {
+    private record Image(VmaImageAllocation allocation, GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors, long view) {
         void close() { new ResourceLifetime(descriptors::destroy, allocation::close).close(); }
     }
 }

@@ -17,5 +17,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     destination.GetDimensions(width, height);
     if (id.x >= width || id.y >= height) return;
     float4 color = source.Load(int3(id.xy, 0));
-    destination[id.xy] = float4(pc.toHost != 0 ? exposedRadianceToDisplay(color.rgb) : displayToExposedRadiance(color.rgb), color.a);
+    float3 radiance = pc.padding != 0 ? color.rgb :
+        (pc.toHost != 0 ? exposedRadianceToDisplay(color.rgb) : displayToExposedRadiance(color.rgb));
+    destination[id.xy] = float4(radiance, color.a);
 }

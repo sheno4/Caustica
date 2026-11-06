@@ -48,6 +48,37 @@ public final class CloudlyFramePrograms implements AutoCloseable {
         }
     }
 
+    /** Retains an original parameter block for invocation by the host's ray shaders. */
+    public Export export(PassFrame frame, String programId, ByteBuffer constants,
+                         Map<String, ? extends GpuDescriptorIndex> descriptors,
+                         CloudlyFrameCamera camera, List<ResourceOwner> dependencies) {
+        var shader = programs.get(programId);
+        if (shader == null) throw new IllegalArgumentException("Original ray program is not loaded: " + programId);
+        var program = shader.program();
+        if (constants.remaining() != program.parametersByteSize()) throw new IllegalArgumentException("Wrong original constants size");
+        int bindingOffset = program.parametersByteSize();
+        int cameraOffset = (bindingOffset + Math.max(4, program.bindingByteSize()) + 15) & ~15;
+        try (var upload = arena.acquire(cameraOffset + CloudlyFrameCamera.BYTE_SIZE)) {
+            var bytes = upload.bytes();
+            bytes.slice(0, bindingOffset).put(constants.duplicate());
+            program.bindingsLayout().write(bytes.slice(bindingOffset, program.bindingByteSize()), descriptors);
+            camera.write(bytes.slice(cameraOffset, CloudlyFrameCamera.BYTE_SIZE));
+            upload.flush();
+            frame.retain(upload.owner()); frame.retain(shader.owner()); dependencies.forEach(frame::retain);
+            var exportedBindings = program.pushDescriptorBindings().isEmpty()
+                    ? program.bindingsLayout().fields().stream().map(field -> new CloudlyShaderLibrary.PushDescriptorBinding(
+                            field.name(), field.byteOffset() / 4, field.byteOffset(), field.type())).toList()
+                    : program.pushDescriptorBindings();
+            return new Export(upload.addressAt(0), upload.addressAt(bindingOffset), upload.addressAt(cameraOffset),
+                    upload.buffer().buffer(), program.parametersByteSize(), exportedBindings, Map.copyOf(descriptors));
+        }
+    }
+
+    public record Export(long parametersAddress, long bindingsAddress, long cameraAddress,
+                         long parametersBuffer, int parametersByteSize,
+                         List<CloudlyShaderLibrary.PushDescriptorBinding> bindings,
+                         Map<String, ? extends GpuDescriptorIndex> descriptors) { }
+
     /** All images and buffers reachable through the supplied heap table accompany this frame as explicit owners. */
     public void record(PassFrame frame, String programId, ByteBuffer constants,
                        Map<String, ? extends GpuDescriptorIndex> descriptors, Map<String, Long> sourcePush,

@@ -15,6 +15,8 @@ import dev.comfyfluffy.cloudly.api.vulkan.GpuImage;
  * Each image carries its own extent.
  */
 public interface PostEffectFrame extends PassFrame {
+    /** True when host and native composition both use scene-linear BT.709, before display mapping. */
+    default boolean sceneLinearHdr() { return false; }
     /**
      * The scene as it stands at this point in the chain: scene-linear ACEScg multiplied by preExposure(), not yet look
      * transformed, or tone mapped. The first scene effect receives trace-resolution colour; the first ordinary

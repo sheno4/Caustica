@@ -29,7 +29,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     nativeDepth[id.xy] = z;
     float4 color = scene.Load(int3(id.xy, 0));
     // The native atmosphere supplies the environment; world surface radiance remains intact.
-    output[id.xy] = float4(z > 0 ? displayToExposedRadiance(color.rgb) : float3(0), color.a);
+    float3 radiance = pc.padding != 0 ? color.rgb : displayToExposedRadiance(color.rgb);
+    output[id.xy] = float4(z > 0 ? radiance : float3(0), color.a);
     // The selected native temporal branch derives motion from cloud distance and camera matrices.
     velocity[id.xy] = float4(0);
 }

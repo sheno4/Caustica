@@ -16,12 +16,14 @@ import java.util.Objects;
 /** Immediate owner of one device-local {@code VkImage} and its VMA allocation. */
 public final class VmaImageAllocation implements AutoCloseable {
     private final long allocator;
+    private final GpuDevice gpu;
     private final long image;
     private final long allocation;
     private boolean closed;
 
-    private VmaImageAllocation(long allocator, long image, long allocation) {
-        this.allocator = allocator;
+    private VmaImageAllocation(GpuDevice gpu, long image, long allocation) {
+        this.gpu = gpu;
+        this.allocator = gpu.vmaAllocator();
         this.image = image;
         this.allocation = allocation;
     }
@@ -46,7 +48,8 @@ public final class VmaImageAllocation implements AutoCloseable {
             image = imageOut.get(0);
             allocation = allocationOut.get(0);
             VulkanChecks.check(result, "vmaCreateImage(" + label + ")");
-            return new VmaImageAllocation(gpu.vmaAllocator(), image, allocation);
+            gpu.descriptorHeap().registerImage(image, createInfo);
+            return new VmaImageAllocation(gpu, image, allocation);
         } catch (RuntimeException | Error failure) {
             if (image != 0L) Vma.vmaDestroyImage(gpu.vmaAllocator(), image, allocation);
             throw failure;
@@ -61,6 +64,7 @@ public final class VmaImageAllocation implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
+        gpu.descriptorHeap().unregisterImage(image);
         Vma.vmaDestroyImage(allocator, image, allocation);
     }
 }

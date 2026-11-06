@@ -3,24 +3,28 @@
 A separately linked LGPL-3.0-or-later Java 21 library derived from Caustica's
 native Cloudly implementation. It executes the original density, atmosphere,
 cloud tracing, reconstruction and foreground composition recipes. The private
-scene bundle supplies 81 programs and authored resources for Hangar, Mission 3
+scene bundle supplies the original programs and authored resources for Hangar, Mission 3
 and Mission 11. Private game resources are not part of this source repository.
 
-The host supplies its OpenGL device UUID and imports three dedicated Vulkan
-allocations: RGBA16F colour input, R32F reversed projected depth and RGBA16F
-output. Binary semaphores and explicit external queue-family barriers transfer
-ownership without a CPU image copy. Java resource claims retire after the exact
-Vulkan submission fence. Preparation runs on a separate CPU worker and uses the
-same serialized compute queue.
+`BorrowedCloudlyRuntime` records into the host's Vulkan command buffer and
+borrows its device. It never submits or destroys the host queue or device.
+Preparation precedes path tracing, and camera composition follows reconstruction
+but precedes exposure and bloom. Both sides use scene-linear HDR. Physical
+first-hit depth remains separate from reconstruction depth. Exact GPU completion
+leases retain every exported image, sampler, buffer and address.
 
-RTX Remix exposes its final display image, rather than its original HDR scene.
-The adapter lifts the display-linear input with inverse Reinhard, runs the
-native compositor and applies Reinhard to the result. Its fixed display
-exposure is normalized to the authored scene's sun illuminance. This is a
-display adapter, not access to Remix's internal exposure, world lighting or
-reflections. Those inputs require a runtime extension. Unchanged display values
-below one round-trip through this bridge. Appearance and performance require
-in-game verification.
+The custom native runtime evaluates the original cloud and atmosphere along
+actual reflection and indirect-ray segments. Original atmospheric transmittance
+and directional cloud shadow maps attenuate distant lights at each surface.
+Catalogue stars use the original Allocate, Fill and Render programs with GPU
+bucket offsets. The primary view uses a camera render at the authored resolution
+fraction; an infinite-distance catalogue cube supplies reflection emission.
+Cloud and atmosphere transport is never replaced by that cube.
+
+The legacy `CloudlyRuntime` retains the separate-device display adapter for
+hosts without the recording extension. RTX Remix's complete AC8 integration
+requires the borrowed-device path and all native capability bits. Compilation
+and package checks do not establish rendered appearance or frame rate.
 
 ## Build
 
@@ -29,7 +33,9 @@ bridge programs, verified against source and binary SHA-256 receipts. To change
 the bridge shaders, set `SLANG_SDK` to Slang 2026.14.1 and `VULKAN_SDK` to a
 Vulkan SDK providing `Bin/spirv-val.exe`; the build then compiles and validates
 the bridges for SPIR-V 1.5 / Vulkan 1.2. These two small library-owned programs
-are separate from the 81 private game programs.
+are separate from the private game programs. The library-owned GPU bucket scan
+source is under `shaders/library/`; its prepared module accompanies the private
+star pipeline metadata.
 
 For a complete private delivery, add
 `-PcloudlyBundleInputRoot=<prepared-private-bundle-directory>`. The bundle root

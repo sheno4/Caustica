@@ -8,6 +8,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,6 +39,8 @@ public final class CloudlyDevice implements AutoCloseable {
             VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
 
     private final Object queueLock = new Object();
+    private final boolean borrowed;
+    private final ConcurrentLinkedQueue<BorrowedWork> borrowedWork = new ConcurrentLinkedQueue<>();
     private final Set<Submission> pending = ConcurrentHashMap.newKeySet();
     private final Set<SharedImage> images = ConcurrentHashMap.newKeySet();
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
@@ -57,6 +61,7 @@ public final class CloudlyDevice implements AutoCloseable {
 
     /** Requires the 16-byte GL_DEVICE_UUID_EXT of the current OpenGL context. */
     public CloudlyDevice(byte[] glDeviceUuid) {
+        borrowed = false;
         if (glDeviceUuid.length != VK_UUID_SIZE) {
             throw new IllegalArgumentException("OpenGL device UUID must contain 16 bytes");
         }
@@ -78,6 +83,42 @@ public final class CloudlyDevice implements AutoCloseable {
         }
     }
 
+    /** Wraps a host device whose required compute features and extensions were enabled at creation. */
+    public static CloudlyDevice borrow(long instance, long physicalDevice, long device,
+                                       int queueFamily, int apiVersion) {
+        return new CloudlyDevice(instance, physicalDevice, device, queueFamily, apiVersion);
+    }
+
+    private CloudlyDevice(long instanceHandle, long physicalHandle, long deviceHandle,
+                           int queueFamily, int apiVersion) {
+        borrowed = true;
+        if (instanceHandle == 0 || physicalHandle == 0 || deviceHandle == 0 || queueFamily < 0
+                || apiVersion < VK_API_VERSION_1_2) {
+            worker.shutdownNow();
+            throw new IllegalArgumentException("A borrowed Vulkan 1.2+ device and compute queue family are required");
+        }
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var application = VkApplicationInfo.calloc(stack).sType$Default().apiVersion(apiVersion);
+            var instanceInfo = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(application);
+            instance = new VkInstance(instanceHandle, instanceInfo);
+            physical = new VkPhysicalDevice(physicalHandle, instance);
+            var required = List.of(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+            PointerBuffer extensions = stack.mallocPointer(required.size());
+            for (String name : required) extensions.put(stack.UTF8(name));
+            extensions.flip();
+            var deviceInfo = VkDeviceCreateInfo.calloc(stack).sType$Default().ppEnabledExtensionNames(extensions);
+            device = new VkDevice(deviceHandle, physical, deviceInfo, apiVersion);
+            this.queueFamily = queueFamily;
+            createAllocator();
+        } catch (RuntimeException | Error failure) {
+            closeNative();
+            worker.shutdownNow();
+            throw failure;
+        }
+    }
+
+    public boolean isBorrowed() { return borrowed; }
+
     public VkDevice vk() { return device; }
     public long vmaAllocator() { return allocator; }
     public int queueFamily() { return queueFamily; }
@@ -92,6 +133,7 @@ public final class CloudlyDevice implements AutoCloseable {
      */
     public synchronized SharedImage createSharedImage(int width, int height, int format, int usage) {
         ensureOpen();
+        if (borrowed) throw new IllegalStateException("Borrowed devices use host images and local VMA images");
         SharedImage image = SharedImage.create(this, physical, width, height, format, usage);
         try {
             try (Submission initial = recordAndSubmit(command -> {
@@ -119,6 +161,10 @@ public final class CloudlyDevice implements AutoCloseable {
     /** Runs command recording on a CPU worker and calls completion after its GPU fence. */
     public synchronized void submit(Consumer<VkCommandBuffer> recorder, Consumer<Throwable> completion) {
         ensureOpen();
+        if (borrowed) {
+            borrowedWork.add(new BorrowedWork(recorder, completion));
+            return;
+        }
         worker.execute(() -> {
             Throwable failure = null;
             try (Submission submission = recordAndSubmit(recorder, false)) {
@@ -130,6 +176,56 @@ public final class CloudlyDevice implements AutoCloseable {
         });
     }
 
+    private record BorrowedWork(Consumer<VkCommandBuffer> recorder, Consumer<Throwable> completion) { }
+    private record BorrowedResult(BorrowedWork work, Throwable failure) { }
+
+    /** Records queued preparation into a host command buffer. Retire only after its GPU completion. */
+    public BorrowedBatch recordBorrowedWork(VkCommandBuffer commands) {
+        if (!borrowed) throw new IllegalStateException("This device owns its command queue");
+        ensureOpen();
+        var recorded = new java.util.ArrayList<BorrowedResult>();
+        Throwable failure = null;
+        BorrowedWork work;
+        while ((work = borrowedWork.poll()) != null) {
+            try {
+                work.recorder.accept(commands);
+                recorded.add(new BorrowedResult(work, null));
+            } catch (CancellationException cancellation) {
+                recorded.add(new BorrowedResult(work, cancellation));
+            } catch (RuntimeException | Error thrown) {
+                recorded.add(new BorrowedResult(work, thrown));
+                failure = thrown;
+                break;
+            }
+        }
+        return new BorrowedBatch(List.copyOf(recorded), failure);
+    }
+
+    public static final class BorrowedBatch implements AutoCloseable {
+        private List<BorrowedResult> recorded;
+        private final Throwable failure;
+        private BorrowedBatch(List<BorrowedResult> recorded, Throwable failure) {
+            this.recorded = recorded;
+            this.failure = failure;
+        }
+        public Throwable failure() { return failure; }
+        public boolean isEmpty() { return recorded.isEmpty(); }
+        @Override public synchronized void close() {
+            var work = recorded;
+            recorded = List.of();
+            new ResourceLifetime(work.stream().<Runnable>map(result -> () -> result.work.completion.accept(result.failure))
+                    .toArray(Runnable[]::new)).close();
+        }
+    }
+
+    /** Cancels only preparation that has not been recorded. Existing GPU leases remain host-owned. */
+    public void cancelBorrowedWork() {
+        BorrowedWork work;
+        while ((work = borrowedWork.poll()) != null) {
+            work.completion.accept(new CancellationException("Cloudly registration was released"));
+        }
+    }
+
     /**
      * Submits one GL/Vulkan frame without a host GPU wait. The host first signals inputReady;
      * Vulkan waits it, acquires all images in GENERAL, records compute, releases them back to GL,
@@ -137,6 +233,7 @@ public final class CloudlyDevice implements AutoCloseable {
      */
     public synchronized Submission submitFrame(Consumer<VkCommandBuffer> recorder, SharedImage... sharedImages) {
         ensureOpen();
+        if (borrowed) throw new IllegalStateException("Only the host submits a borrowed command buffer");
         if (sharedImages.length == 0) throw new IllegalArgumentException("A shared frame needs images");
         return recordAndSubmit(command -> {
             ownershipBarrier(command, true, sharedImages);
@@ -217,6 +314,7 @@ public final class CloudlyDevice implements AutoCloseable {
     /** Drains submitted CPU bake work; the caller must stop producing new bake jobs first. */
     public void waitIdle() {
         ensureOpen();
+        if (borrowed) throw new IllegalStateException("The host owns GPU completion for a borrowed device");
         try {
             worker.submit(() -> {}).get();
         } catch (InterruptedException failure) {
@@ -240,6 +338,12 @@ public final class CloudlyDevice implements AutoCloseable {
             worker.shutdown();
         }
         try {
+            if (borrowed) {
+                cancelBorrowedWork();
+                closeNative();
+                synchronized (this) { closed = true; }
+                return;
+            }
             if (!worker.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) {
                 throw new IllegalStateException("Cloudly GPU worker did not terminate");
             }
@@ -276,11 +380,11 @@ public final class CloudlyDevice implements AutoCloseable {
                     Vma.vmaDestroyAllocator(allocator);
                     allocator = 0;
                 }
-                if (device != null) {
+                if (device != null && !borrowed) {
                     vkDestroyDevice(device, null);
                     device = null;
                 }
-                if (instance != null) {
+                if (instance != null && !borrowed) {
                     vkDestroyInstance(instance, null);
                     instance = null;
                 }

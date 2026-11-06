@@ -30,12 +30,12 @@ public final class CloudlyColorBridge implements AutoCloseable {
 
     /** Input and output extents agree; the output is a distinct image with the same pre-exposure scale. */
     public void record(PassFrame frame, GpuDescriptorIndex.Resource source, GpuDescriptorIndex.Resource destination,
-                       int width, int height, boolean toHost, List<ResourceOwner> dependencies) {
+                       int width, int height, boolean toHost, boolean sceneLinearHdr, List<ResourceOwner> dependencies) {
         frame.retain(owner);
         dependencies.forEach(frame::retain);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var push = stack.malloc(16).order(ByteOrder.LITTLE_ENDIAN);
-            push.putInt(source.value()).putInt(destination.value()).putInt(toHost ? 1 : 0).putInt(0).flip();
+            push.putInt(source.value()).putInt(destination.value()).putInt(toHost ? 1 : 0).putInt(sceneLinearHdr ? 1 : 0).flip();
             frame.whenRetired(shader.dispatch(frame.commandBuffer(), push, (width + 7) / 8, (height + 7) / 8, 1)::close);
             var barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
                     .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT).srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)

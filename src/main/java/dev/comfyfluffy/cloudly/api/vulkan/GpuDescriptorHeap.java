@@ -16,6 +16,10 @@ public final class GpuDescriptorHeap implements AutoCloseable, GpuDescriptorWrit
     private record Buffer(long address, long handle, long bytes) { }
     private final GpuDevice gpu;
     private final Map<Integer, Entry> entries = new HashMap<>();
+    private final Map<Integer, ViewInfo> imageViews = new HashMap<>();
+    private final Map<Long, ImageInfo> images = new HashMap<>();
+    public record ImageInfo(int type, int format, int width, int height, int depth, int mipLevels, int layers) { }
+    public record ViewInfo(long image, int viewType, int format, int baseMip, int levels, int baseLayer, int layers) { }
     private final NavigableMap<Long, Buffer> buffers = new TreeMap<>(Long::compareUnsigned);
     private int next = 1;
     GpuDescriptorHeap(GpuDevice gpu) { this.gpu = gpu; }
@@ -42,6 +46,7 @@ public final class GpuDescriptorHeap implements AutoCloseable, GpuDescriptorWrit
                     closed = true;
                     for (int slot = first; slot < first + count; slot++) {
                         Entry old = entries.remove(slot);
+                        imageViews.remove(slot);
                         if (old != null) old.destroy().run();
                     }
                 }
@@ -66,6 +71,23 @@ public final class GpuDescriptorHeap implements AutoCloseable, GpuDescriptorWrit
     }
     public long imageView(GpuDescriptorIndex.Resource index) { return resolve(index).imageView(); }
     public long samplerHandle(GpuDescriptorIndex.Sampler index) { return resolve(index).sampler(); }
+    public synchronized void registerImage(long handle, VkImageCreateInfo info) {
+        if (images.putIfAbsent(handle, new ImageInfo(info.imageType(), info.format(), info.extent().width(),
+                info.extent().height(), info.extent().depth(), info.mipLevels(), info.arrayLayers())) != null) {
+            throw new IllegalStateException("Cloudly image is already registered");
+        }
+    }
+    public synchronized void unregisterImage(long handle) { images.remove(handle); }
+    public synchronized ImageInfo imageInfo(long handle) {
+        ImageInfo result = images.get(handle);
+        if (result == null) throw new IllegalStateException("Cloudly image has no live storage metadata");
+        return result;
+    }
+    public synchronized ViewInfo viewInfo(GpuDescriptorIndex index) {
+        ViewInfo result = imageViews.get(index.value());
+        if (result == null) throw new IllegalStateException("Cloudly descriptor has no owned view metadata");
+        return result;
+    }
     public synchronized void registerBuffer(long address, long handle, long bytes) {
         Buffer existing = buffers.putIfAbsent(address, new Buffer(address, handle, bytes));
         if (existing != null && existing.handle() != handle) throw new IllegalStateException("Duplicate buffer device address");
@@ -111,6 +133,11 @@ public final class GpuDescriptorHeap implements AutoCloseable, GpuDescriptorWrit
             long view = out.get(0);
             put(slot(range, offset), new Entry(type, view, info.layout(), 0, 0, 0, 0, 0,
                     () -> vkDestroyImageView(gpu.vk(), view, null)));
+            var source = info.view(); var subresource = source.subresourceRange();
+            synchronized (this) {
+                imageViews.put(slot(range, offset), new ViewInfo(source.image(), source.viewType(), source.format(),
+                        subresource.baseMipLevel(), subresource.levelCount(), subresource.baseArrayLayer(), subresource.layerCount()));
+            }
         }
     }
     @Override public void writeImages(GpuDescriptorRange<GpuDescriptorIndex.Resource> range, int offset,
@@ -153,6 +180,6 @@ public final class GpuDescriptorHeap implements AutoCloseable, GpuDescriptorWrit
         throw new UnsupportedOperationException("Cloudly native programs do not bind acceleration structures");
     }
     @Override public synchronized void close() {
-        if (!entries.isEmpty() || !buffers.isEmpty()) throw new IllegalStateException("Cloudly resources remain live at device closure");
+        if (!entries.isEmpty() || !buffers.isEmpty() || !images.isEmpty()) throw new IllegalStateException("Cloudly resources remain live at device closure");
     }
 }
