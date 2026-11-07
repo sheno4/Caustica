@@ -139,7 +139,7 @@ public abstract class GameRendererMixin {
 		}
 
 		var cameraState = this.gameRenderState().levelRenderState.cameraRenderState;
-		RtComposite.INSTANCE.captureFrame(projection, cameraState.viewRotationMatrix,
+		RtComposite.INSTANCE.captureFrame(cameraState.projectionMatrix, projection, cameraState.viewRotationMatrix,
 				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
 		VanillaRenderController.INSTANCE.markProjectionCaptured();
 		return projection;

@@ -33,6 +33,7 @@ import net.minecraft.world.level.MoonPhase;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
+import org.joml.Vector3f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRSynchronization2;
@@ -289,9 +290,12 @@ public final class RtComposite {
     // Camera captured each frame from GameRenderer (unjittered level projection + camera rotation + pos).
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
+    private final Matrix4f cloudProjection = new Matrix4f();
+    private final Matrix4f cloudInvViewProj = new Matrix4f();
     private double camX;
     private double camY;
     private double camZ;
+    private double cloudCamX, cloudCamY, cloudCamZ;
     private boolean frameCaptured;
     private long celestialUvAtlasHandle;
     private int celestialUvMoonPhase = -1;
@@ -499,12 +503,21 @@ public final class RtComposite {
     }
 
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
-    public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
-        frameProjection.set(projection);
+    public void captureFrame(Matrix4f baseProjection, Matrix4f levelProjection, Matrix4fc viewRotation,
+                             double cameraX, double cameraY, double cameraZ) {
+        frameProjection.set(levelProjection);
         frameViewRotation.set(viewRotation);
         camX = cameraX;
         camY = cameraY;
         camZ = cameraZ;
+        Matrix4f viewEffect = new Matrix4f(baseProjection).invert().mul(levelProjection);
+        Vector3f offset = new Matrix4f(viewEffect).mul(viewRotation).invert().transformPosition(new Vector3f());
+        viewEffect.m30(0).m31(0).m32(0);
+        cloudProjection.set(baseProjection).mul(viewEffect);
+        cloudInvViewProj.set(cloudProjection).mul(viewRotation).invert();
+        cloudCamX = cameraX + offset.x;
+        cloudCamY = cameraY + offset.y;
+        cloudCamZ = cameraZ + offset.z;
         frameCaptured = true;
     }
 
@@ -1083,7 +1096,7 @@ public final class RtComposite {
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             if (cloudly != null && cloudly.skyPreset() != null) {
                 cloudFrame = cloudly.frame(cmd, frameCounter, System.nanoTime() / 1.0e9,
-                        camX, camY, camZ, frameInvViewProj.get(new float[16]), jitterX, jitterY,
+                        cloudCamX, cloudCamY, cloudCamZ, cloudInvViewProj.get(new float[16]), jitterX, jitterY,
                         exposure.preExposure(), rrOutput, gCloudDepth);
                 cloudShadow = cloudly.surfaceShadow();
                 if (cloudShadow != null) cloudShadow.prepareRead(cloudFrame);

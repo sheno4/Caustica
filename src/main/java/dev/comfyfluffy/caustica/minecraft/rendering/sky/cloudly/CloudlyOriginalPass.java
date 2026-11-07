@@ -293,7 +293,10 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         double speed = 0;
         if (reuseHistory) {
             float[] a = current.sourceOriginMeters(), b = target.previous.sourceOriginMeters();
-            speed = Math.sqrt(Math.pow(a[0]-b[0],2)+Math.pow(a[1]-b[1],2)+Math.pow(a[2]-b[2],2));
+            double meters = Math.sqrt(Math.pow(a[0]-b[0],2)+Math.pow(a[1]-b[1],2)+Math.pow(a[2]-b[2],2));
+            double elapsed = frame.timeSeconds() - target.previousTime;
+            // The native CameraSpeedMeter contract is metres per second, not metres per frame.
+            speed = elapsed > 1.0e-4 ? meters / elapsed : 0.0;
         }
         put(inputs, "frame.cameraSpeedMeters", speed);
         float[] origin = current.sourceOriginMeters();

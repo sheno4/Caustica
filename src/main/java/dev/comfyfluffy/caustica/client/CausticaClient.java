@@ -1,6 +1,12 @@
 package dev.comfyfluffy.caustica.client;
 
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.CausticaConfig;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.network.chat.Component;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtComposite;
@@ -22,6 +28,24 @@ public final class CausticaClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		CausticaMod.LOGGER.info("Caustica client initialized");
+
+		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registry) -> dispatcher.register(
+				LiteralArgumentBuilder.<FabricClientCommandSource>literal("caustica").then(
+						LiteralArgumentBuilder.<FabricClientCommandSource>literal("cloudheight")
+						.executes(ctx -> {
+							int blocks = CausticaConfig.Rt.Cloudly.HEIGHT_OFFSET_BLOCKS.value();
+							ctx.getSource().sendFeedback(Component.literal("Cloud height offset: " + blocks + " blocks"));
+							return blocks;
+						})
+						.then(com.mojang.brigadier.builder.RequiredArgumentBuilder
+								.<FabricClientCommandSource, Integer>argument("blocks", IntegerArgumentType.integer(-16000, 16000))
+								.executes(ctx -> {
+									int blocks = IntegerArgumentType.getInteger(ctx, "blocks");
+									CausticaConfig.Rt.Cloudly.HEIGHT_OFFSET_BLOCKS.set(blocks);
+									CausticaConfig.save();
+									ctx.getSource().sendFeedback(Component.literal("Cloud height offset set to " + blocks + " blocks"));
+									return blocks;
+								})))));
 
 		// Class-init runs DebugScreenEntries.register(...) via its ID field; touching the class here
 		// makes the entry discoverable in F3's entry list. Off by default -- the player opts in the
