@@ -1,16 +1,10 @@
-// Ray miss = sky. Two sky-view LUT fetches (sun slice + moon slice) give the whole atmosphere; the disc
-// sprites, the starfield and the night airglow floor are added on top. Everything physical lives in
-// sky.slang, shared verbatim with the LUT bakes, so the sky a ray sees and the sky the LUT holds cannot
-// diverge.
+// Miss rays sample the complete native environment when its scene revision is available. Atmosphere,
+// clouds and stars share the source radiance, while the separate celestial layer follows the path's
+// NEE gate. Host atmosphere LUTs and analytic celestials supply the fallback before native publication.
 //
-// Atmospheric scattering is amortized into the per-frame LUT. Analytic stars, airglow, and textured
-// celestial discs are combined with that physical result here.
-//
-// Celestial discs are gated by a packed payload flag, which raygen sets per-ray from the path state: true
-// on the primary ray and after every specular/dielectric bounce (so the sun/moon appear in water, glass
-// and metal reflections/refractions), false after a diffuse vertex did sun/moon NEE — otherwise the disc
-// would be counted twice against the direct light and show up as fireflies. The atmosphere and the stars
-// are added on every miss at any bounce: stars are not a NEE light, so they never double-count.
+// Disc visibility is enabled for delta reflection/refraction paths and disabled where a finite lobe or
+// diffuse vertex already estimated sun/moon direct light. The remaining sky radiance contributes at
+// every miss, so water, glass and diffuse indirect paths read the same native environment.
 import world_common;
 import sky;
 import bindings;
@@ -105,13 +99,7 @@ float3 skyDome(float3 dir, SkyState state) {
     return skyViewLut.SampleLevel(sunUv, 0.0).rgb + skyViewLut.SampleLevel(moonUv, 0.0).rgb;
 }
 
-[shader("miss")]
-void main(inout Payload payload) {
-    WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-    SkyState state = skyState(worldPush);
-    float3 dir = normalize(WorldRayDirection());
-    bool showCelestial = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
-
+float3 hostSkyRadiance(float3 dir, SkyState state, WorldPush worldPush, bool showCelestial) {
     float3 color = skyDome(dir, state);
     // Airglow plus integrated unresolved starlight: the real floor of a moonless night sky (~1e-3 cd/m²),
     // isotropic because it is emitted by the upper atmosphere itself rather than scattered from a body.
@@ -170,12 +158,32 @@ void main(inout Payload payload) {
         // zero below the horizon, matching the NEE visibility test.
     }
 
+    return bt709ToAcesCg(max(color, float3(0.0)));
+}
+
+[shader("miss")]
+void main(inout Payload payload) {
+    WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+    SkyState state = skyState(worldPush);
+    float3 dir = normalize(WorldRayDirection());
+    bool showCelestial = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
+
+    float3 color;
+    if (state.nativeCloudly && worldPush.cloudlyEnvironment.x != 0.0) {
+        // Both native layers contain absolute ACEScg radiance. Only delta reflection/refraction paths
+        // receive the discs; finite lobes and diffuse vertices already sampled them through NEE.
+        color = cloudlyEnvironmentTex.SampleLevel(dir, 0.0).rgb;
+        if (showCelestial) color += cloudlyCelestialTex.SampleLevel(dir, 0.0).rgb;
+    } else {
+        color = hostSkyRadiance(dir, state, worldPush, showCelestial);
+    }
+
     // The sky goes out in absolute scene units at full fp32 — packSky writes the payload's three surface
     // words as raw floats rather than halves, which is why the sun disc's ~1e5 cd/m² needs neither a
     // pre-exposure scale nor a clamp to stay representable. The fp16 ceiling reappears only at world.rgen's
     // outImage store, where the finite-half clamp is applied. packSky also
     // overwrites the normal view, so there is no separate normal clear below.
-    packSky(payload, bt709ToAcesCg(max(color, float3(0.0))));
+    packSky(payload, max(color, float3(0.0)));
     payload.hitT = -1.0;
     payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
     payload.f0 = half3(0.0h, 0.0h, 0.0h);

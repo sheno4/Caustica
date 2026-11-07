@@ -73,6 +73,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.cloudly.RtCloudlyFrame;
 import dev.comfyfluffy.caustica.rt.cloudly.RtCloudlyRenderer;
+import dev.comfyfluffy.caustica.rt.cloudly.CloudlyEnvironment;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySkyPreset;
 import dev.comfyfluffy.caustica.minecraft.rendering.sky.cloudly.CloudlySurfaceShadow;
 
@@ -1071,6 +1072,7 @@ public final class RtComposite {
         RtTerrain terrain = RtTerrain.currentOrNull();
         RtCloudlyFrame cloudFrame = null;
         CloudlySurfaceShadow.Snapshot cloudShadow = null;
+        CloudlyEnvironment.Snapshot cloudEnvironment = null;
         try {
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
@@ -1100,6 +1102,8 @@ public final class RtComposite {
                         exposure.preExposure(), rrOutput, gCloudDepth);
                 cloudShadow = cloudly.surfaceShadow();
                 if (cloudShadow != null) cloudShadow.prepareRead(cloudFrame);
+                cloudEnvironment = cloudly.environment();
+                if (cloudEnvironment != null) cloudEnvironment.prepareRead(cloudFrame);
             }
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
             // submerged, fixing the air→water first-segment orientation) and animated water normals.
@@ -1199,7 +1203,8 @@ public final class RtComposite {
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
                     exposure.preExposure(),
-                    cloudPush.sunColor(), cloudPush.shadowOrigin(), cloudPush.shadowScale(), cloudPush.shadowLight()
+                    cloudPush.sunColor(), cloudPush.shadowOrigin(), cloudPush.shadowScale(), cloudPush.shadowLight(),
+                    new Float4(cloudEnvironment == null ? 0f : 1f, 0f, 0f, 0f)
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
@@ -1220,6 +1225,10 @@ public final class RtComposite {
             active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
             if (cloudShadow != null) {
                 active.setCloudlyShadow(cloudly.imageView(cloudShadow.sampledIndex()), cloudlyShadowSampler(ctx));
+            }
+            if (cloudEnvironment != null) {
+                active.setCloudlyEnvironment(cloudEnvironment.environmentView(), cloudEnvironment.celestialView(),
+                        cloudlyShadowSampler(ctx));
             }
             currentTlasHandle = frameTlas.accel.handle;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
@@ -1354,6 +1363,7 @@ public final class RtComposite {
         } finally {
             if (cloudFrame != null) cloudFrame.close();
             if (cloudShadow != null) cloudShadow.close();
+            if (cloudEnvironment != null) cloudEnvironment.close();
         }
     }
 

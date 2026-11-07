@@ -94,6 +94,7 @@ public struct WorldPush {
     public float4   cloudlyShadowOrigin;  // xyz source UV at the camera, w field available
     public float4   cloudlyShadowScale;   // xyz metres per block divided by source grid extent
     public float4   cloudlyShadowLight;   // xyz the field's distant-light direction in host coordinates
+    public float4   cloudlyEnvironment;   // x complete native environment available, yzw reserved
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the

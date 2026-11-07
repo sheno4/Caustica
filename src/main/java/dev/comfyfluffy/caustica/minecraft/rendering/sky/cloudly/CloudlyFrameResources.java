@@ -53,17 +53,25 @@ public final class CloudlyFrameResources implements AutoCloseable {
     private final Map<String, Buffer> buffers;
     private final Map<String, GpuDescriptorIndex.Sampler> samplers;
     private final ResourceOwner owner;
+    private final java.util.Set<String> borrowedImages;
     private boolean initializationRecorded;
     private boolean closed;
 
     CloudlyFrameResources(CloudlyFrameSchedule schedule, Map<String, Image> images,
                                   Map<String, Buffer> buffers, Map<String, GpuDescriptorIndex.Sampler> samplers,
                                   ResourceOwner owner) {
+        this(schedule, images, buffers, samplers, owner, java.util.Set.of());
+    }
+
+    private CloudlyFrameResources(CloudlyFrameSchedule schedule, Map<String, Image> images,
+                                  Map<String, Buffer> buffers, Map<String, GpuDescriptorIndex.Sampler> samplers,
+                                  ResourceOwner owner, java.util.Set<String> borrowedImages) {
         this.schedule = schedule;
         this.images = Map.copyOf(images);
         this.buffers = Map.copyOf(buffers);
         this.samplers = Map.copyOf(samplers);
         this.owner = owner;
+        this.borrowedImages = java.util.Set.copyOf(borrowedImages);
     }
 
     /** Pure metadata decoding; does not query a Vulkan device, allocate, or record commands. */
@@ -174,16 +182,38 @@ public final class CloudlyFrameResources implements AutoCloseable {
      */
     public static CloudlyFrameResources allocate(GpuDevice gpu, ResourceFactory resources,
                                                  CloudlyFrameSchedule schedule, CloudlyFrameSchedule.Resolved resolved) {
+        return allocate(gpu, resources, schedule, resolved, Map.of(), ResourceOwner.none());
+    }
+
+    /** Borrowed volume images retain their producer and are never transitioned, cleared or destroyed here. */
+    public static CloudlyFrameResources allocate(GpuDevice gpu, ResourceFactory resources,
+                                                 CloudlyFrameSchedule schedule, CloudlyFrameSchedule.Resolved resolved,
+                                                 Map<String, Image> sharedImages, ResourceOwner sharedOwner) {
         AllocationPlan plan = inspect(schedule, resolved);
+        var imageNames = new HashSet<String>();
+        plan.images().forEach(image -> imageNames.add(image.name()));
+        if (!imageNames.containsAll(sharedImages.keySet())) throw new IllegalArgumentException("Unknown borrowed source image");
         List<OwnedImage> ownedImages = new ArrayList<>();
         List<OwnedBuffer> ownedBuffers = new ArrayList<>();
         GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerRange = null;
         ResourceOwner owner = null;
+        ResourceOwner sharedClaim = sharedOwner.retain();
         try {
             Map<String, Image> images = new LinkedHashMap<>();
             Map<String, Buffer> buffers = new LinkedHashMap<>();
             Map<String, GpuDescriptorIndex.Sampler> samplers = new LinkedHashMap<>();
             for (ImageSpec spec : plan.images()) {
+                Image shared = sharedImages.get(spec.name());
+                if (shared != null) {
+                    if (!shared.dimension().equals(spec.dimension()) || shared.width() != spec.width()
+                            || shared.height() != spec.height() || shared.depth() != spec.depth()
+                            || shared.mipLevels() != spec.mipLevels() || shared.format() != spec.format()
+                            || (shared.usage() & spec.usage()) != spec.usage()) {
+                        throw new IllegalArgumentException("Borrowed source frame image differs from its producer: " + spec.name());
+                    }
+                    images.put(spec.name(), shared);
+                    continue;
+                }
                 var allocation = allocateImage(gpu, spec);
                 ownedImages.add(allocation);
                 images.put(spec.name(), allocation.image());
@@ -210,15 +240,15 @@ public final class CloudlyFrameResources implements AutoCloseable {
             var descriptors = samplerRange;
             owner = resources.create(() -> new ResourceLifetime(
                     () -> { if (descriptors != null) descriptors.destroy(); },
-                    () -> closeBuffers(ownedBuffers), () -> closeImages(ownedImages)).close());
-            return new CloudlyFrameResources(schedule, images, buffers, samplers, owner);
+                    () -> closeBuffers(ownedBuffers), () -> closeImages(ownedImages), sharedClaim::close).close());
+            return new CloudlyFrameResources(schedule, images, buffers, samplers, owner, sharedImages.keySet());
         } catch (RuntimeException | Error failure) {
             ResourceOwner allocatedOwner = owner;
             var descriptors = samplerRange;
             ResourceLifetime.closeAfterFailure(failure, () -> {
                 if (allocatedOwner != null) allocatedOwner.close();
                 else new ResourceLifetime(() -> { if (descriptors != null) descriptors.destroy(); },
-                        () -> closeBuffers(ownedBuffers), () -> closeImages(ownedImages)).close();
+                        () -> closeBuffers(ownedBuffers), () -> closeImages(ownedImages), sharedClaim::close).close();
             });
             throw failure;
         }
@@ -285,10 +315,12 @@ public final class CloudlyFrameResources implements AutoCloseable {
         if (initializationRecorded) throw new IllegalStateException("Frame-resource initialization was already recorded");
         frame.retain(owner);
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            if (!images.isEmpty()) {
-                var transitions = VkImageMemoryBarrier2.calloc(images.size(), stack);
+            int ownedImageCount = images.size() - borrowedImages.size();
+            if (ownedImageCount > 0) {
+                var transitions = VkImageMemoryBarrier2.calloc(ownedImageCount, stack);
                 int index = 0;
                 for (Image image : images.values()) {
+                    if (borrowedImages.contains(image.name())) continue;
                     var transition = transitions.get(index++).sType$Default().image(image.handle())
                             .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_GENERAL)
                             .srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).srcAccessMask(VK13.VK_ACCESS_2_NONE)
@@ -302,7 +334,8 @@ public final class CloudlyFrameResources implements AutoCloseable {
             }
             boolean cleared = false;
             for (var resource : schedule.resources()) {
-                if (resource.kind() != CloudlyFrameSchedule.Kind.IMAGE || !resource.spec().has("clearOnAllocation")) continue;
+                if (resource.kind() != CloudlyFrameSchedule.Kind.IMAGE || borrowedImages.contains(resource.name())
+                        || !resource.spec().has("clearOnAllocation")) continue;
                 clearImage(frame, stack, image(resource.name()));
                 cleared = true;
             }
@@ -324,6 +357,7 @@ public final class CloudlyFrameResources implements AutoCloseable {
             if (stage.spec().has("barrierBefore")) declaredBarrier(frame, stack, stage.spec().getAsJsonObject("barrierBefore"));
             for (JsonElement element : stage.spec().getAsJsonArray("resources")) {
                 String name = element.getAsString();
+                if (borrowedImages.contains(name)) throw new IllegalArgumentException("Cannot clear a borrowed source image " + name);
                 if (images.containsKey(name)) {
                     if ((image(name).usage() & VK_IMAGE_USAGE_TRANSFER_DST_BIT) == 0) throw new IllegalArgumentException("Clear image lacks TRANSFER_DST");
                     clearImage(frame, stack, image(name));

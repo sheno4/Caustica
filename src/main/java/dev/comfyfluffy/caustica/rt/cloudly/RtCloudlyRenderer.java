@@ -32,6 +32,7 @@ public final class RtCloudlyRenderer implements AutoCloseable {
     private final GpuComputeQueue compute;
     private final ResourceFactory resources = new ResourceFactory();
     private final CloudlyScenePass scenes;
+    private final RtCloudlyEnvironmentProbe environment;
     private MinecraftSkyFrame captured;
     private Level capturedLevel;
     private RtImage output;
@@ -44,6 +45,7 @@ public final class RtCloudlyRenderer implements AutoCloseable {
         this.gpu = new GpuDevice(context);
         this.compute = new GpuComputeQueue(gpu);
         this.scenes = new CloudlyScenePass(gpu, compute, resources, () -> values, () -> captured);
+        this.environment = new RtCloudlyEnvironmentProbe(gpu, resources, scenes);
     }
 
     /** Publish asynchronous resources before the host reserves this frame's graphics dependencies. */
@@ -52,15 +54,19 @@ public final class RtCloudlyRenderer implements AutoCloseable {
         Level level = Minecraft.getInstance().level;
         if (level != capturedLevel) {
             scenes.invalidateHistory();
+            environment.clear();
             capturedLevel = level;
         }
         values = snapshotOptions();
         scenes.update();
+        values = snapshotOptions();
         captured = captureSky(cameraY);
+        if (scenes.skyPreset() == null) environment.deactivate();
     }
 
     public CloudlySkyPreset skyPreset() { return scenes.skyPreset(); }
     public CloudlySurfaceShadow.Snapshot surfaceShadow() { return scenes.surfaceShadow(); }
+    public CloudlyEnvironment.Snapshot environment() { return environment.capture(); }
     public long imageView(int sampledIndex) {
         return gpu.descriptorHeap().imageView(new GpuDescriptorIndex.Resource(sampledIndex));
     }
@@ -69,6 +75,7 @@ public final class RtCloudlyRenderer implements AutoCloseable {
                                double cameraX, double cameraY, double cameraZ,
                                float[] inverseClip, float jitterX, float jitterY, float preExposure,
                                RtImage sceneColor, RtImage primaryDepth) {
+        environment.refresh(captured, values, new Camera(cameraX, cameraY, cameraZ));
         ensureOutput(sceneColor.width, sceneColor.height);
         var color = new BorrowedGpuImage(gpu, sceneColor, VK10.VK_FORMAT_R16G16B16A16_SFLOAT);
         BorrowedGpuImage depth = null;
@@ -91,6 +98,7 @@ public final class RtCloudlyRenderer implements AutoCloseable {
     public void record(RtCloudlyFrame frame, RtImage sceneColor, MemoryStack stack) {
         scenes.record(frame);
         if (!frame.outputAcquired()) return;
+        environment.record(frame, captured, values);
         VulkanCommandEncoder.memoryBarrier(frame.commandBuffer(), stack);
         var copy = VkImageCopy.calloc(1, stack);
         copy.srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
@@ -125,6 +133,9 @@ public final class RtCloudlyRenderer implements AutoCloseable {
                 CausticaConfig.Rt.Cloudly.SCENE.get().toUpperCase(Locale.ROOT));
         int height = CausticaConfig.Rt.Cloudly.HEIGHT_OFFSET_BLOCKS.value();
         float distance = CausticaConfig.Rt.Cloudly.MAX_DISTANCE_KM.value();
+        CloudlySkyPreset preset = scenes.skyPreset();
+        float tilt = preset == null ? RtLookPackage.current().sky().sunNoonSouthTiltDegrees()
+                : (float) preset.noonTiltDegrees();
         return new OptionValues() {
             @SuppressWarnings("unchecked")
             @Override public <T> T get(Option<T> option) {
@@ -133,9 +144,7 @@ public final class RtCloudlyRenderer implements AutoCloseable {
                 if (option.equals(CloudlyOptions.HEIGHT_OFFSET_BLOCKS)) return (T) Integer.valueOf(height);
                 if (option.equals(CloudlyOptions.MAX_DISTANCE_KM)) return (T) Float.valueOf(distance);
                 if (option.equals(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES)) {
-                    CloudlySkyPreset preset = scenes.skyPreset();
-                    return (T) Float.valueOf(preset == null ? RtLookPackage.current().sky().sunNoonSouthTiltDegrees()
-                            : (float) preset.noonTiltDegrees());
+                    return (T) Float.valueOf(tilt);
                 }
                 throw new IllegalArgumentException("Unknown native sky option: " + option.id());
             }
@@ -166,6 +175,7 @@ public final class RtCloudlyRenderer implements AutoCloseable {
     }
 
     @Override public void close() {
+        environment.close();
         scenes.close();
         if (outputOwner != null) { outputOwner.close(); outputOwner = null; }
         compute.close();

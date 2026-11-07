@@ -5,12 +5,14 @@ import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.resource.ResourceFactory;
 import dev.comfyfluffy.caustica.api.vulkan.GpuComputeQueue;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftSkyFrame;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.function.Supplier;
+import java.util.function.Consumer;
 
 /** Publishes a prepared native scene and its lighting together at the start of a world frame. */
 public final class CloudlyScenePass implements Pass<PostEffectFrame> {
@@ -104,6 +106,17 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
 
     public synchronized CloudlySkyPreset skyPreset() { return active == null ? null : active.skyPreset(); }
     public synchronized CloudlySurfaceShadow.Snapshot surfaceShadow() { return active == null ? null : active.surfaceShadow(); }
+    public synchronized Object environmentIdentity() { return active; }
+    public synchronized long environmentRevision() { return active == null ? 0 : active.environmentRevision(); }
+
+    /** Call after this scene's main recording; callbacks consume unexposed native linear BT.709 radiance. */
+    public synchronized boolean recordEnvironmentFace(PostEffectFrame frame, MinecraftSkyFrame captured,
+                                                       OptionValues values,
+                                                       Consumer<GpuDescriptorIndex.Resource> noDiscs,
+                                                       Consumer<GpuDescriptorIndex.Resource> withDiscs) {
+        return !closed && active != null
+                && active.recordEnvironmentFace(frame, captured, values, noDiscs, withDiscs);
+    }
 
     /** A different world may reuse frame numbers and coordinates, but cannot reuse its predecessor's history. */
     public synchronized void invalidateHistory() {

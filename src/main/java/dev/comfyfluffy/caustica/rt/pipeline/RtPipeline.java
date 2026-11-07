@@ -175,8 +175,14 @@ public final class RtPipeline {
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1)
                     .stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+            for (int binding : new int[]{WORLD_CLOUDLY_ENVIRONMENT, WORLD_CLOUDLY_CELESTIAL}) {
+                binds.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                        .descriptorCount(1).stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR);
+            }
             var ordinaryBindingFlags = stack.callocInt(WORLD_SET_BINDING_COUNT);
             ordinaryBindingFlags.put(WORLD_CLOUD_SURFACE_TRANSMITTANCE, VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT);
+            ordinaryBindingFlags.put(WORLD_CLOUDLY_ENVIRONMENT, VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT);
+            ordinaryBindingFlags.put(WORLD_CLOUDLY_CELESTIAL, VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT);
             var ordinaryFlags = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack).sType$Default()
                     .pBindingFlags(ordinaryBindingFlags);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default()
@@ -491,6 +497,23 @@ public final class RtPipeline {
                     .dstBinding(WORLD_CLOUD_SURFACE_TRANSMITTANCE)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .pImageInfo(info);
+            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
+        }
+    }
+
+    /** The caller retains this complete native environment through the selected slot's graphics use. */
+    public void setCloudlyEnvironment(long environmentView, long celestialView, long sampler) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var info = VkDescriptorImageInfo.calloc(2, stack);
+            info.get(0).sampler(sampler).imageView(environmentView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            info.get(1).sampler(sampler).imageView(celestialView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            var write = VkWriteDescriptorSet.calloc(2, stack);
+            int[] bindings = {WORLD_CLOUDLY_ENVIRONMENT, WORLD_CLOUDLY_CELESTIAL};
+            for (int i = 0; i < bindings.length; i++) {
+                write.get(i).sType$Default().dstSet(descriptorSets[currentSet]).dstBinding(bindings[i])
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                        .pImageInfo(VkDescriptorImageInfo.create(info.get(i).address(), 1));
+            }
             VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
         }
     }

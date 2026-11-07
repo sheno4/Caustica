@@ -28,6 +28,7 @@ public final class RtCloudlyFrame implements PostEffectFrame, AutoCloseable {
     private final List<Runnable> accepted = new ArrayList<>();
     private final List<Runnable> retired = new ArrayList<>();
     private boolean acquired, finished;
+    private RtCloudlyFrame parent;
 
     RtCloudlyFrame(VkCommandBuffer commands, long index, double time, Camera camera,
                    float[] inverseClip, float jitterX, float jitterY, float preExposure,
@@ -83,13 +84,27 @@ public final class RtCloudlyFrame implements PostEffectFrame, AutoCloseable {
 
     public boolean outputAcquired() { return acquired; }
 
+    /** A directional capture shares this submission's callbacks and never acquires the world output. */
+    RtCloudlyFrame environmentFace(Camera camera, float[] fromClip, double captureTime,
+                                   GpuImage black, GpuImage zeroDepth) {
+        var face = new RtCloudlyFrame(commands, index, captureTime, camera, fromClip, 0, 0, 1,
+                black, zeroDepth, black, outputOwner, black.width(), black.height());
+        face.parent = this;
+        return face;
+    }
+
     @Override public void retain(ResourceOwner owner) {
+        if (parent != null) { parent.retain(owner); return; }
         ResourceOwner claim = owner.retain();
         retired.add(claim::close);
     }
 
-    @Override public void whenSubmitted(Runnable callback) { accepted.add(callback); }
-    @Override public void whenRetired(Runnable callback) { retired.add(callback); }
+    @Override public void whenSubmitted(Runnable callback) {
+        if (parent != null) parent.whenSubmitted(callback); else accepted.add(callback);
+    }
+    @Override public void whenRetired(Runnable callback) {
+        if (parent != null) parent.whenRetired(callback); else retired.add(callback);
+    }
 
     /** Call only after the containing command buffer has been accepted by the encoder. */
     public void submitted(RtGpuExecutor executor, RtGpuExecutor.GraphicsUse graphicsUse) {

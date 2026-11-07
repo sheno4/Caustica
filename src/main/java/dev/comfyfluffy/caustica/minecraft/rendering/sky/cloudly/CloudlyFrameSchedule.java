@@ -131,6 +131,20 @@ public final class CloudlyFrameSchedule {
     public List<Stage> stages() { return stages; }
     public Stage stage(String name) { return java.util.Objects.requireNonNull(byName.get(name), "Unknown source frame stage " + name); }
 
+    /** Environment radiance keeps native stages and offsets, with full-float composition for celestial HDR. */
+    public CloudlyFrameSchedule environmentProbe() {
+        List<Resource> probeResources = new ArrayList<>();
+        for (Resource resource : resources) {
+            JsonObject spec = resource.spec().deepCopy();
+            if (resource.kind() == Kind.IMAGE && (resource.name().equals("SceneColor")
+                    || resource.name().equals("HostAtmosphereBackground"))) {
+                spec.addProperty("format", org.lwjgl.vulkan.VK10.VK_FORMAT_R32G32B32A32_SFLOAT);
+            }
+            probeResources.add(new Resource(resource.name(), resource.kind(), spec));
+        }
+        return new CloudlyFrameSchedule(executionReady, probeResources, stages);
+    }
+
     /** Extents are real caller inputs. Missing dimensions never become a one-pixel substitute. */
     public Resolved resolve(Map<String, double[]> inputs) {
         Map<String, Extent> images = new LinkedHashMap<>();

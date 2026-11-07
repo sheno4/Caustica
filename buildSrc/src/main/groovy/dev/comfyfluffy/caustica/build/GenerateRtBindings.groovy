@@ -34,6 +34,7 @@ abstract class GenerateRtBindings extends DefaultTask {
                     CELESTIALS: "celestialsAtlas", SKY_VIEW: "skyViewLut", TRANSMITTANCE: "transmittanceLut",
                     CLOUD_SURFACE_TRANSMITTANCE: "cloudSurfaceTransmittanceTex",
                     CLOUD_DEPTH: "gCloudDepth",
+                    CLOUDLY_ENVIRONMENT: "cloudlyEnvironmentTex", CLOUDLY_CELESTIAL: "cloudlyCelestialTex",
                     ENTITY_ALBEDO: "entityAlbedoTex", MATERIAL_SURFACE0: "materialSurface0Tex",
                     MATERIAL_NORMAL_AO: "materialNormalAoTex", MATERIAL_SURFACE1: "materialSurface1Tex"]],
             [prefix: "DISPLAY", source: "pipelines/display/main.comp.slang", resources: [

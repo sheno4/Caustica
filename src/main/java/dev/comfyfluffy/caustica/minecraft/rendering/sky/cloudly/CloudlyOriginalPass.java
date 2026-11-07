@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.VK10.*;
 
@@ -46,6 +47,11 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     private volatile Throwable preparationFailure;
     private boolean preparationFinished;
     private Epoch epoch;
+    private Epoch environmentEpoch;
+    private Epoch environmentMain;
+    private CloudlyFrameSchedule environmentSchedule;
+    private EnvironmentLighting environmentLighting;
+    private long environmentRevision;
     private int requestedHeightOffset, appliedHeightOffset;
     private long heightRequestNanos;
 
@@ -101,10 +107,19 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     public Optional<Throwable> preparationFailure() { return Optional.ofNullable(preparationFailure); }
     public CloudlySkyPreset skyPreset() { Assets ready = assets; return ready == null ? null : ready.sky; }
     public CloudlySurfaceShadow.Snapshot surfaceShadow() { return surfaceShadow.capture(); }
+    public synchronized long environmentRevision() { return environmentRevision; }
 
     public synchronized void invalidateHistory() {
+        invalidateEnvironment();
         if (epoch != null) { epoch.close(); epoch = null; }
         surfaceShadow.clearPublished();
+    }
+
+    private void invalidateEnvironment() {
+        environmentRevision++;
+        environmentLighting = null;
+        environmentMain = null;
+        if (environmentEpoch != null) { environmentEpoch.close(); environmentEpoch = null; }
     }
 
     @FunctionalInterface
@@ -288,11 +303,13 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                 || !epoch.extents.images().equals(resolved.images()) || !epoch.extents.buffers().equals(resolved.buffers())) {
             Epoch previous = epoch;
             epoch = allocateEpoch(frame, ready.project.schedule(), resolved);
+            invalidateEnvironment();
             if (previous != null) previous.close();
         }
         Epoch target = epoch;
         frame.retain(target.owner);
         if (target.previous != null && target.previousHeightOffset != heightOffset) {
+            invalidateEnvironment();
             target.previous = null;
             target.shadow0 = emptyCache(0);
             target.shadow1 = emptyCache(1);
@@ -406,6 +423,15 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                 if (draw.update().publish()) copyAmbientOcclusion(frame, target, draw.level());
             }
             plan.record(frame, ready.programs);
+            var lightingInputs = new LinkedHashMap<String, double[]>();
+            inputs.forEach((name, value) -> {
+                if (name.startsWith("frame.shadow") || name.startsWith("frame.cloudAO")
+                        || name.startsWith("nativeFrame.Shadow") || name.equals("nativeFrame.shadowSplitGrid")) {
+                    lightingInputs.put(name, value.clone());
+                }
+            });
+            environmentLighting = new EnvironmentLighting(target, frameNumber, heightOffset,
+                    Map.copyOf(lightingInputs), Map.copyOf(roles));
             ready.timing.end(frame, measurement);
             if (!target.reported) {
                 frame.whenSubmitted(() -> {
@@ -415,6 +441,159 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                             terrainFadeStart, terrainFadeEnd, ready.project.scalar("distanceNormalizationMeters"));
                 });
             }
+        }
+    }
+
+    /** One directional environment face uses native tracing after the main frame produces its lighting volumes. */
+    public synchronized boolean recordEnvironmentFace(PostEffectFrame frame, MinecraftSkyFrame captured,
+                                                       OptionValues values,
+                                                       Consumer<GpuDescriptorIndex.Resource> noDiscs,
+                                                       Consumer<GpuDescriptorIndex.Resource> withDiscs) {
+        Assets ready = assets;
+        EnvironmentLighting lighting = environmentLighting;
+        if (closed || ready == null || captured == null || lighting == null
+                || lighting.main() != epoch || lighting.frameIndex() != frame.frameIndex()
+                || !values.get(CloudlyOptions.ENABLED)) return false;
+        if (frame.preExposure() != 1 || frame.sceneColor().width() != frame.sceneColor().height()) {
+            throw new IllegalArgumentException("Native environment faces require square, unexposed inputs");
+        }
+        var view = frame.view().camera();
+        var camera = new CloudlyFrameCamera(frame.cameraRelativeFromClip(), view.x(), view.y(), view.z(),
+                captured.celestial().seaLevel(), frame.metersPerSceneUnit());
+        Map<String, double[]> inputs = frameInputs(frame, captured, values, ready, camera);
+        inputs.putAll(lighting.inputs());
+        put(inputs, "frame.cloudHeightOffsetMeters", lighting.heightOffset() * frame.metersPerSceneUnit());
+        put(inputs, "frame.previousPreExposure", 1);
+        put(inputs, "frame.historyAvailable", 0);
+        put(inputs, "frame.cameraReset", 1);
+        put(inputs, "frame.cameraSpeedMeters", 0);
+        if (environmentSchedule == null) environmentSchedule = ready.project.schedule().environmentProbe();
+        var schedule = environmentSchedule;
+        var resolved = schedule.resolve(inputs);
+        if (environmentEpoch == null || environmentMain != lighting.main()
+                || environmentEpoch.initializationRecorded && !environmentEpoch.initialized
+                || !environmentEpoch.extents.images().equals(resolved.images())
+                || !environmentEpoch.extents.buffers().equals(resolved.buffers())) {
+            if (environmentEpoch != null) environmentEpoch.close();
+            environmentEpoch = null;
+            environmentMain = null;
+            var shared = new LinkedHashMap<String, CloudlyFrameResources.Image>();
+            lighting.main().buffers.images().forEach((name, image) -> {
+                if (name.startsWith("Shadow") || name.startsWith("CloudAO")) shared.put(name, image);
+            });
+            var buffers = CloudlyFrameResources.allocate(gpu, resources, schedule, resolved,
+                    shared, lighting.main().owner);
+            VmaImage2D depth = null, white = null;
+            try {
+                depth = VmaImage2D.create(gpu, frame.sceneColor().width(), frame.sceneColor().height(), VK_FORMAT_R32_SFLOAT,
+                        "Original Cloudly environment depth");
+                white = VmaImage2D.create(gpu, 1, 1, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                        "Original Cloudly environment occlusion");
+                environmentEpoch = new Epoch(resources, buffers, resolved, depth, white);
+                environmentMain = lighting.main();
+            } catch (RuntimeException | Error failure) {
+                var allocatedDepth = depth;
+                var allocatedWhite = white;
+                ResourceLifetime.closeAfterFailure(failure, () -> new ResourceLifetime(buffers::close,
+                        () -> { if (allocatedDepth != null) allocatedDepth.close(); },
+                        () -> { if (allocatedWhite != null) allocatedWhite.close(); }).close());
+                throw failure;
+            }
+        }
+        Epoch target = environmentEpoch;
+        frame.retain(ready.owner);
+        frame.retain(target.owner);
+        frame.retain(lighting.main().owner);
+        CloudlyFrameRecipe.ViewWriter writer = (layout, bytes) -> CloudlyFrameUniforms.writeView(layout, bytes, camera, camera,
+                frame.sceneColor().width(), frame.sceneColor().height(), 0, 0, 0, 0, 1,
+                (float) frame.timeSeconds(), (float) frame.timeSeconds(), (int) frame.frameIndex());
+        Set<String> selected = new LinkedHashSet<>();
+        Map<String, ResourceOwner> satisfied = new LinkedHashMap<>();
+        for (var stage : schedule.stages()) {
+            if (stage.name().startsWith("Shadow") || stage.name().startsWith("CloudAOTrace")) {
+                satisfied.put(stage.name(), lighting.main().owner);
+            } else if (stage.name().equals("PublishAfterRRComposite") || stage.name().equals("AdvanceHistory")
+                    || stage.name().equals("VisibilityBlend")
+                    || stage.name().startsWith("Stars") && inputs.get("frame.starsEnabled")[0] == 0) {
+                satisfied.put(stage.name(), target.owner);
+            } else selected.add(stage.name());
+        }
+        try (var plan = CloudlyFrameExecutor.preflight(schedule, resolved, selected, satisfied,
+                new CloudlyFrameExecutor.Inputs() {
+                    @Override public CloudlyFrameExecutor.ComputeInput compute(CloudlyFrameSchedule.Stage stage) {
+                        ByteBuffer constants = environmentConstants(ready, inputs, writer, camera, stage, true);
+                        CloudlyFrameExecutor.IndirectBuffer indirect = null;
+                        if (resolved.dispatches().get(stage.name()) instanceof CloudlyFrameSchedule.IndirectDispatch dispatch) {
+                            var buffer = target.buffers.indirectBuffer(dispatch.argumentBuffer(), dispatch.byteOffset());
+                            indirect = new CloudlyFrameExecutor.IndirectBuffer(buffer.handle(), buffer.byteSize(), target.buffers.owner());
+                        }
+                        return new CloudlyFrameExecutor.ComputeInput(constants,
+                                (name, field) -> descriptor(ready, target, lighting.roles(), name, field), Map.of(), camera,
+                                List.of(ready.owner, target.owner, lighting.main().owner), indirect);
+                    }
+                    @Override public CloudlyFrameExecutor.HostOperation host(CloudlyFrameSchedule.Stage stage) {
+                        return switch (stage.operation()) {
+                            case "CLEAR" -> new CloudlyFrameExecutor.HostOperation(
+                                    f -> target.buffers.recordClear(f, stage.name()), List.of(target.owner));
+                            case "HOST_COMPOSITION_INPUTS" -> new CloudlyFrameExecutor.HostOperation(
+                                    f -> importScene(frame, ready, target), List.of(target.owner));
+                            default -> throw new IllegalArgumentException("Unsupported environment operation " + stage.operation());
+                        };
+                    }
+                })) {
+            ready.programs.requirePrograms(plan.programIds());
+            if (!target.initialized) {
+                target.initializationRecorded = true;
+                target.buffers.recordInitialization(frame);
+                ComputeSynchronization.initializeImages(frame.commandBuffer(), List.of(target.depth, target.white));
+                clearWhite(frame, target.white);
+                frame.whenSubmitted(() -> target.initialized = true);
+            }
+            plan.record(frame, ready.programs);
+            noDiscs.accept(target.buffers.image("SceneColor").sampled());
+            clearEnvironmentColor(frame, target.buffers.image("SceneColor"));
+            for (String name : List.of("AtmosphereComposite", "ReconstructCompose")) {
+                var stage = schedule.stage(name);
+                ByteBuffer constants = environmentConstants(ready, inputs, writer, camera, stage, false);
+                var bindings = schedule.bindings(name, (resource, field) -> descriptor(ready, target, lighting.roles(), resource, field));
+                var dispatch = (CloudlyFrameSchedule.DirectDispatch) resolved.dispatches().get(name);
+                ready.programs.record(frame, stage.program().id(), schedule.constants(name, constants),
+                        bindings.descriptors(), Map.of(), camera,
+                        List.of(ready.owner, target.owner, lighting.main().owner), dispatch.x(), dispatch.y(), dispatch.z());
+            }
+            withDiscs.accept(target.buffers.image("SceneColor").sampled());
+        }
+        return true;
+    }
+
+    private ByteBuffer environmentConstants(Assets ready, Map<String, double[]> inputs,
+                                             CloudlyFrameRecipe.ViewWriter writer, CloudlyFrameCamera camera,
+                                             CloudlyFrameSchedule.Stage stage, boolean suppressDiscs) {
+        String id = stage.spec().getAsJsonObject("parameters").get("sourceProgramId").getAsString();
+        var stageWriter = stage.name().startsWith("Stars") ? CloudlyFrameUniforms.directionalProjection(writer, camera) : writer;
+        ByteBuffer original = ready.project.recipes().get(id).encode(Set.of(id), inputs, stageWriter).parameters(id);
+        if (!suppressDiscs || !stage.name().equals("AtmosphereComposite")) return original;
+        ByteBuffer copy = ByteBuffer.allocate(original.remaining()).order(ByteOrder.LITTLE_ENDIAN).put(original.duplicate());
+        copy.flip();
+        stage.program().parametersLayout().putInts(copy, "DrawSunDisk", 0);
+        // Keep the original moon silhouette's alpha so it still occludes catalogue stars.
+        stage.program().parametersLayout().putFloats(copy, "MoonDiskBrightness", -1024f);
+        return copy;
+    }
+
+    private static void clearEnvironmentColor(PostEffectFrame frame, CloudlyFrameResources.Image image) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var before = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                    .srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT).srcAccessMask(VK13.VK_ACCESS_2_MEMORY_READ_BIT | VK13.VK_ACCESS_2_MEMORY_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT).dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            KHRSynchronization2.vkCmdPipelineBarrier2KHR(frame.commandBuffer(), VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(before));
+            var clear = VkClearColorValue.calloc(stack);
+            var range = VkImageSubresourceRange.calloc(stack).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+            vkCmdClearColorImage(frame.commandBuffer(), image.handle(), VK_IMAGE_LAYOUT_GENERAL, clear, range);
+            var after = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                    .srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT).srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT).dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+            KHRSynchronization2.vkCmdPipelineBarrier2KHR(frame.commandBuffer(), VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(after));
         }
     }
 
@@ -740,6 +919,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         void record(PostEffectFrame frame,CloudlyFramePrograms programs) { programs.record(frame,program,constants,descriptors,Map.of(),camera,List.of(owner),x,y,z); }
     }
     private record AmbientOcclusionDraw(Draw draw, int level, CloudlyAmbientOcclusionState.Update update) { }
+    private record EnvironmentLighting(Epoch main, long frameIndex, int heightOffset,
+                                       Map<String, double[]> inputs, Map<String, String> roles) { }
     private record Assets(CloudlySkyPreset sky,CloudlyNativeProject project,CloudlyOriginalBakeResources.Ready density,CloudlyOriginalBakeResources.Ready atmosphere,
                           CloudlyFrameTextures.Ready textures,CloudlySourceBuffer sphere,CloudlySourceBuffer catalogue,CloudlyFramePrograms programs,CloudlyColorBridge color,
                           ShaderObjectCompute input,CloudlyGpuTiming timing,ResourceOwner owner) { }
@@ -775,6 +956,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             worker.interrupt();
             release.addAll(jobs); jobs.clear();
             release.addAll(staged); staged.clear();
+            if(environmentEpoch!=null) { release.add(environmentEpoch); environmentEpoch=null; }
+            environmentLighting=null; environmentMain=null;
             if(epoch!=null) { release.add(epoch); epoch=null; }
             if(assets!=null) { release.add(assets.owner); assets=null; }
             release.add(surfaceShadow);
