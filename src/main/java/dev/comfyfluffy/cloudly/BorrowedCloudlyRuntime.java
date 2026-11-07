@@ -47,6 +47,8 @@ public final class BorrowedCloudlyRuntime {
     private volatile boolean ready;
     private volatile float noonTiltDegrees = 30;
     private volatile ReadyScene readyScene;
+    private CloudlyScenePass.PreparationFailure publishedPreparationFailure;
+    private volatile PreparationFailure preparationFailure;
 
     /** Immutable scene data published before the host captures matching lights and acknowledges its index. */
     public record ReadyScene(int sceneIndex, float noonTiltDegrees, float sunIlluminanceLux, float moonIlluminanceLux,
@@ -54,9 +56,13 @@ public final class BorrowedCloudlyRuntime {
                              float sunAngularDiameterDegrees, float sunDiscAngularDiameterDegrees,
                              float moonAngularDiameterDegrees) { }
 
+    /** A failed requested scene does not retire a previously active scene. */
+    public record PreparationFailure(int sceneIndex, String detail) { }
+
     public boolean isReady() { return ready; }
     public float noonTiltDegrees() { return noonTiltDegrees; }
     public ReadyScene readyScene() { return readyScene; }
+    public PreparationFailure preparationFailure() { return preparationFailure; }
 
     /** Consumes direct native-ABI buffers only during this callback. */
     public synchronized long record(ByteBuffer frameBytes, ByteBuffer worldBytes, ByteBuffer hostBytes) {
@@ -137,6 +143,13 @@ public final class BorrowedCloudlyRuntime {
             case 0 -> CloudlyOptions.Scene.HANGAR; case 1 -> CloudlyOptions.Scene.MISSION3;
             case 2 -> CloudlyOptions.Scene.MISSION11; default -> null;
         });
+        var scenePreparationFailure = scenes.preparationFailure();
+        if (scenePreparationFailure != publishedPreparationFailure) {
+            publishedPreparationFailure = scenePreparationFailure;
+            String detail = scenePreparationFailure == null ? null : scenePreparationFailure.cause().getMessage();
+            preparationFailure = scenePreparationFailure == null ? null : new PreparationFailure(scenePreparationFailure.scene().ordinal(),
+                    detail == null ? scenePreparationFailure.cause().getClass().getSimpleName() : detail);
+        }
         var publication = scenes.readyScene();
         if (publication != null) {
             var preset = publication.sky(); var color = preset.sunColorLinearBt709();
@@ -265,6 +278,8 @@ public final class BorrowedCloudlyRuntime {
         released = true;
         ready = false;
         readyScene = null;
+        publishedPreparationFailure = null;
+        preparationFailure = null;
         if (pending != null) { pending.close(); pending = null; }
         if (device != null) {
             new ResourceLifetime(scenes::close, device::cancelBorrowedWork, compute::close, gpu::close, device::close).close();

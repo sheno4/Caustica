@@ -27,6 +27,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
     private CloudlyOptions.Scene activeScene;
     private CloudlyOriginalPass active;
     private CloudlyOriginalPass pending;
+    private PreparationFailure preparationFailure;
     private boolean enabled;
     private boolean closed;
 
@@ -60,6 +61,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
             if (enabled) LOGGER.info("Original Cloudly sky disabled; native scene resources retired");
             enabled = false;
             requested = null;
+            preparationFailure = null;
             return;
         }
         if (hostControlled && pending != null && pending.resourcesReady() && acknowledgedScene == requested) {
@@ -68,6 +70,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
         if (!enabled || requested != selected) {
             enabled = true;
             requested = selected;
+            preparationFailure = null;
             if (pending != null) { pending.close(); pending = null; }
             if (activeScene != selected) {
                 LOGGER.info("Preparing bundled ACE COMBAT sky {}; keeping {} until preparation completes", selected,
@@ -75,6 +78,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
                 try {
                     pending = new CloudlyOriginalPass(gpu, compute, resources, options, frames, selected);
                 } catch (RuntimeException failure) {
+                    preparationFailure = new PreparationFailure(selected, failure);
                     LOGGER.error("Could not start ACE COMBAT sky {} preparation; keeping {}", selected, activeScene, failure);
                 }
             }
@@ -82,6 +86,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
         if (pending == null) return;
         var failure = pending.preparationFailure();
         if (failure.isPresent()) {
+            preparationFailure = new PreparationFailure(requested, failure.get());
             pending.close();
             pending = null;
             LOGGER.error("ACE COMBAT sky {} preparation failed; keeping {}", requested,
@@ -96,6 +101,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
         active = pending;
         activeScene = requested;
         pending = null;
+        preparationFailure = null;
         if (previous != null) previous.close();
         LOGGER.info("Activated bundled ACE COMBAT sky {} with fresh cloud history", activeScene);
     }
@@ -103,6 +109,8 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
     public synchronized boolean resourcesReady() { return !closed && active != null; }
 
     public synchronized CloudlySkyPreset skyPreset() { return active == null ? null : active.skyPreset(); }
+    public record PreparationFailure(CloudlyOptions.Scene scene, Throwable cause) { }
+    public synchronized PreparationFailure preparationFailure() { return preparationFailure; }
     public record ReadyScene(CloudlyOptions.Scene scene, CloudlySkyPreset sky) { }
     public synchronized ReadyScene readyScene() {
         if (pending != null && pending.resourcesReady()) return new ReadyScene(requested, pending.skyPreset());
@@ -132,6 +140,7 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
     @Override public synchronized void close() {
         if (closed) return;
         closed = true;
+        preparationFailure = null;
         if (pending != null) { pending.close(); pending = null; }
         if (active != null) { active.close(); active = null; }
     }

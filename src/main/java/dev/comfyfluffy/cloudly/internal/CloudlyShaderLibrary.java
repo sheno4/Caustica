@@ -18,6 +18,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -243,6 +244,7 @@ public final class CloudlyShaderLibrary {
                           ParameterLayout parametersLayout, BindingLayout bindingsLayout, List<PushDescriptorBinding> pushDescriptorBindings, String sourceSha256) {
         public Instance create(GpuDevice gpu, ResourceFactory resources) throws IOException {
             byte[] code = verifiedBytes(spirv, sha256);
+            requireComputeEntryPoint(code, entryPoint, id);
             ByteBuffer nativeCode = MemoryUtil.memAlloc(code.length);
             try {
                 nativeCode.put(code).flip();
@@ -254,7 +256,37 @@ public final class CloudlyShaderLibrary {
                                         field.name(), field.slot(), descriptorType(field.type()))).toList());
                 try { return new Instance(this, shader, resources.create(shader::close)); }
                 catch (RuntimeException | Error failure) { shader.close(); throw failure; }
+            } catch (RuntimeException failure) {
+                throw new IllegalStateException("Original Cloudly program " + id + " (entry=" + entryPoint
+                        + ", sha256=" + sha256 + ", file=" + spirv + ") could not create its compute pipeline", failure);
             } finally { MemoryUtil.memFree(nativeCode); }
+        }
+    }
+
+    /** Checks the actual module entry before a driver sees metadata that names another function. */
+    private static void requireComputeEntryPoint(byte[] code, String expected, String programId) throws IOException {
+        ByteBuffer words = ByteBuffer.wrap(code).order(ByteOrder.LITTLE_ENDIAN);
+        if (code.length < 20 || (code.length & 3) != 0 || words.getInt(0) != 0x07230203) {
+            throw new IOException("Original Cloudly program " + programId + " is not a complete SPIR-V module");
+        }
+        var entries = new java.util.ArrayList<String>();
+        for (int offset = 20; offset < code.length;) {
+            int instruction = words.getInt(offset), wordCount = instruction >>> 16;
+            if (wordCount == 0 || wordCount > (code.length - offset) / 4) {
+                throw new IOException("Malformed SPIR-V instruction in original Cloudly program " + programId);
+            }
+            int end = offset + wordCount * 4;
+            if ((instruction & 0xffff) == 15 && wordCount >= 4 && words.getInt(offset + 4) == 5) {
+                int begin = offset + 12, terminator = begin;
+                while (terminator < end && code[terminator] != 0) terminator++;
+                if (terminator == end) throw new IOException("Unterminated SPIR-V entry in " + programId);
+                entries.add(new String(code, begin, terminator - begin, StandardCharsets.UTF_8));
+            }
+            offset = end;
+        }
+        if (!entries.contains(expected)) {
+            throw new IOException("Original Cloudly program " + programId + " expects compute entry '"
+                    + expected + "', but its SPIR-V contains " + entries);
         }
     }
 
