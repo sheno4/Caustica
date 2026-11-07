@@ -82,7 +82,14 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
             throw new IllegalArgumentException("Cloudly stars import requires boolean source or native-default EnableStars");
         }
         Stars stars = new Stars(starsEnabled, resolvedNumber(starsValues, starsDefaults, "StarsIntensity"),
-                resolvedNumber(starsValues, starsDefaults, "StarsBackgroundIntensity"));
+                resolvedNumber(starsValues, starsDefaults, "StarsBackgroundIntensity"),
+                resolvedNumber(starsValues, starsDefaults, "StarsTextureScreenFraction"),
+                resolvedNumber(starsValues, starsDefaults, "StarsRadius"),
+                resolvedNumber(starsValues, starsDefaults, "StarsFadePower"),
+                resolvedNumber(starsValues, starsDefaults, "StarsScintillationsPower"),
+                (int)resolvedNumber(starsValues, starsDefaults, "StarsHashN"),
+                resolvedBoolean(starsValues, starsDefaults, "StarsNoColorMode"),
+                vector(starsValues, starsDefaults, "StarsGlobalRotation"));
         return new CloudlySkyPreset(-Math.asin(x), Math.toDegrees(Math.atan2(z, y)),
                 new Sunlight(illuminance, physicalRadius, visibleRadius, color,
                         illuminance * moonFraction, moonRadius), stars);
@@ -106,12 +113,33 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
     public record Color(double red, double green, double blue) { }
 
     /** StarsIntensity offsets catalogue visual magnitudes; the background multiplier is linear. */
-    public record Stars(boolean enabled, double intensityMagnitude, double backgroundIntensity) {
+    public record Stars(boolean enabled, double intensityMagnitude, double backgroundIntensity,
+                        double screenFraction, double radiusPixels, double fadePower, double scintillationPower,
+                        int hashBuckets, boolean noColorMode, double[] globalRotation) {
         public Stars {
             if (!Double.isFinite(intensityMagnitude) || !Double.isFinite(backgroundIntensity) || backgroundIntensity < 0) {
                 throw new IllegalArgumentException("Cloudly star magnitude must be finite and background intensity finite and nonnegative");
             }
+            if (!Double.isFinite(screenFraction) || screenFraction <= 0 || screenFraction > 1
+                    || !Double.isFinite(radiusPixels) || radiusPixels <= 0 || radiusPixels > 32
+                    || !Double.isFinite(fadePower) || fadePower < 0 || !Double.isFinite(scintillationPower)
+                    || scintillationPower < 0 || hashBuckets < 1 || hashBuckets > 1_048_576
+                    || globalRotation.length != 3) throw new IllegalArgumentException("Invalid original star rendering parameters");
+            globalRotation = globalRotation.clone();
         }
+        @Override public double[] globalRotation() { return globalRotation.clone(); }
+    }
+
+    private static boolean resolvedBoolean(Map<String, Object> values, Map<String, Object> defaults, String name) {
+        Object value = property(values, name);
+        if (value == null) value = property(defaults, name);
+        if (!(value instanceof Boolean enabled)) throw new IllegalArgumentException("Missing original star flag " + name);
+        return enabled;
+    }
+
+    private static double[] vector(Map<String, Object> values, Map<String, Object> defaults, String name) {
+        Map<String, Object> actual = object(property(values, name)), fallback = object(property(defaults, name));
+        return new double[]{resolvedNumber(actual, fallback, "X"), resolvedNumber(actual, fallback, "Y"), resolvedNumber(actual, fallback, "Z")};
     }
 
     public static double discRadiance(double illuminanceLux, double halfAngleRadians) {

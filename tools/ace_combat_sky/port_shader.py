@@ -57,6 +57,20 @@ def host_camera_body(text: str) -> str:
     return normalize(float3(direction.x, -direction.z, direction.y));
 }"""
     text = text[:function.start()] + replacement + text[cursor:]
+    inverse = re.search(r"float2\s+InvGetNormalizeRayWorldDirection\s*\([^\n]*\)\s*\{.*?\n\}", text, re.S)
+    if inverse and re.search(r"\bvoid\s+Stars(?:Fill|Allocate)CS\s*\(", text):
+        text = text[:inverse.start()] + """float2 InvGetNormalizeRayWorldDirection(in float3 RayDirection)
+{
+    float4 clip = mul(float4(RayDirection, 0.0f), View.TranslatedWorldToClip);
+    if (clip.w <= 1.0e-6f) return float2(-1.0e10f, -1.0e10f);
+    return float2(clip.x, -clip.y) / clip.w;
+}""" + text[inverse.end():]
+        pixel = "uint2 coveredPixelPos = uint2(starPixel + float2(x, y));"
+        if text.count(pixel) != 1:
+            raise ValueError("The native star pixel coverage interface changed")
+        text = text.replace(pixel, """float2 coveredPixel = starPixel + float2(x, y);
+            if (any(coveredPixel < 0.0f) || any(coveredPixel >= float2(StarsTexture2DSize))) continue;
+            uint2 coveredPixelPos = uint2(coveredPixel);""", 1)
     origin = "(DFDemote(GetPrimaryView().WorldCameraOrigin)).xyz"
     ray = re.search(r"Ray\s+GetViewRay(?:ForCoarseTrace)?\s*\(.*?\n\}", text, re.S)
     if not ray or ray[0].count(origin) != 1:
@@ -160,7 +174,7 @@ def host_environment_depth(text: str) -> str:
 
 
 def host_stars_background(text: str) -> str:
-    """The host has the native cubemap, without the source's separate star catalogue pass."""
+    """Composite the native catalogue texture and independently authored background cubemap."""
     if not re.search(r"\bvoid\s+CompositeAtmosphereCS\s*\(", text):
         return text
     sample = re.compile(
@@ -170,14 +184,17 @@ def host_stars_background(text: str) -> str:
         r"\s*\*\s*StarsIntensityMask\(view_ray\.d,\s*MoonDirection\)\s*"
         r"\+\s*StarsBackgroundIntensity\s*\*\s*StarsBackground\.SampleLevel\(StarsTextureSampler,\s*view_ray\.d,\s*0\);"
     )
-    replacement = """// Native source Z is the sky's vertical axis; catalogue stars have no host producer.
+    replacement = """const float2 uv_viewport = GetScreenUV(id.xy, 1.0f);
+                const float4 stars_tex_val = StarsTexture.SampleLevel(StarsTextureSampler, uv_viewport, 0);
                 float hostStarsSin, hostStarsCos;
                 sincos(HostStarsRotationRadians, hostStarsSin, hostStarsCos);
                 const float3 hostStarsDirection = float3(
                     hostStarsCos * view_ray.d.x - hostStarsSin * view_ray.d.y,
                     hostStarsSin * view_ray.d.x + hostStarsCos * view_ray.d.y,
                     view_ray.d.z);
-                Star = StarsBackgroundIntensity * StarsBackground.SampleLevel(StarsTextureSampler, hostStarsDirection, 0);"""
+                Star = float4(UnNormalizeStarsValue(StarsNoColorMode ? stars_tex_val.xxx : stars_tex_val.xyz), 1.0f)
+                    * StarsIntensityMask(view_ray.d, MoonDirection) * HostCatalogueStarsVisibility
+                    + StarsBackgroundIntensity * StarsBackground.SampleLevel(StarsTextureSampler, hostStarsDirection, 0);"""
     text, count = sample.subn(replacement, text)
     if count != 1:
         raise ValueError("The native star-background composition interface changed")
@@ -496,6 +513,12 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
         if any(field["offset"] < 4 for field in common):
             raise ValueError("The host star rotation interface requires four unused root bytes")
         common.append(dict(name="HostStarsRotationRadians", type="float", offset=0, size=4, elements=0))
+        visibility_offset = next((offset for offset in range(4, common_size, 4)
+                                  if all(offset + 4 <= field["offset"] or offset >= field["offset"] + field["size"]
+                                         for field in common)), None)
+        if visibility_offset is None:
+            raise ValueError("The host star visibility interface needs four unused root bytes")
+        common.append(dict(name="HostCatalogueStarsVisibility", type="float", offset=visibility_offset, size=4, elements=0))
         common.sort(key=lambda field: field["offset"])
     if cloud_height:
         offset = next((offset for offset in range(0, common_size, 4)
@@ -654,7 +677,7 @@ def adapt(source_path: Path, output_path: Path, host_camera: bool = False,
                 hostStarsBackground=dict(enabled=stars_rotation,
                     rotationField="HostStarsRotationRadians" if stars_rotation else None,
                     rotationAxis="source Z" if stars_rotation else None,
-                    catalogueTextureSampled=False if stars_rotation else None,
+                    catalogueTextureSampled=True if stars_rotation else None,
                     originalDescriptorSlotsPreserved=True),
                 cameraBridge=dict(enabled=host_camera, byteSize=80 if host_camera else 0,
                                   sourceAxes="host X, negative host Z, host Y",

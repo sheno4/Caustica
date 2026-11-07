@@ -15,7 +15,7 @@ import java.util.Map;
 public record CloudlyNativeProject(CloudlyShaderLibrary library, CloudlyOriginalBakeResources density,
                                    CloudlyOriginalBakeResources atmosphere, CloudlyFrameTextures.Source textures,
                                    CloudlyFrameSchedule schedule, Map<String, CloudlyFrameRecipe> recipes,
-                                   Map<String, double[]> settings, Path sphereSamples) {
+                                   Map<String, double[]> settings, Path sphereSamples, CloudlyStarCatalogue starCatalogue) {
     public CloudlyNativeProject { recipes = Map.copyOf(recipes); settings = copy(settings); }
     @Override public Map<String, double[]> settings() { return copy(settings); }
 
@@ -47,7 +47,7 @@ public record CloudlyNativeProject(CloudlyShaderLibrary library, CloudlyOriginal
             settings.put(entry.getKey(), CloudlyUniformExpressions.evaluate(entry.getValue(), Map.of()));
         }
         return new CloudlyNativeProject(library, density, atmosphere, textures, schedule, recipes, settings,
-                path(actual, root, "sphereSamples"));
+                path(actual, root, "sphereSamples"), CloudlyStarCatalogue.load(path(actual, root, "starCatalogue")));
     }
 
     public double scalar(String name) {

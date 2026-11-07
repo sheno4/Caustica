@@ -260,7 +260,7 @@ public final class CloudlyFrameResources implements AutoCloseable {
         if (buffer != null) {
             boolean structured = field.type().startsWith("StructuredBuffer<") || field.type().startsWith("RWStructuredBuffer<");
             if (structured != buffer.descriptorType().equals("STORAGE_BUFFER")
-                    || !structured && !field.type().startsWith("RWBuffer<")) {
+                    || !structured && !(field.type().startsWith("RWBuffer<") || field.type().startsWith("Buffer<"))) {
                 throw new IllegalArgumentException("Source frame buffer descriptor does not match " + field.type());
             }
             if (structured) {
@@ -268,7 +268,9 @@ public final class CloudlyFrameResources implements AutoCloseable {
                     throw new IllegalArgumentException("Original structured-buffer element and stride differ");
                 }
             } else requireFormatScalar(buffer.format(), field.type());
-            return buffer.descriptor();
+            // Typed buffers own adjacent writable and read-only views of the same storage.
+            return field.type().startsWith("Buffer<")
+                    ? new GpuDescriptorIndex.Resource(Math.addExact(buffer.descriptor().value(), 1)) : buffer.descriptor();
         }
         throw new IllegalArgumentException("External source resource must be supplied by its actual producer: " + name);
     }
@@ -401,11 +403,17 @@ public final class CloudlyFrameResources implements AutoCloseable {
             if (spec.descriptorType().equals("STORAGE_TEXEL_BUFFER")) {
                 var format = VkFormatProperties2.calloc(stack).sType$Default();
                 VK11.vkGetPhysicalDeviceFormatProperties2(gpu.vk().getPhysicalDevice(), spec.format(), format);
-                if ((format.formatProperties().bufferFeatures() & VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT) == 0) {
+                int required = VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT | VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
+                if (spec.format() == VK_FORMAT_R32_UINT || spec.format() == VK_FORMAT_R32_SINT) {
+                    required |= VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_ATOMIC_BIT;
+                }
+                if ((format.formatProperties().bufferFeatures() & required) != required) {
                     throw new UnsupportedOperationException("Original frame texel-buffer format is unsupported");
                 }
             }
-            var info = VkBufferCreateInfo.calloc(stack).sType$Default().size(spec.byteSize()).usage(spec.usage()).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+            boolean texelBuffer = spec.descriptorType().equals("STORAGE_TEXEL_BUFFER");
+            int usage = spec.usage() | (texelBuffer ? VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT : 0);
+            var info = VkBufferCreateInfo.calloc(stack).sType$Default().size(spec.byteSize()).usage(usage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
             int[] families = gpu.asyncBufferSharingQueueFamilies();
             if (families.length > 1) info.sharingMode(VK_SHARING_MODE_CONCURRENT).pQueueFamilyIndices(stack.ints(families));
             var vmaInfo = VmaAllocationCreateInfo.calloc(stack).usage(Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
@@ -419,7 +427,7 @@ public final class CloudlyFrameResources implements AutoCloseable {
             if (address == 0) throw new IllegalStateException("Source frame buffer needs a nonzero device address");
             gpu.descriptorHeap().registerBuffer(address, handle, spec.byteSize());
             registeredAddress = address;
-            descriptors = gpu.descriptorHeap().allocateResources(1);
+            descriptors = gpu.descriptorHeap().allocateResources(texelBuffer ? 2 : 1);
             var encoded = VkResourceDescriptorInfoEXT.calloc(stack).sType$Default();
             if (spec.descriptorType().equals("STORAGE_TEXEL_BUFFER")) {
                 var texels = VkTexelBufferDescriptorInfoEXT.calloc(stack).sType$Default().format(spec.format())
@@ -430,7 +438,11 @@ public final class CloudlyFrameResources implements AutoCloseable {
                         org.lwjgl.vulkan.VkDeviceAddressRangeEXT.calloc(stack).address$(address).size(spec.byteSize())));
             }
             gpu.descriptorHeap().writer().writeResource(descriptors, 0, encoded);
-            var buffer = new Buffer(spec.name(), spec.strideBytes(), spec.elements(), spec.byteSize(), spec.usage(),
+            if (texelBuffer) {
+                encoded.type(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER);
+                gpu.descriptorHeap().writer().writeResource(descriptors, 1, encoded);
+            }
+            var buffer = new Buffer(spec.name(), spec.strideBytes(), spec.elements(), spec.byteSize(), usage,
                     spec.descriptorType(), spec.format(), handle, new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), spec.byteSize()),
                     descriptors.firstIndex());
             return new OwnedBuffer(gpu, gpu.vmaAllocator(), handle, allocation, descriptors, buffer);

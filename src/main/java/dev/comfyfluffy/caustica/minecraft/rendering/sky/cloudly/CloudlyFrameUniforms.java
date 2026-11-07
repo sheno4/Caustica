@@ -6,6 +6,15 @@ import java.nio.ByteBuffer;
 public final class CloudlyFrameUniforms {
     private CloudlyFrameUniforms() { }
 
+    /** Infinite-distance points use rotation-only projection, independent of large world origins. */
+    public static CloudlyFrameRecipe.ViewWriter directionalProjection(CloudlyFrameRecipe.ViewWriter base,
+                                                                      CloudlyFrameCamera camera) {
+        return (layout, bytes) -> {
+            base.write(layout, bytes);
+            layout.putFloats(bytes, "View.TranslatedWorldToClip", camera.cameraToClipForSourceUniform());
+        };
+    }
+
     public static void writeView(CloudlyShaderLibrary.ParameterLayout layout, ByteBuffer target,
                                  CloudlyFrameCamera current, CloudlyFrameCamera previous,
                                  int width, int height, float jitterX, float jitterY,

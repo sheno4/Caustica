@@ -148,8 +148,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             requirePreparing();
             LOGGER.info("Original Cloudly: preparing {} source components, {} volume textures, density bake and atmosphere",
                     source.components().size(), source.textures().size());
-            LOGGER.info("Original Cloudly star settings: enabled={}, source magnitude intensity={}, linear background intensity={}; catalogue producer is not connected",
-                    sky.stars().enabled(), sky.stars().intensityMagnitude(), sky.stars().backgroundIntensity());
+            LOGGER.info("Original Cloudly star catalogue: {} records; enabled={}, source magnitude intensity={}, linear background intensity={}",
+                    project.starCatalogue().count(), sky.stars().enabled(), sky.stars().intensityMagnitude(), sky.stars().backgroundIntensity());
             var volumeFuture = new CompletableFuture<CloudlyCloudResources>();
             track(CloudlyVolumeUpload.prepare(gpu, compute, resources, source, result -> {
                 if (result instanceof CloudlyVolumeUpload.Ready ready) stage(volumeFuture, ready.resources());
@@ -183,6 +183,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             requirePreparing();
             var sphere = CloudlySourceBuffer.uploadFloat4Texels(gpu, resources, ByteBuffer.wrap(Files.readAllBytes(project.sphereSamples())), List.of());
             acquired.add(sphere);
+            var catalogue = CloudlySourceBuffer.upload(gpu, resources, ByteBuffer.wrap(project.starCatalogue().data()), 16, List.of());
+            acquired.add(catalogue);
             Set<String> programIds = new LinkedHashSet<>();
             project.schedule().stages().stream().filter(stage -> stage.program() != null).forEach(stage -> programIds.add(stage.program().id()));
             programIds.add(CloudlySurfaceShadow.PROGRAM);
@@ -197,7 +199,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             List<AutoCloseable> owned = List.copyOf(acquired);
             ResourceOwner owner = resources.create(() -> closeAll(owned));
             acquired.clear();
-            var completed = new Assets(sky, project, density, atmosphere, textures, sphere, programs, color, input, timing, owner);
+            var completed = new Assets(sky, project, density, atmosphere, textures, sphere, catalogue, programs, color, input, timing, owner);
             synchronized (this) {
                 preparationFinished = true;
                 jobs.clear();
@@ -337,7 +339,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         Set<String> selected = new LinkedHashSet<>();
         Map<String, ResourceOwner> retainedDependencies = new LinkedHashMap<>();
         for (var stage : ready.project.schedule().stages()) {
-            if (stage.name().startsWith("Shadow") || stage.name().startsWith("CloudAOTrace"))
+            if (stage.name().startsWith("Shadow") || stage.name().startsWith("CloudAOTrace")
+                    || stage.name().startsWith("Stars") && inputs.get("frame.starsEnabled")[0] == 0)
                 retainedDependencies.put(stage.name(), target.buffers.owner());
             else selected.add(stage.name());
         }
@@ -359,7 +362,9 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
                 new CloudlyFrameExecutor.Inputs() {
                     @Override public CloudlyFrameExecutor.ComputeInput compute(CloudlyFrameSchedule.Stage stage) {
                         String id = stage.spec().getAsJsonObject("parameters").get("sourceProgramId").getAsString();
-                        var constants = ready.project.recipes().get(id).encode(Set.of(id), inputs, writer).parameters(id);
+                        var stageWriter = stage.name().startsWith("Stars")
+                                ? CloudlyFrameUniforms.directionalProjection(writer, current) : writer;
+                        var constants = ready.project.recipes().get(id).encode(Set.of(id), inputs, stageWriter).parameters(id);
                         CloudlyFrameExecutor.IndirectBuffer indirect = null;
                         if (resolved.dispatches().get(stage.name()) instanceof CloudlyFrameSchedule.IndirectDispatch dispatch) {
                             var buffer = target.buffers.indirectBuffer(dispatch.argumentBuffer(), dispatch.byteOffset());
@@ -574,6 +579,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             case "HostRainCoverage" -> ready.textures.descriptors().get("HostRainCoverage");
             case "OriginalRainPillarSDF" -> ready.density.texture("CloudTex_RainPillar_SDF_Tex").sampledIndex();
             case "OriginalSphereSamples" -> ready.sphere.descriptor();
+            case "OriginalStarsCatalogue" -> ready.catalogue.descriptor();
             case "OpticalDepth" -> ready.atmosphere.texture("OpticalDepthTex").sampledIndex();
             case "MultiScattering" -> ready.atmosphere.texture("MultiScatteringLut").sampledIndex();
             case "BASE_SDF", "InactiveAO", "InactiveRain", "InactiveFogVolume" -> ready.density.texture("CloudTex_BASE_SDF_Tex").sampledIndex();
@@ -667,7 +673,28 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         double starVisibility = Math.max(0, captured.celestial().starBrightness())
                 * (1-captured.rainStrength()) * (1-captured.thunderStrength());
         put(result,"frame.starsEnabled",sky.stars().enabled() && starVisibility > 0 ? 1 : 0);
+        put(result,"frame.starVisibility",starVisibility);
         put(result,"frame.starsBackgroundIntensity",sky.stars().backgroundIntensity() * starVisibility);
+        var stars = sky.stars();
+        int sw = stars.enabled() ? Math.max(1, (int)Math.ceil(w * stars.screenFraction())) : 1;
+        int sh = stars.enabled() ? Math.max(1, (int)Math.ceil(h * stars.screenFraction())) : 1;
+        int side = Math.addExact(Math.multiplyExact((int)Math.ceil(stars.radiusPixels()), 2), 1);
+        int capacity = stars.enabled() ? Math.multiplyExact(ready.project.starCatalogue().count(), Math.multiplyExact(side, side)) : 1;
+        double[] rotation = stars.globalRotation();
+        rotation[2] -= captured.celestial().starAngleRadians();
+        put(result,"frame.starsTextureSize",sw,sh);
+        put(result,"frame.starsListCapacity",capacity);
+        put(result,"frame.starsHashN",stars.hashBuckets());
+        put(result,"frame.starsCatalogueCount",ready.project.starCatalogue().count());
+        put(result,"frame.starsCatalogueGroups",Math.ceilDiv(ready.project.starCatalogue().count(),32));
+        put(result,"frame.starsHashGroups",Math.ceilDiv(stars.hashBuckets(),32));
+        put(result,"frame.starsMagnitude",stars.intensityMagnitude());
+        put(result,"frame.starsRadius",stars.radiusPixels());
+        put(result,"frame.starsFadePower",stars.fadePower());
+        put(result,"frame.starsScintillationPower",stars.scintillationPower());
+        put(result,"frame.starsNoColorMode",stars.noColorMode()?1:0);
+        put(result,"frame.starsGlobalRotation",rotation);
+        put(result,"frame.starsAnimationTime",frame.timeSeconds()%3600.0);
         for (var entry : ready.density.statistics().entrySet()) {
             String category = entry.getKey().substring("NoiseTexParams".length());
             if (category.startsWith("_")) category = category.substring(1);
@@ -714,7 +741,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     }
     private record AmbientOcclusionDraw(Draw draw, int level, CloudlyAmbientOcclusionState.Update update) { }
     private record Assets(CloudlySkyPreset sky,CloudlyNativeProject project,CloudlyOriginalBakeResources.Ready density,CloudlyOriginalBakeResources.Ready atmosphere,
-                          CloudlyFrameTextures.Ready textures,CloudlySourceBuffer sphere,CloudlyFramePrograms programs,CloudlyColorBridge color,
+                          CloudlyFrameTextures.Ready textures,CloudlySourceBuffer sphere,CloudlySourceBuffer catalogue,CloudlyFramePrograms programs,CloudlyColorBridge color,
                           ShaderObjectCompute input,CloudlyGpuTiming timing,ResourceOwner owner) { }
     private static final class Epoch implements AutoCloseable {
         final CloudlyFrameResources buffers; final CloudlyFrameSchedule.Resolved extents; final VmaImage2D depth,white;
