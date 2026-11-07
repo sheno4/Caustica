@@ -70,7 +70,14 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     CloudlyOriginalPass(GpuDevice gpu, GpuComputeQueue compute, ResourceFactory resources,
                         Supplier<OptionValues> options, Supplier<MinecraftSkyFrame> frames,
                         CloudlyOptions.Scene scene) {
-        this(gpu, compute, resources, options, frames, () -> CloudlyBundledPreset.load(scene), null);
+        this(gpu, compute, resources, options, frames, new SourceLoader() {
+            @Override public CloudlySourcePack load() throws IOException {
+                return CloudlyBundledPreset.load(scene);
+            }
+            @Override public void invalidate(CloudlySourcePack source) throws IOException {
+                CloudlyBundledPreset.invalidate(scene, source);
+            }
+        }, null);
     }
 
     private CloudlyOriginalPass(GpuDevice gpu, GpuComputeQueue compute, ResourceFactory resources,
@@ -101,7 +108,10 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
     }
 
     @FunctionalInterface
-    private interface SourceLoader { CloudlySourcePack load() throws IOException; }
+    private interface SourceLoader {
+        CloudlySourcePack load() throws IOException;
+        default void invalidate(CloudlySourcePack source) throws IOException { }
+    }
 
     private synchronized <T extends AutoCloseable> void stage(CompletableFuture<T> future, T value) {
         if (closed || preparationFinished) { closeAll(List.of(value)); future.cancel(false); }
@@ -128,8 +138,9 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
 
     private void prepare(SourceLoader loader, Path manifest) {
         List<AutoCloseable> acquired = new ArrayList<>();
+        CloudlySourcePack source = null;
         try {
-            CloudlySourcePack source = loader.load();
+            source = loader.load();
             if (manifest == null) manifest = projectManifest(source).orElseThrow(
                     () -> new IllegalArgumentException("Bundled Cloudly preset has no original pipeline manifest"));
             var project = CloudlyNativeProject.load(manifest);
@@ -201,6 +212,12 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             }
             ResourceLifetime.closeAfterFailure(failure, () -> closeAll(pendingJobs),
                     () -> closeAll(acquired), () -> closeAll(pending));
+            if (source != null) {
+                try { loader.invalidate(source); }
+                catch (IOException | RuntimeException | Error cleanupFailure) {
+                    if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
+                }
+            }
             preparationFailure = failure;
             if (!closed && !(failure instanceof InterruptedException)) LOGGER.error("Original Cloudly GPU preparation failed; original rendering is unavailable", failure);
         } finally {
@@ -290,11 +307,12 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         put(inputs, "frame.previousPreExposure", reuseHistory ? target.previousExposure : frame.preExposure());
         put(inputs, "frame.historyAvailable", reuseHistory ? 1 : 0);
         put(inputs, "frame.cameraReset", reuseHistory ? 0 : 1);
+        double cameraTimeSeconds = frame.timeSeconds();
         double speed = 0;
         if (reuseHistory) {
             float[] a = current.sourceOriginMeters(), b = target.previous.sourceOriginMeters();
             double meters = Math.sqrt(Math.pow(a[0]-b[0],2)+Math.pow(a[1]-b[1],2)+Math.pow(a[2]-b[2],2));
-            double elapsed = frame.timeSeconds() - target.previousTime;
+            double elapsed = cameraTimeSeconds - target.previousCameraTimeSeconds;
             // The native CameraSpeedMeter contract is metres per second, not metres per frame.
             speed = elapsed > 1.0e-4 ? meters / elapsed : 0.0;
         }
@@ -327,6 +345,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             target.shadow0 = shadow0.stateAfterGpuCompletion(); target.shadow1 = shadow1.stateAfterGpuCompletion();
             target.flipped = !target.flipped; target.previous = current;
             target.previousExposure = exposure; target.previousTime = time;
+            target.previousCameraTimeSeconds = cameraTimeSeconds;
             target.previousFrame = frameNumber;
             target.previousHeightOffset = heightOffset;
             target.previousCloudDistance = cloudDistance; target.previousCirrusDistance = cirrusDistance;
@@ -700,6 +719,7 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         final ResourceOwner owner;
         CloudlyShadowState.Cache<String> shadow0=emptyCache(0),shadow1=emptyCache(1);
         CloudlyFrameCamera previous; float previousExposure,previousTime; boolean initializationRecorded,initialized,flipped,reported;
+        double previousCameraTimeSeconds;
         long previousFrame = Long.MIN_VALUE;
         int previousHeightOffset;
         double previousCloudDistance,previousCirrusDistance,previousTerrainFadeStart,previousTerrainFadeEnd;

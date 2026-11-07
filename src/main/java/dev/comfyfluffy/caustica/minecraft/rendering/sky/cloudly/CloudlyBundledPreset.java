@@ -7,18 +7,11 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.Map;
 
-/**
- * Bundled source paths remain readable for asynchronous uploads throughout the process lifetime.
- *
- * <p>Each scene owns its archive file system. Preparation for one scene is cancellable by
- * interrupting its upload worker; with a single shared file system that interrupt closed the
- * underlying jar channel and made every later scene fail with {@link java.nio.channels.ClosedChannelException}.
- */
+/** Each scene owns an archive file system until its source revision is explicitly invalidated. */
 public final class CloudlyBundledPreset {
     private static final Map<CloudlyOptions.Scene, CloudlySourcePack> SOURCES = new EnumMap<>(CloudlyOptions.Scene.class);
     private static final Map<CloudlyOptions.Scene, FileSystem> ARCHIVES = new EnumMap<>(CloudlyOptions.Scene.class);
@@ -28,15 +21,7 @@ public final class CloudlyBundledPreset {
     /** Reads the immutable preset directly from the class directory or the owning mod archive. */
     public static synchronized CloudlySourcePack load(CloudlyOptions.Scene scene) throws IOException {
         CloudlySourcePack source = SOURCES.get(scene);
-        if (source != null) {
-            try {
-                if (Files.isRegularFile(source.manifest())) return source;
-            } catch (RuntimeException ignored) {
-                // A canceled upload may have closed this scene's archive channel.
-            }
-            SOURCES.remove(scene);
-            closeArchive(scene);
-        }
+        if (source != null) return source;
         String manifest = switch (scene) {
             case HANGAR -> "/caustica/cloudly/manifest.json";
             case MISSION3 -> "/caustica/cloudly/scenes/mission3/manifest.json";
@@ -54,13 +39,23 @@ public final class CloudlyBundledPreset {
                 source = CloudlySourcePack.load(path);
                 SOURCES.put(scene, source);
                 return source;
-            } catch (IOException | RuntimeException failure) {
-                closeArchive(scene);
+            } catch (IOException | RuntimeException | Error failure) {
+                try { closeArchive(scene); }
+                catch (IOException | RuntimeException | Error cleanupFailure) {
+                    if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
+                }
                 throw failure;
             }
         } catch (URISyntaxException failure) {
             throw new IOException("Invalid bundled Cloudly resource URI", failure);
         }
+    }
+
+    /** The caller has stopped reading this revision; a newer cached revision must remain usable. */
+    static synchronized void invalidate(CloudlyOptions.Scene scene, CloudlySourcePack expected) throws IOException {
+        if (expected == null || SOURCES.get(scene) != expected) return;
+        SOURCES.remove(scene);
+        closeArchive(scene);
     }
 
     private static Path archivePath(CloudlyOptions.Scene scene, URL resource) throws IOException, URISyntaxException {
@@ -75,13 +70,8 @@ public final class CloudlyBundledPreset {
         return fileSystem.getPath("/" + connection.getEntryName());
     }
 
-    private static void closeArchive(CloudlyOptions.Scene scene) {
+    private static void closeArchive(CloudlyOptions.Scene scene) throws IOException {
         FileSystem fileSystem = ARCHIVES.remove(scene);
-        if (fileSystem == null) return;
-        try {
-            fileSystem.close();
-        } catch (IOException ignored) {
-            // The interrupted upload worker may already have closed its channel.
-        }
+        if (fileSystem != null) fileSystem.close();
     }
 }

@@ -58,9 +58,8 @@ public final class CloudlyScenePass implements Pass<PostEffectFrame> {
             requested = selected;
             retryAtNanos = 0;
         }
-        // A preparation already in flight is never interrupted to chase a newer menu value. Let it
-        // finish, then either publish it or discard it; this avoids closing source-pack channels while
-        // the worker is reading them (the previous ClosedChannelException loop).
+        // Let preparation finish before publishing or discarding it, so menu changes cannot interrupt
+        // archive reads or invalidate another scene's pending uploads.
         if (pending != null) {
             var failure = pending.preparationFailure();
             if (failure.isPresent()) {
