@@ -6,8 +6,8 @@ import java.util.Map;
 import java.util.OptionalDouble;
 import java.util.regex.Pattern;
 
-/** Source sun values under the pack's explicit direction, angle, photometric and colour-space adapter. */
-public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, Sunlight sunlight) {
+/** Authored celestial values under the pack's explicit units and colour-space adapter. */
+public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, Sunlight sunlight, Stars stars) {
     /** The native project's moon angle is a full angular diameter in degrees. */
     public static CloudlySkyPreset from(CloudlySourcePack source, double moonDiskAngleDegrees) {
         return from(source, OptionalDouble.of(Math.toRadians(moonDiskAngleDegrees * .5)));
@@ -74,9 +74,18 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
                 || moonRadius.getAsDouble() <= 0 || moonRadius.getAsDouble() >= Math.PI / 2)) {
             throw new IllegalArgumentException("Cloudly moon angular diameter must be physically valid");
         }
+        Map<String, Object> starsValues = object(property(source.skyParameters(), "StarsParams"));
+        Map<String, Object> starsDefaults = object(property(nativeSky(source), "StarsParams"));
+        Object enableStars = property(starsValues, "EnableStars");
+        if (enableStars == null) enableStars = property(starsDefaults, "EnableStars");
+        if (!(enableStars instanceof Boolean starsEnabled)) {
+            throw new IllegalArgumentException("Cloudly stars import requires boolean source or native-default EnableStars");
+        }
+        Stars stars = new Stars(starsEnabled, resolvedNumber(starsValues, starsDefaults, "StarsIntensity"),
+                resolvedNumber(starsValues, starsDefaults, "StarsBackgroundIntensity"));
         return new CloudlySkyPreset(-Math.asin(x), Math.toDegrees(Math.atan2(z, y)),
                 new Sunlight(illuminance, physicalRadius, visibleRadius, color,
-                        illuminance * moonFraction, moonRadius));
+                        illuminance * moonFraction, moonRadius), stars);
     }
 
     public double sunIlluminanceLux() { return sunlight.illuminanceLux(); }
@@ -95,6 +104,15 @@ public record CloudlySkyPreset(double sunAngleRadians, double noonTiltDegrees, S
                            double discHalfAngleRadians, Color colorLinearBt709, double moonIlluminanceLux,
                            OptionalDouble moonDiscHalfAngleRadians) { }
     public record Color(double red, double green, double blue) { }
+
+    /** StarsIntensity offsets catalogue visual magnitudes; the background multiplier is linear. */
+    public record Stars(boolean enabled, double intensityMagnitude, double backgroundIntensity) {
+        public Stars {
+            if (!Double.isFinite(intensityMagnitude) || !Double.isFinite(backgroundIntensity) || backgroundIntensity < 0) {
+                throw new IllegalArgumentException("Cloudly star magnitude must be finite and background intensity finite and nonnegative");
+            }
+        }
+    }
 
     public static double discRadiance(double illuminanceLux, double halfAngleRadians) {
         double sine = Math.sin(halfAngleRadians);

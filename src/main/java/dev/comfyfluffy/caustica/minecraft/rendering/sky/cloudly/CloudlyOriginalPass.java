@@ -148,6 +148,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
             requirePreparing();
             LOGGER.info("Original Cloudly: preparing {} source components, {} volume textures, density bake and atmosphere",
                     source.components().size(), source.textures().size());
+            LOGGER.info("Original Cloudly star settings: enabled={}, source magnitude intensity={}, linear background intensity={}; catalogue producer is not connected",
+                    sky.stars().enabled(), sky.stars().intensityMagnitude(), sky.stars().backgroundIntensity());
             var volumeFuture = new CompletableFuture<CloudlyCloudResources>();
             track(CloudlyVolumeUpload.prepare(gpu, compute, resources, source, result -> {
                 if (result instanceof CloudlyVolumeUpload.Ready ready) stage(volumeFuture, ready.resources());
@@ -664,8 +666,8 @@ public final class CloudlyOriginalPass implements Pass<PostEffectFrame> {
         put(result,"frame.starAngleRadians",captured.celestial().starAngleRadians());
         double starVisibility = Math.max(0, captured.celestial().starBrightness())
                 * (1-captured.rainStrength()) * (1-captured.thunderStrength());
-        put(result,"frame.starsEnabled",starVisibility > 0 ? 1 : 0);
-        put(result,"frame.starsBackgroundIntensity",ready.project.scalar("StarsIntensity") * starVisibility);
+        put(result,"frame.starsEnabled",sky.stars().enabled() && starVisibility > 0 ? 1 : 0);
+        put(result,"frame.starsBackgroundIntensity",sky.stars().backgroundIntensity() * starVisibility);
         for (var entry : ready.density.statistics().entrySet()) {
             String category = entry.getKey().substring("NoiseTexParams".length());
             if (category.startsWith("_")) category = category.substring(1);
