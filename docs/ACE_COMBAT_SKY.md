@@ -18,8 +18,10 @@ Game-derived textures, programs and parameter templates stay outside the Git che
 ./gradlew.bat jar -PngxPlatforms=windows-x64 '-PcloudlyBundleInputRoot=../analysis-game/bundle-main.1.private'
 ```
 
-The build requires JDK 25, `SLANG_SDK`, `VULKAN_SDK`, the DLSS SDK and a matching compiled NGX shim. `SLANG_SDK` selects the build-time Slang compiler. The single Fabric JAR includes the prepared sky resources and Windows runtime libraries. An additional installed sky pack is unnecessary.
+The build requires JDK 25, `SLANG_SDK`, `VULKAN_SDK`, NVIDIA DLSS SDK `310.9.16` (commit `9981c6350dc58c0ce21f024fd65e31e851c31689`) and an NGX shim compiled against that SDK. `SLANG_SDK` selects the build-time Slang compiler. SDK headers and Windows release DLL hashes are pinned in `native/ngx_shim/dlss-sdk.json` and checked during packaging. The JAR carries that manifest and NVIDIA's license alongside its native libraries. An additional installed sky pack is unnecessary.
+
+Ray Reconstruction requests Preset F (RR2) by default. Existing `dlss-rr.preset=0` settings resolve to F; explicit D (`4`) and E (`5`) remain available. Every feature creation replaces all per-quality preset hints, so switching models cannot retain a previous feature's hints. Both Windows RR and Frame Generation libraries are version `310.9.16.0`. Frame Generation remains opt-in. Replace the mod only after the Minecraft JVM exits, as loaded native libraries remain held for its lifetime. Driver overrides can change the final model selected by NVIDIA's runtime.
 
 The public source-only CI build has no private sky resources. Compilation and package checks cover Java, host shaders, all native programs, manifests, hashes and bindings. Game rendering, frame rate and visual agreement with AC8 require in-game acceptance. Compilation and package integrity alone do not establish runtime or visual correctness.
 
-The Windows bundled artifact is `caustica-0.1.2-ac8-cloud.jar`. Its three scenes each contain 81 unique programs and retain their foreground-cloud history pair. Local compilation and package receipts, including artifact size and SHA-256, accompany the artifact outside the checkout.
+The Windows bundled artifact is `caustica-0.1.3-ac8-cloud.jar`. Its three scenes each contain 81 unique programs and retain their foreground-cloud history pair. Local compilation and package receipts, including artifact size and SHA-256, accompany the artifact outside the checkout.

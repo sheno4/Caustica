@@ -1,0 +1,19 @@
+{
+  "sdkVersion": "310.9.16",
+  "sdkCommit": "9981c6350dc58c0ce21f024fd65e31e851c31689",
+  "release": "https://github.com/NVIDIA/DLSS/releases/tag/v310.9.16",
+  "rrHeaderSha256": "2e97fe1595b1334f71b51724f2cb67496e8c296a7a2eec5606da53055882e716",
+  "rrHeaderLineEndings": "LF",
+  "defaultRrPreset": 6,
+  "defaultRrModel": "RR2 / Preset F",
+  "windowsReleaseLibraries": {
+    "nvngx_dlssd.dll": {
+      "version": "310.9.16.0",
+      "sha256": "b49435ae346f227feafe7bbe937d88277ea0ee7323975ec06488f377fdb46cee"
+    },
+    "nvngx_dlssg.dll": {
+      "version": "310.9.16.0",
+      "sha256": "8d59d49b36410dd6b62fef2503a5871d347415bd85d943fa0848563a95dd50c7"
+    }
+  }
+}

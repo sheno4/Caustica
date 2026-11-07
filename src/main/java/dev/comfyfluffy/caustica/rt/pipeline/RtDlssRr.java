@@ -39,9 +39,10 @@ public final class RtDlssRr {
     private static final int FEATURE_FLAG_AUTO_EXPOSURE = 1 << 6;
     private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES
             | FEATURE_FLAG_DEPTH_INVERTED | FEATURE_FLAG_AUTO_EXPOSURE;
-    // 0 = let the RR DLL pick its per-mode default preset.
+    // Zero selects Ray Reconstruction's F (RR2), independently of DLSS-SR preset letters.
     private static int renderPreset() {
-        return CausticaConfig.Rt.DlssRr.PRESET.value();
+        int preset = CausticaConfig.Rt.DlssRr.PRESET.value();
+        return preset == 0 ? 6 : preset;
     }
 
     public static int quality() {

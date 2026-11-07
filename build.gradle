@@ -326,6 +326,7 @@ if (requestedNgxPlatformsRaw.size() == 1 && requestedNgxPlatformsRaw[0].equalsIg
 
 def dlssSdkEnv = providers.environmentVariable("DLSS_SDK")
 def dlssSdkRootProvider = dlssSdkEnv.map { file(it) }
+def dlssSdkManifest = file("native/ngx_shim/dlss-sdk.json")
 
 def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 	group = "build"
@@ -333,6 +334,7 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 
 	inputs.property "ngxShimConfig", ngxShimConfig
 	inputs.property "ngxVendorConfig", ngxVendorConfig
+	inputs.file(dlssSdkManifest)
 
 	selectedNgxNativePlatforms.each { platform ->
 		inputs.files(fileTree(ngxShimOutDir) {
@@ -375,7 +377,28 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 			throw new GradleException("Missing NGX native inputs:\n - " + missing.join("\n - "))
 		}
 
+		def sdk = new groovy.json.JsonSlurper().parse(dlssSdkManifest)
+		def sha256 = { byte[] input ->
+			java.security.MessageDigest.getInstance("SHA-256").digest(input).encodeHex().toString()
+		}
+		def header = new File(dlssSdkRoot, "include/nvsdk_ngx_defs_dlssd.h").getText("UTF-8").replace("\r\n", "\n")
+		if (sha256(header.getBytes("UTF-8")) != sdk.rrHeaderSha256) {
+			throw new GradleException("DLSS_SDK must match the SDK pinned in native/ngx_shim/dlss-sdk.json")
+		}
+		if (ngxVendorConfig == "rel" && selectedNgxNativePlatforms.any { it.name == "windows-x64" }) {
+			sdk.windowsReleaseLibraries.each { name, expected ->
+				if (sha256(new File(dlssSdkRoot, "lib/Windows_x86_64/rel/${name}").bytes) != expected.sha256) {
+					throw new GradleException("Pinned DLSS ${sdk.sdkVersion} runtime hash mismatch: ${name}")
+				}
+			}
+		}
+
 		copy {
+			from(dlssSdkManifest) { into "caustica/natives" }
+			from(new File(dlssSdkRoot, "LICENSE.txt")) {
+				rename { "NVIDIA-LICENSE.txt" }
+				into "caustica/natives"
+			}
 			selectedNgxNativePlatforms.each { platform ->
 				from(fileTree(ngxShimOutDir) {
 					include platform.shimIncludes

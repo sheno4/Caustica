@@ -669,7 +669,9 @@ public final class CausticaConfig {
 
         public static final class DlssRr {
             public static final BooleanSetting ENABLED = bool("caustica.rt.dlssRr", "dlss-rr.enabled", true);
-            public static final IntSetting PRESET = intValue("caustica.rt.dlssRr.preset", "dlss-rr.preset", 0);
+            // Ray Reconstruction presets: 0 selects F (RR2); explicit D=4, E=5 and F=6 remain available.
+            public static final IntSetting PRESET =
+                    intChoice("caustica.rt.dlssRr.preset", "dlss-rr.preset", 6, List.of(0, 4, 5, 6));
 
             // NVSDK_NGX_PerfQuality_Value. Per NVIDIA's DLSS-RR programming guide, Ray Reconstruction only
             // supports Performance(0), Balanced(1), Quality(2), Ultra-Performance(3), and DLAA(5) —

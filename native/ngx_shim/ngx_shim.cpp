@@ -349,7 +349,7 @@ NGX_SHIM_EXPORT int ngxshim_query_optimal_dlssd(unsigned int displayWidth, unsig
 // Creates a DLSS Ray Reconstruction (DLSSD) feature. Configured for our path tracer: DL-unified
 // denoise, roughness packed into normals.w, and HW (non-linear, reversed-Z) depth — the rgen writes
 // ndc z/w, shared with Frame Generation. renderPreset is an NVSDK_NGX_RayReconstruction_Hint_Render_Preset
-// value (0 = DLL default).
+// value (0 selects RR preset F, the RR2 model; DLSS-SR preset letters are independent).
 NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
                                            unsigned int renderWidth, unsigned int renderHeight,
                                            unsigned int displayWidth, unsigned int displayHeight,
@@ -367,15 +367,15 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
     }
     NVSDK_NGX_Result r = NVSDK_NGX_Result_Success;
 
-    if (renderPreset != 0) {
-        unsigned int preset = (unsigned int) renderPreset;
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality, preset);
-    }
+    // Always replace every hint because the capability parameter block survives feature recreation.
+    unsigned int preset = (unsigned int) (renderPreset == 0
+            ? NVSDK_NGX_RayReconstruction_Hint_Render_Preset_F : renderPreset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality, preset);
 
     NVSDK_NGX_DLSSD_Create_Params createParams;
     std::memset(&createParams, 0, sizeof(createParams));
