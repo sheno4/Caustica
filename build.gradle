@@ -80,7 +80,16 @@ processResources {
     from(bridgeOutput)
     from('.') { include 'LICENSE.md', 'COPYING', 'COPYING.LESSER', 'NOTICE.md' }
     if (providers.gradleProperty('cloudlyBundleInputRoot').isPresent()) {
-        from(providers.gradleProperty('cloudlyBundleInputRoot')) { into 'caustica/cloudly' }
+        def input = providers.gradleProperty('cloudlyBundleInputRoot').get()
+        def bundle = file(input)
+        if (!bundle.isDirectory() && !new File(input).isAbsolute()
+                && new File(projectDir.parentFile, 'settings.gradle').isFile()) {
+            bundle = new File(projectDir.parentFile, input)
+        }
+        if (!bundle.isDirectory() || !new File(bundle, 'manifest.json').isFile()) {
+            throw new GradleException("Private Cloudly bundle is missing: ${bundle}")
+        }
+        from(bundle) { into 'caustica/cloudly' }
     }
 }
 
