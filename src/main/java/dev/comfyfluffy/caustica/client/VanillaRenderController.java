@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
@@ -45,7 +46,7 @@ public final class VanillaRenderController {
 		this.inactiveReason = findInactiveReason(mainTarget);
 		this.baseReady = this.inactiveReason == null;
 		if (this.baseReady) {
-			if (!this.loggedActive) {
+			if (!this.loggedActive && !VivecraftCompat.isVrActive()) {
 				this.loggedActive = true;
 				CausticaMod.LOGGER.info("Vanilla world rendering cancellation active; using existing RT composite seam");
 			}
@@ -101,6 +102,10 @@ public final class VanillaRenderController {
 
 	public boolean shouldCompositeRt() {
 		return this.rtActive;
+	}
+
+	public boolean canCompositeEye() {
+		return this.frameStarted && this.rtActive && this.projectionCaptured && !RtComposite.INSTANCE.hasFailed();
 	}
 
 	/** Runtime work switch for per-frame RT work; mirrors {@link RtComposite#enabled()}. */

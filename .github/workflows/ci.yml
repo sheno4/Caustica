@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - caustica-main-vivecraft
     paths:
       - ".github/workflows/**"
       - "build.gradle"

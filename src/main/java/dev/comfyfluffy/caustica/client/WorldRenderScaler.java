@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 
 /**
@@ -23,8 +24,10 @@ public final class WorldRenderScaler {
 
 	/** Open the level-render window. Called right before level rendering. */
 	public void begin(RenderTarget mainTarget) {
+		this.rtWindowOpen = false;
 		VanillaRenderController.INSTANCE.beginFrame(mainTarget);
-		if (VanillaRenderController.INSTANCE.shouldCompositeRt()) {
+		if (VanillaRenderController.INSTANCE.shouldCompositeRt()
+				&& VivecraftCompat.view() != VivecraftCompat.View.AUXILIARY) {
 			this.rtWindowOpen = true;
 		}
 	}
@@ -41,9 +44,17 @@ public final class WorldRenderScaler {
 		this.end(mainTarget, false);
 	}
 
+	/** Consumes this eye's world window before Vivecraft draws the deferred overlays. */
+	public boolean endEye(RenderTarget mainTarget) {
+		if (!this.rtWindowOpen || !VivecraftCompat.view().isEye()) return false;
+		this.rtWindowOpen = false;
+		return RtComposite.INSTANCE.composite(mainTarget.getColorTexture(), mainTarget.width, mainTarget.height);
+	}
+
 	private void end(RenderTarget mainTarget, boolean beforeHandSeam) {
 		if (this.rtWindowOpen) {
 			this.rtWindowOpen = false;
+			if (VivecraftCompat.isVrActive()) return;
 			if (!beforeHandSeam && VanillaRenderController.INSTANCE.wasWorldSkippedThisFrame()) {
 				VanillaRenderController.INSTANCE.markMissedBeforeHandSeam();
 				return;

@@ -4,6 +4,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat.View;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
@@ -23,6 +24,30 @@ import java.lang.foreign.ValueLayout;
  */
 public final class RtDlssRr {
     public static final RtDlssRr INSTANCE = new RtDlssRr();
+    private static final RtDlssRr LEFT = new RtDlssRr();
+    private static final RtDlssRr RIGHT = new RtDlssRr();
+
+    public static RtDlssRr forView(View view) {
+        return switch (view) {
+            case DESKTOP -> INSTANCE;
+            case LEFT -> LEFT;
+            case RIGHT -> RIGHT;
+            case AUXILIARY -> throw new IllegalArgumentException("Auxiliary VR passes use native rendering");
+        };
+    }
+
+    public static void resetHistories() {
+        for (RtDlssRr rr : new RtDlssRr[]{INSTANCE, LEFT, RIGHT}) {
+            rr.resetHistory = true;
+            rr.lastFrameNanos = 0;
+        }
+    }
+
+    public static void destroyAll() {
+        INSTANCE.destroy();
+        LEFT.destroy();
+        RIGHT.destroy();
+    }
     public static boolean enabled() {
         return CausticaConfig.Rt.DlssRr.ENABLED.value();
     }

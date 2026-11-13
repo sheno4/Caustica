@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
@@ -27,7 +28,7 @@ public final class RtDlssFg {
     public static final RtDlssFg INSTANCE = new RtDlssFg();
 
     public static boolean enabled() {
-        return CausticaConfig.Rt.Fg.ENABLED.value();
+        return !VivecraftCompat.isVrActive() && CausticaConfig.Rt.Fg.ENABLED.value();
     }
 
     private NgxLibrary lib;

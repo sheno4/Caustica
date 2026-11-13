@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.client;
 
+import dev.comfyfluffy.caustica.compat.VivecraftCompat.View;
+
 /**
  * Sub-pixel camera jitter for DLSS Ray Reconstruction.
  *
@@ -10,6 +12,23 @@ package dev.comfyfluffy.caustica.client;
  */
 public final class CausticaJitter {
 	public static final CausticaJitter INSTANCE = new CausticaJitter();
+	private static final CausticaJitter LEFT = new CausticaJitter();
+	private static final CausticaJitter RIGHT = new CausticaJitter();
+
+	public static CausticaJitter forView(View view) {
+		return switch (view) {
+			case DESKTOP -> INSTANCE;
+			case LEFT -> LEFT;
+			case RIGHT -> RIGHT;
+			case AUXILIARY -> throw new IllegalArgumentException("Auxiliary VR passes use native rendering");
+		};
+	}
+
+	public static void resetAll() {
+		INSTANCE.frameIndex = 0;
+		LEFT.frameIndex = 0;
+		RIGHT.frameIndex = 0;
+	}
 
 	private int frameIndex;
 	private float pixelsX;
@@ -21,7 +40,8 @@ public final class CausticaJitter {
 	/** Advance one frame. Call once per frame before the level projection is built. */
 	public void prepare(int renderWidth, int renderHeight, int displayWidth) {
 		int phaseCount = jitterPhaseCount(renderWidth, displayWidth);
-		int index = (this.frameIndex++ % phaseCount) + 1; // Halton(0) is degenerate
+		int index = this.frameIndex % phaseCount + 1;
+		this.frameIndex = index % phaseCount;
 		this.pixelsX = halton(index, 2) - 0.5f;
 		this.pixelsY = halton(index, 3) - 0.5f;
 	}

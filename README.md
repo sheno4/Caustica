@@ -63,6 +63,20 @@ Caustica takes over the world renderer, so other mods that heavily modify world
 rendering, shader pipelines, post-processing, or the Vulkan backend may conflict.
 UI-only mods are more likely to work.
 
+### Vivecraft
+
+The Vivecraft integration targets Minecraft 26.2 on Fabric with Vivecraft
+26.2-1.3.15 and the Vulkan backend. With Fast or Fancy graphics, Caustica
+composites the left and right eye world colors before Vivecraft draws its
+hands and spatial UI. Each eye has independent motion, jitter and DLSS Ray
+Reconstruction history. Vivecraft retains raster depth for overlay occlusion
+and submits the eye textures to the headset.
+
+The headset path uses SDR and disables DLSS Frame Generation while VR is
+active. Auxiliary views, including the scope and third-person camera, and the
+Fabulous transparency path use Vivecraft's native rendering. The desktop
+Video Settings screen exposes Caustica's renderer settings.
+
 ## Status
 
 Caustica is not a finished renderer yet. Current work focuses on visual

@@ -10,6 +10,8 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat.View;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
@@ -261,20 +263,45 @@ public final class RtComposite {
 
     // Motion-vector reprojection state: the previous frame's camera-relative view-projection and
     // camera position, read into the push constant each frame then advanced at frame end.
-    private final Matrix4f mvPrevProjView = new Matrix4f();
     private final Matrix4f mvCurProjView = new Matrix4f();
     private final Matrix4f mvPushMatrix = new Matrix4f();
     private final Matrix4f frameInvViewProj = new Matrix4f();
     private final BlockPos.MutableBlockPos cameraBlockPos = new BlockPos.MutableBlockPos();
-    private double mvPrevCamX;
-    private double mvPrevCamY;
-    private double mvPrevCamZ;
     private float mvCamDeltaX;
     private float mvCamDeltaY;
     private float mvCamDeltaZ;
-    private boolean mvHasPrev;
-    private float previousWaterWaveTime;
-    private boolean waterWaveTimeValid;
+    private final MotionHistory desktopMotion = new MotionHistory();
+    private final MotionHistory leftMotion = new MotionHistory();
+    private final MotionHistory rightMotion = new MotionHistory();
+    private View capturedView = View.DESKTOP;
+    private Object temporalLevel;
+    private boolean temporalVr;
+
+    private static final class MotionHistory {
+        final Matrix4f projection = new Matrix4f();
+        double x, y, z;
+        boolean valid;
+        float waveTime;
+        boolean waveValid;
+    }
+
+    private MotionHistory motionHistory() {
+        return switch (capturedView) {
+            case DESKTOP -> desktopMotion;
+            case LEFT -> leftMotion;
+            case RIGHT -> rightMotion;
+            case AUXILIARY -> throw new IllegalStateException("No temporal state for an auxiliary VR pass");
+        };
+    }
+
+    private void resetTemporalHistory() {
+        for (MotionHistory history : new MotionHistory[]{desktopMotion, leftMotion, rightMotion}) {
+            history.valid = false;
+            history.waveValid = false;
+        }
+        CausticaJitter.resetAll();
+        RtDlssRr.resetHistories();
+    }
     private long atlasSampler;
     private boolean failed;
     private boolean loggedActive;
@@ -493,6 +520,7 @@ public final class RtComposite {
 
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
     public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
+        capturedView = VivecraftCompat.view();
         frameProjection.set(projection);
         frameViewRotation.set(viewRotation);
         camX = cameraX;
@@ -504,6 +532,7 @@ public final class RtComposite {
     /** Reset exposure filtering after an explicit render-state invalidation such as F3+A. */
     public void resetExposureHistory() {
         exposure.requestReset();
+        resetTemporalHistory();
     }
 
     /**
@@ -530,6 +559,7 @@ public final class RtComposite {
         }
         RtFrameStats.FRAME.beginIfInactive();
         hdrWrittenThisFrame = false;
+        frameCaptured = false;
     }
 
     /** This frame's completion token, valid until {@link #finishGraphicsUse()} signals it. */
@@ -559,6 +589,15 @@ public final class RtComposite {
     }
 
     public boolean composite(GpuTexture nativeColor, int width, int height) {
+        View view = VivecraftCompat.view();
+        if (view == View.AUXILIARY || capturedView != view) return false;
+        Object level = Minecraft.getInstance().level;
+        if (temporalLevel != level || temporalVr != view.isEye()) {
+            temporalLevel = level;
+            temporalVr = view.isEye();
+            resetTemporalHistory();
+            exposure.requestReset();
+        }
         frameCounter++; // global frame serial used by remaining per-frame/entity rings and diagnostics
         VulkanDiagnostics.setInFlight("graphics-latest", "frame=" + frameCounter + " size=" + width + "x" + height);
         hdrWrittenThisFrame = false; // set true again below once this frame's HDR display image is written
@@ -927,7 +966,7 @@ public final class RtComposite {
         // With RR on, ask NGX what render resolution its chosen quality mode actually expects rather
         // than assuming a fixed ratio: different quality modes (and driver versions) use different
         // ratios, and DLSSD's own optimal-settings query is the source of truth for what it will accept.
-        int[] optimal = rrEnabled ? RtDlssRr.INSTANCE.queryOptimalRenderSize(width, height) : null;
+        int[] optimal = rrEnabled ? RtDlssRr.forView(capturedView).queryOptimalRenderSize(width, height) : null;
         renderW = optimal != null ? optimal[0] : width;
         renderH = optimal != null ? optimal[1] : height;
         renderSizeRrEnabled = rrEnabled;
@@ -972,8 +1011,7 @@ public final class RtComposite {
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
         exposure.ensureResources(ctx);
 
-        mvHasPrev = false; // recreated images -> first MV frame is zero
-        waterWaveTimeValid = false;
+        resetTemporalHistory();
         if (worldPipeline != null) {
             worldPipeline.setStorageImage(output.view);
             bindGuideImages();
@@ -1004,22 +1042,23 @@ public final class RtComposite {
      */
     private void updateMotion() {
         mvCurProjView.set(frameProjection).mul(frameViewRotation);
-        if (mvHasPrev) {
-            mvPushMatrix.set(mvPrevProjView);
-            mvCamDeltaX = (float) (camX - mvPrevCamX);
-            mvCamDeltaY = (float) (camY - mvPrevCamY);
-            mvCamDeltaZ = (float) (camZ - mvPrevCamZ);
+        MotionHistory history = motionHistory();
+        if (history.valid) {
+            mvPushMatrix.set(history.projection);
+            mvCamDeltaX = (float) (camX - history.x);
+            mvCamDeltaY = (float) (camY - history.y);
+            mvCamDeltaZ = (float) (camZ - history.z);
         } else {
             mvPushMatrix.set(mvCurProjView);
             mvCamDeltaX = 0f;
             mvCamDeltaY = 0f;
             mvCamDeltaZ = 0f;
         }
-        mvPrevProjView.set(mvCurProjView);
-        mvPrevCamX = camX;
-        mvPrevCamY = camY;
-        mvPrevCamZ = camZ;
-        mvHasPrev = true;
+        history.projection.set(mvCurProjView);
+        history.x = camX;
+        history.y = camY;
+        history.z = camZ;
+        history.valid = true;
     }
 
     private void recordFrame(RtContext ctx, RtPipeline active, GpuTexture nativeColor) {
@@ -1045,9 +1084,10 @@ public final class RtComposite {
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
-                CausticaJitter.INSTANCE.prepare(renderW, renderH, displayW);
-                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
-                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
+                CausticaJitter jitter = CausticaJitter.forView(capturedView);
+                jitter.prepare(renderW, renderH, displayW);
+                jitterX = jitter.jitterPixelsX() * jitterSignX();
+                jitterY = jitter.jitterPixelsY() * jitterSignY();
             }
 
             boolean rrDone = false;
@@ -1090,14 +1130,15 @@ public final class RtComposite {
                 wtb = (wc & 0xFF) / 255f;
             }
             float waterWaveTime = (float) (System.nanoTime() / 1.0e9 % 3600.0);
-            float waterWaveDelta = waterWaveTime - previousWaterWaveTime;
+            MotionHistory history = motionHistory();
+            float waterWaveDelta = waterWaveTime - history.waveTime;
             // A first frame, long pause, or one-hour phase wrap has no adjacent wave frame to reproject.
             // Use the current phase so the reflection MV is neutral instead of manufacturing a huge jump.
-            float priorWaterWaveTime = waterWaveTimeValid
+            float priorWaterWaveTime = history.waveValid
                     && waterWaveDelta >= 0f && waterWaveDelta <= 0.25f
-                    ? previousWaterWaveTime : waterWaveTime;
-            previousWaterWaveTime = waterWaveTime;
-            waterWaveTimeValid = true;
+                    ? history.waveTime : waterWaveTime;
+            history.waveTime = waterWaveTime;
+            history.waveValid = true;
             Float4 waterParams = linearAcesCgFromSrgb(wtr, wtg, wtb, waterWaveTime);
             // Wave-domain anchor: the terrain rebase origin reduced mod 4096 (kept small for shader
             // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so the
@@ -1213,10 +1254,11 @@ public final class RtComposite {
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
-            if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd.address(), renderW, renderH, displayW, displayH)) {
+            RtDlssRr rr = RtDlssRr.forView(capturedView);
+            if (rrPath && rr.ensureFeature(cmd.address(), renderW, renderH, displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
-                    rrDone = RtDlssRr.INSTANCE.evaluate(cmd.address(), output, gDepth, gMotion, gAlbedo,
+                    rrDone = rr.evaluate(cmd.address(), output, gDepth, gMotion, gAlbedo,
                             gSpecAlbedo, gNormal, gSpecMotion, rrOutput, renderW, renderH, displayW, displayH,
                             -jitterX, -jitterY, frameViewRotation, frameProjection);
                 }
@@ -1258,13 +1300,14 @@ public final class RtComposite {
                         bloom.thresholdSceneLinear(), bloom.softKneeFraction(), bloom.radius());
             }
 
+            boolean hdrOutput = capturedView == View.DESKTOP && CausticaConfig.Rt.Hdr.enabled();
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
-                displayPipeline.dispatch(cmd, displayW, displayH, CausticaConfig.Rt.Hdr.enabled(),
+                displayPipeline.dispatch(cmd, displayW, displayH, hdrOutput,
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
                         true, lookLut.size, LOOK.bloom().strength() / bloomLevels.length);
             }
-            hdrWrittenThisFrame = CausticaConfig.Rt.Hdr.enabled();
+            hdrWrittenThisFrame = hdrOutput;
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // display output visible to debug composite
 
             if (debugView != 0) {
@@ -1464,9 +1507,9 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
-        if (RtDlssRr.enabled()) {
-            RtDlssRr.INSTANCE.destroy();
-        }
+        RtDlssRr.destroyAll();
+        temporalLevel = null;
+        resetTemporalHistory();
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;
@@ -1628,7 +1671,7 @@ public final class RtComposite {
 
     /** Whether the HDR present path (HDR image + combined UI -> PQ swapchain) should replace the vanilla SDR blit. */
     public boolean isHdrPresentActive() {
-        return CausticaConfig.Rt.Hdr.enabled()
+        return !VivecraftCompat.isVrActive() && CausticaConfig.Rt.Hdr.enabled()
                 && hdrWrittenThisFrame
                 && hdrDisplayImage != null;
     }
@@ -2000,8 +2043,8 @@ public final class RtComposite {
             // clipToPrevClip = prevVP * inverse(curVP); prevClipToClip = curVP * inverse(prevVP). Both from
             // the (rotation-only, camera-relative) MV view-projections, so jitter-free.
             fgMatTmp.set(mvCurProjView).invert();
-            fgClipToPrev.set(mvPrevProjView).mul(fgMatTmp);
-            fgMatTmp.set(mvPrevProjView).invert();
+            fgClipToPrev.set(desktopMotion.projection).mul(fgMatTmp);
+            fgMatTmp.set(desktopMotion.projection).invert();
             fgPrevToClip.set(mvCurProjView).mul(fgMatTmp);
         }
         if (index < 1 || index > fgInterp.length || fgInterp[index - 1] == null) {

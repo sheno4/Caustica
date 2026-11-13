@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
+
 import java.util.Optional;
 
 import org.joml.Vector4f;
@@ -74,7 +76,8 @@ public final class RtUiOverlay {
      * GUI on the normal path.
      */
     public static boolean enabled() {
-        return !compositeFailed && Minecraft.getInstance().isGameLoadFinished();
+        return !VivecraftCompat.isVrActive()
+                && !compositeFailed && Minecraft.getInstance().isGameLoadFinished();
     }
 
     /** Whether the overlay holds this frame's UI (for the HDR present path to composite + consume). */

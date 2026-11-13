@@ -7,6 +7,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
@@ -68,7 +69,7 @@ public abstract class GameRendererMixin {
 			at = @At(value = "INVOKE",
 					target = "Lnet/minecraft/client/renderer/GameRenderer;renderLevel(Lnet/minecraft/client/DeltaTracker;)V"))
 	private void caustica$beginWorldScale(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		WorldRenderScaler.INSTANCE.begin(this.mainRenderTarget);
+		WorldRenderScaler.INSTANCE.begin(((GameRenderer) (Object) this).mainRenderTarget());
 	}
 
 	// Redirect the held-item/hand render into the combined UI overlay. SDR and HDR then feed DLSS-FG the same
@@ -134,7 +135,8 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;getBuffer(Lorg/joml/Matrix4f;)Lcom/mojang/blaze3d/buffers/GpuBufferSlice;"),
 			index = 0)
 	private Matrix4f caustica$captureLevelProjection(Matrix4f projection) {
-		if (!VanillaRenderController.rtRuntimeWorkRequested()) {
+		if (!VanillaRenderController.rtRuntimeWorkRequested()
+				|| VivecraftCompat.view() == VivecraftCompat.View.AUXILIARY) {
 			return projection;
 		}
 
@@ -158,6 +160,7 @@ public abstract class GameRendererMixin {
 					shift = At.Shift.AFTER))
 	private void caustica$endWorldScaleBeforeHand(DeltaTracker deltaTracker, CallbackInfo ci) {
 		WorldRenderScaler.INSTANCE.end(this.mainRenderTarget);
+		if (VivecraftCompat.isVrActive()) return;
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
 		// add their own layers. RtUiOverlay then performs the single final blend to SDR/HDR.
 		try {
