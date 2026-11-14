@@ -105,7 +105,8 @@ public final class VanillaRenderController {
 	}
 
 	public boolean canCompositeEye() {
-		return this.frameStarted && this.rtActive && this.projectionCaptured && !RtComposite.INSTANCE.hasFailed();
+		return this.frameStarted && this.rtActive && this.projectionCaptured
+				&& !RtComposite.INSTANCE.hasFailed() && RtTerrain.hasCurrentMaterials();
 	}
 
 	/** Runtime work switch for per-frame RT work; mirrors {@link RtComposite#enabled()}. */

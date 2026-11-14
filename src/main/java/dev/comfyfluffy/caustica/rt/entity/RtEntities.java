@@ -1954,11 +1954,6 @@ public final class RtEntities {
         tableCapacity = requiredCapacity;
     }
 
-    /** Drop CPU templates that retain resource-pack-owned model trees. */
-    public void onResourceReload() {
-        collector.clearCaches();
-    }
-
     /** Free the geometry-table ring and entity resources (teardown; caller has idled the device). */
     public void shutdown() {
         for (FrameLists lists : frameLists) {

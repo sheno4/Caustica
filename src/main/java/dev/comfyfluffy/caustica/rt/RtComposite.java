@@ -21,6 +21,7 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -154,20 +155,12 @@ public final class RtComposite {
     }
 
     private RtPipeline worldPipeline;
-    // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
-    // atlas + entity textures. We tear down the world pipeline there (drops all descriptor references) and
-    // rebuild it once the NEW atlas is in place — detected by the atlas view handle changing away from
-    // boundBlockAlbedoAtlasHandle to a fresh non-zero value (MC's deferred free keeps the old handle live for a few
-    // frames, so "handle != 0" alone isn't enough to tell old from new).
+    // A reload replaces the atlas and model resources. Keep tracing suspended until the client
+    // tick can bind the completed reload and reset terrain to the new material epoch.
     private volatile boolean reloadRebindRequested;
-    // The block-atlas view handle currently bound into the world pipeline (set by bindWorldTextures).
-    private long boundBlockAlbedoAtlasHandle;
     private int bindlessTextureCapacity;
     // True after the LabPBR atlases have been resolved/bound for the currently alive world pipeline.
     private boolean materialBindingsReady;
-    // Set when a new material epoch is published. The first composite returns to vanilla so the next
-    // client tick can apply RtTerrain's full-clear before any old-epoch primitive IDs are traced.
-    private boolean materialEpochTraceGate;
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
     // Exact graphics completion guards host writes; ring depth only avoids routine waits.
@@ -480,30 +473,13 @@ public final class RtComposite {
     /**
      * Whether the current frame must retain vanilla world rendering while RT resource state converges.
      *
-     * <p>The composite still runs at the normal seam so it can consume the one-frame epoch gate or observe
-     * the newly uploaded atlas. This method only prevents {@code LevelRenderer} from being cancelled before
-     * a deliberately transient {@link #composite} return. Such a return is not a renderer failure and must
-     * not trip {@code VanillaRenderController}'s permanent safety latch.</p>
+     * <p>Keep {@code LevelRenderer} active when {@link #composite} may temporarily decline to
+     * replace the frame, so the safety latch only sees failures after the vanilla world was skipped.</p>
      */
     public boolean requiresVanillaWorldFallback() {
-        // Pipeline creation publishes a new material epoch and deliberately makes composite() return
-        // false once so RtTerrain can apply the matching full clear. Keep vanilla alive for that bring-up
-        // frame; otherwise LevelRenderer is cancelled before composite() discovers it must fall back and
-        // VanillaRenderController permanently latches the resulting missing replacement frame.
-        if (worldPipeline == null || !materialBindingsReady) {
-            return true;
-        }
-        if (materialEpochTraceGate) {
-            return true;
-        }
-        if (RtEntityTextures.maxTextures() > bindlessTextureCapacity) {
-            return true;
-        }
-        if (reloadRebindRequested) {
-            long atlas = blockAlbedoAtlasView();
-            return atlas == 0L || atlas == boundBlockAlbedoAtlasHandle;
-        }
-        return false;
+        return reloadRebindRequested || worldPipeline == null || !materialBindingsReady
+                || !RtTerrain.hasCurrentMaterials()
+                || RtEntityTextures.maxTextures() > bindlessTextureCapacity;
     }
 
     /**
@@ -609,6 +585,9 @@ public final class RtComposite {
             return false;
         }
         ctx.gpuExecutor().throwIfFailed();
+        if (reloadRebindRequested) {
+            return false;
+        }
         // Count-bounded terrain streaming (dispatch/drain/build kick) runs here once per render frame — before
         // the ready gate below, because it is what MAKES terrain ready during the initial fill.
         try {
@@ -670,17 +649,6 @@ public final class RtComposite {
             if (lookLut == null) {
                 lookLut = RtToneLut.loadResource(ctx, LOOK.lmtResource());
             }
-            // A resource reload re-stitches the block atlas. We've already torn down the world pipeline
-            // (onResourceReloadStart) so nothing references the old atlas, but MC's deferred free keeps the
-            // old view handle live for a few frames, then swaps in the new atlas (whose GPU upload may lag,
-            // leaving the handle 0 transiently). Skip RT — vanilla renders — until the handle becomes a
-            // fresh, non-zero value different from what we last bound; only then rebuild against it.
-            if (reloadRebindRequested) {
-                long atlas = blockAlbedoAtlasView();
-                if (atlas == 0L || atlas == boundBlockAlbedoAtlasHandle) {
-                    return false;
-                }
-            }
             ensureOutput(ctx, width, height);
             // ensureOutput's rebuild path (only taken on resize/RR-setting change) already rebinds
             // displayPipeline's descriptor set; this covers the case ensureOutput early-returned but
@@ -700,8 +668,7 @@ public final class RtComposite {
             exposure.ensureResources(ctx);
             refreshPipelineShapeIfNeeded(ctx);
             RtPipeline active = ensureWorld(ctx);
-            if (materialEpochTraceGate) {
-                materialEpochTraceGate = false;
+            if (!RtTerrain.hasCurrentMaterials()) {
                 return false;
             }
             refreshMaterialBindingsIfNeeded(ctx);
@@ -724,15 +691,17 @@ public final class RtComposite {
      * Bring the world pipeline + LabPBR atlases up as soon as we're in a world and the block atlas is
      * loaded — <em>before</em> terrain tessellates — so the immutable material snapshot is available to
      * the first worker section. Driven from the client tick ahead of {@link RtTerrain#update}. No-op once
-     * the pipeline exists, while a reload rebuild is pending (the reload path rebuilds against the new
-     * atlas), or until we're in a world with the atlas ready. The heavy {@code _s}/{@code _n} atlases are
+     * the pipeline exists, while the resource loading overlay is active, or until we're in a
+     * world with the atlas ready. The heavy {@code _s}/{@code _n} atlases are
      * deliberately not built at the menu — only once a world is entered.
      */
     public void ensureResourcesReady(RtContext ctx) {
-        if (failed || worldPipeline != null || reloadRebindRequested) {
+        if (failed || worldPipeline != null) {
             return;
         }
-        if (Minecraft.getInstance().level == null || blockAlbedoAtlasView() == 0L) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.level == null || client.gui.overlay() instanceof LoadingOverlay
+                || blockAlbedoAtlasView() == 0L) {
             return;
         }
         try {
@@ -790,6 +759,7 @@ public final class RtComposite {
             return;
         }
         ctx.waitIdle();
+        RtEntities.INSTANCE.shutdown();
         worldPipeline.destroy();
         worldPipeline = null;
         bindlessTextureCapacity = 0;
@@ -805,7 +775,6 @@ public final class RtComposite {
     private void bindWorldTextures(RtContext ctx) {
         long sampler = atlasSampler(ctx);
         long atlasView = blockAlbedoAtlasView();
-        boundBlockAlbedoAtlasHandle = atlasView; // remember what we bound so a reload can detect the new atlas
         worldPipeline.setBlockAlbedoAtlas(atlasView, sampler);
         // Bindless slot 0 = fallback texture (the block atlas) so an entity whose texture can't be
         // resolved samples something defined rather than an unbound (partially-bound) descriptor.
@@ -832,10 +801,6 @@ public final class RtComposite {
             }
         }
         setCelestialUvAtlas(celView);
-        // Atlas UVs and material IDs are one resource epoch. Drop old terrain as a unit rather than
-        // incrementally displaying old UVs/IDs against the new atlas/table.
-        RtTerrain.requestFullClear();
-        materialEpochTraceGate = true;
     }
 
     private void refreshMaterialBindingsIfNeeded(RtContext ctx) {
@@ -859,23 +824,19 @@ public final class RtComposite {
     }
 
     /**
-     * Hooked at the HEAD of {@link net.minecraft.client.Minecraft#reloadResourcePacks()} (mixin). A
-     * resource reload re-stitches the block atlas (and reloads entity textures): MC frees the old GPU
-     * images via its deferred destruction queue, which refuses while any descriptor set still references
-     * them ("in use by VkDescriptorSet" → device lost). So we drain in-flight frames and then <b>destroy
-     * the world pipeline outright</b> — dropping every descriptor reference (block atlas binding 2 +
-     * bindless set) — so MC can free its textures cleanly. The pipeline is cheap to rebuild (no terrain
-     * re-upload); {@code ensureWorld} recreates it on the first world frame after the reload, once the new
-     * atlas is ready (gated in {@link #composite}). The new material epoch clears terrain before trace.
+     * Retire old geometry and drop descriptors before Minecraft replaces their model and texture
+     * resources. The client tick binds the completed reload before it updates terrain residency.
      */
     public void onResourceReloadStart() {
         reloadRebindRequested = true;
         materialBindingsReady = false;
         setCelestialUvAtlas(0L);
-        RtEntities.INSTANCE.onResourceReload();
+        resetExposureHistory();
         RtContext ctx = RtContext.currentOrNull();
         if (ctx != null) {
+            RtTerrain.onResourceReload(ctx);
             ctx.waitIdle();
+            RtEntities.INSTANCE.shutdown();
             if (worldPipeline != null) {
                 worldPipeline.destroy();
                 worldPipeline = null;
@@ -1601,7 +1562,6 @@ public final class RtComposite {
         }
         bindlessTextureCapacity = 0;
         materialBindingsReady = false;
-        materialEpochTraceGate = false;
         RtMaterialRegistry.INSTANCE.destroy();
         if (pushRing != null) {
             for (PushSlot slot : pushRing) {
@@ -1644,7 +1604,7 @@ public final class RtComposite {
     private static long blockAlbedoAtlasView() {
         GpuTextureView view = Minecraft.getInstance().getTextureManager()
                 .getTexture(TextureAtlas.LOCATION_BLOCKS).getTextureView();
-        return vkImageView(view);
+        return view == null ? 0L : vkImageView(view);
     }
 
     private static long vkImageView(GpuTextureView view) {

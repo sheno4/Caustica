@@ -169,6 +169,7 @@ public final class RtTerrain {
     private long dirtyGroupSeq;
     private final RtSectionTable table = new RtSectionTable();
     private boolean ready;
+    private long materialEpoch;
     // Full-residency invalidation requested off the render thread. Wired to Fabric's
     // InvalidateRenderStateCallback = vanilla LevelExtractor.allChanged() (dimension change via setLevel,
     // render-distance change, F3+A). Consumed in tick(), where the RT context is available.
@@ -315,7 +316,20 @@ public final class RtTerrain {
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
     public static void frame(RtContext ctx) {
-        if (RtMaterialRegistry.INSTANCE.isReady()) INSTANCE.frameStream(ctx);
+        if (hasCurrentMaterials()) INSTANCE.frameStream(ctx);
+    }
+
+    /** Only stream or trace against the material table that owns the resident primitive IDs. */
+    public static boolean hasCurrentMaterials() {
+        long epoch = RtMaterialRegistry.INSTANCE.epoch();
+        return epoch != 0L && INSTANCE.materialEpoch == epoch;
+    }
+
+    public static void onResourceReload(RtContext ctx) {
+        INSTANCE.clearAsync(ctx);
+        // A worker already tessellating can still read the old sprite's native image.
+        INSTANCE.awaitActiveTasks();
+        RtTerrainOmm.clearCache();
     }
 
     public static void shutdown(RtContext ctx) {
@@ -380,8 +394,9 @@ public final class RtTerrain {
             return;
         }
         noWorldClearApplied = false;
-        if (!RtMaterialRegistry.INSTANCE.isReady()) {
-            return; // resource reload gap: keep old work dormant until the new epoch requests a full clear
+        long epoch = RtMaterialRegistry.INSTANCE.epoch();
+        if (epoch == 0L) {
+            return;
         }
 
         // Full clear on an explicit invalidation — vanilla's LevelExtractor.allChanged() via the Fabric
@@ -389,9 +404,10 @@ public final class RtTerrain {
         // render-distance change, and F3+A. Without it, End→Overworld keeps the old dimension's geometry:
         // residency is keyed by raw section coords (no world identity), so the same coords stay resident
         // and are never rebuilt for the new world.
-        if (fullClearRequested) {
+        if (fullClearRequested || materialEpoch != epoch) {
             fullClearRequested = false;
             clear(ctx, false);
+            materialEpoch = epoch;
         }
 
         int pbx = mc.player.getBlockX();
