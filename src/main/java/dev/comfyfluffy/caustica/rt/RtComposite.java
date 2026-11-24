@@ -177,10 +177,7 @@ public final class RtComposite {
     private RtToneLut hdrToneLut;
     private RtToneLut lookLut;
     private int loadedHdrLutNits = -1;
-    private RtImage output;
-    // Packed primary -> indirect continuations. Pass A is fixed at one sample and owns two records per
-    // render pixel (base + optional transmission); Pass B resamples them at the configured SPP.
-    private RtBuffer continuationQueue;
+    private TraceTargets traceTargets;
     private RtImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
     // display mapper reads level 0, which the upsample sweep leaves holding the sum of every band.
@@ -231,16 +228,8 @@ public final class RtComposite {
     private final Matrix4f fgClipToPrev = new Matrix4f();
     private final Matrix4f fgPrevToClip = new Matrix4f();
     private final Matrix4f fgMatTmp = new Matrix4f();
-    // Guide buffers (first-hit attributes for DLSS-RR): normal+roughness, albedo, depth, motion,
-    // specular albedo, and reflection motion.
-    private RtImage gNormal;
-    private RtImage gAlbedo;
-    private RtImage gDepth;
-    private RtImage gMotion;
-    private RtImage gSpecAlbedo;
-    private RtImage gSpecMotion;
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
-    // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
+    // linear blit of the trace color fills it when RR is off/unavailable (the no-RR reference / fallback).
     private RtImage rrOutput;
     private final RtExposure exposure = new RtExposure();
 
@@ -659,8 +648,8 @@ public final class RtComposite {
                     sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
                     boundLookLut.view(), boundLookLut.sampler(), bloomLevels[0].view, bloomPipeline.sampler());
             bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
-            debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
-                    gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
+            debugPresentPipeline.setImages(displayImage.view, traceTargets.gNormal.view, traceTargets.gAlbedo.view, traceTargets.gDepth.view,
+                    traceTargets.gMotion.view, traceTargets.gSpecAlbedo.view, traceTargets.gSpecMotion.view, rrOutput.view, exposure.image().view,
                     exposure.stateBuffer());
             // Cheap idempotent check every frame (not just on resize): if the exposure mode is switched
             // manual -> auto at runtime (video settings), the auto-mode histogram/state/pipeline must be
@@ -738,8 +727,8 @@ public final class RtComposite {
                             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push " + i));
                 }
             }
-            if (output != null) {
-                worldPipeline.setStorageImage(output.view);
+            if (traceTargets != null) {
+                worldPipeline.setStorageImage(traceTargets.color.view);
                 bindGuideImages();
             }
             bindWorldTextures(ctx);
@@ -848,45 +837,60 @@ public final class RtComposite {
 
     /** Bind the guide buffers into the world pipeline's extra storage-image slots. */
     private void bindGuideImages() {
-        if (worldPipeline == null || gNormal == null) {
+        if (worldPipeline == null || traceTargets == null) {
             return;
         }
-        worldPipeline.setExtraStorageImage(0, gNormal.view);
-        worldPipeline.setExtraStorageImage(1, gAlbedo.view);
-        worldPipeline.setExtraStorageImage(2, gDepth.view);
-        worldPipeline.setExtraStorageImage(3, gMotion.view);
-        worldPipeline.setExtraStorageImage(4, gSpecAlbedo.view);
-        worldPipeline.setExtraStorageImage(5, gSpecMotion.view);
+        worldPipeline.setExtraStorageImage(0, traceTargets.gNormal.view);
+        worldPipeline.setExtraStorageImage(1, traceTargets.gAlbedo.view);
+        worldPipeline.setExtraStorageImage(2, traceTargets.gDepth.view);
+        worldPipeline.setExtraStorageImage(3, traceTargets.gMotion.view);
+        worldPipeline.setExtraStorageImage(4, traceTargets.gSpecAlbedo.view);
+        worldPipeline.setExtraStorageImage(5, traceTargets.gSpecMotion.view);
     }
 
-    private void destroyGuideImages() {
-        if (gNormal != null) {
-            gNormal.destroy();
-            gNormal = null;
+    /** All trace-resolution allocations for one rectangular projection. */
+    private static final class TraceTargets {
+        private RtImage color;
+        private RtImage gNormal;
+        private RtImage gAlbedo;
+        private RtImage gDepth;
+        private RtImage gMotion;
+        private RtImage gSpecAlbedo;
+        private RtImage gSpecMotion;
+        private RtBuffer continuations;
+
+        static TraceTargets create(RtContext ctx, int width, int height) {
+            TraceTargets targets = new TraceTargets();
+            try {
+                int rgba16 = VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
+                int rg16 = VK10.VK_FORMAT_R16G16_SFLOAT;
+                targets.color = ctx.createStorageImage(width, height, rgba16, "trace color");
+                targets.gNormal = ctx.createStorageImage(width, height, rgba16, "guide normal roughness");
+                targets.gAlbedo = ctx.createStorageImage(width, height, rgba16, "guide diffuse albedo");
+                targets.gDepth = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R32_SFLOAT, "guide depth");
+                targets.gMotion = ctx.createStorageImage(width, height, rg16, "guide motion");
+                targets.gSpecAlbedo = ctx.createStorageImage(width, height, rgba16, "guide specular albedo");
+                targets.gSpecMotion = ctx.createStorageImage(width, height, rg16, "guide specular motion");
+                // One primary and one optional transmitted continuation per pixel.
+                long bytes = Math.multiplyExact((long) width * height, 2L * PATH_RECORD_BYTES);
+                targets.continuations = ctx.createBuffer(bytes, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        false, "path continuation queue");
+                return targets;
+            } catch (RuntimeException | Error failure) {
+                targets.destroy();
+                throw failure;
+            }
         }
-        if (gAlbedo != null) {
-            gAlbedo.destroy();
-            gAlbedo = null;
-        }
-        if (gDepth != null) {
-            gDepth.destroy();
-            gDepth = null;
-        }
-        if (gMotion != null) {
-            gMotion.destroy();
-            gMotion = null;
-        }
-        if (gSpecAlbedo != null) {
-            gSpecAlbedo.destroy();
-            gSpecAlbedo = null;
-        }
-        if (gSpecMotion != null) {
-            gSpecMotion.destroy();
-            gSpecMotion = null;
-        }
-        if (rrOutput != null) {
-            rrOutput.destroy();
-            rrOutput = null;
+
+        void destroy() {
+            if (continuations != null) {
+                continuations.destroy();
+            }
+            for (RtImage image : new RtImage[]{color, gNormal, gAlbedo, gDepth, gMotion, gSpecAlbedo, gSpecMotion}) {
+                if (image != null) {
+                    image.destroy();
+                }
+            }
         }
     }
 
@@ -896,7 +900,7 @@ public final class RtComposite {
         // the RR path whose render-resolution guide inputs the debug pass visualizes.
         boolean rrEnabled = RtDlssRr.enabled();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
-        if (output != null && continuationQueue != null
+        if (traceTargets != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
                 && bloomLevels.length > 0 && exposure.ready()
                 && displayW == width && displayH == height
@@ -911,14 +915,10 @@ public final class RtComposite {
             hdrDisplayImage.destroy();
         }
         destroyBloomLevels();
-        if (output != null) {
-            output.destroy();
+        if (traceTargets != null) {
+            traceTargets.destroy();
+            traceTargets = null;
         }
-        if (continuationQueue != null) {
-            continuationQueue.destroy();
-            continuationQueue = null;
-        }
-        destroyGuideImages();
 
         displayW = width;
         displayH = height;
@@ -937,13 +937,7 @@ public final class RtComposite {
         // so radiance > 1 and wide-gamut colour survive to the display seam. displayImage stays
         // R8G8B8A8 to match the main target it is copied into
         // (vkCmdCopyImage requires texel-size-compatible formats).
-        output = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "trace color " + renderW + "x" + renderH);
-        long pixelRecords = Math.multiplyExact((long) renderW, (long) renderH);
-        long continuationBytes = Math.multiplyExact(
-                Math.multiplyExact(pixelRecords, 2L), PATH_RECORD_BYTES);
-        continuationQueue = ctx.createBuffer(continuationBytes,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false,
-                "path continuation queue " + renderW + "x" + renderH + "x2");
+        traceTargets = TraceTargets.create(ctx, renderW, renderH);
         displayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, "RT display image " + width + "x" + height);
         // PQ-encoded ([0,1], ST.2084) HDR display image, written in parallel by display.comp when HDR mode is active.
         hdrDisplayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "RT HDR display image " + width + "x" + height);
@@ -961,20 +955,13 @@ public final class RtComposite {
             bloomWidth = Math.max(1, bloomWidth / 2);
             bloomHeight = Math.max(1, bloomHeight / 2);
         }
-        // Guide buffers match the trace (render) resolution; DLSS-RR consumes them at render res.
-        gNormal = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide normal roughness " + renderW + "x" + renderH);
-        gAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide diffuse albedo " + renderW + "x" + renderH);
-        gDepth = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R32_SFLOAT, "guide linear depth " + renderW + "x" + renderH);
-        gMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderW + "x" + renderH);
-        gSpecAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide specular albedo " + renderW + "x" + renderH);
-        gSpecMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide specular motion " + renderW + "x" + renderH);
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
         exposure.ensureResources(ctx);
 
         resetTemporalHistory();
         if (worldPipeline != null) {
-            worldPipeline.setStorageImage(output.view);
+            worldPipeline.setStorageImage(traceTargets.color.view);
             bindGuideImages();
         }
         RtToneLut boundLookLut = lookLut;
@@ -982,8 +969,8 @@ public final class RtComposite {
                 sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
                 boundLookLut.view(), boundLookLut.sampler(), bloomLevels[0].view, bloomPipeline.sampler());
         bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
-        debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
-                gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
+        debugPresentPipeline.setImages(displayImage.view, traceTargets.gNormal.view, traceTargets.gAlbedo.view, traceTargets.gDepth.view,
+                traceTargets.gMotion.view, traceTargets.gSpecAlbedo.view, traceTargets.gSpecMotion.view, rrOutput.view, exposure.image().view,
                 exposure.stateBuffer());
     }
 
@@ -1196,7 +1183,7 @@ public final class RtComposite {
                     RtMaterialRegistry.INSTANCE.tableAddress(),
                     terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
-                    terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
+                    terrain.lightGridSpanBufferAddress(), traceTargets.continuations.deviceAddress,
                     (int) frameCounter).write(pushConstants);
             // Sky LUTs, from the same WorldPush slot the trace is about to read: the sky the LUT holds and
             // the sky the frame shades are built from one set of angles, not two. Recorded here (after the
@@ -1222,8 +1209,8 @@ public final class RtComposite {
             if (rrPath && rr.ensureFeature(cmd.address(), renderW, renderH, displayW, displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
-                    rrDone = rr.evaluate(cmd.address(), output, gDepth, gMotion, gAlbedo,
-                            gSpecAlbedo, gNormal, gSpecMotion, rrOutput, renderW, renderH, displayW, displayH,
+                    rrDone = rr.evaluate(cmd.address(), traceTargets.color, traceTargets.gDepth, traceTargets.gMotion, traceTargets.gAlbedo,
+                            traceTargets.gSpecAlbedo, traceTargets.gNormal, traceTargets.gSpecMotion, rrOutput, renderW, renderH, displayW, displayH,
                             -jitterX, -jitterY, frameViewRotation, frameProjection);
                 }
             }
@@ -1236,7 +1223,7 @@ public final class RtComposite {
                 VulkanCommandEncoder.memoryBarrier(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale")) {
-                    blitUpscale(cmd, stack, output, rrOutput);
+                    blitUpscale(cmd, stack, traceTargets.color, rrOutput);
                 }
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // rrOutput visible to exposure histogram
@@ -1250,7 +1237,7 @@ public final class RtComposite {
             // regardless of SPP, keeping exposure consistent.
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.exposure")) {
-                exposure.record(ctx, cmd, stack, rrOutput, gDepth, gAlbedo);
+                exposure.record(ctx, cmd, stack, rrOutput, traceTargets.gDepth, traceTargets.gAlbedo);
                 exposure.recordStateReadback(cmd, stack);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // exposure image visible to the display mapper
@@ -1492,15 +1479,10 @@ public final class RtComposite {
             fgHdrHudlessImage = null;
         }
         RtWorldOverlay.INSTANCE.destroy(); // overlay features/pipelines/scratch live on the same device lifetime
-        if (output != null) {
-            output.destroy();
-            output = null;
+        if (traceTargets != null) {
+            traceTargets.destroy();
+            traceTargets = null;
         }
-        if (continuationQueue != null) {
-            continuationQueue.destroy();
-            continuationQueue = null;
-        }
-        destroyGuideImages();
         exposure.destroy();
         if (displayPipeline != null) {
             displayPipeline.destroy();
@@ -1990,7 +1972,7 @@ public final class RtComposite {
      */
     public RtImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
             int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
-        if (failed || gDepth == null || gMotion == null || !frameCaptured) {
+        if (failed || traceTargets == null || !frameCaptured) {
             return null;
         }
         RtContext ctx = RtContext.currentOrNull();
@@ -2030,8 +2012,8 @@ public final class RtComposite {
         VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
         boolean ok = RtDlssFg.INSTANCE.evaluate(cmd.address(),
                 backbufferView, backbufferImage, fmt,
-                gDepth.view, gDepth.image, VK10.VK_FORMAT_R32_SFLOAT,
-                gMotion.view, gMotion.image, VK10.VK_FORMAT_R16G16_SFLOAT,
+                traceTargets.gDepth.view, traceTargets.gDepth.image, VK10.VK_FORMAT_R32_SFLOAT,
+                traceTargets.gMotion.view, traceTargets.gMotion.image, VK10.VK_FORMAT_R16G16_SFLOAT,
                 hudlessView, hudlessImg, hudlessReady ? hudlessFmt : 0,
                 uiView, uiImg, uiReady ? VK10.VK_FORMAT_R8G8B8A8_UNORM : 0,
                 out.view, out.image, fmt,
