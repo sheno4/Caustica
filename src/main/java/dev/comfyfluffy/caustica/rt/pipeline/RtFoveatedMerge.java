@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
@@ -26,7 +27,7 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
 /** Combines both reconstructed layers in scene-linear color before exposure and bloom. */
 public final class RtFoveatedMerge {
-    private static final int PUSH_SIZE = Float.BYTES;
+    private static final int PUSH_SIZE = 16 * Float.BYTES;
     private final VkDevice device;
     private long descriptorLayout;
     private long pool;
@@ -124,12 +125,12 @@ public final class RtFoveatedMerge {
         }
     }
 
-    public void record(VkCommandBuffer cmd, MemoryStack stack, int width, int height, float centerFraction) {
+    public void record(VkCommandBuffer cmd, MemoryStack stack, int width, int height, Matrix4fc eyeToInset) {
         int compute = VK10.VK_PIPELINE_BIND_POINT_COMPUTE;
         VK10.vkCmdBindPipeline(cmd, compute, pipeline);
         VK10.vkCmdBindDescriptorSets(cmd, compute, layout, 0, stack.longs(set), null);
         var push = stack.malloc(PUSH_SIZE);
-        push.putFloat(0, centerFraction);
+        eyeToInset.get(0, push);
         VK10.vkCmdPushConstants(cmd, layout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
         VK10.vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
     }

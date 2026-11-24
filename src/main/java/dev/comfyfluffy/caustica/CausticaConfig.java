@@ -4,6 +4,7 @@ import com.electronwill.nightconfig.core.CommentedConfig;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.core.file.FileNotFoundAction;
 import com.electronwill.nightconfig.toml.TomlFormat;
+import dev.comfyfluffy.caustica.rt.VrFoveation;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -529,11 +530,11 @@ public final class CausticaConfig {
         }
 
         public static final class Composite {
-            public static final int FOVEATION_MAX_DETAIL = 8;
             public static final BooleanSetting FIXED_FOVEATION =
                     bool("caustica.rt.fixedFoveation", "composite.fixed-foveation", false);
             public static final IntSetting FOVEATION_DETAIL =
-                    clampedInt("caustica.rt.foveationDetail", "composite.foveation-detail", 4, 0, FOVEATION_MAX_DETAIL);
+                    clampedInt("caustica.rt.foveationDetail", "composite.foveation-detail", 4, 0,
+                            VrFoveation.MAX_DETAIL);
             public static final IntSetting FOVEATION_PREVIEW =
                     clampedInt("caustica.rt.foveationPreview", "composite.foveation-preview", 0, 0, 2);
             public static final IntSetting DEBUG_VIEW = intValue("caustica.rt.debugView", "composite.debug-view", 0);

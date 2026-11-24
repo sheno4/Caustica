@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
 import org.lwjgl.system.MemoryStack;
+import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -204,14 +205,14 @@ public final class RtDisplayPipeline {
      */
     public void dispatch(VkCommandBuffer cmd, int width, int height, boolean hdrEnabled, int lutSize,
                          float gamma, float hdrPeakNits, boolean lookEnabled, int lookLutSize,
-                         float bloomStrength, float foveatedFraction, int foveationPreview) {
+                         float bloomStrength, int foveationPreview, Matrix4fc eyeToInset) {
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "display compute")) {
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
             ByteBuffer push = stack.malloc(DisplayPushData.BYTE_SIZE);
             new DisplayPushData(hdrEnabled ? 1 : 0, (float) lutSize, gamma, hdrPeakNits,
                     lookEnabled ? 1 : 0, (float) lookLutSize, bloomStrength,
-                    foveatedFraction, foveationPreview).write(push);
+                    foveationPreview, eyeToInset).write(push);
             VK10.vkCmdPushConstants(cmd, pipelineLayout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             VK10.vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
         }

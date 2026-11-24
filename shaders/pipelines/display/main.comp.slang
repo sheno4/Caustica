@@ -5,6 +5,7 @@
 
 import display_common;
 import bindings;
+import foveation;
 
 [[vk::push_constant]] DisplayPush pc;
 
@@ -141,12 +142,13 @@ float3 tonemapHdr(float3 lookedAcesCg) {
     return displayGammaHdr(hdrToneLut.SampleLevel(lutTexCoord(uvw, pc.lutSize), 0.0).rgb);
 }
 
-float3 previewFoveation(float3 displayColor, float2 pixelCenter, float2 extent) {
+float3 previewFoveation(float3 displayColor, float2 uv) {
     if (pc.foveationPreview == 0) return displayColor;
 
-    float2 toEdge = abs(pixelCenter - 0.5 * extent) - 0.5 * extent * pc.foveatedFraction;
+    float2 insetUv = projectInsetUv(uv, pc.eyeToInset);
+    float2 toEdge = abs(insetUv - 0.5) - 0.5;
     float distance = max(toEdge.x, toEdge.y);
-    float outline = 1.0 - smoothstep(1.0, 2.0, abs(distance));
+    float outline = 1.0 - smoothstep(0.0015, 0.004, abs(distance));
     float fill = pc.foveationPreview == 2 && distance <= 0.0 ? 0.33 : 0.0;
     return lerp(displayColor, float3(0.15, 0.85, 1.0), max(outline, fill));
 }
@@ -167,7 +169,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     exposedAcesCg += sampleBloom(pix, w, h) * max(pc.bloomStrength, 0.0);
     float3 lookedAcesCg = applyLook(exposedAcesCg);
     float3 displayColor = previewFoveation(tonemap(lookedAcesCg),
-            float2(pix) + 0.5, float2(w, h));
+            (float2(pix) + 0.5) / float2(w, h));
     outputImage[pix] = float4(displayColor, 1.0);
 
     if (pc.hdrEnabled != 0) {

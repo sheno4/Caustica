@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.CausticaConfig.IntSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.StringSetting;
 import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.VrFoveation;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -70,19 +71,11 @@ public final class RtVideoOptions {
         String key = "caustica.options.rt.foveationDetail";
         IntSetting setting = CausticaConfig.Rt.Composite.FOVEATION_DETAIL;
         return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
-                (caption, detail) -> {
-                    float fraction = RtComposite.foveatedCenterFraction(detail);
-                    var metrics = RtComposite.INSTANCE.foveationMetrics();
-                    if (VivecraftCompat.isVrActive() && metrics != null) {
-                        double degrees = metrics.horizontalDegrees(fraction);
-                        if (degrees >= 1.0) {
-                            return Options.genericValueLabel(caption, Component.translatable(key + ".readout",
-                                    Math.round(metrics.insetTraceWidth() / degrees), Math.round(degrees)));
-                        }
-                    }
-                    return Options.genericValueLabel(caption,
-                            Component.translatable(key + ".coverage", Math.round(fraction * 100)));
-                }, new OptionInstance.IntRange(0, CausticaConfig.Rt.Composite.FOVEATION_MAX_DETAIL),
+                (caption, detail) -> Options.genericValueLabel(caption,
+                        Component.translatable(key + ".readout",
+                                VrFoveation.pixelsPerDegree(RtComposite.INSTANCE.vrInsetResolution(), detail),
+                                VrFoveation.coverageDegrees(detail))),
+                new OptionInstance.IntRange(0, VrFoveation.MAX_DETAIL),
                 setting.value(), setting::set);
     }
 

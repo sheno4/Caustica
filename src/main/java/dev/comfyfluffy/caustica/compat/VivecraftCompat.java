@@ -35,8 +35,24 @@ public final class VivecraftCompat {
         static final OverlayOptions OPTIONS = hasEyeIntegration() ? resolveOverlayOptions() : null;
     }
 
+    private static final class HeadAccess {
+        static HeadPose pose = hasEyeIntegration() ? resolveHeadPose() : null;
+    }
+
     public static boolean hasEyeIntegration() {
         return Access.HOOKS != null;
+    }
+
+    public static Matrix4f headViewRotation() {
+        HeadPose pose = HeadAccess.pose;
+        if (pose == null) return null;
+        try {
+            return (Matrix4f) pose.modelView.invoke(null, pose.headPass);
+        } catch (ReflectiveOperationException e) {
+            HeadAccess.pose = null;
+            CausticaMod.LOGGER.warn("Cannot read Vivecraft head pose; using the normal eye renderer", e);
+            return null;
+        }
     }
 
     public static Boolean highResolutionOverlay() {
@@ -167,6 +183,18 @@ public final class VivecraftCompat {
         }
     }
 
+    private static HeadPose resolveHeadPose() {
+        try {
+            Class<?> pass = load("api.client.data.RenderPass");
+            Method modelView = load("client_vr.render.helpers.RenderHelper").getMethod("getVRModelView", pass);
+            // VRData.getEye(VANILLA) selects the raw HMD pose. CENTER may use mirror smoothing.
+            return new HeadPose(modelView, pass.getField("VANILLA").get(null));
+        } catch (ReflectiveOperationException | LinkageError e) {
+            CausticaMod.LOGGER.warn("Vivecraft head pose is unavailable; cannot align foveated views", e);
+            return null;
+        }
+    }
+
     private static Class<?> load(String name) throws ClassNotFoundException {
         return Class.forName("org.vivecraft." + name, false, VivecraftCompat.class.getClassLoader());
     }
@@ -177,4 +205,6 @@ public final class VivecraftCompat {
 
     private record OverlayOptions(Field settings, Field doubleResolution, Method setOption,
                                   Object doubleResolutionOption) {}
+
+    private record HeadPose(Method modelView, Object headPass) {}
 }

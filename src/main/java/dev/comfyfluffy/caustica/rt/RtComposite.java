@@ -180,7 +180,8 @@ public final class RtComposite {
     private int loadedHdrLutNits = -1;
     private TraceTargets traceTargets;
     private FoveatedTargets foveatedTargets;
-    private FoveationMetrics foveationMetrics;
+    private int lastVrInsetResolution = VrFoveation.REFERENCE_RESOLUTION;
+    private final Matrix4f eyeToInset = new Matrix4f();
     private RtImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
     // display mapper reads level 0, which the upsample sweep leaves holding the sum of every band.
@@ -264,8 +265,10 @@ public final class RtComposite {
 
     private static final class MotionHistory {
         final Matrix4f projection = new Matrix4f();
+        final Matrix4f insetProjection = new Matrix4f();
         double x, y, z;
         boolean valid;
+        boolean insetValid;
         float waveTime;
         boolean waveValid;
     }
@@ -282,6 +285,7 @@ public final class RtComposite {
     private void resetTemporalHistory() {
         for (MotionHistory history : new MotionHistory[]{desktopMotion, leftMotion, rightMotion}) {
             history.valid = false;
+            history.insetValid = false;
             history.waveValid = false;
         }
         CausticaJitter.resetAll();
@@ -294,6 +298,7 @@ public final class RtComposite {
     // Camera captured each frame from GameRenderer (unjittered level projection + camera rotation + pos).
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
+    private Matrix4f frameHeadView;
     private double camX;
     private double camY;
     private double camZ;
@@ -489,6 +494,8 @@ public final class RtComposite {
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
     public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
         capturedView = VivecraftCompat.view();
+        frameHeadView = capturedView.isEye() && CausticaConfig.Rt.Composite.FIXED_FOVEATION.value()
+                ? VivecraftCompat.headViewRotation() : null;
         frameProjection.set(projection);
         frameViewRotation.set(viewRotation);
         camX = cameraX;
@@ -896,14 +903,13 @@ public final class RtComposite {
             try {
                 // Fix the inset pixel budget so changing its angular coverage does not reallocate
                 // the render targets. A smaller projection puts the same samples in a tighter area.
-                int insetW = merged.width - 2 * (merged.width / 4);
-                int insetH = merged.height - 2 * (merged.height / 4);
-                int[] optimal = RtDlssRr.forInset(eye).queryOptimalRenderSize(insetW, insetH);
-                targets.inset = TraceTargets.create(ctx, optimal == null ? insetW : optimal[0],
-                        optimal == null ? insetH : optimal[1]);
+                int size = VrFoveation.insetResolution(merged.width, merged.height);
+                int[] optimal = RtDlssRr.forInset(eye).queryOptimalRenderSize(size, size);
+                targets.inset = TraceTargets.create(ctx, optimal == null ? size : optimal[0],
+                        optimal == null ? size : optimal[1]);
                 int format = VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
                 targets.wideColor = ctx.createStorageImage(wideW, wideH, format, "VR wide reconstruction");
-                targets.insetColor = ctx.createStorageImage(insetW, insetH, format, "VR inset reconstruction");
+                targets.insetColor = ctx.createStorageImage(size, size, format, "VR inset reconstruction");
                 targets.merge = RtFoveatedMerge.create(ctx, merged, targets.wideColor, targets.insetColor, sampler);
                 return targets;
             } catch (RuntimeException | Error failure) {
@@ -920,30 +926,8 @@ public final class RtComposite {
         }
     }
 
-    public static float foveatedCenterFraction(int detail) {
-        return 0.65f - 0.30f * detail / CausticaConfig.Rt.Composite.FOVEATION_MAX_DETAIL;
-    }
-
-    public record FoveationMetrics(int insetTraceWidth, float projectionScale, float projectionOffset) {
-        public double horizontalDegrees(float fraction) {
-            return Math.toDegrees(Math.atan((projectionOffset + fraction) / projectionScale)
-                    - Math.atan((projectionOffset - fraction) / projectionScale));
-        }
-    }
-
-    public FoveationMetrics foveationMetrics() {
-        return foveationMetrics;
-    }
-
-    private void captureFoveationMetrics() {
-        if (capturedView != View.LEFT) return;
-        float scale = Math.abs(frameProjection.m00());
-        float offset = frameProjection.m20();
-        if (scale > 0.0f && Float.isFinite(scale) && Float.isFinite(offset)) {
-            int insetTraceWidth = foveatedTargets == null ? Math.max(1, renderW / 2)
-                    : foveatedTargets.inset.color.width;
-            foveationMetrics = new FoveationMetrics(insetTraceWidth, scale, offset);
-        }
+    public int vrInsetResolution() {
+        return lastVrInsetResolution;
     }
 
     private void destroyReconstructionTargets() {
@@ -961,8 +945,11 @@ public final class RtComposite {
     private void ensureOutput(RtContext ctx, int width, int height) {
         boolean rrEnabled = RtDlssRr.enabled();
         // Guide diagnostics visualize one rectangular projection.
-        boolean foveated = capturedView.isEye() && debugView() == 0 && width >= 512 && height >= 512
-                && CausticaConfig.Rt.Composite.FIXED_FOVEATION.value();
+        boolean eligibleEye = capturedView.isEye() && width >= 512 && height >= 512;
+        if (eligibleEye) {
+            lastVrInsetResolution = VrFoveation.insetResolution(width, height);
+        }
+        boolean foveated = eligibleEye && frameHeadView != null && debugView() == 0;
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (traceTargets != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
@@ -1081,7 +1068,6 @@ public final class RtComposite {
     }
 
     private void recordFrame(RtContext ctx, RtPipeline active, GpuTexture nativeColor) {
-        captureFoveationMetrics();
         long dstImage = vkImage(nativeColor);
         var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice().createCommandEncoder()).caustica$getBackend();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
@@ -1183,27 +1169,11 @@ public final class RtComposite {
 
             TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
                     flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter);
-            int detail = CausticaConfig.Rt.Composite.FOVEATION_DETAIL.value();
-            float centerFraction = foveatedCenterFraction(detail);
             RtImage wide = foveatedTargets == null ? rrOutput : foveatedTargets.wideColor;
             recordTraceLayer(ctx, cmd, stack, active, scene, traceTargets, wide,
-                    frameProjection, mvCurProjView, mvPushMatrix, false);
+                    frameProjection, frameViewRotation, mvCurProjView, mvPushMatrix, false);
             if (foveatedTargets != null) {
-                if (foveatedTargets.detail != detail) {
-                    RtDlssRr.resetInsetHistories();
-                    foveatedTargets.detail = detail;
-                }
-                RtImage inset = foveatedTargets.insetColor;
-                // Scale clip X/Y, leaving reversed-Z and the eye's asymmetric lens projection intact.
-                float cropScale = 1.0f / centerFraction;
-                Matrix4f crop = new Matrix4f().scaling(cropScale, cropScale, 1f);
-                recordTraceLayer(ctx, cmd, stack, active, scene, foveatedTargets.inset, inset,
-                        crop.mul(frameProjection, new Matrix4f()), crop.mul(mvCurProjView, new Matrix4f()),
-                        crop.mul(mvPushMatrix, new Matrix4f()), true);
-                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.foveatedMerge")) {
-                    foveatedTargets.merge.record(cmd, stack, displayW, displayH, centerFraction);
-                }
-                VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                recordFoveatedInset(ctx, cmd, stack, active, scene, history);
             }
 
             // Auto-exposure meters rrOutput (the post-RR, denoised/converged image), not the raw
@@ -1236,7 +1206,7 @@ public final class RtComposite {
                 displayPipeline.dispatch(cmd, displayW, displayH, hdrOutput,
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
                         true, lookLut.size, LOOK.bloom().strength() / bloomLevels.length,
-                        centerFraction, preview);
+                        preview, eyeToInset);
             }
             hdrWrittenThisFrame = hdrOutput;
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // display output visible to debug composite
@@ -1277,8 +1247,35 @@ public final class RtComposite {
                               Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
                               RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter) {}
 
+    private void recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
+                                     TraceScene scene, MotionHistory history) {
+        int detail = CausticaConfig.Rt.Composite.FOVEATION_DETAIL.value();
+        if (foveatedTargets.detail != detail) {
+            leftMotion.insetValid = false;
+            rightMotion.insetValid = false;
+            RtDlssRr.resetInsetHistories();
+            foveatedTargets.detail = detail;
+            CausticaMod.LOGGER.info("VR foveation inset: {} degrees, {} pixels/degree at center",
+                    VrFoveation.coverageDegrees(detail),
+                    VrFoveation.pixelsPerDegree(foveatedTargets.insetColor.width, detail));
+        }
+        Matrix4f insetProjection = VrFoveation.insetProjection(frameProjection, detail);
+        Matrix4f insetViewProjection = insetProjection.mul(frameHeadView, new Matrix4f());
+        // The two eyes retain their own origins. Only the angular window uses the headset's rotation.
+        recordTraceLayer(ctx, cmd, stack, active, scene, foveatedTargets.inset, foveatedTargets.insetColor,
+                insetProjection, frameHeadView, insetViewProjection,
+                history.insetValid ? history.insetProjection : insetViewProjection, true);
+        history.insetProjection.set(insetViewProjection);
+        history.insetValid = true;
+        VrFoveation.eyeToInset(mvCurProjView, insetViewProjection, eyeToInset);
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.foveatedMerge")) {
+            foveatedTargets.merge.record(cmd, stack, displayW, displayH, eyeToInset);
+        }
+        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+    }
+
     private void recordTraceLayer(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active, TraceScene scene,
-                                  TraceTargets targets, RtImage reconstructed, Matrix4f projection,
+                                  TraceTargets targets, RtImage reconstructed, Matrix4f projection, Matrix4fc viewRotation,
                                   Matrix4f viewProj, Matrix4f previousViewProj, boolean inset) {
         RtTerrain terrain = scene.terrain();
         SkyPush sky = scene.sky();
@@ -1383,7 +1380,7 @@ public final class RtComposite {
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
                 rrDone = rr.evaluate(cmd.address(), targets.color, targets.gDepth, targets.gMotion, targets.gAlbedo,
                         targets.gSpecAlbedo, targets.gNormal, targets.gSpecMotion, reconstructed, traceW, traceH, reconstructed.width, reconstructed.height,
-                        -jitterX, -jitterY, frameViewRotation, projection);
+                        -jitterX, -jitterY, viewRotation, projection);
             }
         }
 
@@ -1569,7 +1566,7 @@ public final class RtComposite {
         destroyReconstructionTargets();
         RtDlssRr.destroyAll();
         temporalLevel = null;
-        foveationMetrics = null;
+        lastVrInsetResolution = VrFoveation.REFERENCE_RESOLUTION;
         resetTemporalHistory();
         if (displayImage != null) {
             displayImage.destroy();

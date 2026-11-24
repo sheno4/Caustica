@@ -81,8 +81,9 @@ Toggle **Fixed Foveated Rendering** in the VR Rendering section of Video Setting
 to render each eye with a lower-resolution full view and a higher-resolution
 center. Each layer has its own DLSS Ray Reconstruction history. Caustica blends
 the layers before exposure and bloom and sends the full-size result to
-Vivecraft. **Center Detail** trades center coverage for detail at a fixed trace
-resolution. **Show Center Region** outlines or colors the inset for inspection.
+Vivecraft. Both insets use the headset's angular center and each eye's own
+position. **Center Detail** trades coverage from 65° to 25° for detail at a
+fixed reconstruction size. **Show Center Region** outlines or colors the inset.
 **VR Overlay Quality** controls Vivecraft's high-resolution GUI option. Fixed
 foveated rendering starts disabled and is suspended in ray-tracing guide debug views.
 
