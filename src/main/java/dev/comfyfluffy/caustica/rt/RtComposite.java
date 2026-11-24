@@ -69,6 +69,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtFoveatedMerge;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
@@ -164,7 +165,7 @@ public final class RtComposite {
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
     // Exact graphics completion guards host writes; ring depth only avoids routine waits.
-    private static final int PUSH_RING = 6;
+    private static final int PUSH_RING = 12;
     private PushSlot[] pushRing;
     private int pushSlot;
     private RtDisplayPipeline displayPipeline;
@@ -178,6 +179,7 @@ public final class RtComposite {
     private RtToneLut lookLut;
     private int loadedHdrLutNits = -1;
     private TraceTargets traceTargets;
+    private FoveatedTargets foveatedTargets;
     private RtImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
     // display mapper reads level 0, which the upsample sweep leaves holding the sum of every band.
@@ -727,10 +729,6 @@ public final class RtComposite {
                             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push " + i));
                 }
             }
-            if (traceTargets != null) {
-                worldPipeline.setStorageImage(traceTargets.color.view);
-                bindGuideImages();
-            }
             bindWorldTextures(ctx);
             reloadRebindRequested = false;
         }
@@ -835,19 +833,6 @@ public final class RtComposite {
         }
     }
 
-    /** Bind the guide buffers into the world pipeline's extra storage-image slots. */
-    private void bindGuideImages() {
-        if (worldPipeline == null || traceTargets == null) {
-            return;
-        }
-        worldPipeline.setExtraStorageImage(0, traceTargets.gNormal.view);
-        worldPipeline.setExtraStorageImage(1, traceTargets.gAlbedo.view);
-        worldPipeline.setExtraStorageImage(2, traceTargets.gDepth.view);
-        worldPipeline.setExtraStorageImage(3, traceTargets.gMotion.view);
-        worldPipeline.setExtraStorageImage(4, traceTargets.gSpecAlbedo.view);
-        worldPipeline.setExtraStorageImage(5, traceTargets.gSpecMotion.view);
-    }
-
     /** All trace-resolution allocations for one rectangular projection. */
     private static final class TraceTargets {
         private RtImage color;
@@ -858,6 +843,7 @@ public final class RtComposite {
         private RtImage gSpecAlbedo;
         private RtImage gSpecMotion;
         private RtBuffer continuations;
+        private long[] views;
 
         static TraceTargets create(RtContext ctx, int width, int height) {
             TraceTargets targets = new TraceTargets();
@@ -871,6 +857,8 @@ public final class RtComposite {
                 targets.gMotion = ctx.createStorageImage(width, height, rg16, "guide motion");
                 targets.gSpecAlbedo = ctx.createStorageImage(width, height, rgba16, "guide specular albedo");
                 targets.gSpecMotion = ctx.createStorageImage(width, height, rg16, "guide specular motion");
+                targets.views = new long[]{targets.color.view, targets.gNormal.view, targets.gAlbedo.view,
+                        targets.gDepth.view, targets.gMotion.view, targets.gSpecAlbedo.view, targets.gSpecMotion.view};
                 // One primary and one optional transmitted continuation per pixel.
                 long bytes = Math.multiplyExact((long) width * height, 2L * PATH_RECORD_BYTES);
                 targets.continuations = ctx.createBuffer(bytes, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -894,25 +882,76 @@ public final class RtComposite {
         }
     }
 
+    private static final class FoveatedTargets {
+        private TraceTargets inset;
+        private RtImage wideColor;
+        private RtImage insetColor;
+        private RtFoveatedMerge merge;
+
+        static FoveatedTargets create(RtContext ctx, View eye, RtImage merged, int wideW, int wideH,
+                                      long sampler) {
+            var targets = new FoveatedTargets();
+            try {
+                // Equal margins keep the cropped projection aligned on odd-sized eye targets.
+                int insetW = merged.width - 2 * (merged.width / 4);
+                int insetH = merged.height - 2 * (merged.height / 4);
+                int[] optimal = RtDlssRr.forInset(eye).queryOptimalRenderSize(insetW, insetH);
+                targets.inset = TraceTargets.create(ctx, optimal == null ? insetW : optimal[0],
+                        optimal == null ? insetH : optimal[1]);
+                int format = VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
+                targets.wideColor = ctx.createStorageImage(wideW, wideH, format, "VR wide reconstruction");
+                targets.insetColor = ctx.createStorageImage(insetW, insetH, format, "VR inset reconstruction");
+                targets.merge = RtFoveatedMerge.create(ctx, merged, targets.wideColor, targets.insetColor, sampler);
+                return targets;
+            } catch (RuntimeException | Error failure) {
+                targets.destroy();
+                throw failure;
+            }
+        }
+
+        void destroy() {
+            if (merge != null) merge.destroy();
+            if (insetColor != null) insetColor.destroy();
+            if (wideColor != null) wideColor.destroy();
+            if (inset != null) inset.destroy();
+        }
+    }
+
+    private void destroyReconstructionTargets() {
+        if (foveatedTargets != null) {
+            foveatedTargets.destroy();
+            foveatedTargets = null;
+            RtDlssRr.destroyInsets();
+        }
+        if (rrOutput != null) {
+            rrOutput.destroy();
+            rrOutput = null;
+        }
+    }
+
     private void ensureOutput(RtContext ctx, int width, int height) {
-        // Debug presentation is downstream of the ordinary frame graph and must not change the image
-        // being inspected. In particular, toggling it must not rebuild at native resolution or disable
-        // the RR path whose render-resolution guide inputs the debug pass visualizes.
         boolean rrEnabled = RtDlssRr.enabled();
+        // Guide diagnostics visualize one rectangular projection.
+        boolean foveated = capturedView.isEye() && debugView() == 0 && width >= 512 && height >= 512
+                && CausticaConfig.Rt.Composite.FIXED_FOVEATION.value();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (traceTargets != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
                 && bloomLevels.length > 0 && exposure.ready()
                 && displayW == width && displayH == height
+                && foveated == (foveatedTargets != null)
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
             return;
         }
         ctx.waitIdle(); // resize is rare; no in-flight frame may use the old image/descriptor
+        destroyReconstructionTargets();
         if (displayImage != null) {
             displayImage.destroy();
+            displayImage = null;
         }
         if (hdrDisplayImage != null) {
             hdrDisplayImage.destroy();
+            hdrDisplayImage = null;
         }
         destroyBloomLevels();
         if (traceTargets != null) {
@@ -927,9 +966,11 @@ public final class RtComposite {
         // With RR on, ask NGX what render resolution its chosen quality mode actually expects rather
         // than assuming a fixed ratio: different quality modes (and driver versions) use different
         // ratios, and DLSSD's own optimal-settings query is the source of truth for what it will accept.
-        int[] optimal = rrEnabled ? RtDlssRr.forView(capturedView).queryOptimalRenderSize(width, height) : null;
-        renderW = optimal != null ? optimal[0] : width;
-        renderH = optimal != null ? optimal[1] : height;
+        int wideW = foveated ? width * 5 / 8 : width;
+        int wideH = foveated ? height * 5 / 8 : height;
+        int[] optimal = rrEnabled ? RtDlssRr.forView(capturedView).queryOptimalRenderSize(wideW, wideH) : null;
+        renderW = optimal != null ? optimal[0] : wideW;
+        renderH = optimal != null ? optimal[1] : wideH;
         renderSizeRrEnabled = rrEnabled;
         renderSizeRrQuality = rrQuality;
 
@@ -957,13 +998,14 @@ public final class RtComposite {
         }
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
+        if (foveated) {
+            foveatedTargets = FoveatedTargets.create(ctx, capturedView, rrOutput, wideW, wideH, bloomPipeline.sampler());
+            CausticaMod.LOGGER.info("VR fixed foveation: trace wide {}x{}, inset {}x{}, eye {}x{}",
+                    renderW, renderH, foveatedTargets.inset.color.width, foveatedTargets.inset.color.height, width, height);
+        }
         exposure.ensureResources(ctx);
 
         resetTemporalHistory();
-        if (worldPipeline != null) {
-            worldPipeline.setStorageImage(traceTargets.color.view);
-            bindGuideImages();
-        }
         RtToneLut boundLookLut = lookLut;
         displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
                 sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
@@ -1026,28 +1068,6 @@ public final class RtComposite {
         int debugView = debugView();
         RtTerrain terrain = RtTerrain.currentOrNull();
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
-            // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
-            // A debug view observes this ordinary path; it never changes jitter or disables RR.
-            boolean rrPath = RtDlssRr.enabled();
-            float jitterX = 0f;
-            float jitterY = 0f;
-            if (rrPath) {
-                CausticaJitter jitter = CausticaJitter.forView(capturedView);
-                jitter.prepare(renderW, renderH, displayW);
-                jitterX = jitter.jitterPixelsX() * jitterSignX();
-                jitterY = jitter.jitterPixelsY() * jitterSignY();
-            }
-
-            boolean rrDone = false;
-            // Select the next BDA ring slot; the generated WorldPushData serializer fills it once all
-            // frame-derived values (including entity addresses and block-breaking entries) are known.
-            pushSlot = (pushSlot + 1) % PUSH_RING;
-            PushSlot selectedPushSlot = pushRing[pushSlot];
-            graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
-            selectedPushSlot.graphicsUse.mark(graphicsUse);
-            RtBuffer pushBuf = selectedPushSlot.buffer;
-            ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
-            frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
             // submerged, fixing the air→water first-segment orientation) and animated water normals.
             // Bit 1 remains unused to avoid conflicting with stale external readers.
@@ -1066,9 +1086,6 @@ public final class RtComposite {
             }
             if (waterWaves()) {
                 flags |= 0b10000; // animated water wave normals
-            }
-            if (capturedView.isEye() && CausticaConfig.Rt.Composite.FIXED_FOVEATION.value()) {
-                flags |= 32; // fixed peripheral ray sampling budget
             }
 
             // Water parameters: camera-biome tint plus wrapped animation time. Per-water-body tint
@@ -1113,44 +1130,6 @@ public final class RtComposite {
             // resolved slot rides along with the uploadPending() call right below.
             BreakEntry[] breaking = breakingEntries(terrain);
             SkyPush sky = skyPush();
-            new WorldPushData(
-                    frameInvViewProj,
-                    new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
-                            (float) (camZ - terrain.blockZ)),
-                    (int) frameCounter,
-                    mvPushMatrix,
-                    new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
-                    spp(),
-                    new Float2(jitterX, jitterY),
-                    flags,
-                    maxBounces(),
-                    sky.celestial(),
-                    sky.look0(),
-                    sky.look1(),
-                    sky.look2(),
-                    sky.look3(),
-                    sky.sunUv(),
-                    sky.moonUv(),
-                    waterParams,
-                    waterAnchor,
-                    mvCurProjView,
-                    breaking.length,
-                    breaking,
-                    // RIS emitter NEE: candidate count (0 = emitter NEE off; the shader also requires
-                    // lightCount > 0, so an empty buffer leaves only direct-hit emission). The light buffer
-                    // device addresses themselves are pc.light*Addr — every 64-bit address lives in the
-                    // push-constant block now, not here.
-                    new Float4(terrain.lightRebaseOffsetX(), terrain.lightRebaseOffsetY(),
-                            terrain.lightRebaseOffsetZ(), terrain.lightInvGlobalPowerSum()),
-                    new Float4(terrain.lightGridOriginX(), terrain.lightGridOriginY(), terrain.lightGridOriginZ(), 16f),
-                    new Int4(terrain.lightGridDimX(), terrain.lightGridDimY(), terrain.lightGridDimZ(), 0),
-                    terrain.lightCount(),
-                    CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
-                    // Must be the SAME value the exposure resolve divides out this frame (it reads it
-                    // from the same RtExposure accessor), or the two stop cancelling.
-                    exposure.preExposure()
-            ).write(push);
-            pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload any entity textures registered this frame into the bindless set before the trace.
             RtEntityTextures.INSTANCE.uploadPending(active, atlasSampler(ctx));
             // Build the entity BLAS, the TLAS that references it and the terrain BLAS, then the trace.
@@ -1166,67 +1145,30 @@ public final class RtComposite {
                 frameTlas = RtAccel.prepareTlas(ctx, fe.baseInstances(), fe.dynamicInstances(), tlasRing,
                         graphicsUse);
             }
-            active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
             currentTlasHandle = frameTlas.accel.handle;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
                 RtAccel.recordTlasBuild(ctx, cmd, frameTlas);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
-            // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.
-            // Every 64-bit device address the trace needs lives here, not behind worldPushAddr: the
-            // section/entity/material tables are read from world.rahit/world.rchit, which never load
-            // WorldPush at all, and the RIS light buffers are read from world.rgen's hot inner loop, so
-            // none of them should cost an extra BDA dereference to find.
-            ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
-            new WorldPushConstantsData(pushBuf.deviceAddress, terrain.tableAddress(), fe.geomTableAddr(),
-                    RtMaterialRegistry.INSTANCE.tableAddress(),
-                    terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
-                    terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
-                    terrain.lightGridSpanBufferAddress(), traceTargets.continuations.deviceAddress,
-                    (int) frameCounter).write(pushConstants);
-            // Sky LUTs, from the same WorldPush slot the trace is about to read: the sky the LUT holds and
-            // the sky the frame shades are built from one set of angles, not two. Recorded here (after the
-            // push flush, before the trace) so the miss shader's very first fetch sees this frame's dome.
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
-                skyLut.record(cmd, pushBuf.deviceAddress);
-            }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // sky LUT writes visible to raygen/miss
-
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
-                active.trace(cmd, renderW, renderH, pushConstants, 0);
-            }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // continuation/guide writes visible to pass B
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
-                active.trace(cmd, renderW, renderH, pushConstants, 1);
-            }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
-            // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
-            // RR reads them and writes the display-res denoised result straight into rrOutput.
-            RtDlssRr rr = RtDlssRr.forView(capturedView);
-            if (rrPath && rr.ensureFeature(cmd.address(), renderW, renderH, displayW, displayH)) {
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
-                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
-                    rrDone = rr.evaluate(cmd.address(), traceTargets.color, traceTargets.gDepth, traceTargets.gMotion, traceTargets.gAlbedo,
-                            traceTargets.gSpecAlbedo, traceTargets.gNormal, traceTargets.gSpecMotion, rrOutput, renderW, renderH, displayW, displayH,
-                            -jitterX, -jitterY, frameViewRotation, frameProjection);
+            TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
+                    flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter);
+            RtImage wide = foveatedTargets == null ? rrOutput : foveatedTargets.wideColor;
+            recordTraceLayer(ctx, cmd, stack, active, scene, traceTargets, wide,
+                    frameProjection, mvCurProjView, mvPushMatrix, false);
+            if (foveatedTargets != null) {
+                RtImage inset = foveatedTargets.insetColor;
+                // Scale clip X/Y, leaving reversed-Z and the eye's asymmetric lens projection intact.
+                Matrix4f crop = new Matrix4f().scaling((float) displayW / inset.width,
+                        (float) displayH / inset.height, 1f);
+                recordTraceLayer(ctx, cmd, stack, active, scene, foveatedTargets.inset, inset,
+                        crop.mul(frameProjection, new Matrix4f()), crop.mul(mvCurProjView, new Matrix4f()),
+                        crop.mul(mvPushMatrix, new Matrix4f()), true);
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.foveatedMerge")) {
+                    foveatedTargets.merge.record(cmd, stack, displayW, displayH);
                 }
-            }
-
-            // When DLSS-RR did not produce the display-res image (disabled or a runtime failure), bring
-            // the render-res trace up to display res with a linear blit so the display mapper and
-            // downstream debug pass always have a valid display-res scene image. With RR off
-            // render == display, so this is a 1:1 copy.
-            if (!rrDone) {
                 VulkanCommandEncoder.memoryBarrier(cmd, stack);
-                try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
-                     RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale")) {
-                    blitUpscale(cmd, stack, traceTargets.color, rrOutput);
-                }
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // rrOutput visible to exposure histogram
 
             // Auto-exposure meters rrOutput (the post-RR, denoised/converged image), not the raw
             // pre-RR trace: RR has no notion of exposure (DLSS-RR Integration Guide §3.7 — ignore
@@ -1291,6 +1233,134 @@ public final class RtComposite {
         // every owner in this frame's manifest is protected through the final overlay consumer.
         RtEntities.INSTANCE.markGraphicsUse(frameEntities, graphicsUse);
         exposure.markStateReadbackUse(graphicsUse);
+    }
+
+    private record TraceScene(RtTerrain terrain, long entityTable, long tlas, int flags, SkyPush sky,
+                              Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
+                              RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter) {}
+
+    private void recordTraceLayer(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active, TraceScene scene,
+                                  TraceTargets targets, RtImage reconstructed, Matrix4f projection,
+                                  Matrix4f viewProj, Matrix4f previousViewProj, boolean inset) {
+        RtTerrain terrain = scene.terrain();
+        SkyPush sky = scene.sky();
+        Float4 waterParams = scene.waterParams();
+        Float4 waterAnchor = scene.waterAnchor();
+        BreakEntry[] breaking = scene.breaking();
+        int traceW = targets.color.width;
+        int traceH = targets.color.height;
+        RtDlssRr rr = inset ? RtDlssRr.forInset(capturedView) : RtDlssRr.forView(capturedView);
+        boolean rrPath = RtDlssRr.enabled();
+        float jitterX = 0f;
+        float jitterY = 0f;
+        if (rrPath) {
+            CausticaJitter jitter = inset ? CausticaJitter.forInset(capturedView) : CausticaJitter.forView(capturedView);
+            jitter.prepare(traceW, traceH, reconstructed.width);
+            jitterX = jitter.jitterPixelsX() * jitterSignX();
+            jitterY = jitter.jitterPixelsY() * jitterSignY();
+        }
+        pushSlot = (pushSlot + 1) % PUSH_RING;
+        PushSlot slot = pushRing[pushSlot];
+        scene.waiter().await(slot.graphicsUse);
+        slot.graphicsUse.mark(scene.graphicsUse());
+        RtBuffer pushBuf = slot.buffer;
+        ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
+        frameInvViewProj.set(viewProj).invert();
+        active.bindTraceTargets(scene.tlas(), targets.views, scene.graphicsUse(), scene.waiter());
+        boolean rrDone = false;
+        new WorldPushData(
+                frameInvViewProj,
+                new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
+                        (float) (camZ - terrain.blockZ)),
+                (int) frameCounter,
+                previousViewProj,
+                new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
+                spp(),
+                new Float2(jitterX, jitterY),
+                scene.flags(),
+                maxBounces(),
+                sky.celestial(),
+                sky.look0(),
+                sky.look1(),
+                sky.look2(),
+                sky.look3(),
+                sky.sunUv(),
+                sky.moonUv(),
+                waterParams,
+                waterAnchor,
+                viewProj,
+                breaking.length,
+                breaking,
+                // RIS emitter NEE: candidate count (0 = emitter NEE off; the shader also requires
+                // lightCount > 0, so an empty buffer leaves only direct-hit emission). The light buffer
+                // device addresses themselves are pc.light*Addr — every 64-bit address lives in the
+                // push-constant block now, not here.
+                new Float4(terrain.lightRebaseOffsetX(), terrain.lightRebaseOffsetY(),
+                        terrain.lightRebaseOffsetZ(), terrain.lightInvGlobalPowerSum()),
+                new Float4(terrain.lightGridOriginX(), terrain.lightGridOriginY(), terrain.lightGridOriginZ(), 16f),
+                new Int4(terrain.lightGridDimX(), terrain.lightGridDimY(), terrain.lightGridDimZ(), 0),
+                terrain.lightCount(),
+                CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
+                // Must be the SAME value the exposure resolve divides out this frame (it reads it
+                // from the same RtExposure accessor), or the two stop cancelling.
+                exposure.preExposure()
+        ).write(push);
+        pushBuf.flush(0L, WORLD_PUSH_SIZE);
+        // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.
+        // Every 64-bit device address the trace needs lives here, not behind worldPushAddr: the
+        // section/entity/material tables are read from world.rahit/world.rchit, which never load
+        // WorldPush at all, and the RIS light buffers are read from world.rgen's hot inner loop, so
+        // none of them should cost an extra BDA dereference to find.
+        ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
+        new WorldPushConstantsData(pushBuf.deviceAddress, terrain.tableAddress(), scene.entityTable(),
+                RtMaterialRegistry.INSTANCE.tableAddress(),
+                terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
+                terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
+                terrain.lightGridSpanBufferAddress(), targets.continuations.deviceAddress,
+                (int) frameCounter).write(pushConstants);
+        // Sky LUTs, from the same WorldPush slot the trace is about to read: the sky the LUT holds and
+        // the sky the frame shades are built from one set of angles, not two. Recorded here (after the
+        // push flush, before the trace) so the miss shader's very first fetch sees this frame's dome.
+        if (!inset) {
+            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
+                skyLut.record(cmd, pushBuf.deviceAddress);
+            }
+            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+        }
+
+        try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
+             RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
+            active.trace(cmd, traceW, traceH, pushConstants, 0);
+        }
+        VulkanCommandEncoder.memoryBarrier(cmd, stack); // continuation/guide writes visible to pass B
+        try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
+             RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
+            active.trace(cmd, traceW, traceH, pushConstants, 1);
+        }
+        VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
+        // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
+        // RR reads them and writes the display-res denoised result straight into reconstructed.
+        if (rrPath && rr.ensureFeature(cmd.address(), traceW, traceH, reconstructed.width, reconstructed.height)) {
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
+                rrDone = rr.evaluate(cmd.address(), targets.color, targets.gDepth, targets.gMotion, targets.gAlbedo,
+                        targets.gSpecAlbedo, targets.gNormal, targets.gSpecMotion, reconstructed, traceW, traceH, reconstructed.width, reconstructed.height,
+                        -jitterX, -jitterY, frameViewRotation, projection);
+            }
+        }
+
+        // When DLSS-RR did not produce the display-res image (disabled or a runtime failure), bring
+        // the render-res trace up to display res with a linear blit so the display mapper and
+        // downstream debug pass always have a valid display-res scene image. With RR off
+        // render == display, so this is a 1:1 copy.
+        if (!rrDone) {
+            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale")) {
+                blitUpscale(cmd, stack, targets.color, reconstructed);
+            }
+        }
+        VulkanCommandEncoder.memoryBarrier(cmd, stack); // reconstructed visible to merge or exposure
     }
 
     /**
@@ -1458,6 +1528,7 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
+        destroyReconstructionTargets();
         RtDlssRr.destroyAll();
         temporalLevel = null;
         resetTemporalHistory();

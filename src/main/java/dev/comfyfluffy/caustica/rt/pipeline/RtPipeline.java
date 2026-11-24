@@ -56,22 +56,23 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupH
 /**
  * An RT pipeline with an SBT of {raygen + N miss + triangle hit groups} and a descriptor
  * set of {binding 0 = TLAS, binding 1 = storage image}. Built from SPIR-V resources. Update the
- * bindings with {@link #setTlas}/{@link #setStorageImage}, then {@link #trace}. Reusable across
+ * bindings with {@link #bindTraceTargets}, then {@link #trace}. Reusable across
  * the triangle spike and terrain (extend the descriptor layout there as needed). Multiple miss
  * shaders (e.g. a primary sky miss at index 0 plus a shadow/visibility miss at index 1) are
  * supported by passing an array; {@code traceRayEXT}'s {@code missIndex} selects among them.
  */
 public final class RtPipeline {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/world/";
-    // A ring of descriptor sets: setTlas waits for the selected slot's exact prior graphics use before
+    // A ring of descriptor sets: bindTraceTargets waits for the selected slot's exact prior graphics use before
     // rewriting it. Ring depth is only a performance choice that avoids routine host waits.
-    private static final int RING = 6;
+    private static final int RING = 12;
 
     private final RtContext ctx;
     private final long descriptorSetLayout;
     private final long descriptorPool;
     private final long[] descriptorSets;
     private final RtGpuExecutor.TrackedGraphicsUse[] descriptorSetUses;
+    private final long[][] boundTraceViews = new long[RING][];
     private int currentSet;
     private final long pipelineLayout;
     private final long pipeline;
@@ -374,53 +375,35 @@ public final class RtPipeline {
         return entityBucket == RtAccel.ENTITY_BUCKET_ANY_HIT;
     }
 
-    /** Bind a new TLAS after the selected descriptor slot's exact prior graphics use completes. */
-    public void setTlas(long tlas, RtGpuExecutor.GraphicsUse graphicsUse,
-                        RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter) {
+    /** Reserve a descriptor slot for one trace and keep it intact until graphics completes. */
+    public void bindTraceTargets(long tlas, long[] imageViews, RtGpuExecutor.GraphicsUse graphicsUse,
+                                 RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter) {
         currentSet = (currentSet + 1) % RING;
         RtGpuExecutor.TrackedGraphicsUse slotUse = descriptorSetUses[currentSet];
         graphicsUseWaiter.await(slotUse);
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            long set = descriptorSets[currentSet];
+            boolean rebind = boundTraceViews[currentSet] != imageViews;
             VkWriteDescriptorSetAccelerationStructureKHR asWrite = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR).pAccelerationStructures(stack.longs(tlas));
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
-            write.get(0).sType$Default().pNext(asWrite.address()).dstSet(descriptorSets[currentSet])
-                    .dstBinding(WORLD_TLAS)
-                    .descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
+                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR)
+                    .pAccelerationStructures(stack.longs(tlas));
+            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(rebind ? 1 + imageViews.length : 1, stack);
+            writes.get(0).sType$Default().pNext(asWrite.address()).dstSet(set)
+                    .dstBinding(WORLD_TLAS).descriptorCount(1)
+                    .descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+            if (rebind) {
+                for (int i = 0; i < imageViews.length; i++) {
+                    VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
+                    info.get(0).imageView(imageViews[i]).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                    writes.get(i + 1).sType$Default().dstSet(set)
+                            .dstBinding(i == 0 ? WORLD_OUTPUT : WORLD_G_NORMAL + i - 1)
+                            .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(info);
+                }
+                boundTraceViews[currentSet] = imageViews;
+            }
+            VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
         }
         slotUse.mark(graphicsUse);
-    }
-
-    /** Write the storage image into every ring slot (set once at init / on resize, when idle). */
-    public void setStorageImage(long imageView) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer imgInfo = VkDescriptorImageInfo.calloc(1, stack);
-            imgInfo.get(0).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(RING, stack);
-            for (int i = 0; i < RING; i++) {
-                write.get(i).sType$Default().dstSet(descriptorSets[i]).dstBinding(WORLD_OUTPUT)
-                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(imgInfo);
-            }
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
-    /** Write one DLSS-RR guide image into its canonical world binding across every ring slot. */
-    public void setExtraStorageImage(int slot, long imageView) {
-        if (slot < 0 || slot >= WORLD_GUIDE_COUNT) {
-            throw new IllegalArgumentException("Guide slot out of range: " + slot);
-        }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer imgInfo = VkDescriptorImageInfo.calloc(1, stack);
-            imgInfo.get(0).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(RING, stack);
-            for (int i = 0; i < RING; i++) {
-                write.get(i).sType$Default().dstSet(descriptorSets[i]).dstBinding(WORLD_G_NORMAL + slot)
-                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(imgInfo);
-            }
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
     }
 
     /** Bind the block albedo atlas into every ring slot. */

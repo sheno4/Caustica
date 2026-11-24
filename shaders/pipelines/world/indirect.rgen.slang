@@ -34,7 +34,7 @@ import bindings;
 
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
 // to colour the NEE sun/moonlight, the miss shader reads it to tint the visible discs and stars.
-public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, uint risCandidates) {
+public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     float3 L = float3(0.0, 0.0, 0.0);
     float3 ro = seg.ro;
     float3 rd = seg.rd;
@@ -49,7 +49,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, uint risCa
     int rrStart = maxBounces <= 3 ? 1 : 2;
     // RIS emitter NEE: direct lighting from block emitters is active when lights are published and the
     // candidate count is non-zero. Otherwise emitters contribute only when a path hits them.
-    bool risOn = risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
+    bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
     // Independent light-proposal RNG. Screen-space coherent selection is intentionally deferred until
     // there is a real presampled RIS tile buffer; direct sharing made tile-shaped lighting noise visible.
     // Measured: making a 16x16 tile share this seed recovers at most 1.3ms, so a future pool should share
@@ -223,7 +223,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, uint risCa
             if (risOn) {
                 float3 v = -rd;
                 Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                                         true, 0.0, risCandidates, seed, proposalSeed);
+                                         true, 0.0, seed, proposalSeed);
                 L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
                                                  true, 0.0);
             }
@@ -316,7 +316,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, uint risCa
         if (risOn) {
             float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
-                                     risCandidates, seed, proposalSeed);
+                                     seed, proposalSeed);
             L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
                                              activeSss);
         }
@@ -409,17 +409,6 @@ void main() {
     uint2 dimensions = DispatchRaysDimensions().xy;
     int2 pix = int2(dispatchIndex);
     uint spp = max(worldPush.spp, 1u);
-    uint risCandidates = worldPush.risCandidates;
-    if ((worldPush.flags & 32u) != 0u) {
-        // Center is fixed in each eye image. Keep dense primary guides and reduce only
-        // the stochastic work in Pass B, with a gradual transition into the periphery.
-        float2 eyePosition = 2.0 * (float2(dispatchIndex) + 0.5) / float2(dimensions) - 1.0;
-        float density = lerp(1.0, 0.5, smoothstep(0.35, 0.90, length(eyePosition)));
-        spp = max(1u, uint(round(float(spp) * density)));
-        if (risCandidates > 0u) {
-            risCandidates = max(1u, uint(round(float(risCandidates) * density)));
-        }
-    }
     uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;
     ConstPtr<PackedPathSegment> queue = ConstPtr<PackedPathSegment>(pc.pathQueueAddr);
     float3 frameRadiance = float3(0.0, 0.0, 0.0);
@@ -428,7 +417,7 @@ void main() {
         PackedPathSegment packed = queue[recordIndex];
         PathSegment segment = unpackPathSegment(packed);
         for (uint s = 0u; s < spp; ++s) {
-            frameRadiance += tracePath(segment, uint2(pix), s + leaf * spp, risCandidates);
+            frameRadiance += tracePath(segment, uint2(pix), s + leaf * spp);
         }
         if (packed.nextRecord == PATH_NO_NEXT) {
             break;

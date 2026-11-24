@@ -14,6 +14,16 @@ public final class CausticaJitter {
 	public static final CausticaJitter INSTANCE = new CausticaJitter();
 	private static final CausticaJitter LEFT = new CausticaJitter();
 	private static final CausticaJitter RIGHT = new CausticaJitter();
+	private static final CausticaJitter LEFT_INSET = new CausticaJitter();
+	private static final CausticaJitter RIGHT_INSET = new CausticaJitter();
+
+	public static CausticaJitter forInset(View eye) {
+		return switch (eye) {
+			case LEFT -> LEFT_INSET;
+			case RIGHT -> RIGHT_INSET;
+			default -> throw new IllegalArgumentException("An inset requires a VR eye");
+		};
+	}
 
 	public static CausticaJitter forView(View view) {
 		return switch (view) {
@@ -28,6 +38,8 @@ public final class CausticaJitter {
 		INSTANCE.frameIndex = 0;
 		LEFT.frameIndex = 0;
 		RIGHT.frameIndex = 0;
+		LEFT_INSET.frameIndex = 0;
+		RIGHT_INSET.frameIndex = 0;
 	}
 
 	private int frameIndex;

@@ -78,9 +78,11 @@ Fabulous transparency path use Vivecraft's native rendering. The desktop
 Video Settings screen exposes Caustica's renderer settings.
 
 Toggle **Fixed Foveated Rendering** in the Ray Tracing section of Video Settings
-to use fixed foveated ray sampling in the headset. It reduces indirect samples and
-emitter candidates in the periphery while keeping the primary rays and DLSS
-Ray Reconstruction inputs at their normal resolution. It starts disabled.
+to render each eye with a lower-resolution full view and a higher-resolution
+center. Each layer has its own DLSS Ray Reconstruction history. Caustica blends
+the layers before exposure and bloom and sends the full-size result to
+Vivecraft. Vivecraft's depth and overlays stay at eye resolution. The option
+starts disabled and is suspended in ray-tracing guide debug views.
 
 ## Status
 

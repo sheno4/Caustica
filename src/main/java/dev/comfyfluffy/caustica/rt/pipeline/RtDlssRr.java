@@ -26,6 +26,16 @@ public final class RtDlssRr {
     public static final RtDlssRr INSTANCE = new RtDlssRr();
     private static final RtDlssRr LEFT = new RtDlssRr();
     private static final RtDlssRr RIGHT = new RtDlssRr();
+    private static final RtDlssRr LEFT_INSET = new RtDlssRr();
+    private static final RtDlssRr RIGHT_INSET = new RtDlssRr();
+
+    public static RtDlssRr forInset(View eye) {
+        return switch (eye) {
+            case LEFT -> LEFT_INSET;
+            case RIGHT -> RIGHT_INSET;
+            default -> throw new IllegalArgumentException("An inset requires a VR eye");
+        };
+    }
 
     public static RtDlssRr forView(View view) {
         return switch (view) {
@@ -37,7 +47,7 @@ public final class RtDlssRr {
     }
 
     public static void resetHistories() {
-        for (RtDlssRr rr : new RtDlssRr[]{INSTANCE, LEFT, RIGHT}) {
+        for (RtDlssRr rr : new RtDlssRr[]{INSTANCE, LEFT, RIGHT, LEFT_INSET, RIGHT_INSET}) {
             rr.resetHistory = true;
             rr.lastFrameNanos = 0;
         }
@@ -47,6 +57,12 @@ public final class RtDlssRr {
         INSTANCE.destroy();
         LEFT.destroy();
         RIGHT.destroy();
+        destroyInsets();
+    }
+
+    public static void destroyInsets() {
+        LEFT_INSET.destroy();
+        RIGHT_INSET.destroy();
     }
     public static boolean enabled() {
         return CausticaConfig.Rt.DlssRr.ENABLED.value();
