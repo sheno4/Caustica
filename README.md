@@ -77,12 +77,14 @@ active. Auxiliary views, including the scope and third-person camera, and the
 Fabulous transparency path use Vivecraft's native rendering. The desktop
 Video Settings screen exposes Caustica's renderer settings.
 
-Toggle **Fixed Foveated Rendering** in the Ray Tracing section of Video Settings
+Toggle **Fixed Foveated Rendering** in the VR Rendering section of Video Settings
 to render each eye with a lower-resolution full view and a higher-resolution
 center. Each layer has its own DLSS Ray Reconstruction history. Caustica blends
 the layers before exposure and bloom and sends the full-size result to
-Vivecraft. Vivecraft's depth and overlays stay at eye resolution. The option
-starts disabled and is suspended in ray-tracing guide debug views.
+Vivecraft. **Center Detail** trades center coverage for detail at a fixed trace
+resolution. **Show Center Region** outlines or colors the inset for inspection.
+**VR Overlay Quality** controls Vivecraft's high-resolution GUI option. Fixed
+foveated rendering starts disabled and is suspended in ray-tracing guide debug views.
 
 ## Status
 

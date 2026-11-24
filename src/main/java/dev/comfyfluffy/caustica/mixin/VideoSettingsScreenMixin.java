@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.mixin;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.client.RtVideoOptions;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.OptionInstance;
@@ -69,6 +70,15 @@ public abstract class VideoSettingsScreenMixin {
         }
         list.addHeader(CAUSTICA$RT_HEADER);
         list.addSmall(RtVideoOptions.runtimeOptions());
+        if (VivecraftCompat.hasEyeIntegration()) {
+            list.addHeader(Component.translatable("caustica.options.rt.vrHeader"));
+            list.addSmall(RtVideoOptions.fixedFoveation(), RtVideoOptions.foveationPreview());
+            list.addBig(RtVideoOptions.foveationDetail());
+            var overlayQuality = RtVideoOptions.vrOverlayQuality();
+            if (overlayQuality != null) {
+                list.addBig(overlayQuality);
+            }
+        }
     }
 
     @Inject(method = "removed", at = @At("TAIL"))

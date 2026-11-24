@@ -15,6 +15,7 @@ import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
 import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
+import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
@@ -25,6 +26,7 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
 /** Combines both reconstructed layers in scene-linear color before exposure and bloom. */
 public final class RtFoveatedMerge {
+    private static final int PUSH_SIZE = Float.BYTES;
     private final VkDevice device;
     private long descriptorLayout;
     private long pool;
@@ -81,8 +83,10 @@ public final class RtFoveatedMerge {
         }
         VK10.vkUpdateDescriptorSets(device, writes, null);
 
+        var pushRange = VkPushConstantRange.calloc(1, stack);
+        pushRange.get(0).stageFlags(compute).offset(0).size(PUSH_SIZE);
         var layoutInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
-                .pSetLayouts(stack.longs(descriptorLayout));
+                .pSetLayouts(stack.longs(descriptorLayout)).pPushConstantRanges(pushRange);
         check(VK10.vkCreatePipelineLayout(device, layoutInfo, null, handle), "foveated pipeline layout");
         layout = handle.get(0);
         long shader = loadShader(stack);
@@ -120,10 +124,13 @@ public final class RtFoveatedMerge {
         }
     }
 
-    public void record(VkCommandBuffer cmd, MemoryStack stack, int width, int height) {
+    public void record(VkCommandBuffer cmd, MemoryStack stack, int width, int height, float centerFraction) {
         int compute = VK10.VK_PIPELINE_BIND_POINT_COMPUTE;
         VK10.vkCmdBindPipeline(cmd, compute, pipeline);
         VK10.vkCmdBindDescriptorSets(cmd, compute, layout, 0, stack.longs(set), null);
+        var push = stack.malloc(PUSH_SIZE);
+        push.putFloat(0, centerFraction);
+        VK10.vkCmdPushConstants(cmd, layout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
         VK10.vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
     }
 

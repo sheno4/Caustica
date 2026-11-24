@@ -31,6 +31,40 @@ public final class VivecraftCompat {
         static final Hooks HOOKS = RUNNING == null ? null : resolveHooks();
     }
 
+    private static final class OverlayAccess {
+        static final OverlayOptions OPTIONS = hasEyeIntegration() ? resolveOverlayOptions() : null;
+    }
+
+    public static boolean hasEyeIntegration() {
+        return Access.HOOKS != null;
+    }
+
+    public static Boolean highResolutionOverlay() {
+        OverlayOptions options = OverlayAccess.OPTIONS;
+        if (options == null) return null;
+        try {
+            Object settings = options.settings.get(Access.HOOKS.holder.invoke(null));
+            return settings == null ? null : options.doubleResolution.getBoolean(settings);
+        } catch (ReflectiveOperationException e) {
+            CausticaMod.LOGGER.warn("Cannot read Vivecraft overlay quality", e);
+            return null;
+        }
+    }
+
+    public static void setHighResolutionOverlay(boolean highResolution) {
+        OverlayOptions options = OverlayAccess.OPTIONS;
+        if (options == null) return;
+        try {
+            Object settings = options.settings.get(Access.HOOKS.holder.invoke(null));
+            if (settings != null && options.doubleResolution.getBoolean(settings) != highResolution) {
+                // Vivecraft's option setter persists the value and schedules its GUI target resize.
+                options.setOption.invoke(settings, options.doubleResolutionOption);
+            }
+        } catch (ReflectiveOperationException e) {
+            CausticaMod.LOGGER.warn("Cannot set Vivecraft overlay quality", e);
+        }
+    }
+
     public static boolean isVrActive() {
         try {
             return Access.RUNNING != null && Access.RUNNING.getBoolean(null);
@@ -119,6 +153,20 @@ public final class VivecraftCompat {
         }
     }
 
+    private static OverlayOptions resolveOverlayOptions() {
+        try {
+            Class<?> holder = Access.HOOKS.holder.getReturnType();
+            Field settings = holder.getField("vrSettings");
+            Class<?> options = load("client_vr.settings.VRSettings$VrOptions");
+            return new OverlayOptions(settings, settings.getType().getField("doubleGUIResolution"),
+                    settings.getType().getMethod("setOptionValue", options),
+                    options.getField("DOUBLE_GUI_RESOLUTION").get(null));
+        } catch (ReflectiveOperationException | LinkageError e) {
+            CausticaMod.LOGGER.warn("Vivecraft overlay quality option is unavailable", e);
+            return null;
+        }
+    }
+
     private static Class<?> load(String name) throws ClassNotFoundException {
         return Class.forName("org.vivecraft." + name, false, VivecraftCompat.class.getClassLoader());
     }
@@ -126,4 +174,7 @@ public final class VivecraftCompat {
     private record Hooks(Method holder, Field pass, Method isVanilla, Method levelVrState, Field statePass,
                          Field uiAfterWorld, Field armsState, Field handsSecond, Field[] screens,
                          Field lightCoords, Method applyModelView, Method renderEffects) {}
+
+    private record OverlayOptions(Field settings, Field doubleResolution, Method setOption,
+                                  Object doubleResolutionOption) {}
 }

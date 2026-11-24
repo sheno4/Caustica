@@ -53,6 +53,11 @@ public final class RtDlssRr {
         }
     }
 
+    public static void resetInsetHistories() {
+        LEFT_INSET.resetHistory = true;
+        RIGHT_INSET.resetHistory = true;
+    }
+
     public static void destroyAll() {
         INSTANCE.destroy();
         LEFT.destroy();

@@ -141,6 +141,16 @@ float3 tonemapHdr(float3 lookedAcesCg) {
     return displayGammaHdr(hdrToneLut.SampleLevel(lutTexCoord(uvw, pc.lutSize), 0.0).rgb);
 }
 
+float3 previewFoveation(float3 displayColor, float2 pixelCenter, float2 extent) {
+    if (pc.foveationPreview == 0) return displayColor;
+
+    float2 toEdge = abs(pixelCenter - 0.5 * extent) - 0.5 * extent * pc.foveatedFraction;
+    float distance = max(toEdge.x, toEdge.y);
+    float outline = 1.0 - smoothstep(1.0, 2.0, abs(distance));
+    float fill = pc.foveationPreview == 2 && distance <= 0.0 ? 0.33 : 0.0;
+    return lerp(displayColor, float3(0.15, 0.85, 1.0), max(outline, fill));
+}
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 dispatchId : SV_DispatchThreadID) {
@@ -156,7 +166,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     float3 exposedAcesCg = max(rt.rgb * exposure, float3(0.0));
     exposedAcesCg += sampleBloom(pix, w, h) * max(pc.bloomStrength, 0.0);
     float3 lookedAcesCg = applyLook(exposedAcesCg);
-    outputImage[pix] = float4(tonemap(lookedAcesCg), 1.0);
+    float3 displayColor = previewFoveation(tonemap(lookedAcesCg),
+            float2(pix) + 0.5, float2(w, h));
+    outputImage[pix] = float4(displayColor, 1.0);
 
     if (pc.hdrEnabled != 0) {
         hdrImage[pix] = float4(tonemapHdr(lookedAcesCg), 1.0);

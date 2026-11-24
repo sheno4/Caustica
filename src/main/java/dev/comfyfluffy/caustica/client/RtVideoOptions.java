@@ -6,6 +6,8 @@ import dev.comfyfluffy.caustica.CausticaConfig.BooleanSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.FloatSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.IntSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.StringSetting;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
+import dev.comfyfluffy.caustica.rt.RtComposite;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -49,7 +51,6 @@ public final class RtVideoOptions {
             entities(),
             particles(),
             waterWaves(),
-            bool("caustica.options.rt.fixedFoveation", CausticaConfig.Rt.Composite.FIXED_FOVEATION),
             dlssQuality()
         ));
         if (CausticaConfig.Rt.Hdr.swapchainPqAvailable()) {
@@ -59,6 +60,48 @@ public final class RtVideoOptions {
         }
         options.add(debugView());
         return options.toArray(OptionInstance<?>[]::new);
+    }
+
+    public static OptionInstance<Boolean> fixedFoveation() {
+        return bool("caustica.options.rt.fixedFoveation", CausticaConfig.Rt.Composite.FIXED_FOVEATION);
+    }
+
+    public static OptionInstance<Integer> foveationDetail() {
+        String key = "caustica.options.rt.foveationDetail";
+        IntSetting setting = CausticaConfig.Rt.Composite.FOVEATION_DETAIL;
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, detail) -> {
+                    float fraction = RtComposite.foveatedCenterFraction(detail);
+                    var metrics = RtComposite.INSTANCE.foveationMetrics();
+                    if (VivecraftCompat.isVrActive() && metrics != null) {
+                        double degrees = metrics.horizontalDegrees(fraction);
+                        if (degrees >= 1.0) {
+                            return Options.genericValueLabel(caption, Component.translatable(key + ".readout",
+                                    Math.round(metrics.insetTraceWidth() / degrees), Math.round(degrees)));
+                        }
+                    }
+                    return Options.genericValueLabel(caption,
+                            Component.translatable(key + ".coverage", Math.round(fraction * 100)));
+                }, new OptionInstance.IntRange(0, CausticaConfig.Rt.Composite.FOVEATION_MAX_DETAIL),
+                setting.value(), setting::set);
+    }
+
+    public static OptionInstance<Integer> foveationPreview() {
+        String key = "caustica.options.rt.foveationPreview";
+        IntSetting setting = CausticaConfig.Rt.Composite.FOVEATION_PREVIEW;
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, value) -> Component.translatable(key + "." + value),
+                new OptionInstance.Enum<>(List.of(0, 1, 2), Codec.INT), setting.value(), setting::set);
+    }
+
+    public static OptionInstance<Boolean> vrOverlayQuality() {
+        Boolean highResolution = VivecraftCompat.highResolutionOverlay();
+        if (highResolution == null) return null;
+        String key = "caustica.options.rt.vrOverlayQuality";
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, high) -> Component.translatable(key + (high ? ".high" : ".standard")),
+                new OptionInstance.Enum<>(List.of(false, true), Codec.BOOL), highResolution,
+                VivecraftCompat::setHighResolutionOverlay);
     }
 
     private static OptionInstance<String> exposureMode() {

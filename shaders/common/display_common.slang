@@ -77,6 +77,8 @@ public struct DisplayPush {
     // SUM of every band, so RtComposite folds the 1/levelCount normalisation into this value: the authored
     // look-package strength then means the same thing whichever level count the resolution supports.
     public float bloomStrength;
+    public float foveatedFraction; // fraction of each eye axis occupied by the inset
+    public int foveationPreview;   // 0 = off, 1 = outline, 2 = fill
 };
 
 public struct BloomPush {

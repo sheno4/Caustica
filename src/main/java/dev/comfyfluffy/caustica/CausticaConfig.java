@@ -529,8 +529,13 @@ public final class CausticaConfig {
         }
 
         public static final class Composite {
+            public static final int FOVEATION_MAX_DETAIL = 8;
             public static final BooleanSetting FIXED_FOVEATION =
                     bool("caustica.rt.fixedFoveation", "composite.fixed-foveation", false);
+            public static final IntSetting FOVEATION_DETAIL =
+                    clampedInt("caustica.rt.foveationDetail", "composite.foveation-detail", 4, 0, FOVEATION_MAX_DETAIL);
+            public static final IntSetting FOVEATION_PREVIEW =
+                    clampedInt("caustica.rt.foveationPreview", "composite.foveation-preview", 0, 0, 2);
             public static final IntSetting DEBUG_VIEW = intValue("caustica.rt.debugView", "composite.debug-view", 0);
             public static final IntSetting SPP = intAtLeast("caustica.rt.spp", "composite.spp", 1, 1);
             public static final IntSetting MAX_BOUNCES =

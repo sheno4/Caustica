@@ -27,6 +27,23 @@
 	"caustica.options.rt.waterWaves": "动态水面",
 	"caustica.options.rt.waterWaves.tooltip": "对水面法线进行动画处理，以显示移动波浪高光。",
 
+	"caustica.options.rt.vrHeader": "VR 渲染",
+	"caustica.options.rt.fixedFoveation": "固定注视点渲染",
+	"caustica.options.rt.fixedFoveation.tooltip": "在头显中以较低分辨率渲染外围，保留高清中心。切换后立即生效。",
+	"caustica.options.rt.foveationDetail": "注视点清晰度",
+	"caustica.options.rt.foveationDetail.tooltip": "向左扩大高清区域，向右把细节集中到更小的区域。在同一 DLSS 档位下，两层的光追像素总数固定。",
+	"caustica.options.rt.foveationDetail.readout": "约 %1$s 光追像素/度 · 水平 %2$s°",
+	"caustica.options.rt.foveationDetail.coverage": "占单眼画面宽度的 %s%%",
+	"caustica.options.rt.foveationPreview": "显示注视点区域",
+	"caustica.options.rt.foveationPreview.tooltip": "固定注视点渲染开启时，标记画面的高清区域。",
+	"caustica.options.rt.foveationPreview.0": "关闭",
+	"caustica.options.rt.foveationPreview.1": "边框",
+	"caustica.options.rt.foveationPreview.2": "填充",
+	"caustica.options.rt.vrOverlayQuality": "叠加界面画质",
+	"caustica.options.rt.vrOverlayQuality.tooltip": "高画质会将 Vivecraft 界面的渲染分辨率加倍，使菜单和叠加界面更清晰，也会增加 GPU 开销。",
+	"caustica.options.rt.vrOverlayQuality.standard": "标准",
+	"caustica.options.rt.vrOverlayQuality.high": "高",
+
 	"caustica.options.rt.hdr": "HDR 输出",
 	"caustica.options.rt.hdr.tooltip": "当显示器支持时，以 HDR (ST.2084/PQ) 而不是 SDR 显示。重启游戏后生效。",
 
