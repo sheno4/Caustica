@@ -73,6 +73,7 @@ public final class RtPipeline {
     private final long[] descriptorSets;
     private final RtGpuExecutor.TrackedGraphicsUse[] descriptorSetUses;
     private final long[][] boundTraceViews = new long[RING][];
+    private final long[] boundInsetRadiance = new long[RING];
     private int currentSet;
     private final long pipelineLayout;
     private final long pipeline;
@@ -169,6 +170,9 @@ public final class RtPipeline {
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1)
                     .stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+            binds.get(WORLD_INSET_RADIANCE).binding(WORLD_INSET_RADIANCE)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout");
@@ -376,7 +380,8 @@ public final class RtPipeline {
     }
 
     /** Reserve a descriptor slot for one trace and keep it intact until graphics completes. */
-    public void bindTraceTargets(long tlas, long[] imageViews, RtGpuExecutor.GraphicsUse graphicsUse,
+    public void bindTraceTargets(long tlas, long[] imageViews, long insetRadianceView, long insetSampler,
+                                 RtGpuExecutor.GraphicsUse graphicsUse,
                                  RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter) {
         currentSet = (currentSet + 1) % RING;
         RtGpuExecutor.TrackedGraphicsUse slotUse = descriptorSetUses[currentSet];
@@ -384,10 +389,12 @@ public final class RtPipeline {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             long set = descriptorSets[currentSet];
             boolean rebind = boundTraceViews[currentSet] != imageViews;
+            boolean rebindInset = rebind || boundInsetRadiance[currentSet] != insetRadianceView;
+            int changedImages = rebind ? imageViews.length : 0;
             VkWriteDescriptorSetAccelerationStructureKHR asWrite = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
                     .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR)
                     .pAccelerationStructures(stack.longs(tlas));
-            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(rebind ? 1 + imageViews.length : 1, stack);
+            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(1 + changedImages + (rebindInset ? 1 : 0), stack);
             writes.get(0).sType$Default().pNext(asWrite.address()).dstSet(set)
                     .dstBinding(WORLD_TLAS).descriptorCount(1)
                     .descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
@@ -400,6 +407,14 @@ public final class RtPipeline {
                             .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(info);
                 }
                 boundTraceViews[currentSet] = imageViews;
+            }
+            if (rebindInset) {
+                VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
+                info.get(0).sampler(insetSampler).imageView(insetRadianceView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                writes.get(1 + changedImages).sType$Default().dstSet(set).dstBinding(WORLD_INSET_RADIANCE)
+                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                        .pImageInfo(info);
+                boundInsetRadiance[currentSet] = insetRadianceView;
             }
             VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
         }

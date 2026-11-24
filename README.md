@@ -90,6 +90,13 @@ square side at 256 to 4096 pixels, up to the eye target's shorter edge.
 **VR Overlay Quality** controls Vivecraft's high-resolution GUI option. Fixed
 foveated rendering starts disabled and is suspended in ray-tracing guide debug views.
 
+Wide reuses the inset's scene-linear lighting in the fully covered core while
+tracing its own DLSS guides and blend margin. Set `foveation-reuse-inset = false`
+under `[composite]` for a comparison with independent lighting in both layers.
+Enable `[frame-stats]` in `config/caustica.toml` to record CPU timings to
+`rt-frame-stats/frame.csv` and Vulkan timings per eye to `rt-frame-stats/gpu.csv`.
+The GPU rows report the trace sizes and whether lighting reuse is enabled.
+
 ## Status
 
 Caustica is not a finished renderer yet. Current work focuses on visual

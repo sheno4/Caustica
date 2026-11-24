@@ -38,6 +38,7 @@ public final class RtFrameStats {
                     "terrain.drainCompletion",
                     "terrain.snapshotDispatch",
                     "terrain.publish",
+                    "terrain.lightGridPublish",
                     "entity.capture",
                     "entity.capture.extract",
                     "entity.capture.submit",
@@ -71,6 +72,7 @@ public final class RtFrameStats {
                     "frame.exposure",
                     "frame.dlssRr",
                     "frame.upscale",
+                    "frame.foveatedMerge",
                     "frame.bloom",
                     "frame.displayMap",
                     "frame.debugPresent",
@@ -121,6 +123,20 @@ public final class RtFrameStats {
 
     public static boolean enabled() {
         return CausticaConfig.Rt.FrameStats.ENABLED.value();
+    }
+
+    static PrintWriter openCsv(String name, String header) {
+        Path file = FabricLoader.getInstance().getGameDir().resolve("rt-frame-stats").resolve(name + ".csv");
+        try {
+            Files.createDirectories(file.getParent());
+            PrintWriter writer = new PrintWriter(new BufferedWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8)));
+            writer.println(header);
+            writer.flush();
+            return writer;
+        } catch (IOException e) {
+            CausticaMod.LOGGER.warn("RtFrameStats: failed to open {}: {}", file, e.toString());
+            return null;
+        }
     }
 
     public interface Scope extends AutoCloseable {
@@ -283,27 +299,17 @@ public final class RtFrameStats {
                 return;
             }
             csvOpenAttempted = true;
-            Path dir = FabricLoader.getInstance().getGameDir().resolve("rt-frame-stats");
-            Path file = dir.resolve(name + ".csv");
-            try {
-                Files.createDirectories(dir);
-                csv = new PrintWriter(new BufferedWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8)));
-                StringBuilder header = new StringBuilder("frame,totalMs,medianMs,hitch");
-                for (String stageName : stageNames) {
-                    header.append(',').append(stageName).append("Ms");
-                }
-                for (String counterName : counterNames) {
-                    header.append(',').append(counterName);
-                }
-                if (trackGc) {
-                    header.append(",gcCount,gcPauseMs");
-                }
-                csv.println(header);
-                csv.flush();
-            } catch (IOException e) {
-                CausticaMod.LOGGER.warn("RtFrameStats: failed to open CSV {} for profile {}: {}", file, name, e.toString());
-                csv = null;
+            StringBuilder header = new StringBuilder("frame,totalMs,medianMs,hitch");
+            for (String stageName : stageNames) {
+                header.append(',').append(stageName).append("Ms");
             }
+            for (String counterName : counterNames) {
+                header.append(',').append(counterName);
+            }
+            if (trackGc) {
+                header.append(",gcCount,gcPauseMs");
+            }
+            csv = openCsv(name, header.toString());
         }
 
         private void logHitch(long total, long median, long gcCount, long gcMs) {

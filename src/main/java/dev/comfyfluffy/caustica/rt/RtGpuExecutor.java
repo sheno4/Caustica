@@ -543,6 +543,10 @@ public final class RtGpuExecutor {
             this.completedValue = completedValue;
         }
 
+        public boolean completed(GraphicsUse graphicsUse) {
+            return graphicsUse.value <= completedValue;
+        }
+
         /** Return true only when this call had to issue a host wait. */
         public boolean await(TrackedGraphicsUse trackedUse) {
             assertRenderThread();

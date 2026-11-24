@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.compat.VivecraftCompat.View;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
+import dev.comfyfluffy.caustica.rt.RtGpuFrameStats.Stage;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.BreakEntry;
@@ -109,6 +110,8 @@ public final class RtComposite {
     // generated from the same Slang module and owns this second ABI as well. debugView is no longer
     // part of it -- no world shader reads it anymore; debug views are a downstream compute pass.
     private static final long PATH_RECORD_BYTES = 48L;
+    private static final int REUSE_INSET_LIGHTING = 1 << 5;
+    private static final Float2 ZERO_UV = new Float2(0f, 0f);
     private static int debugView() {
         return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
     }
@@ -180,6 +183,8 @@ public final class RtComposite {
     private int loadedHdrLutNits = -1;
     private TraceTargets traceTargets;
     private FoveatedTargets foveatedTargets;
+    private RtBuffer pathContinuations;
+    private final RtGpuFrameStats gpuFrameStats = new RtGpuFrameStats();
     private final Matrix4f eyeToInset = new Matrix4f();
     private RtImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
@@ -849,7 +854,6 @@ public final class RtComposite {
         private RtImage gMotion;
         private RtImage gSpecAlbedo;
         private RtImage gSpecMotion;
-        private RtBuffer continuations;
         private long[] views;
 
         static TraceTargets create(RtContext ctx, int width, int height) {
@@ -866,10 +870,6 @@ public final class RtComposite {
                 targets.gSpecMotion = ctx.createStorageImage(width, height, rg16, "guide specular motion");
                 targets.views = new long[]{targets.color.view, targets.gNormal.view, targets.gAlbedo.view,
                         targets.gDepth.view, targets.gMotion.view, targets.gSpecAlbedo.view, targets.gSpecMotion.view};
-                // One primary and one optional transmitted continuation per pixel.
-                long bytes = Math.multiplyExact((long) width * height, 2L * PATH_RECORD_BYTES);
-                targets.continuations = ctx.createBuffer(bytes, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                        false, "path continuation queue");
                 return targets;
             } catch (RuntimeException | Error failure) {
                 targets.destroy();
@@ -878,9 +878,6 @@ public final class RtComposite {
         }
 
         void destroy() {
-            if (continuations != null) {
-                continuations.destroy();
-            }
             for (RtImage image : new RtImage[]{color, gNormal, gAlbedo, gDepth, gMotion, gSpecAlbedo, gSpecMotion}) {
                 if (image != null) {
                     image.destroy();
@@ -923,6 +920,10 @@ public final class RtComposite {
     }
 
     private void destroyReconstructionTargets() {
+        if (pathContinuations != null) {
+            pathContinuations.destroy();
+            pathContinuations = null;
+        }
         if (foveatedTargets != null) {
             foveatedTargets.destroy();
             foveatedTargets = null;
@@ -945,7 +946,7 @@ public final class RtComposite {
         int insetSize = foveated ? VrFoveation.insetResolution(width, height,
                 CausticaConfig.Rt.Composite.FOVEATION_INSET_MAX_RESOLUTION.value()) : 0;
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
-        if (traceTargets != null
+        if (traceTargets != null && pathContinuations != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
                 && bloomLevels.length > 0 && exposure.ready()
                 && displayW == width && displayH == height
@@ -1008,13 +1009,19 @@ public final class RtComposite {
         }
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
+        long continuationPixels = (long) renderW * renderH;
         if (foveated) {
             foveatedTargets = FoveatedTargets.create(ctx, capturedView, rrOutput, wideW, wideH,
                     insetSize, bloomPipeline.sampler());
             CausticaMod.LOGGER.info("VR fixed foveation: wide {}x{} from trace {}x{}, inset {}x{} from trace {}x{}, eye {}x{}",
                     wideW, wideH, renderW, renderH, insetSize, insetSize,
                     foveatedTargets.inset.color.width, foveatedTargets.inset.color.height, width, height);
+            continuationPixels = Math.max(continuationPixels,
+                    (long) foveatedTargets.inset.color.width * foveatedTargets.inset.color.height);
         }
+        // Each layer consumes its continuations before the next layer overwrites the queue.
+        pathContinuations = ctx.createBuffer(Math.multiplyExact(continuationPixels, 2L * PATH_RECORD_BYTES),
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, "path continuation queue");
         exposure.ensureResources(ctx);
 
         resetTemporalHistory();
@@ -1079,7 +1086,16 @@ public final class RtComposite {
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         RtTerrain terrain = RtTerrain.currentOrNull();
+        boolean reuseInset = foveatedTargets != null && CausticaConfig.Rt.Composite.FOVEATION_REUSE_INSET.value();
+        RtGpuFrameStats.Sample gpuSample = RtGpuFrameStats.Sample.DISABLED;
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
+            if (RtFrameStats.enabled()) {
+                RtImage inset = foveatedTargets == null ? null : foveatedTargets.inset.color;
+                gpuSample = gpuFrameStats.begin(ctx, cmd, stack, graphicsUseWaiter,
+                        new RtGpuFrameStats.FrameInfo(frameCounter, capturedView, displayW, displayH, renderW, renderH,
+                                inset == null ? 0 : inset.width, inset == null ? 0 : inset.height,
+                                inset == null ? 0 : CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value(), reuseInset));
+            }
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
             // submerged, fixing the air→water first-segment orientation) and animated water normals.
             // Bit 1 remains unused to avoid conflicting with stale external readers.
@@ -1147,7 +1163,8 @@ public final class RtComposite {
             // Build the entity BLAS, the TLAS that references it and the terrain BLAS, then the trace.
             // Barriers separate each stage; the graphics-use timeline guards resource reuse.
             if (!fe.blas().isEmpty()) {
-                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blasRecord")) {
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blasRecord");
+                     RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.ENTITY_BLAS)) {
                     RtAccel.recordBlasBuilds(ctx, cmd, fe.blas());
                 }
                 VulkanCommandEncoder.memoryBarrier(cmd, stack); // entity BLAS writes visible to the TLAS build
@@ -1158,18 +1175,28 @@ public final class RtComposite {
                         graphicsUse);
             }
             currentTlasHandle = frameTlas.accel.handle;
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
+            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.TLAS)) {
                 RtAccel.recordTlasBuild(ctx, cmd, frameTlas);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
             TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
                     flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter);
+            Float2 insetJitterUv = null;
+            if (foveatedTargets != null) {
+                insetJitterUv = recordFoveatedInset(ctx, cmd, stack, active, scene, history, gpuSample);
+            }
             RtImage wide = foveatedTargets == null ? rrOutput : foveatedTargets.wideColor;
             recordTraceLayer(ctx, cmd, stack, active, scene, traceTargets, wide,
-                    frameProjection, frameViewRotation, mvCurProjView, mvPushMatrix, false);
+                    frameProjection, frameViewRotation, mvCurProjView, mvPushMatrix,
+                    false, reuseInset ? insetJitterUv : null, gpuSample);
             if (foveatedTargets != null) {
-                recordFoveatedInset(ctx, cmd, stack, active, scene, history);
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.foveatedMerge");
+                     RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.MERGE)) {
+                    foveatedTargets.merge.record(cmd, stack, displayW, displayH, eyeToInset);
+                }
+                VulkanCommandEncoder.memoryBarrier(cmd, stack);
             }
 
             // Auto-exposure meters rrOutput (the post-RR, denoised/converged image), not the raw
@@ -1180,14 +1207,16 @@ public final class RtComposite {
             // on the concave log()), so the computed exposure drifted with SPP; rrOutput is stable
             // regardless of SPP, keeping exposure consistent.
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.exposure")) {
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.exposure");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.EXPOSURE)) {
                 exposure.record(ctx, cmd, stack, rrOutput, traceTargets.gDepth, traceTargets.gAlbedo);
                 exposure.recordStateReadback(cmd, stack);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // exposure image visible to the display mapper
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "bloom");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.bloom")) {
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.bloom");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.BLOOM)) {
                 RtLookPackage.Bloom bloom = LOOK.bloom();
                 // The tent radius is in source texels, so it needs no resolution scaling: the pyramid's
                 // reach is set by its level count, and each level's texel already scales with the frame.
@@ -1198,7 +1227,8 @@ public final class RtComposite {
             boolean hdrOutput = capturedView == View.DESKTOP && CausticaConfig.Rt.Hdr.enabled();
             int preview = foveatedTargets == null ? 0 : CausticaConfig.Rt.Composite.FOVEATION_PREVIEW.value();
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.DISPLAY)) {
                 displayPipeline.dispatch(cmd, displayW, displayH, hdrOutput,
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
                         true, lookLut.size, LOOK.bloom().strength() / bloomLevels.length,
@@ -1223,7 +1253,8 @@ public final class RtComposite {
             VulkanCommandEncoder.memoryBarrier(cmd, stack);
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "copy composite to main target");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.copyOutput")) {
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.copyOutput");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.COPY_OUTPUT)) {
                 VK10.vkCmdCopyImage(cmd, displayImage.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
                         dstImage, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, displayW, displayH));
             }
@@ -1233,6 +1264,7 @@ public final class RtComposite {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
         encoder.execute(cmd); // deferred into the frame's submission — correct for per-frame work
+        gpuSample.submitted(graphicsUse);
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
         RtEntities.INSTANCE.markGraphicsUse(frameEntities, graphicsUse);
@@ -1243,8 +1275,8 @@ public final class RtComposite {
                               Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
                               RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter) {}
 
-    private void recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
-                                     TraceScene scene, MotionHistory history) {
+    private Float2 recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
+                                      TraceScene scene, MotionHistory history, RtGpuFrameStats.Sample gpuSample) {
         int coverageDegrees = CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value();
         if (foveatedTargets.coverageDegrees != coverageDegrees) {
             leftMotion.insetValid = false;
@@ -1257,21 +1289,19 @@ public final class RtComposite {
         Matrix4f insetProjection = VrFoveation.insetProjection(frameProjection, coverageDegrees);
         Matrix4f insetViewProjection = insetProjection.mul(frameHeadView, new Matrix4f());
         // The two eyes retain their own origins. Only the angular window uses the headset's rotation.
-        recordTraceLayer(ctx, cmd, stack, active, scene, foveatedTargets.inset, foveatedTargets.insetColor,
+        Float2 jitterUv = recordTraceLayer(ctx, cmd, stack, active, scene, foveatedTargets.inset, foveatedTargets.insetColor,
                 insetProjection, frameHeadView, insetViewProjection,
-                history.insetValid ? history.insetProjection : insetViewProjection, true);
+                history.insetValid ? history.insetProjection : insetViewProjection, true, null, gpuSample);
         history.insetProjection.set(insetViewProjection);
         history.insetValid = true;
         VrFoveation.eyeToInset(mvCurProjView, insetViewProjection, eyeToInset);
-        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.foveatedMerge")) {
-            foveatedTargets.merge.record(cmd, stack, displayW, displayH, eyeToInset);
-        }
-        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+        return jitterUv;
     }
 
-    private void recordTraceLayer(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active, TraceScene scene,
+    private Float2 recordTraceLayer(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active, TraceScene scene,
                                   TraceTargets targets, RtImage reconstructed, Matrix4f projection, Matrix4fc viewRotation,
-                                  Matrix4f viewProj, Matrix4f previousViewProj, boolean inset) {
+                                  Matrix4f viewProj, Matrix4f previousViewProj, boolean inset,
+                                  Float2 insetJitterUv, RtGpuFrameStats.Sample gpuSample) {
         RtTerrain terrain = scene.terrain();
         SkyPush sky = scene.sky();
         Float4 waterParams = scene.waterParams();
@@ -1296,7 +1326,10 @@ public final class RtComposite {
         RtBuffer pushBuf = slot.buffer;
         ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
         frameInvViewProj.set(viewProj).invert();
-        active.bindTraceTargets(scene.tlas(), targets.views, scene.graphicsUse(), scene.waiter());
+        boolean reuseInset = insetJitterUv != null;
+        long insetRadianceView = reuseInset ? foveatedTargets.inset.color.view : skyLut.skyViewView();
+        active.bindTraceTargets(scene.tlas(), targets.views, insetRadianceView, bloomPipeline.sampler(),
+                scene.graphicsUse(), scene.waiter());
         boolean rrDone = false;
         new WorldPushData(
                 frameInvViewProj,
@@ -1307,7 +1340,7 @@ public final class RtComposite {
                 new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
                 spp(),
                 new Float2(jitterX, jitterY),
-                scene.flags(),
+                scene.flags() | (reuseInset ? REUSE_INSET_LIGHTING : 0),
                 maxBounces(),
                 sky.celestial(),
                 sky.look0(),
@@ -1333,7 +1366,9 @@ public final class RtComposite {
                 CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                 // Must be the SAME value the exposure resolve divides out this frame (it reads it
                 // from the same RtExposure accessor), or the two stop cancelling.
-                exposure.preExposure()
+                exposure.preExposure(),
+                eyeToInset,
+                reuseInset ? insetJitterUv : ZERO_UV
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.
@@ -1346,25 +1381,28 @@ public final class RtComposite {
                 RtMaterialRegistry.INSTANCE.tableAddress(),
                 terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
                 terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
-                terrain.lightGridSpanBufferAddress(), targets.continuations.deviceAddress,
+                terrain.lightGridSpanBufferAddress(), pathContinuations.deviceAddress,
                 (int) frameCounter).write(pushConstants);
         // Sky LUTs, from the same WorldPush slot the trace is about to read: the sky the LUT holds and
         // the sky the frame shades are built from one set of angles, not two. Recorded here (after the
         // push flush, before the trace) so the miss shader's very first fetch sees this frame's dome.
-        if (!inset) {
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
+        if (inset || foveatedTargets == null) {
+            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(Stage.SKY_LUT)) {
                 skyLut.record(cmd, pushBuf.deviceAddress);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack);
         }
 
         try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
-             RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
+             RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary");
+             RtFrameStats.Scope ignoredGpu = gpuSample.stage(inset ? Stage.INSET_PRIMARY : Stage.WIDE_PRIMARY)) {
             active.trace(cmd, traceW, traceH, pushConstants, 0);
         }
         VulkanCommandEncoder.memoryBarrier(cmd, stack); // continuation/guide writes visible to pass B
         try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
-             RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
+             RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect");
+             RtFrameStats.Scope ignoredGpu = gpuSample.stage(inset ? Stage.INSET_INDIRECT : Stage.WIDE_INDIRECT)) {
             active.trace(cmd, traceW, traceH, pushConstants, 1);
         }
         VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
@@ -1372,7 +1410,8 @@ public final class RtComposite {
         // RR reads them and writes the display-res denoised result straight into reconstructed.
         if (rrPath && rr.ensureFeature(cmd.address(), traceW, traceH, reconstructed.width, reconstructed.height)) {
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(inset ? Stage.INSET_RR : Stage.WIDE_RR)) {
                 rrDone = rr.evaluate(cmd.address(), targets.color, targets.gDepth, targets.gMotion, targets.gAlbedo,
                         targets.gSpecAlbedo, targets.gNormal, targets.gSpecMotion, reconstructed, traceW, traceH, reconstructed.width, reconstructed.height,
                         -jitterX, -jitterY, viewRotation, projection);
@@ -1386,11 +1425,13 @@ public final class RtComposite {
         if (!rrDone) {
             VulkanCommandEncoder.memoryBarrier(cmd, stack);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale")) {
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale");
+                 RtFrameStats.Scope ignoredGpu = gpuSample.stage(inset ? Stage.INSET_UPSCALE : Stage.WIDE_UPSCALE)) {
                 blitUpscale(cmd, stack, targets.color, reconstructed);
             }
         }
         VulkanCommandEncoder.memoryBarrier(cmd, stack); // reconstructed visible to merge or exposure
+        return inset ? new Float2(jitterX / traceW, jitterY / traceH) : null;
     }
 
     /**
@@ -1558,6 +1599,7 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
+        gpuFrameStats.destroy();
         destroyReconstructionTargets();
         RtDlssRr.destroyAll();
         temporalLevel = null;

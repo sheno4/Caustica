@@ -31,6 +31,7 @@ import trace_ser;
 import lighting;
 import sky;
 import bindings;
+import foveation;
 
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
 // to colour the NEE sun/moonlight, the miss shader reads it to tint the visible discs and stars.
@@ -400,14 +401,33 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
 [shader("raygeneration")]
 void main() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+    uint2 dispatchIndex = DispatchRaysIndex().xy;
+    uint2 dimensions = DispatchRaysDimensions().xy;
+    int2 pix = int2(dispatchIndex);
+
+    if ((worldPush.flags & 32u) != 0u) {
+        float2 size = float2(dimensions);
+        float2 uv = (float2(pix) + 0.5) / size + worldPush.jitter / size;
+        float4x4 wideToInset = worldPush.wideToInset;
+        float2 insetUv = projectInsetUv(uv, wideToInset);
+        // Keep independently traced radiance through the blend and its reconstruction neighbourhood.
+        // The primary pass still writes Wide's dense geometry and motion guides at its own jitter.
+        if (insetEdgeDistance(insetUv) >= INSET_BLEND_WIDTH + 0.06) {
+            float2 pad = 8.0 / size;
+            if (insetEdgeDistance(projectInsetUv(uv - pad, wideToInset)) >= INSET_BLEND_WIDTH
+                    && insetEdgeDistance(projectInsetUv(uv + pad, wideToInset)) >= INSET_BLEND_WIDTH
+                    && insetEdgeDistance(projectInsetUv(uv + float2(-pad.x, pad.y), wideToInset)) >= INSET_BLEND_WIDTH
+                    && insetEdgeDistance(projectInsetUv(uv + float2(pad.x, -pad.y), wideToInset)) >= INSET_BLEND_WIDTH) {
+                outImage[pix] = insetRadiance.SampleLevel(insetUv - worldPush.insetJitterUv, 0.0);
+                return;
+            }
+        }
+    }
     // Derive this dispatch's directional light once. The same transmittance LUT drives terrain lighting
     // and the visible sun/moon, keeping atmospheric tint consistent across both consumers.
     celestialLight = dominantCelestialLight(skyState(worldPush), transmittanceLut);
     // The path integral is ACEScg end to end; sky.slang works in linear BT.709, so this is the one seam.
     celestialLight.illuminance = bt709ToAcesCg(celestialLight.illuminance);
-    uint2 dispatchIndex = DispatchRaysIndex().xy;
-    uint2 dimensions = DispatchRaysDimensions().xy;
-    int2 pix = int2(dispatchIndex);
     uint spp = max(worldPush.spp, 1u);
     uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;
     ConstPtr<PackedPathSegment> queue = ConstPtr<PackedPathSegment>(pc.pathQueueAddr);
