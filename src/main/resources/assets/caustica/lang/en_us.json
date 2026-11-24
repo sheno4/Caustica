@@ -28,6 +28,8 @@
 	"caustica.options.rt.glow.tooltip": "Draw the vanilla Glowing-effect outline (through walls) around glowing entities.",
 
 	"caustica.options.rt.waterWaves": "Animated Water",
+	"caustica.options.rt.fixedFoveation": "Fixed Foveated Rendering",
+	"caustica.options.rt.fixedFoveation.tooltip": "Reduce ray-tracing samples at the edges of each VR eye view. Takes effect immediately.",
 	"caustica.options.rt.waterWaves.tooltip": "Animate water-surface normals for moving wave highlights.",
 
 	"caustica.options.rt.hdr": "HDR Output",

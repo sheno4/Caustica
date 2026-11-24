@@ -49,6 +49,7 @@ public final class RtVideoOptions {
             entities(),
             particles(),
             waterWaves(),
+            bool("caustica.options.rt.fixedFoveation", CausticaConfig.Rt.Composite.FIXED_FOVEATION),
             dlssQuality()
         ));
         if (CausticaConfig.Rt.Hdr.swapchainPqAvailable()) {
