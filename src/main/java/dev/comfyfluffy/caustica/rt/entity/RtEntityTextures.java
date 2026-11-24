@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.rt.entity;
 
 import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.blaze3d.vulkan.VulkanGpuSampler;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
@@ -12,6 +13,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
 import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.resources.Identifier;
@@ -72,6 +74,7 @@ public final class RtEntityTextures {
     // reset/recreate; a lower value stops allocating new slots immediately without invalidating old ones.
     private int capacity = maxTextures();
     private int nextSlot = 1;
+    private int glintSlot = -1;
     private boolean loggedFailure;
     private boolean loggedMaterialFailure;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons); see whiteSlot().
@@ -81,7 +84,7 @@ public final class RtEntityTextures {
     // Cached RenderSetup.TextureBinding#location() (the class is package-private, the method public).
     private Method locationMethod;
 
-    private record Pending(int slot, long view) {
+    private record Pending(int slot, long view, long sampler) {
     }
 
     private RtEntityTextures() {
@@ -97,6 +100,28 @@ public final class RtEntityTextures {
             return 0;
         }
         return slotForView(resolveView(renderType));
+    }
+
+    /** Glint uses the game's filtered sampler, independently of the nearest-filtered entity slots. */
+    int glintSlot() {
+        if (glintSlot >= 0) return glintSlot;
+        glintSlot = 0;
+        if (nextSlot >= slotLimit()) return glintSlot;
+        try {
+            for (PreparedRenderType.Texture texture : RenderTypes.glint().prepare().textures()) {
+                if ("Sampler0".equals(texture.name()) && texture.sampler() instanceof VulkanGpuSampler sampler) {
+                    long view = vkImageView(texture.textureView());
+                    if (view != 0L) {
+                        glintSlot = nextSlot++;
+                        pending.add(new Pending(glintSlot, view, sampler.vkSampler()));
+                    }
+                    break;
+                }
+            }
+        } catch (RuntimeException e) {
+            CausticaMod.LOGGER.warn("Cannot resolve the first-person glint texture", e);
+        }
+        return glintSlot;
     }
 
     /** Canonical material ID for a full entity texture, or the neutral runtime-texture fallback. */
@@ -171,7 +196,7 @@ public final class RtEntityTextures {
         }
         int slot = nextSlot++;
         viewSlotCache.put(view, slot);
-        pending.add(new Pending(slot, view));
+        pending.add(new Pending(slot, view, 0L));
         return slot;
     }
 
@@ -181,7 +206,7 @@ public final class RtEntityTextures {
             return;
         }
         for (Pending p : pending) {
-            pipeline.setEntityAlbedoTexture(p.slot(), p.view(), sampler);
+            pipeline.setEntityAlbedoTexture(p.slot(), p.view(), p.sampler() == 0L ? sampler : p.sampler());
         }
         pending.clear();
     }
@@ -201,6 +226,7 @@ public final class RtEntityTextures {
         atlasSlotCache.put(TextureAtlas.LOCATION_BLOCKS, 0); // block atlas = the slot-0 fallback
         pending.clear();
         nextSlot = 1;
+        glintSlot = -1;
     }
 
     private int slotLimit() {

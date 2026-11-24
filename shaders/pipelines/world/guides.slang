@@ -36,6 +36,7 @@ public struct SpecSurface {
     public float3 motionPrev;     // current-minus-previous displacement of the reflecting surface
     public float roughness;
     public float3 albedo;         // specular albedo fed to DLSS-RR for demodulation (0 = pure diffuse)
+    public bool viewModel;
 };
 public static SpecSurface gv_spec = {};
 
@@ -51,6 +52,7 @@ public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float3 previous
     s.motionPrev = motionPrev;
     s.roughness = roughness;
     s.albedo = albedo;
+    s.viewModel = false;
     return s;
 }
 
@@ -107,7 +109,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
 
     // Pass A stops radiance traversal at the first split, so reflection motion keeps one dedicated,
     // deterministic guide probe.
-    traceGuide(CULL_SECONDARY,
+    traceGuide(secondaryCullMask(surface.viewModel),
             offsetSurfaceOrigin(surfacePos, surface.biasNormal, specDir, SURF_BIAS),
             RAY_TMIN, specDir, 10000.0,
             max(length(surface.camRel) * primaryConeSpread, RAY_CONE_MIN_WIDTH),

@@ -40,6 +40,7 @@ import net.minecraft.client.renderer.gizmos.DrawableGizmoPrimitives;
 import net.minecraft.client.renderer.item.ItemStackRenderState;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.rendertype.TextureTransform;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.QuadParticleRenderState;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -137,6 +138,20 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     boolean viewModelCompatible() {
         return viewModelCompatible;
+    }
+
+    public boolean isCapturingViewModel() {
+        return viewModel;
+    }
+
+    /** Preserve the held model's own UVs for the entity-glint texture transform. */
+    public void captureModelGlint(Runnable submit) {
+        capture.glint.begin(TextureTransform.ENTITY_GLINT_TEXTURING, null, null);
+        try {
+            submit.run();
+        } finally {
+            capture.glint.end();
+        }
     }
 
     /** This entity's Glowing-effect outline colour (opaque ARGB), or 0 if it isn't glowing. */
@@ -761,12 +776,17 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (capture == null) {
             return;
         }
-        if (viewModel && foilType != ItemStackRenderState.FoilType.NONE) {
-            viewModelCompatible = false;
-            return;
+        boolean glint = viewModel && foilType != ItemStackRenderState.FoilType.NONE;
+        if (glint) {
+            PoseStack.Pose decalPose = foilType == ItemStackRenderState.FoilType.SPECIAL ? poseStack.last() : null;
+            capture.glint.begin(TextureTransform.GLINT_TEXTURING, decalPose, displayContext);
         }
-        addQuads(poseStack.last().pose(), quads, tintLayers);
-        addMeshQuads(poseStack, mesh, tintLayers, true);
+        try {
+            addQuads(poseStack.last().pose(), quads, tintLayers);
+            addMeshQuads(poseStack, mesh, tintLayers, true);
+        } finally {
+            if (glint) capture.glint.end();
+        }
     }
 
     /** Capture a Fabric Renderer API mesh; each quad already carries final atlas UVs. */
@@ -854,14 +874,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     @Override
     public void submitItem(PoseStack poseStack, ItemDisplayContext displayContext, int lightCoords, int overlayCoords,
                            int outlineColor, int[] tintLayers, List<BakedQuad> quads, ItemStackRenderState.FoilType foilType) {
-        if (capture == null) {
-            return;
-        }
-        if (viewModel && foilType != ItemStackRenderState.FoilType.NONE) {
-            viewModelCompatible = false;
-            return;
-        }
-        addQuads(poseStack.last().pose(), quads, tintLayers);
+        submitItem(poseStack, displayContext, lightCoords, overlayCoords, outlineColor, tintLayers, quads, null, foilType);
     }
 
     @Override

@@ -1,8 +1,6 @@
 // Ray dispatch: SBT/cull constants, payload construction, ordinary/reordered radiance, guide probes,
 // and shadow visibility. Depends on core.
 
-// receiver billboards only. The first-person camera owner uses 0x01 (secondary only).
-
 import world_common;
 import world_core;
 import bindings;
@@ -10,6 +8,7 @@ import bindings;
 public static const uint CULL_SECONDARY = 0x01u;
 public static const uint CULL_PRIMARY = 0x02u;
 public static const uint CULL_VIEW_MODEL = 0x04u;
+public static const uint CULL_CAMERA_OWNER = 0x08u;
 public static const uint VIEW_MODEL_PRESENT = 64u;
 public static const uint VIEW_MODEL_FOREGROUND = 128u;
 public static const uint TERRAIN_BUCKETS = 4u;
@@ -84,6 +83,11 @@ public uint cameraCullMask() {
     return CULL_PRIMARY | (worldPlaced ? CULL_VIEW_MODEL : 0u);
 }
 
+// A hand's lighting and reflections should not see the separate camera-owner model.
+public uint secondaryCullMask(bool viewModelPath) {
+    return viewModelPath ? CULL_SECONDARY : CULL_SECONDARY | CULL_CAMERA_OWNER;
+}
+
 // Desktop viewmodels have their own depth layer. The short-circuit still returns the shared material
 // payload, including geometry, motion, and optical properties for the subsequent integrator.
 public bool traceForegroundViewModel(float3 ro, float3 rd, float2 ndc, float coneWidth, float coneSpread) {
@@ -115,7 +119,7 @@ public Payload makeShadowPayload() {
     return shadowPayload;
 }
 
-public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
+public VisibilityResult visibility(uint cullMask, float3 origin, float3 dir, float tmax) {
     // Vulkan requires an identical payload structure for every stage reachable by this trace. The shadow
     // path uses only the albedo view as accumulated transmittance and hitT as the nearest-water crossing.
     Payload shadowPayload = makeShadowPayload();
@@ -125,7 +129,7 @@ public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
     // needs only ordinary TraceRay and no invocation-reorder capability.
     TraceRay(topLevelAS,
             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-            CULL_SECONDARY, SBT_SHADOW, SBT_STRIDE_BUCKET, MISS_GUIDE,
+            cullMask, SBT_SHADOW, SBT_STRIDE_BUCKET, MISS_GUIDE,
             makeRay(origin, RAY_TMIN, dir, tmax), shadowPayload);
     VisibilityResult result;
     result.transmittance = shadowPayload.flags == 0u

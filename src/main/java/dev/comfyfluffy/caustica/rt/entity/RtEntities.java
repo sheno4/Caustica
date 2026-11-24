@@ -96,6 +96,8 @@ public final class RtEntities {
     /** World geometry is visible to both ordinary camera and secondary rays. */
     private static final int MASK_ALL = MASK_SECONDARY | MASK_PRIMARY;
     private static final int MASK_VIEW_MODEL = 0x04;
+    /** The hidden camera owner is visible to world transport, outside of viewmodel paths. */
+    private static final int MASK_CAMERA_OWNER = 0x08;
     /** Particles are primary-ray-only: visible/lit by the camera path, invisible to shadows/GI/reflections. */
     private static final int PARTICLE_MASK = MASK_PRIMARY;
     public static boolean particlesEnabled() {
@@ -361,7 +363,7 @@ public final class RtEntities {
     /** This frame's terrain and dynamic instance segments, entity BLAS builds, and geometry-table address. */
     public record FrameEntities(List<RtAccel.Instance> baseInstances, List<RtAccel.Instance> dynamicInstances,
                                 List<RtAccel.PreparedBlas> blas, long geomTableAddr, FrameUse use,
-                                Vector4f viewModelBounds) {
+                                Vector4f viewModelBounds, int glintSlot) {
     }
 
     private record FrameUse(FrameLists lists, TableSlot table) {
@@ -594,6 +596,7 @@ public final class RtEntities {
         TableSlot table;
         int count;        // geometry-table entries / TLAS instances
         int logicalCount; // ordinary entities + block entities + individual particles
+        int glintSlot;
 
         final GraphicsUseWaiter graphicsUseWaiter;
 
@@ -620,12 +623,12 @@ public final class RtEntities {
         boolean captureWorldEntities = enabled();
         if (!captureWorldEntities && viewModel == null) {
             previousViewModels[view.ordinal()] = null;
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0);
         }
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0);
         }
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
@@ -658,7 +661,7 @@ public final class RtEntities {
         RtFrameStats.FRAME.count("entityRetainedGeometryBytes", retainedGeometryBytes);
 
         if (build.instances == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0);
         }
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.uploadFlush")) {
             build.motion.flushWrites();
@@ -668,7 +671,7 @@ public final class RtEntities {
             }
         }
         return new FrameEntities(base, build.instances, build.blas, build.geomTableAddr,
-                new FrameUse(build.lists, build.table), viewModelBounds);
+                new FrameUse(build.lists, build.table), viewModelBounds, build.glintSlot);
     }
 
     private Vector4f appendViewModel(RtContext ctx, FrameBuild build, View view, Consumer<SubmitNodeCollector> submit,
@@ -697,6 +700,7 @@ public final class RtEntities {
         Motion motion = uploadVertexMotion(ctx, build, capture.verts, previous, camX, camY, camZ);
         appendCapture(ctx, build, motion, -1, ENTITY_BIT, MASK_VIEW_MODEL,
                 translationTransform((float) (camX - rbx), (float) (camY - rby), (float) (camZ - rbz)));
+        if (capture.hasGlint) build.glintSlot = RtEntityTextures.INSTANCE.glintSlot();
         previousViewModels[view.ordinal()] = storeEntityPrev(previous, capture.verts, camX, camY, camZ);
         build.logicalCount++;
         return bounds;
@@ -759,7 +763,7 @@ public final class RtEntities {
                 continue;
             }
             boolean firstPersonSelf = entity == cameraEntity && firstPerson;
-            int mask = firstPersonSelf ? MASK_SECONDARY : MASK_ALL;
+            int mask = firstPersonSelf ? MASK_CAMERA_OWNER : MASK_ALL;
             float ix;
             float iy;
             float iz;
@@ -1328,7 +1332,7 @@ public final class RtEntities {
         // passes null ⇒ dispAddr 0 ⇒ no MV. The disp buffer is a per-frame transient, so a BE that stops
         // animating reverts to MV 0 next frame.
         long dispAddr = uploadDisp(ctx, build, disp);
-        writeTableEntry(build, e.primAddr, e.indexAddr, e.uvAddr, dispAddr, 0f, 0f, 0f, e.bucketTris);
+        writeTableEntry(build, e.primAddr, e.indexAddr, e.uvAddr, dispAddr, 0f, 0f, 0f, e.bucketTris, false);
         // Block-local mesh placed by a translate-only instance transform (blockPos − rebase), like terrain.
         float[] xform = {1, 0, 0, e.bx - rbx, 0, 1, 0, e.by - rby, 0, 0, 1, e.bz - rbz};
         build.instances.add(new RtAccel.Instance(xform, e.accel.deviceAddress,
@@ -1480,7 +1484,7 @@ public final class RtEntities {
         }
         build.lists.usedEntitySlots.add(ea.refSlot);
         writeTableEntry(build, ea.refPrimAddr, ea.refIndexAddr, ea.refUvAddr,
-                motion.dispAddr, motion.rigidX, motion.rigidY, motion.rigidZ, ea.refBucketTris);
+                motion.dispAddr, motion.rigidX, motion.rigidY, motion.rigidZ, ea.refBucketTris, false);
         build.instances.add(new RtAccel.Instance(placeTransform(localTransform, placeX, placeY, placeZ),
                 ea.refAccel.deviceAddress,
                 ENTITY_BIT | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
@@ -1634,7 +1638,7 @@ public final class RtEntities {
         build.pooledBlas.add(blas);
 
         writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
-                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris());
+                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris(), mask == MASK_VIEW_MODEL);
 
         build.instances.add(new RtAccel.Instance(instanceTransform, blas.accel.deviceAddress,
                 instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
@@ -1712,7 +1716,7 @@ public final class RtEntities {
         }
 
         writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
-                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris());
+                motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris(), false);
         build.instances.add(new RtAccel.Instance(instanceTransform, accel.deviceAddress,
                 instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
 
@@ -1775,7 +1779,7 @@ public final class RtEntities {
 
     /** Write one std430 EntityGeom entry, including bases for the two packed BLAS geometries. */
     private void writeTableEntry(FrameBuild build, long primAddr, long idxAddr, long uvAddr, long dispAddr,
-                                 float rigidX, float rigidY, float rigidZ, int[] bucketTris) {
+                                 float rigidX, float rigidY, float rigidZ, int[] bucketTris, boolean viewModel) {
         if (bucketTris == null || bucketTris.length != RtAccel.ENTITY_BUCKETS) {
             throw new IllegalArgumentException("Missing entity BLAS bucket counts");
         }
@@ -1790,7 +1794,7 @@ public final class RtEntities {
         MemoryUtil.memPutFloat(entry + 44, 0f);
         MemoryUtil.memPutInt(entry + 48, 0);
         MemoryUtil.memPutInt(entry + 52, bucketTris[RtAccel.ENTITY_BUCKET_OPAQUE]);
-        MemoryUtil.memPutInt(entry + 56, 0);
+        MemoryUtil.memPutInt(entry + 56, viewModel ? 1 : 0);
         MemoryUtil.memPutInt(entry + 60, 0);
     }
 

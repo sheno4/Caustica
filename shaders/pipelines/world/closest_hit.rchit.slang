@@ -293,7 +293,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
         float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
-        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
+        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId & ~ENTITY_PRIM_GLINT];
         uint material = header.model;
         float3 baseAlbedo709 = srgbToLinear(entityTexel.rgb) * srgbToLinear(pr.tint.rgb);
         float3 opticalColor709 = material == MATERIAL_DIELECTRIC
@@ -323,6 +323,21 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                 emission, sss, header.params.z, header.params.w,
                 materialEmissionSource(header, emission));
         payloadSetDielectric(payload, material, entering);
+        if (g.viewModel != 0u) {
+            payload.flags |= PAYLOAD_VIEW_MODEL;
+        }
+        if ((pr.materialId & ENTITY_PRIM_GLINT) != 0u) {
+            ConstPtr<WorldPush> frame = ConstPtr<WorldPush>(pc.worldPushAddr);
+            uint slot = frame[0].glintSlot;
+            if (slot != 0u && frame[0].glintStrength > 0.0) {
+                float2 glintUv = ebary.x * unpackHalf2(pr.flags) + ebary.y * unpackHalf2(pr.aux0)
+                        + ebary.z * unpackHalf2(pr.aux1);
+                float4 glintTexel = entityAlbedoTex[NonUniformResourceIndex(slot)].SampleLevel(glintUv, 0.0);
+                uint3 color = uint3(round(saturate(glintTexel.rgb) * 255.0));
+                payload.flags |= PAYLOAD_GLINT;
+                payload.rayCone = glintTexel.a < 0.1 ? 0u : color.x | (color.y << 8u) | (color.z << 16u);
+            }
+        }
         return;
     }
 

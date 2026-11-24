@@ -1218,7 +1218,8 @@ public final class RtComposite {
 
             TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
                     flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter,
-                    bounds == null ? EMPTY_VIEW_MODEL_BOUNDS : new Float4(bounds.x, bounds.y, bounds.z, bounds.w));
+                    bounds == null ? EMPTY_VIEW_MODEL_BOUNDS : new Float4(bounds.x, bounds.y, bounds.z, bounds.w),
+                    fe.glintSlot());
             Float2 insetJitterUv = null;
             if (foveatedTargets != null) {
                 insetJitterUv = recordFoveatedInset(ctx, cmd, stack, active, scene, history, gpuSample);
@@ -1311,7 +1312,7 @@ public final class RtComposite {
     private record TraceScene(RtTerrain terrain, long entityTable, long tlas, int flags, SkyPush sky,
                               Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
                               RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter,
-                              Float4 viewModelBounds) {}
+                              Float4 viewModelBounds, int glintSlot) {}
 
     private Float2 recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
                                       TraceScene scene, MotionHistory history, RtGpuFrameStats.Sample gpuSample) {
@@ -1407,7 +1408,9 @@ public final class RtComposite {
                 exposure.preExposure(),
                 eyeToInset,
                 reuseInset ? insetJitterUv : ZERO_UV,
-                scene.viewModelBounds()
+                scene.viewModelBounds(),
+                scene.glintSlot(),
+                scene.glintSlot() == 0 ? 0f : Minecraft.getInstance().options.glintStrength().get().floatValue()
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.

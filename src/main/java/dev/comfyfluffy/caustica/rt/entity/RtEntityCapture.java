@@ -29,6 +29,8 @@ public final class RtEntityCapture implements VertexConsumer {
     final IntArrayList idx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY)); // 3 indices/triangle
     final FloatArrayList uvList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 2);  // 2 floats/vertex (entity-texture UV)
     final FloatArrayList prim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY)); // 12 floats/triangle
+    final RtGlint glint = new RtGlint();
+    boolean hasGlint;
     // One classification per triangle in capture order. The upload path repacks indices + primitive
     // records into fixed {opaque, any-hit} BLAS geometries while positions/UVs stay shared. Keeping
     // capture order here preserves glow meshes, parity checks and motion topology.
@@ -85,6 +87,8 @@ public final class RtEntityCapture implements VertexConsumer {
         currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
         currentOrder = 0;
         uvRemap = false;
+        glint.end();
+        hasGlint = false;
     }
 
     private void ensureVertexCapacity(int vertexCount) {
@@ -390,6 +394,12 @@ public final class RtEntityCapture implements VertexConsumer {
         float tr = ((c >> 16) & 0xFF) * (1f / 255f);
         float tg = ((c >> 8) & 0xFF) * (1f / 255f);
         float tb = (c & 0xFF) * (1f / 255f);
+        boolean glintQuad = glint.active();
+        if (glintQuad) {
+            glint.captureQuad(x, y, z, corners, u, v, nx, ny, nz);
+            hasGlint = true;
+        }
+        int material = glintQuad ? currentMaterialId | RtGlint.PRIMITIVE_BIT : currentMaterialId;
         for (int t = 0; t < 2; t++) { // one {normal+emission, tint, mat} record per triangle
             prim.add(nx);
             prim.add(ny);
@@ -399,10 +409,10 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(tg);
             prim.add(tb);
             prim.add((float) currentTexSlot); // tint.w = bindless texture slot
-            prim.add(Float.intBitsToFloat(currentMaterialId));
-            prim.add(0f); // flags
-            prim.add(0f); // aux0
-            prim.add(0f); // aux1
+            prim.add(Float.intBitsToFloat(material));
+            prim.add(glintQuad ? glint.packedUv(0) : 0f);
+            prim.add(glintQuad ? glint.packedUv(t + 1) : 0f);
+            prim.add(glintQuad ? glint.packedUv(t + 2) : 0f);
             alphaBuckets.add(currentAlphaBucket);
         }
     }

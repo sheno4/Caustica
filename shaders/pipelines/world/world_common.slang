@@ -91,6 +91,8 @@ public struct WorldPush {
     public float4x4 wideToInset;
     public float2   insetJitterUv;
     public float4   viewModelBounds;  // desktop foreground bounds in jitter-free NDC, xy min and zw max
+    public uint     glintSlot;        // bindless vanilla glint texture, 0 when absent
+    public float    glintStrength;
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the
@@ -175,13 +177,15 @@ public struct Payload {
     public uint   roughMetal;  // packHalf2x16(roughness, metalness)
     public uint   emissionSss; // packHalf2x16(emission, sss)
     public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
-    public uint   rayCone;     // packHalf2x16(width, spread)
+    public uint   rayCone;     // incoming cone width/spread, or outgoing RGB8 on a glint hit
 };
 
 public static const uint PAYLOAD_SHOW_CELESTIAL = 4u;
 // Set by world.rchit on a terrain hit whose prim carries TERRAIN_PRIM_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
+public static const uint PAYLOAD_VIEW_MODEL = 256u;
+public static const uint PAYLOAD_GLINT = 512u;
 // Set by world.rchit on any dielectric hit (water or glass/ice): true when the incoming ray travels
 // against the prim's outward face normal (entering the volume), false when it exits. Derived from face
 // orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
@@ -207,7 +211,8 @@ public static const uint MATERIAL_WATER = 1u;
 public static const uint MATERIAL_PARTICLE = 2u;
 public static const uint MATERIAL_DIELECTRIC = 3u;
 
-// Entity per-triangle record (48 B). The final lane mirrors TerrainPrim's integer material metadata.
+// Entity per-triangle record (48 B). The final three words carry half2 UVs for glinted primitives.
+public static const uint ENTITY_PRIM_GLINT = 0x80000000u;
 public struct Prim {
     public float4 normal; // xyz = geometric normal, w = per-primitive emission strength
     public float4 tint;
@@ -275,7 +280,8 @@ public struct EntityGeom {
     public uint64_t dispAddr;
     public float4 rigidDisp;
     public uint triBase[2];
-    public uint2 reserved;
+    public uint viewModel;
+    public uint reserved;
 };
 
 // TLAS instance-custom-index encoding + terrain geometry buckets (shared by rahit/rchit).

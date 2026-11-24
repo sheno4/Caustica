@@ -296,7 +296,7 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
 // the survivor (front BRDF, twoSided billboard, or SSS backscatter) — the origin is biased toward the
 // sample's side of the surface.
 public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
-                      float3 F0, float rough, bool twoSided, float sss) {
+                      float3 F0, float rough, bool twoSided, float sss, uint shadowMask) {
     if (s.W <= 0.0 || s.phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
@@ -315,12 +315,7 @@ public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, flo
     float3 toL = s.pos - origin;
     float dist = length(toL);
     // Stop just short of the sample point so the ray doesn't self-occlude on the emitter's own face.
-    VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999);
+    VisibilityResult shadow = visibility(shadowMask, origin, toL / dist, dist * 0.999);
     float3 vis = shadow.transmittance;
     return contrib * vis * s.W;
 }
-
-// TLAS instance-mask bits (set on the Java side, ANDed against these per-ray cull masks):
-//   bit 0 (0x01) — secondary rays: shadows, GI bounces, reflections.
-//   bit 1 (0x02) — the primary camera ray.
-// Terrain / entities / block entities keep 0xFF (both bits). Particles use 0x02: primary-visible

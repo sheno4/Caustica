@@ -43,7 +43,7 @@ public PathSegment tracePrimary(PathSegment seg,
         int bounce = seg.bounce;
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
-                                               showCelestial);
+                                               showCelestial, seg.viewModelPath);
         if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
             traceRadiance(bounce == 0 ? cameraCullMask() : CULL_PRIMARY,
                           ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
@@ -66,6 +66,9 @@ public PathSegment tracePrimary(PathSegment seg,
         float3 n = payloadNormal();
         float3 hitPos = ro + rd * payload.hitT;
         uint material = payloadMaterial();
+        bool viewModelHit = payloadViewModel();
+        bool viewModelPath = seg.viewModelPath || viewModelHit;
+        bool hasGlint = payloadGlint();
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) {
             float rough = material == MATERIAL_PARTICLE
                     ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
@@ -93,6 +96,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     gv_rough = rough;
                     gv_spec = makeSpecSurface(gv_hitCamRel, n, float3(payload.motionPrev), rough,
                                               rrSpecularAlbedo(payload.f0, rough, dot(n, v)));
+                    gv_spec.viewModel = viewModelHit;
                 }
             }
 
@@ -149,6 +153,7 @@ public PathSegment tracePrimary(PathSegment seg,
             gv_spec = makeSpecSurface(gv_hitCamRel, n, previousNormal, geometricNormal,
                                       isWater ? float3(0.0, 0.0, 0.0) : float3(payload.motionPrev),
                                       gv_rough, float3(F, F, F));
+            gv_spec.viewModel = viewModelHit;
             if (dot(transmittedDir, transmittedDir) > 0.0) {
                 MediumStack guideMedium = medium;
                 if (entering) {
@@ -162,6 +167,9 @@ public PathSegment tracePrimary(PathSegment seg,
                                 ? payloadAlbedo() : float3(1.0, 1.0, 1.0));
             }
         }
+
+        // The indirect pass shades overlays at the surface before tracing through a glinted interface.
+        if (hasGlint) return terminal;
 
         // Split once, write both post-interface continuations, and stop Pass A radiance traversal.
         // Pass B owns every radiance trace after this point.
@@ -179,7 +187,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, deferredDir, transmitBias),
                     deferredDir, throughput * (1.0 - F), transmittedMedium,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
-                    true);
+                    true, viewModelPath);
             queue[splitRecord] = packPathSegment(deferred, PATH_NO_NEXT);
             nextRecord = splitRecord;
             float3 reflectedDir = reflect(rd, n);
@@ -187,7 +195,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed ^ 0xa511e9b3u, bounce + 1,
-                    true);
+                    true, viewModelPath);
             return reflected;
         }
 
@@ -199,7 +207,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
-                    true);
+                    true, viewModelPath);
         } else {
             float3 deferredDir = normalize(transmittedDir);
             if (entering) {
@@ -211,7 +219,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, deferredDir, transmitBias),
                     deferredDir, throughput * (1.0 - F), medium,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
-                    true);
+                    true, viewModelPath);
         }
         return continuation;
     }
@@ -245,7 +253,7 @@ void main() {
 
     seed = pcg(seed);
     PathSegment current = makePathSegment(origin, dir, float3(1.0, 1.0, 1.0),
-            cameraMedium, 0.0, rayConeSpread, seed, 0, true);
+            cameraMedium, 0.0, rayConeSpread, seed, 0, true, false);
     uint nextRecord;
     PathSegment terminal = tracePrimary(
             current, queue, splitRecord, jndc, nextRecord);

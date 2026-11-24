@@ -33,6 +33,8 @@ import sky;
 import bindings;
 import foveation;
 
+static const float GLINT_RADIANCE_SCALE = 300.0; // cd/m² at full texture intensity
+
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
 // to colour the NEE sun/moonlight, the miss shader reads it to tint the visible discs and stars.
 public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
@@ -68,6 +70,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // diffuse-sampled continuation rays — those are already covered by the sun NEE, so the tiny disc
     // would be a double-counted firefly. Reset true on every specular/water bounce, false on a diffuse one.
     bool showCelestial = seg.showCelestial;
+    bool viewModelPath = seg.viewModelPath;
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -79,9 +82,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
-        // Camera rays can see viewmodels. World bounce rays see the player body and exclude viewmodels.
         if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
-            uint mask = bounce == 0 ? cameraCullMask() : CULL_SECONDARY;
+            uint mask = bounce == 0 ? cameraCullMask() : secondaryCullMask(viewModelPath);
 #ifdef CAUSTICA_ENABLE_EXT_SER
             // Keep roulette eligibility and the path cap in separate coherence groups.
             uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
@@ -120,7 +122,18 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
+        viewModelPath = viewModelPath || payloadViewModel();
+        uint shadowMask = secondaryCullMask(viewModelPath);
         int hitDepth = indirectDepth++;
+
+        // Minecraft's glint blend adds the squared source color at the visible item surface.
+        // Convert that artistic overlay to scene radiance without participating in light sampling.
+        if (payloadGlint()) {
+            uint packed = payload.rayCone;
+            float3 glint = float3(packed & 255u, (packed >> 8u) & 255u, (packed >> 16u) & 255u)
+                    * (worldPush.glintStrength / 255.0);
+            L += throughput * bt709ToAcesCg(srgbToLinear(glint * glint)) * GLINT_RADIANCE_SCALE;
+        }
 
         // ---- Dielectric interface: water, stained glass, ice. ONE handler and one behaviour — every
         // dielectric is a volume. Fresnel from the relative index across the face, then reflect or
@@ -214,7 +227,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             float ndl = abs(signedNdl);
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
-                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
+                float3 vis = visibility(shadowMask, shadowOrigin, lightDir, 10000.0).transmittance;
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                     L += throughput * albedo * INV_PI * celestialLight.illuminance * ndl * vis;
                 }
@@ -228,7 +241,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
                                          true, 0.0, seed, proposalSeed);
                 L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                                                 true, 0.0);
+                                                 true, 0.0, shadowMask);
             }
 
             if (bounce >= maxBounces) {
@@ -289,7 +302,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         }
         float ndl = max(0.0, dot(n, lightDir));
         if (ndl > 0.0) {
-            VisibilityResult shadow = visibility(p, lightDir, 10000.0);
+            VisibilityResult shadow = visibility(shadowMask, p, lightDir, 10000.0);
             float3 vis = shadow.transmittance;
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
             // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
@@ -321,7 +334,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
                                      seed, proposalSeed);
             L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
-                                             activeSss);
+                                             activeSss, shadowMask);
         }
 
         // Thin-surface SSS transmission. Light entering from the back face scatters through toward the
@@ -332,7 +345,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         if (sss > 0.0 && hitDepth <= MAX_SSS_INDIRECT_DEPTH) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
-                VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
+                VisibilityResult shadowBack = visibility(shadowMask, hitPos - n * SURF_BIAS, lightDir, 10000.0);
                 float3 visB = shadowBack.transmittance;
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
                 // flicker with the same light bands as the floor around it.
