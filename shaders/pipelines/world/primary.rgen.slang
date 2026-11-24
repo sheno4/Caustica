@@ -26,6 +26,7 @@ import guides;
 public PathSegment tracePrimary(PathSegment seg,
                                 DevicePtr<PackedPathSegment> queue,
                                 uint splitRecord,
+                                float2 ndc,
                                 out uint nextRecord) {
     float3 ro = seg.ro;
     float3 rd = seg.rd;
@@ -43,8 +44,10 @@ public PathSegment tracePrimary(PathSegment seg,
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
                                                showCelestial);
-        traceRadiance(CULL_PRIMARY, ro, 0.0, rd, 10000.0,
-                      showCelestial, rayConeWidth, rayConeSpread);
+        if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
+            traceRadiance(bounce == 0 ? cameraCullMask() : CULL_PRIMARY,
+                          ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
+        }
 
         if (payload.hitT < 0.0) {
             if (bounce == 0) {
@@ -245,7 +248,7 @@ void main() {
             cameraMedium, 0.0, rayConeSpread, seed, 0, true);
     uint nextRecord;
     PathSegment terminal = tracePrimary(
-            current, queue, splitRecord, nextRecord);
+            current, queue, splitRecord, jndc, nextRecord);
     queue[pixelIndex] = packPathSegment(terminal, nextRecord);
 
     writeGuides(pix, dir, jndc, size, rayConeSpread);

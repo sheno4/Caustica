@@ -51,6 +51,9 @@ public abstract class LevelRendererMixin {
 					&& VanillaRenderController.INSTANCE.canCompositeEye()
 					&& !renderer.gameRenderState().useShaderTransparency()) {
 				VivecraftCompat.deferEyeOverlays(this.levelRenderState);
+				if (RtComposite.INSTANCE.acceptsViewModel()) {
+					RtComposite.INSTANCE.captureViewModel(VivecraftCompat.captureEyeHands(this.levelRenderState));
+				}
 				this.caustica$deferredEyeOverlays = true;
 			}
 			return;
@@ -81,6 +84,9 @@ public abstract class LevelRendererMixin {
 		this.caustica$deferredEyeOverlays = false;
 		try {
 			if (WorldRenderScaler.INSTANCE.endEye(Minecraft.getInstance().gameRenderer.mainRenderTarget())) {
+				if (RtComposite.INSTANCE.viewModelRendered()) {
+					VivecraftCompat.hideCapturedHands(this.levelRenderState);
+				}
 				VivecraftCompat.restoreEyeEffects(this.submitNodeStorage, this.levelRenderState, this.featureRenderDispatcher);
 			}
 		} finally {

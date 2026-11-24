@@ -4,6 +4,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
@@ -13,15 +14,18 @@ import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
 import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.world.level.GameType;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
@@ -36,15 +40,32 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
+	@Unique
+	private static final String CAUSTICA$LEVEL_RENDER = "Lnet/minecraft/client/renderer/LevelRenderer;render("
+			+ "Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;Lnet/minecraft/client/DeltaTracker;Z"
+			+ "Lnet/minecraft/client/renderer/state/level/CameraRenderState;Lorg/joml/Matrix4fc;"
+			+ "Lcom/mojang/blaze3d/buffers/GpuBufferSlice;Lorg/joml/Vector4f;Z)V";
+
 	@Shadow
 	@Final
 	private RenderTarget mainRenderTarget;
+
+	@Shadow
+	private void bobHurt(CameraRenderState cameraState, PoseStack pose) {
+		throw new AssertionError("mixin stub");
+	}
+
+	@Shadow
+	private void bobView(CameraRenderState cameraState, PoseStack pose) {
+		throw new AssertionError("mixin stub");
+	}
 
 	// Reset the UI overlay's per-frame clear latch at the very start of the frame (before the world, hand,
 	// or GUI render into it).
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("HEAD"))
 	private void caustica$beginOverlayFrame(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
 		RtUiOverlay.beginFrame();
+		VivecraftCompat.restoreCapturedHands();
 		// Clear the stale HDR-present flag every frame: composite() only runs while a level renders, so on
 		// menu frames it would otherwise stay true from the last world frame and present a black HDR image.
 		RtComposite.INSTANCE.beginFrame();
@@ -72,6 +93,41 @@ public abstract class GameRendererMixin {
 		WorldRenderScaler.INSTANCE.begin(((GameRenderer) (Object) this).mainRenderTarget());
 	}
 
+	@Inject(method = "renderLevel", at = @At(value = "INVOKE", target = CAUSTICA$LEVEL_RENDER))
+	private void caustica$captureDesktopViewModel(DeltaTracker deltaTracker, CallbackInfo ci) {
+		RtComposite composite = RtComposite.INSTANCE;
+		if (VivecraftCompat.isVrActive() || !composite.acceptsViewModel()) return;
+		Minecraft mc = Minecraft.getInstance();
+		var state = this.gameRenderState();
+		var camera = state.levelRenderState.cameraRenderState;
+		var player = mc.player;
+		if (player == null || mc.gameMode == null || mc.gameMode.getPlayerMode() == GameType.SPECTATOR
+				|| !state.optionsRenderState.cameraType.isFirstPerson() || camera.isPanoramicMode
+				|| camera.entityRenderState.isSleeping || state.guiRenderState.isHudHidden) {
+			return;
+		}
+		PoseStack handBob = new PoseStack();
+		bobHurt(camera, handBob);
+		if (state.optionsRenderState.bobView) bobView(camera, handBob);
+		var window = state.windowRenderState;
+		Matrix4f correction = composite.desktopViewModelPose(camera.projectionMatrix,
+				handBob.last().pose(), camera.hudFov, window.width, window.height);
+		if (correction == null) return;
+
+		GameRenderer renderer = (GameRenderer) (Object) this;
+		float partialTick = renderer.mainCamera().getCameraEntityPartialTicks(deltaTracker);
+		int light = mc.getEntityRenderDispatcher().getPackedLightCoords(player, partialTick);
+		PoseStack poses = new PoseStack();
+		poses.mulPose(correction);
+		composite.captureViewModel(collector ->
+				renderer.itemInHandRenderer.submitHandsWithItems(partialTick, poses, collector, player, light));
+	}
+
+	@Inject(method = "renderLevel", at = @At(value = "INVOKE", target = CAUSTICA$LEVEL_RENDER, shift = At.Shift.AFTER))
+	private void caustica$restoreEyeHands(DeltaTracker deltaTracker, CallbackInfo ci) {
+		VivecraftCompat.restoreCapturedHands();
+	}
+
 	// Redirect the held-item/hand render into the combined UI overlay. SDR and HDR then feed DLSS-FG the same
 	// shape: hudless excludes the screen-fixed hand, while pUI carries hand + screen effects + GUI overlays.
 	// try/finally guarantees the output overrides are cleared even if the hand render throws.
@@ -80,6 +136,7 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/GameRenderer;renderItemInHand(Lnet/minecraft/client/renderer/state/level/CameraRenderState;FLorg/joml/Matrix4fc;)V"))
 	private void caustica$redirectHandToOverlay(GameRenderer self, CameraRenderState cameraState, float deltaPartialTick,
 			Matrix4fc modelViewMatrix, Operation<Void> original) {
+		if (RtComposite.INSTANCE.viewModelRendered() && !VivecraftCompat.isVrActive()) return;
 		boolean redirect = RtUiOverlay.enabled();
 		if (redirect) {
 			RtUiOverlay.beginOutputRedirect(this.mainRenderTarget);

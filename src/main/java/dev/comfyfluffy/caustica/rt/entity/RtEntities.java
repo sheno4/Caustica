@@ -30,9 +30,12 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
+import org.joml.Vector4f;
 import org.lwjgl.system.MemoryUtil;
 
 import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat.View;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
@@ -56,6 +59,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.function.Consumer;
+import net.minecraft.client.renderer.SubmitNodeCollector;
 
 /**
  * Dynamic entities as real ray-traced {@code ModelPart} geometry. Each frame, every model entity is
@@ -88,8 +93,9 @@ public final class RtEntities {
     // (shadows / GI / reflections, CULL_SECONDARY); bit 1 = the primary camera ray (CULL_PRIMARY).
     private static final int MASK_SECONDARY = 0x01;
     private static final int MASK_PRIMARY = 0x02;
-    /** Default mask: visible to every ray (terrain and ordinary entities use this). */
-    private static final int MASK_ALL = 0xFF;
+    /** World geometry is visible to both ordinary camera and secondary rays. */
+    private static final int MASK_ALL = MASK_SECONDARY | MASK_PRIMARY;
+    private static final int MASK_VIEW_MODEL = 0x04;
     /** Particles are primary-ray-only: visible/lit by the camera path, invisible to shadows/GI/reflections. */
     private static final int PARTICLE_MASK = MASK_PRIMARY;
     public static boolean particlesEnabled() {
@@ -266,9 +272,11 @@ public final class RtEntities {
     private static final class EntityPrev {
         float[] verts = new float[0];
         int size;
-        float anchorX, anchorY, anchorZ;
+        double anchorX, anchorY, anchorZ;
     }
 
+    private final EntityPrev[] previousViewModels = new EntityPrev[View.values().length];
+    private boolean warnedViewModelCapture;
     private long retainedGeometryBytes;
 
     // Persistent per-entity acceleration structures, keyed by entity id, for refit.
@@ -352,7 +360,8 @@ public final class RtEntities {
 
     /** This frame's terrain and dynamic instance segments, entity BLAS builds, and geometry-table address. */
     public record FrameEntities(List<RtAccel.Instance> baseInstances, List<RtAccel.Instance> dynamicInstances,
-                                List<RtAccel.PreparedBlas> blas, long geomTableAddr, FrameUse use) {
+                                List<RtAccel.PreparedBlas> blas, long geomTableAddr, FrameUse use,
+                                Vector4f viewModelBounds) {
     }
 
     private record FrameUse(FrameLists lists, TableSlot table) {
@@ -606,28 +615,36 @@ public final class RtEntities {
      * particles remain captured rebase-relative with an identity instance.
      */
     public FrameEntities beginFrame(RtContext ctx, List<RtAccel.Instance> base, int rbx, int rby, int rbz,
-                                    double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
-        if (!enabled()) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null);
+                                    double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation,
+                                    View view, Consumer<SubmitNodeCollector> viewModel) {
+        boolean captureWorldEntities = enabled();
+        if (!captureWorldEntities && viewModel == null) {
+            previousViewModels[view.ordinal()] = null;
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null);
         }
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null);
         }
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
 
         FrameBuild build = new FrameBuild(base, ctx.gpuExecutor());
+        Vector4f viewModelBounds;
         try {
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.capture")) {
-                captureEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
-            }
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blockEntities")) {
-                captureBlockEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
-            }
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.particles")) {
-                captureParticles(ctx, build, mc, partial, rbx, rby, rbz, projection, viewRotation);
+            viewModelBounds = appendViewModel(ctx, build, view, viewModel, camX, camY, camZ,
+                    rbx, rby, rbz, projection, viewRotation);
+            if (captureWorldEntities) {
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.capture")) {
+                    captureEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
+                }
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blockEntities")) {
+                    captureBlockEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
+                }
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.particles")) {
+                    captureParticles(ctx, build, mc, partial, rbx, rby, rbz, projection, viewRotation);
+                }
             }
         } catch (RuntimeException | Error t) {
             // A partially recorded frame may already have installed unbuilt BLAS into persistent slots.
@@ -641,7 +658,7 @@ public final class RtEntities {
         RtFrameStats.FRAME.count("entityRetainedGeometryBytes", retainedGeometryBytes);
 
         if (build.instances == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null);
         }
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.uploadFlush")) {
             build.motion.flushWrites();
@@ -651,7 +668,53 @@ public final class RtEntities {
             }
         }
         return new FrameEntities(base, build.instances, build.blas, build.geomTableAddr,
-                new FrameUse(build.lists, build.table));
+                new FrameUse(build.lists, build.table), viewModelBounds);
+    }
+
+    private Vector4f appendViewModel(RtContext ctx, FrameBuild build, View view, Consumer<SubmitNodeCollector> submit,
+                                     double camX, double camY, double camZ, int rbx, int rby, int rbz,
+                                     Matrix4f projection, Matrix4f viewRotation) {
+        EntityPrev previous = previousViewModels[view.ordinal()];
+        previousViewModels[view.ordinal()] = null;
+        if (submit == null || build.full()) return null;
+        capture.reset(previous == null ? 0 : previous.size / 3);
+        collector.beginViewModel(capture);
+        try {
+            submit.accept(collector);
+            if (!collector.viewModelCompatible() || capture.isEmpty()) return null;
+            capture.requireCompleteQuads("first-person model");
+        } catch (RuntimeException failure) {
+            if (!warnedViewModelCapture) {
+                warnedViewModelCapture = true;
+                CausticaMod.LOGGER.warn("First-person geometry capture failed. Using the native hand draw.", failure);
+            }
+            return null;
+        } finally {
+            collector.begin(null, false);
+        }
+        Vector4f bounds = view == View.DESKTOP
+                ? projectViewModelBounds(new Matrix4f(projection).mul(viewRotation)) : new Vector4f(-1f, -1f, 1f, 1f);
+        Motion motion = uploadVertexMotion(ctx, build, capture.verts, previous, camX, camY, camZ);
+        appendCapture(ctx, build, motion, -1, ENTITY_BIT, MASK_VIEW_MODEL,
+                translationTransform((float) (camX - rbx), (float) (camY - rby), (float) (camZ - rbz)));
+        previousViewModels[view.ordinal()] = storeEntityPrev(previous, capture.verts, camX, camY, camZ);
+        build.logicalCount++;
+        return bounds;
+    }
+
+    private Vector4f projectViewModelBounds(Matrix4f viewProjection) {
+        Vector4f bounds = new Vector4f(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY,
+                Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY);
+        Vector4f vertex = new Vector4f();
+        for (int i = 0; i < capture.verts.size(); i += 3) {
+            viewProjection.transform(vertex.set(capture.verts.getFloat(i), capture.verts.getFloat(i + 1),
+                    capture.verts.getFloat(i + 2), 1f));
+            if (!(vertex.w > 1e-5f)) return new Vector4f(-2f, -2f, 2f, 2f);
+            float x = vertex.x / vertex.w;
+            float y = vertex.y / vertex.w;
+            bounds.set(Math.min(bounds.x, x), Math.min(bounds.y, y), Math.max(bounds.z, x), Math.max(bounds.w, y));
+        }
+        return bounds.add(-0.002f, -0.002f, 0.002f, 0.002f);
     }
 
     /** Associate every resource returned for a successfully enqueued frame with its graphics completion. */
@@ -849,15 +912,15 @@ public final class RtEntities {
      * buffer directly.
      */
     private Motion uploadVertexMotion(RtContext ctx, FrameBuild build, FloatArrayList cur,
-                                      EntityPrev prev, float anchorX, float anchorY, float anchorZ) {
+                                      EntityPrev prev, double anchorX, double anchorY, double anchorZ) {
         if (prev == null || prev.size != cur.size()) {
             return NO_MOTION;
         }
         float[] curVerts = cur.elements();
         float[] prevVerts = prev.verts;
-        float sx = anchorX - prev.anchorX;
-        float sy = anchorY - prev.anchorY;
-        float sz = anchorZ - prev.anchorZ;
+        float sx = (float) (anchorX - prev.anchorX);
+        float sy = (float) (anchorY - prev.anchorY);
+        float sz = (float) (anchorZ - prev.anchorZ);
         int vc = cur.size() / 3;
         if (vc == 0) {
             return NO_MOTION;
@@ -898,7 +961,7 @@ public final class RtEntities {
     }
 
     private static EntityPrev storeEntityPrev(EntityPrev prev, FloatArrayList cur,
-                                              float anchorX, float anchorY, float anchorZ) {
+                                              double anchorX, double anchorY, double anchorZ) {
         EntityPrev out = prev != null ? prev : new EntityPrev();
         int size = cur.size();
         if (out.verts.length < size) {
@@ -1269,7 +1332,7 @@ public final class RtEntities {
         // Block-local mesh placed by a translate-only instance transform (blockPos − rebase), like terrain.
         float[] xform = {1, 0, 0, e.bx - rbx, 0, 1, 0, e.by - rby, 0, 0, 1, e.bz - rbz};
         build.instances.add(new RtAccel.Instance(xform, e.accel.deviceAddress,
-                ENTITY_BIT | (build.count & 0x7FFFFF), 0xFF, RtAccel.SBT_ENTITY_OFFSET));
+                ENTITY_BIT | (build.count & 0x7FFFFF), MASK_ALL, RtAccel.SBT_ENTITY_OFFSET));
         build.count++;
         build.lists.usedBlockEntities.add(e);
         build.logicalCount++;
@@ -1548,7 +1611,7 @@ public final class RtEntities {
         EntityGeometryLayout layout = EntityGeometryLayout.create(capture.verts.size(), idxCount,
                 capture.uvList.size(), packed.primitives().size());
         long required = Math.addExact(layout.totalBytes, EntityGeometryLayout.REGION_ALIGNMENT - 1L);
-        RtBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, "particle geometry");
+        RtBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, "transient surface geometry");
         layout = layout.shifted((-geometry.deviceAddress) & (EntityGeometryLayout.REGION_ALIGNMENT - 1L));
         MemoryUtil.memFloatBuffer(geometry.mapped + layout.positionOffset, capture.verts.size())
                 .put(capture.verts.elements(), 0, capture.verts.size());
@@ -1566,7 +1629,7 @@ public final class RtEntities {
         long primAddr = Math.addExact(geometry.deviceAddress, layout.primOffset);
 
         RtAccel.PreparedBlas blas = RtAccel.prepareEntityBlas(ctx, positionAddr, vertCount, indexAddr, packed.bucketTris(),
-                "particle BLAS");
+                "transient surface BLAS");
         build.blas.add(blas);
         build.pooledBlas.add(blas);
 
@@ -1956,6 +2019,7 @@ public final class RtEntities {
 
     /** Free the geometry-table ring and entity resources (teardown; caller has idled the device). */
     public void shutdown() {
+        java.util.Arrays.fill(previousViewModels, null);
         for (FrameLists lists : frameLists) {
             lists.releaseDeferred();
             lists.destroyPersistent();

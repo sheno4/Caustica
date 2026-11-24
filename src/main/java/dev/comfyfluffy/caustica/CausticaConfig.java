@@ -555,6 +555,8 @@ public final class CausticaConfig {
                             45, VrFoveation.MIN_COVERAGE_DEGREES, VrFoveation.MAX_COVERAGE_DEGREES);
             public static final BooleanSetting FOVEATION_REUSE_INSET =
                     bool("caustica.rt.foveationReuseInset", "composite.foveation-reuse-inset", true);
+            public static final BooleanSetting FIRST_PERSON_PBR =
+                    bool("caustica.rt.firstPersonPbr", "composite.first-person-pbr", true);
             public static final IntSetting FOVEATION_PREVIEW =
                     clampedInt("caustica.rt.foveationPreview", "composite.foveation-preview", 0, 0, 2);
             public static final IntSetting DEBUG_VIEW = intValue("caustica.rt.debugView", "composite.debug-view", 0);

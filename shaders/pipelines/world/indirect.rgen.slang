@@ -74,21 +74,23 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // remains active with its full configured candidate count at every hit. Pass A's primary/interface
     // prefix is outside this SSS quality budget.
     int indirectDepth = 0;
+    float2 size = float2(DispatchRaysDimensions().xy);
+    float2 ndc = ((float2(pix) + 0.5) / size + worldPush.jitter / size) * 2.0 - 1.0;
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
-        // Primary (bounce 0) is the camera ray (CULL_PRIMARY): sees particles but not the first-person
-        // player. Bounce rays are secondary (CULL_SECONDARY): exclude particles, include the player.
+        // Camera rays can see viewmodels. World bounce rays see the player body and exclude viewmodels.
+        if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
+            uint mask = bounce == 0 ? cameraCullMask() : CULL_SECONDARY;
 #ifdef CAUSTICA_ENABLE_EXT_SER
-        // SER lifetime phase: keep paths that are not roulette-eligible, paths that may terminate via
-        // roulette, and paths guaranteed to end at the bounce cap in separate coherence groups.
-        uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
-        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
-                               showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
+            // Keep roulette eligibility and the path cap in separate coherence groups.
+            uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
+            traceRadianceReordered(mask, ro, 0.0, rd, 10000.0,
+                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
 #else
-        traceRadiance(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
-                      showCelestial, rayConeWidth, rayConeSpread);
+            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
 #endif
+        }
 
         if (payload.hitT < 0.0) {
             // A ray still in water should leave through a water interface. A miss instead means the

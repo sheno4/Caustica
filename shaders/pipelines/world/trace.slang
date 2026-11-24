@@ -9,6 +9,9 @@ import bindings;
 
 public static const uint CULL_SECONDARY = 0x01u;
 public static const uint CULL_PRIMARY = 0x02u;
+public static const uint CULL_VIEW_MODEL = 0x04u;
+public static const uint VIEW_MODEL_PRESENT = 64u;
+public static const uint VIEW_MODEL_FOREGROUND = 128u;
 public static const uint TERRAIN_BUCKETS = 4u;
 public static const uint SBT_RADIANCE = 0u;
 public static const uint SBT_SHADOW = TERRAIN_BUCKETS;
@@ -74,6 +77,22 @@ public void traceGuide(uint cullMask, float3 ro, float tmin, float3 rd, float tm
     payload = makeRadiancePayload(0u, packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask, SBT_RADIANCE, SBT_STRIDE_BUCKET,
             MISS_GUIDE, makeRay(ro, tmin, rd, tmax), payload);
+}
+
+public uint cameraCullMask() {
+    bool worldPlaced = (worldPush.flags & (VIEW_MODEL_PRESENT | VIEW_MODEL_FOREGROUND)) == VIEW_MODEL_PRESENT;
+    return CULL_PRIMARY | (worldPlaced ? CULL_VIEW_MODEL : 0u);
+}
+
+// Desktop viewmodels have their own depth layer. The short-circuit still returns the shared material
+// payload, including geometry, motion, and optical properties for the subsequent integrator.
+public bool traceForegroundViewModel(float3 ro, float3 rd, float2 ndc, float coneWidth, float coneSpread) {
+    if ((worldPush.flags & VIEW_MODEL_FOREGROUND) == 0u
+            || any(ndc < worldPush.viewModelBounds.xy) || any(ndc > worldPush.viewModelBounds.zw)) {
+        return false;
+    }
+    traceGuide(CULL_VIEW_MODEL, ro, 0.0, rd, 10000.0, coneWidth, coneSpread);
+    return payload.hitT >= 0.0;
 }
 
 public Payload makeShadowPayload() {

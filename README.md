@@ -97,6 +97,12 @@ Enable `[frame-stats]` in `config/caustica.toml` to record CPU timings to
 `rt-frame-stats/frame.csv` and Vulkan timings per eye to `rt-frame-stats/gpu.csv`.
 The GPU rows report the trace sizes and whether lighting reuse is enabled.
 
+First-person arms and held models use the scene's LabPBR materials and light
+transport on desktop and in both Vivecraft eyes. Desktop hand geometry uses
+its own field of view and foreground visibility mask. VR hands follow their
+controller poses in the scene. Menu hands and held items with custom drawing
+or enchantment glint use the native hand pass.
+
 ## Status
 
 Caustica is not a finished renderer yet. Current work focuses on visual

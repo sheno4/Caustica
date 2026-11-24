@@ -24,6 +24,7 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.client.renderer.BiomeColors;
+import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.ModelBakery;
@@ -37,6 +38,7 @@ import net.minecraft.world.level.MoonPhase;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
+import org.joml.Vector4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRSynchronization2;
@@ -80,6 +82,7 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * On-screen composite. Each frame, ray-trace into a render-res storage image (+ guide buffers), use
@@ -111,7 +114,10 @@ public final class RtComposite {
     // part of it -- no world shader reads it anymore; debug views are a downstream compute pass.
     private static final long PATH_RECORD_BYTES = 48L;
     private static final int REUSE_INSET_LIGHTING = 1 << 5;
+    private static final int VIEW_MODEL_PRESENT = 1 << 6;
+    private static final int VIEW_MODEL_FOREGROUND = 1 << 7;
     private static final Float2 ZERO_UV = new Float2(0f, 0f);
+    private static final Float4 EMPTY_VIEW_MODEL_BOUNDS = new Float4(0f, 0f, 0f, 0f);
     private static int debugView() {
         return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
     }
@@ -303,6 +309,8 @@ public final class RtComposite {
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
     private Matrix4f frameHeadView;
+    private Consumer<SubmitNodeCollector> frameViewModel;
+    private boolean viewModelRendered;
     private double camX;
     private double camY;
     private double camZ;
@@ -498,6 +506,8 @@ public final class RtComposite {
     /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
     public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
         capturedView = VivecraftCompat.view();
+        frameViewModel = null;
+        viewModelRendered = false;
         frameHeadView = capturedView.isEye() && CausticaConfig.Rt.Composite.FIXED_FOVEATION.value()
                 ? VivecraftCompat.headViewRotation() : null;
         frameProjection.set(projection);
@@ -506,6 +516,23 @@ public final class RtComposite {
         camY = cameraY;
         camZ = cameraZ;
         frameCaptured = true;
+    }
+
+    public boolean acceptsViewModel() {
+        return frameCaptured && CausticaConfig.Rt.Composite.FIRST_PERSON_PBR.value() && debugView() == 0;
+    }
+
+    public Matrix4f desktopViewModelPose(Matrix4fc rawProjection, Matrix4fc handBob,
+                                        float handFov, int width, int height) {
+        return RtViewModel.desktopPose(frameProjection, rawProjection, frameViewRotation, handBob, handFov, width, height);
+    }
+
+    public void captureViewModel(Consumer<SubmitNodeCollector> submission) {
+        frameViewModel = submission;
+    }
+
+    public boolean viewModelRendered() {
+        return viewModelRendered;
     }
 
     /** Reset exposure filtering after an explicit render-state invalidation such as F3+A. */
@@ -539,6 +566,8 @@ public final class RtComposite {
         RtFrameStats.FRAME.beginIfInactive();
         hdrWrittenThisFrame = false;
         frameCaptured = false;
+        frameViewModel = null;
+        viewModelRendered = false;
     }
 
     /** This frame's completion token, valid until {@link #finishGraphicsUse()} signals it. */
@@ -1150,8 +1179,14 @@ public final class RtComposite {
             // Entity BLASes are built inline below and merged into the per-frame TLAS. geomTableAddr
             // feeds the hit shader entity path (per-prim normal/tint) and motion vectors.
             RtEntities.FrameEntities fe = RtEntities.INSTANCE.beginFrame(ctx, terrain.staticInstances(),
-                    terrain.blockX, terrain.blockY, terrain.blockZ, camX, camY, camZ, frameProjection, frameViewRotation);
+                    terrain.blockX, terrain.blockY, terrain.blockZ, camX, camY, camZ, frameProjection, frameViewRotation,
+                    capturedView, frameViewModel);
             frameEntities = fe;
+            Vector4f bounds = fe.viewModelBounds();
+            if (bounds != null) {
+                flags |= VIEW_MODEL_PRESENT;
+                if (capturedView == View.DESKTOP) flags |= VIEW_MODEL_FOREGROUND;
+            }
             // Block-breaking overlay: resolves each destroy-stage RenderType's texture into the
             // SAME bindless entity-texture array (destroy_stage_N.png is a standalone Sampler0 texture,
             // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
@@ -1182,7 +1217,8 @@ public final class RtComposite {
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
             TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
-                    flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter);
+                    flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter,
+                    bounds == null ? EMPTY_VIEW_MODEL_BOUNDS : new Float4(bounds.x, bounds.y, bounds.z, bounds.w));
             Float2 insetJitterUv = null;
             if (foveatedTargets != null) {
                 insetJitterUv = recordFoveatedInset(ctx, cmd, stack, active, scene, history, gpuSample);
@@ -1264,6 +1300,7 @@ public final class RtComposite {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
         encoder.execute(cmd); // deferred into the frame's submission — correct for per-frame work
+        viewModelRendered = frameEntities != null && frameEntities.viewModelBounds() != null;
         gpuSample.submitted(graphicsUse);
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
@@ -1273,7 +1310,8 @@ public final class RtComposite {
 
     private record TraceScene(RtTerrain terrain, long entityTable, long tlas, int flags, SkyPush sky,
                               Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
-                              RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter) {}
+                              RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter,
+                              Float4 viewModelBounds) {}
 
     private Float2 recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
                                       TraceScene scene, MotionHistory history, RtGpuFrameStats.Sample gpuSample) {
@@ -1368,7 +1406,8 @@ public final class RtComposite {
                 // from the same RtExposure accessor), or the two stop cancelling.
                 exposure.preExposure(),
                 eyeToInset,
-                reuseInset ? insetJitterUv : ZERO_UV
+                reuseInset ? insetJitterUv : ZERO_UV,
+                scene.viewModelBounds()
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.

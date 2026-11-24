@@ -913,7 +913,7 @@ public final class RtAccel {
      */
     public record Instance(float[] transform3x4, long blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
         public Instance(float[] transform3x4, long blasDeviceAddress, int customIndex) {
-            this(transform3x4, blasDeviceAddress, customIndex, 0xFF, 0);
+            this(transform3x4, blasDeviceAddress, customIndex, 0x03, 0);
         }
 
         public Instance(float[] transform3x4, long blasDeviceAddress, int customIndex, int mask) {

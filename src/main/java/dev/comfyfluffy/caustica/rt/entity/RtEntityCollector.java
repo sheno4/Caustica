@@ -84,6 +84,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private static final float[] ZERO_UV = new float[4];
 
     private RtEntityCapture capture;
+    private boolean viewModel;
+    private boolean viewModelCompatible;
     private boolean profileDynamicEntity;
     private final RtEntityCapture parityCapture = new RtEntityCapture();
     private final RtCuboidEmitter cuboidEmitter = new RtCuboidEmitter();
@@ -119,11 +121,22 @@ public final class RtEntityCollector implements SubmitNodeCollector {
      */
     public void begin(RtEntityCapture capture, boolean profileDynamicEntity) {
         this.capture = capture;
+        viewModel = false;
         this.profileDynamicEntity = capture != null && profileDynamicEntity;
         if (capture != null) {
             this.outlineColor = 0;
             this.pendingOrder = 0;
         }
+    }
+
+    void beginViewModel(RtEntityCapture capture) {
+        begin(capture, false);
+        viewModel = true;
+        viewModelCompatible = true;
+    }
+
+    boolean viewModelCompatible() {
+        return viewModelCompatible;
     }
 
     /** This entity's Glowing-effect outline colour (opaque ARGB), or 0 if it isn't glowing. */
@@ -748,6 +761,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (capture == null) {
             return;
         }
+        if (viewModel && foilType != ItemStackRenderState.FoilType.NONE) {
+            viewModelCompatible = false;
+            return;
+        }
         addQuads(poseStack.last().pose(), quads, tintLayers);
         addMeshQuads(poseStack, mesh, tintLayers, true);
     }
@@ -840,12 +857,20 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (capture == null) {
             return;
         }
+        if (viewModel && foilType != ItemStackRenderState.FoilType.NONE) {
+            viewModelCompatible = false;
+            return;
+        }
         addQuads(poseStack.last().pose(), quads, tintLayers);
     }
 
     @Override
     public void submitCustomGeometry(PoseStack poseStack, RenderType renderType,
                                      SubmitNodeCollector.CustomGeometryRenderer customGeometryRenderer) {
+        if (viewModel) {
+            viewModelCompatible = false;
+            return;
+        }
         if (capture == null) {
             return;
         }

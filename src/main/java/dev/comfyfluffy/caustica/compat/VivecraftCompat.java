@@ -7,12 +7,14 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.util.LightCoordsUtil;
 import org.joml.Matrix4f;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.function.Consumer;
 
 /** Optional access to the Vivecraft eye pass and its deferred world overlays. */
 public final class VivecraftCompat {
@@ -37,6 +39,11 @@ public final class VivecraftCompat {
 
     private static final class HeadAccess {
         static HeadPose pose = hasEyeIntegration() ? resolveHeadPose() : null;
+    }
+
+    private static final class HandAccess {
+        static HandHooks hooks = hasEyeIntegration() ? resolveHandHooks() : null;
+        static Object hiddenArms;
     }
 
     public static boolean hasEyeIntegration() {
@@ -113,6 +120,58 @@ public final class VivecraftCompat {
             hooks.handsSecond.setBoolean(hooks.armsState.get(state), true);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Cannot defer Vivecraft eye overlays", e);
+        }
+    }
+
+    public static Consumer<SubmitNodeCollector> captureEyeHands(LevelRenderState levelState) {
+        HandHooks hands = HandAccess.hooks;
+        Hooks hooks = Access.HOOKS;
+        if (hands == null || hooks == null) return null;
+        try {
+            Object state = hooks.levelVrState.invoke(levelState);
+            Object arms = hooks.armsState.get(state);
+            if (!hands.renderHands.getBoolean(arms) || hands.mainMenuHand.getBoolean(arms)
+                    || hands.offMenuHand.getBoolean(arms)) {
+                return null;
+            }
+            return collector -> {
+                try {
+                    hands.submit.invoke(null, collector, state, levelState.cameraRenderState,
+                            new PoseStack(), true, true, false, false, 0);
+                } catch (ReflectiveOperationException e) {
+                    throw new IllegalStateException("Cannot submit Vivecraft hand geometry", e);
+                }
+            };
+        } catch (ReflectiveOperationException e) {
+            HandAccess.hooks = null;
+            CausticaMod.LOGGER.warn("Cannot read Vivecraft hand state. Using native hands.", e);
+            return null;
+        }
+    }
+
+    public static void hideCapturedHands(LevelRenderState levelState) {
+        HandHooks hands = HandAccess.hooks;
+        Hooks hooks = Access.HOOKS;
+        if (hands == null || hooks == null) return;
+        try {
+            Object arms = hooks.armsState.get(hooks.levelVrState.invoke(levelState));
+            if (hands.renderHands.getBoolean(arms)) {
+                hands.renderHands.setBoolean(arms, false);
+                HandAccess.hiddenArms = arms;
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Cannot hide the captured Vivecraft hand draw", e);
+        }
+    }
+
+    public static void restoreCapturedHands() {
+        Object arms = HandAccess.hiddenArms;
+        if (arms == null) return;
+        HandAccess.hiddenArms = null;
+        try {
+            HandAccess.hooks.renderHands.setBoolean(arms, true);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Cannot restore the Vivecraft hand state", e);
         }
     }
 
@@ -195,6 +254,21 @@ public final class VivecraftCompat {
         }
     }
 
+    private static HandHooks resolveHandHooks() {
+        try {
+            Class<?> state = load("client_vr.render.renderstates.VRRenderState");
+            Class<?> arms = Access.HOOKS.armsState.getType();
+            Method submit = load("client_vr.render.helpers.VRArmHelper").getMethod("renderVRHands",
+                    SubmitNodeCollector.class, state, CameraRenderState.class, PoseStack.class,
+                    boolean.class, boolean.class, boolean.class, boolean.class, int.class);
+            return new HandHooks(submit, arms.getField("renderHands"), arms.getField("menuHandMain"),
+                    arms.getField("menuHandOff"));
+        } catch (ReflectiveOperationException | LinkageError e) {
+            CausticaMod.LOGGER.warn("Vivecraft hand submission is unavailable. Using native hands.", e);
+            return null;
+        }
+    }
+
     private static Class<?> load(String name) throws ClassNotFoundException {
         return Class.forName("org.vivecraft." + name, false, VivecraftCompat.class.getClassLoader());
     }
@@ -207,4 +281,6 @@ public final class VivecraftCompat {
                                   Object doubleResolutionOption) {}
 
     private record HeadPose(Method modelView, Object headPass) {}
+
+    private record HandHooks(Method submit, Field renderHands, Field mainMenuHand, Field offMenuHand) {}
 }
