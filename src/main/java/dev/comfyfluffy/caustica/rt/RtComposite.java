@@ -180,7 +180,6 @@ public final class RtComposite {
     private int loadedHdrLutNits = -1;
     private TraceTargets traceTargets;
     private FoveatedTargets foveatedTargets;
-    private int lastVrInsetResolution = VrFoveation.REFERENCE_RESOLUTION;
     private final Matrix4f eyeToInset = new Matrix4f();
     private RtImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
@@ -895,21 +894,18 @@ public final class RtComposite {
         private RtImage wideColor;
         private RtImage insetColor;
         private RtFoveatedMerge merge;
-        private int detail = -1;
+        private int coverageDegrees;
 
         static FoveatedTargets create(RtContext ctx, View eye, RtImage merged, int wideW, int wideH,
-                                      long sampler) {
+                                      int insetSize, long sampler) {
             var targets = new FoveatedTargets();
             try {
-                // Fix the inset pixel budget so changing its angular coverage does not reallocate
-                // the render targets. A smaller projection puts the same samples in a tighter area.
-                int size = VrFoveation.insetResolution(merged.width, merged.height);
-                int[] optimal = RtDlssRr.forInset(eye).queryOptimalRenderSize(size, size);
-                targets.inset = TraceTargets.create(ctx, optimal == null ? size : optimal[0],
-                        optimal == null ? size : optimal[1]);
+                int[] optimal = RtDlssRr.forInset(eye).queryOptimalRenderSize(insetSize, insetSize);
+                targets.inset = TraceTargets.create(ctx, optimal == null ? insetSize : optimal[0],
+                        optimal == null ? insetSize : optimal[1]);
                 int format = VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
                 targets.wideColor = ctx.createStorageImage(wideW, wideH, format, "VR wide reconstruction");
-                targets.insetColor = ctx.createStorageImage(size, size, format, "VR inset reconstruction");
+                targets.insetColor = ctx.createStorageImage(insetSize, insetSize, format, "VR inset reconstruction");
                 targets.merge = RtFoveatedMerge.create(ctx, merged, targets.wideColor, targets.insetColor, sampler);
                 return targets;
             } catch (RuntimeException | Error failure) {
@@ -924,10 +920,6 @@ public final class RtComposite {
             if (wideColor != null) wideColor.destroy();
             if (inset != null) inset.destroy();
         }
-    }
-
-    public int vrInsetResolution() {
-        return lastVrInsetResolution;
     }
 
     private void destroyReconstructionTargets() {
@@ -945,17 +937,21 @@ public final class RtComposite {
     private void ensureOutput(RtContext ctx, int width, int height) {
         boolean rrEnabled = RtDlssRr.enabled();
         // Guide diagnostics visualize one rectangular projection.
-        boolean eligibleEye = capturedView.isEye() && width >= 512 && height >= 512;
-        if (eligibleEye) {
-            lastVrInsetResolution = VrFoveation.insetResolution(width, height);
-        }
-        boolean foveated = eligibleEye && frameHeadView != null && debugView() == 0;
+        boolean foveated = capturedView.isEye() && width >= 512 && height >= 512
+                && frameHeadView != null && debugView() == 0;
+        float widePercent = CausticaConfig.Rt.Composite.FOVEATION_WIDE_PERCENT.value();
+        int wideW = foveated ? VrFoveation.wideResolution(width, widePercent) : width;
+        int wideH = foveated ? VrFoveation.wideResolution(height, widePercent) : height;
+        int insetSize = foveated ? VrFoveation.insetResolution(width, height,
+                CausticaConfig.Rt.Composite.FOVEATION_INSET_MAX_RESOLUTION.value()) : 0;
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (traceTargets != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
                 && bloomLevels.length > 0 && exposure.ready()
                 && displayW == width && displayH == height
                 && foveated == (foveatedTargets != null)
+                && (!foveated || (foveatedTargets.wideColor.width == wideW
+                    && foveatedTargets.wideColor.height == wideH && foveatedTargets.insetColor.width == insetSize))
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
             return;
         }
@@ -982,8 +978,6 @@ public final class RtComposite {
         // With RR on, ask NGX what render resolution its chosen quality mode actually expects rather
         // than assuming a fixed ratio: different quality modes (and driver versions) use different
         // ratios, and DLSSD's own optimal-settings query is the source of truth for what it will accept.
-        int wideW = foveated ? width * 5 / 8 : width;
-        int wideH = foveated ? height * 5 / 8 : height;
         int[] optimal = rrEnabled ? RtDlssRr.forView(capturedView).queryOptimalRenderSize(wideW, wideH) : null;
         renderW = optimal != null ? optimal[0] : wideW;
         renderH = optimal != null ? optimal[1] : wideH;
@@ -1015,9 +1009,11 @@ public final class RtComposite {
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
         if (foveated) {
-            foveatedTargets = FoveatedTargets.create(ctx, capturedView, rrOutput, wideW, wideH, bloomPipeline.sampler());
-            CausticaMod.LOGGER.info("VR fixed foveation: trace wide {}x{}, inset {}x{}, eye {}x{}",
-                    renderW, renderH, foveatedTargets.inset.color.width, foveatedTargets.inset.color.height, width, height);
+            foveatedTargets = FoveatedTargets.create(ctx, capturedView, rrOutput, wideW, wideH,
+                    insetSize, bloomPipeline.sampler());
+            CausticaMod.LOGGER.info("VR fixed foveation: wide {}x{} from trace {}x{}, inset {}x{} from trace {}x{}, eye {}x{}",
+                    wideW, wideH, renderW, renderH, insetSize, insetSize,
+                    foveatedTargets.inset.color.width, foveatedTargets.inset.color.height, width, height);
         }
         exposure.ensureResources(ctx);
 
@@ -1249,17 +1245,16 @@ public final class RtComposite {
 
     private void recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
                                      TraceScene scene, MotionHistory history) {
-        int detail = CausticaConfig.Rt.Composite.FOVEATION_DETAIL.value();
-        if (foveatedTargets.detail != detail) {
+        int coverageDegrees = CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value();
+        if (foveatedTargets.coverageDegrees != coverageDegrees) {
             leftMotion.insetValid = false;
             rightMotion.insetValid = false;
             RtDlssRr.resetInsetHistories();
-            foveatedTargets.detail = detail;
+            foveatedTargets.coverageDegrees = coverageDegrees;
             CausticaMod.LOGGER.info("VR foveation inset: {} degrees, {} pixels/degree at center",
-                    VrFoveation.coverageDegrees(detail),
-                    VrFoveation.pixelsPerDegree(foveatedTargets.insetColor.width, detail));
+                    coverageDegrees, VrFoveation.pixelsPerDegree(foveatedTargets.insetColor.width, coverageDegrees));
         }
-        Matrix4f insetProjection = VrFoveation.insetProjection(frameProjection, detail);
+        Matrix4f insetProjection = VrFoveation.insetProjection(frameProjection, coverageDegrees);
         Matrix4f insetViewProjection = insetProjection.mul(frameHeadView, new Matrix4f());
         // The two eyes retain their own origins. Only the angular window uses the headset's rotation.
         recordTraceLayer(ctx, cmd, stack, active, scene, foveatedTargets.inset, foveatedTargets.insetColor,
@@ -1566,7 +1561,6 @@ public final class RtComposite {
         destroyReconstructionTargets();
         RtDlssRr.destroyAll();
         temporalLevel = null;
-        lastVrInsetResolution = VrFoveation.REFERENCE_RESOLUTION;
         resetTemporalHistory();
         if (displayImage != null) {
             displayImage.destroy();

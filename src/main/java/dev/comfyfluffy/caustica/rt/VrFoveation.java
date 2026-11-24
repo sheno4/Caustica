@@ -3,29 +3,33 @@ package dev.comfyfluffy.caustica.rt;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 
-/** Fixed angular coverage shared by both eyes, with one reconstruction budget for all settings. */
+/** Per-eye reconstruction sizing and the angular region shared by both eyes. */
 public final class VrFoveation {
-    public static final int MAX_DETAIL = 8;
-    public static final int REFERENCE_RESOLUTION = 1344;
+    public static final int MIN_WIDE_PERCENT = 25;
+    public static final int MAX_WIDE_PERCENT = 100;
+    public static final int MIN_INSET_RESOLUTION = 256;
+    public static final int MAX_INSET_RESOLUTION = 4096;
+    public static final int MIN_COVERAGE_DEGREES = 5;
+    public static final int MAX_COVERAGE_DEGREES = 120;
 
     private VrFoveation() {}
 
-    public static int coverageDegrees(int detail) {
-        return 65 - 5 * detail;
+    public static int wideResolution(int eyeDimension, float percent) {
+        return (int) (eyeDimension * (double) percent / 100.0);
     }
 
-    public static int insetResolution(int eyeWidth, int eyeHeight) {
-        return Math.min(REFERENCE_RESOLUTION, Math.min(eyeWidth, eyeHeight) / 2);
+    public static int insetResolution(int eyeWidth, int eyeHeight, int maxResolution) {
+        return Math.min(maxResolution, Math.min(eyeWidth, eyeHeight));
     }
 
-    public static int pixelsPerDegree(int resolution, int detail) {
+    public static int pixelsPerDegree(int resolution, int coverageDegrees) {
         // Rectilinear projection has its minimum angular density on the forward axis.
-        return (int) Math.round(resolution * Math.toRadians(1.0) / (2.0 * halfAngleTangent(detail)));
+        return (int) Math.round(resolution * Math.toRadians(1.0) / (2.0 * halfAngleTangent(coverageDegrees)));
     }
 
-    public static Matrix4f insetProjection(Matrix4fc eyeProjection, int detail) {
+    public static Matrix4f insetProjection(Matrix4fc eyeProjection, int coverageDegrees) {
         // Match the eye's clip-depth convention and create a symmetric angular window about head-forward.
-        float scale = Math.abs(eyeProjection.m23()) / (float) halfAngleTangent(detail);
+        float scale = Math.abs(eyeProjection.m23()) / (float) halfAngleTangent(coverageDegrees);
         return new Matrix4f().zero()
                 .m00(Math.copySign(scale, eyeProjection.m00()))
                 .m11(Math.copySign(scale, eyeProjection.m11()))
@@ -39,7 +43,7 @@ public final class VrFoveation {
         insetViewProjection.mul(dest, dest);
     }
 
-    private static double halfAngleTangent(int detail) {
-        return Math.tan(Math.toRadians(coverageDegrees(detail) * 0.5));
+    private static double halfAngleTangent(int coverageDegrees) {
+        return Math.tan(Math.toRadians(coverageDegrees * 0.5));
     }
 }

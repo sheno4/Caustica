@@ -7,7 +7,6 @@ import dev.comfyfluffy.caustica.CausticaConfig.FloatSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.IntSetting;
 import dev.comfyfluffy.caustica.CausticaConfig.StringSetting;
 import dev.comfyfluffy.caustica.compat.VivecraftCompat;
-import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.VrFoveation;
 import java.util.ArrayList;
 import java.util.List;
@@ -67,15 +66,31 @@ public final class RtVideoOptions {
         return bool("caustica.options.rt.fixedFoveation", CausticaConfig.Rt.Composite.FIXED_FOVEATION);
     }
 
-    public static OptionInstance<Integer> foveationDetail() {
-        String key = "caustica.options.rt.foveationDetail";
-        IntSetting setting = CausticaConfig.Rt.Composite.FOVEATION_DETAIL;
+    public static OptionInstance<Integer> foveationWidePercent() {
+        String key = "caustica.options.rt.foveationWidePercent";
+        FloatSetting setting = CausticaConfig.Rt.Composite.FOVEATION_WIDE_PERCENT;
         return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
-                (caption, detail) -> Options.genericValueLabel(caption,
-                        Component.translatable(key + ".readout",
-                                VrFoveation.pixelsPerDegree(RtComposite.INSTANCE.vrInsetResolution(), detail),
-                                VrFoveation.coverageDegrees(detail))),
-                new OptionInstance.IntRange(0, VrFoveation.MAX_DETAIL),
+                (caption, tenths) -> Options.genericValueLabel(caption,
+                        Component.literal(String.format(Locale.ROOT, "%.1f%%", tenths / 10.0f))),
+                new OptionInstance.IntRange(10 * VrFoveation.MIN_WIDE_PERCENT, 10 * VrFoveation.MAX_WIDE_PERCENT, false),
+                Math.round(10 * setting.value()), tenths -> setting.set(tenths / 10.0f));
+    }
+
+    public static OptionInstance<Integer> foveationInsetMaxResolution() {
+        String key = "caustica.options.rt.foveationInsetMaxResolution";
+        IntSetting setting = CausticaConfig.Rt.Composite.FOVEATION_INSET_MAX_RESOLUTION;
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, pixels) -> Options.genericValueLabel(caption, Component.literal(pixels + " × " + pixels)),
+                new OptionInstance.IntRange(VrFoveation.MIN_INSET_RESOLUTION, VrFoveation.MAX_INSET_RESOLUTION, false),
+                setting.value(), setting::set);
+    }
+
+    public static OptionInstance<Integer> foveationCoverageDegrees() {
+        String key = "caustica.options.rt.foveationCoverageDegrees";
+        IntSetting setting = CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES;
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, degrees) -> Options.genericValueLabel(caption, Component.literal(degrees + "°")),
+                new OptionInstance.IntRange(VrFoveation.MIN_COVERAGE_DEGREES, VrFoveation.MAX_COVERAGE_DEGREES),
                 setting.value(), setting::set);
     }
 

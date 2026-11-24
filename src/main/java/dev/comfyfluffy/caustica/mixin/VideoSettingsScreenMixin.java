@@ -73,7 +73,9 @@ public abstract class VideoSettingsScreenMixin {
         if (VivecraftCompat.hasEyeIntegration()) {
             list.addHeader(Component.translatable("caustica.options.rt.vrHeader"));
             list.addSmall(RtVideoOptions.fixedFoveation(), RtVideoOptions.foveationPreview());
-            list.addBig(RtVideoOptions.foveationDetail());
+            list.addBig(RtVideoOptions.foveationWidePercent());
+            list.addBig(RtVideoOptions.foveationInsetMaxResolution());
+            list.addBig(RtVideoOptions.foveationCoverageDegrees());
             var overlayQuality = RtVideoOptions.vrOverlayQuality();
             if (overlayQuality != null) {
                 list.addBig(overlayQuality);

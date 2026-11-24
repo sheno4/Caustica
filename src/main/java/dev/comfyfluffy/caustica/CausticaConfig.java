@@ -28,6 +28,7 @@ import org.slf4j.LoggerFactory;
 public final class CausticaConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger("Caustica");
     private static final List<RuntimeSetting<?>> SETTINGS = new CopyOnWriteArrayList<>();
+    private static final String FOVEATION_COVERAGE_PATH = "composite.foveation-coverage-degrees";
 
     private static final Path CONFIG_PATH = resolveConfigPath();
     private static final CommentedFileConfig FILE = loadFile(CONFIG_PATH);
@@ -125,10 +126,18 @@ public final class CausticaConfig {
                 .build();
         try {
             config.load();
+            migrateFoveationCoverage(config);
         } catch (Exception e) {
             LOGGER.warn("Failed to read Caustica config {}: {}", path, e.toString());
         }
         return config;
+    }
+
+    static void migrateFoveationCoverage(CommentedConfig config) {
+        if (!config.contains(FOVEATION_COVERAGE_PATH)
+                && config.get("composite.foveation-detail") instanceof Number detail) {
+            config.set(FOVEATION_COVERAGE_PATH, 65 - 5 * Math.clamp(detail.intValue(), 0, 8));
+        }
     }
 
     private static Boolean fileBoolean(String tomlPath) {
@@ -530,11 +539,20 @@ public final class CausticaConfig {
         }
 
         public static final class Composite {
+            private static final float DEFAULT_WIDE_PERCENT = 62.5f;
             public static final BooleanSetting FIXED_FOVEATION =
                     bool("caustica.rt.fixedFoveation", "composite.fixed-foveation", false);
-            public static final IntSetting FOVEATION_DETAIL =
-                    clampedInt("caustica.rt.foveationDetail", "composite.foveation-detail", 4, 0,
-                            VrFoveation.MAX_DETAIL);
+            public static final FloatSetting FOVEATION_WIDE_PERCENT =
+                    new FloatSetting("caustica.rt.foveationWidePercent", "composite.foveation-wide-percent",
+                            DEFAULT_WIDE_PERCENT, v -> v, v -> v, v -> Double.isFinite(v)
+                                    ? Math.clamp(v, VrFoveation.MIN_WIDE_PERCENT, VrFoveation.MAX_WIDE_PERCENT)
+                                    : DEFAULT_WIDE_PERCENT);
+            public static final IntSetting FOVEATION_INSET_MAX_RESOLUTION =
+                    clampedInt("caustica.rt.foveationInsetMaxResolution", "composite.foveation-inset-max-resolution",
+                            1344, VrFoveation.MIN_INSET_RESOLUTION, VrFoveation.MAX_INSET_RESOLUTION);
+            public static final IntSetting FOVEATION_COVERAGE_DEGREES =
+                    clampedInt("caustica.rt.foveationCoverageDegrees", FOVEATION_COVERAGE_PATH,
+                            45, VrFoveation.MIN_COVERAGE_DEGREES, VrFoveation.MAX_COVERAGE_DEGREES);
             public static final IntSetting FOVEATION_PREVIEW =
                     clampedInt("caustica.rt.foveationPreview", "composite.foveation-preview", 0, 0, 2);
             public static final IntSetting DEBUG_VIEW = intValue("caustica.rt.debugView", "composite.debug-view", 0);

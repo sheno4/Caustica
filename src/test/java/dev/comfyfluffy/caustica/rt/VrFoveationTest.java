@@ -11,16 +11,22 @@ final class VrFoveationTest {
     private static final float EPSILON = 0.00001f;
 
     @Test
+    void sizesTheWideAndInsetLayersFromTheirOwnSettings() {
+        assertEquals(2302, VrFoveation.wideResolution(3684, 62.5f));
+        assertEquals(2465, VrFoveation.wideResolution(3944, 62.5f));
+        assertEquals(921, VrFoveation.wideResolution(3684, 25f));
+        assertEquals(3944, VrFoveation.wideResolution(3944, 100f));
+        assertEquals(3072, VrFoveation.insetResolution(3684, 3944, 3072));
+        assertEquals(3684, VrFoveation.insetResolution(3684, 3944, 4096));
+        assertEquals(2000, VrFoveation.insetResolution(2100, 2000, 4096));
+    }
+
+    @Test
     void reportsTheDensityAtTheCenterOfTheAngularRegion() {
-        int resolution = VrFoveation.insetResolution(2900, 3104);
-        assertEquals(1344, resolution);
-        assertEquals(65, VrFoveation.coverageDegrees(0));
-        assertEquals(18, VrFoveation.pixelsPerDegree(resolution, 0));
-        assertEquals(45, VrFoveation.coverageDegrees(4));
-        assertEquals(28, VrFoveation.pixelsPerDegree(resolution, 4));
-        assertEquals(25, VrFoveation.coverageDegrees(8));
-        assertEquals(53, VrFoveation.pixelsPerDegree(resolution, 8));
-        assertEquals(1000, VrFoveation.insetResolution(2100, 2000));
+        assertEquals(18, VrFoveation.pixelsPerDegree(1344, 65));
+        assertEquals(28, VrFoveation.pixelsPerDegree(1344, 45));
+        assertEquals(53, VrFoveation.pixelsPerDegree(1344, 25));
+        assertEquals(57, VrFoveation.pixelsPerDegree(2688, 45));
     }
 
     @Test
@@ -37,9 +43,9 @@ final class VrFoveationTest {
             Matrix4f eyeView = new Matrix4f().rotationY(eye * 0.07f).mul(headView);
             Matrix4f eyeViewProjection = projection.mul(eyeView, new Matrix4f());
 
-            for (int detail : new int[]{0, 4, 8}) {
-                float tangent = (float) Math.tan(Math.toRadians(VrFoveation.coverageDegrees(detail) * 0.5));
-                Matrix4f insetViewProjection = VrFoveation.insetProjection(projection, detail).mul(headView);
+            for (int degrees : new int[]{VrFoveation.MIN_COVERAGE_DEGREES, 37, VrFoveation.MAX_COVERAGE_DEGREES}) {
+                float tangent = (float) Math.tan(Math.toRadians(degrees * 0.5));
+                Matrix4f insetViewProjection = VrFoveation.insetProjection(projection, degrees).mul(headView);
                 Matrix4f eyeToInset = new Matrix4f();
                 VrFoveation.eyeToInset(eyeViewProjection, insetViewProjection, eyeToInset);
 
