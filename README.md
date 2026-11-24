@@ -77,6 +77,11 @@ active. Auxiliary views, including the scope and third-person camera, and the
 Fabulous transparency path use Vivecraft's native rendering. The desktop
 Video Settings screen exposes Caustica's renderer settings.
 
+Set `fixed-foveation = true` under `[composite]` in `config/caustica.toml` to
+use fixed foveated ray sampling in the headset. It reduces indirect samples and
+emitter candidates in the periphery while keeping the primary rays and DLSS
+Ray Reconstruction inputs at their normal resolution. It starts disabled.
+
 ## Status
 
 Caustica is not a finished renderer yet. Current work focuses on visual

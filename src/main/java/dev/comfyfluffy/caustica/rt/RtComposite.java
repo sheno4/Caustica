@@ -1080,6 +1080,9 @@ public final class RtComposite {
             if (waterWaves()) {
                 flags |= 0b10000; // animated water wave normals
             }
+            if (capturedView.isEye() && CausticaConfig.Rt.Composite.FIXED_FOVEATION.value()) {
+                flags |= 32; // fixed peripheral ray sampling budget
+            }
 
             // Water parameters: camera-biome tint plus wrapped animation time. Per-water-body tint
             // comes from the primitive; this is the fallback for a camera already inside the medium.
