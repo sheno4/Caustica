@@ -640,7 +640,7 @@ public final class RtEntities {
                     rbx, rby, rbz, projection, viewRotation);
             if (captureWorldEntities) {
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.capture")) {
-                    captureEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
+                    captureEntities(ctx, build, mc, level, partial, rbx, rby, rbz, view);
                 }
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blockEntities")) {
                     captureBlockEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
@@ -738,13 +738,14 @@ public final class RtEntities {
     }
 
     /** Capture animated entities (mobs, items, falling blocks) with per-object motion-vector displacement. */
-    private void captureEntities(RtContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
+    private void captureEntities(RtContext ctx, FrameBuild build, Minecraft mc, ClientLevel level,
+                                 float partial, int rbx, int rby, int rbz, View view) {
         EntityRenderDispatcher dispatcher = mc.getEntityRenderDispatcher();
         Entity cameraEntity = mc.getCameraEntity();
         // In first person the camera owner's own body must not block the primary camera ray, but it should
         // still appear in reflections / shadows / GI (so the player sees themselves in water as others would).
         // In F5 third person it renders fully, like any other entity.
-        boolean firstPerson = mc.options.getCameraType().isFirstPerson();
+        boolean firstPerson = view.isEye() || mc.options.getCameraType().isFirstPerson();
         curVerts.clear();
         glowBatches.clear();
         nameTagBatches.clear();

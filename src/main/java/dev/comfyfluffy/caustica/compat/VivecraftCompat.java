@@ -43,7 +43,7 @@ public final class VivecraftCompat {
 
     private static final class HandAccess {
         static HandHooks hooks = hasEyeIntegration() ? resolveHandHooks() : null;
-        static Object hiddenArms;
+        static HiddenHands hidden;
     }
 
     public static boolean hasEyeIntegration() {
@@ -134,10 +134,21 @@ public final class VivecraftCompat {
                     || hands.offMenuHand.getBoolean(arms)) {
                 return null;
             }
+            Object teleport = hands.teleportState.get(state);
             return collector -> {
                 try {
-                    hands.submit.invoke(null, collector, state, levelState.cameraRenderState,
-                            new PoseStack(), true, true, false, false, 0);
+                    boolean energy = hands.teleportEnergy.getBoolean(teleport);
+                    boolean arc = hands.teleportArc.getBoolean(teleport);
+                    try {
+                        // These draws belong to the native overlay pass, which also owns their blend state.
+                        hands.teleportEnergy.setBoolean(teleport, false);
+                        hands.teleportArc.setBoolean(teleport, false);
+                        hands.submit.invoke(null, collector, state, levelState.cameraRenderState,
+                                new PoseStack(), true, true, false, false, 0);
+                    } finally {
+                        hands.teleportEnergy.setBoolean(teleport, energy);
+                        hands.teleportArc.setBoolean(teleport, arc);
+                    }
                 } catch (ReflectiveOperationException e) {
                     throw new IllegalStateException("Cannot submit Vivecraft hand geometry", e);
                 }
@@ -156,8 +167,11 @@ public final class VivecraftCompat {
         try {
             Object arms = hooks.armsState.get(hooks.levelVrState.invoke(levelState));
             if (hands.renderHands.getBoolean(arms)) {
-                hands.renderHands.setBoolean(arms, false);
-                HandAccess.hiddenArms = arms;
+                HandAccess.hidden = new HiddenHands(hands, arms, hands.skipMain.getBoolean(arms),
+                        hands.skipOff.getBoolean(arms));
+                // The offhand helper still submits teleport overlays with the model skipped.
+                hands.skipMain.setBoolean(arms, true);
+                hands.skipOff.setBoolean(arms, true);
             }
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Cannot hide the captured Vivecraft hand draw", e);
@@ -165,11 +179,12 @@ public final class VivecraftCompat {
     }
 
     public static void restoreCapturedHands() {
-        Object arms = HandAccess.hiddenArms;
-        if (arms == null) return;
-        HandAccess.hiddenArms = null;
+        HiddenHands hidden = HandAccess.hidden;
+        if (hidden == null) return;
+        HandAccess.hidden = null;
         try {
-            HandAccess.hooks.renderHands.setBoolean(arms, true);
+            hidden.hooks.skipMain.setBoolean(hidden.arms, hidden.skipMain);
+            hidden.hooks.skipOff.setBoolean(hidden.arms, hidden.skipOff);
         } catch (IllegalAccessException e) {
             throw new IllegalStateException("Cannot restore the Vivecraft hand state", e);
         }
@@ -261,8 +276,12 @@ public final class VivecraftCompat {
             Method submit = load("client_vr.render.helpers.VRArmHelper").getMethod("renderVRHands",
                     SubmitNodeCollector.class, state, CameraRenderState.class, PoseStack.class,
                     boolean.class, boolean.class, boolean.class, boolean.class, int.class);
+            Field teleportState = state.getField("teleportState");
+            Class<?> teleport = teleportState.getType();
             return new HandHooks(submit, arms.getField("renderHands"), arms.getField("menuHandMain"),
-                    arms.getField("menuHandOff"));
+                    arms.getField("menuHandOff"), arms.getField("skipMainHandItemRendering"),
+                    arms.getField("skipOffHandItemRendering"), teleportState,
+                    teleport.getField("tpEnergy"), teleport.getField("arcAiming"));
         } catch (ReflectiveOperationException | LinkageError e) {
             CausticaMod.LOGGER.warn("Vivecraft hand submission is unavailable. Using native hands.", e);
             return null;
@@ -282,5 +301,9 @@ public final class VivecraftCompat {
 
     private record HeadPose(Method modelView, Object headPass) {}
 
-    private record HandHooks(Method submit, Field renderHands, Field mainMenuHand, Field offMenuHand) {}
+    private record HandHooks(Method submit, Field renderHands, Field mainMenuHand, Field offMenuHand,
+                             Field skipMain, Field skipOff, Field teleportState, Field teleportEnergy,
+                             Field teleportArc) {}
+
+    private record HiddenHands(HandHooks hooks, Object arms, boolean skipMain, boolean skipOff) {}
 }
