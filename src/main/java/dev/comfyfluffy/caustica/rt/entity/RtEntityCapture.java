@@ -21,6 +21,9 @@ import org.joml.Vector3fc;
  */
 public final class RtEntityCapture implements VertexConsumer {
     private static final int DEFAULT_VERTEX_CAPACITY = 1024;
+    // Material ID metadata shared with world_common.slang.
+    private static final int OWNER_HELD = 0x40000000;
+    private static final int OWNER_HELD_OPAQUE = 0x20000000;
     // Same magnitude as RtTerrain.QuadCapture.OFFSET (2e-4 blocks) — proven large enough to break a BVH
     // depth tie without a visible gap at terrain/entity scale.
     private static final float ORDER_OFFSET = 2.0e-4f;
@@ -31,6 +34,7 @@ public final class RtEntityCapture implements VertexConsumer {
     final FloatArrayList prim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY)); // 12 floats/triangle
     final RtGlint glint = new RtGlint();
     boolean hasGlint;
+    boolean cameraOwnerHeldItem;
     // One classification per triangle in capture order. The upload path repacks indices + primitive
     // records into fixed {opaque, any-hit} BLAS geometries while positions/UVs stay shared. Keeping
     // capture order here preserves glow meshes, parity checks and motion topology.
@@ -89,6 +93,7 @@ public final class RtEntityCapture implements VertexConsumer {
         uvRemap = false;
         glint.end();
         hasGlint = false;
+        cameraOwnerHeldItem = false;
     }
 
     private void ensureVertexCapacity(int vertexCount) {
@@ -140,6 +145,7 @@ public final class RtEntityCapture implements VertexConsumer {
         target.currentTexSlot = currentTexSlot;
         target.currentMaterialId = currentMaterialId;
         target.currentAlphaBucket = currentAlphaBucket;
+        target.cameraOwnerHeldItem = cameraOwnerHeldItem;
         target.currentOrder = currentOrder;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
@@ -400,6 +406,14 @@ public final class RtEntityCapture implements VertexConsumer {
             hasGlint = true;
         }
         int material = glintQuad ? currentMaterialId | RtGlint.PRIMITIVE_BIT : currentMaterialId;
+        int alphaBucket = currentAlphaBucket;
+        if (cameraOwnerHeldItem) {
+            // The any-hit shader filters this geometry from hand reflections while retaining the
+            // original opacity behavior for ordinary scene rays.
+            material |= OWNER_HELD;
+            if (alphaBucket == RtAccel.ENTITY_BUCKET_OPAQUE) material |= OWNER_HELD_OPAQUE;
+            alphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+        }
         for (int t = 0; t < 2; t++) { // one {normal+emission, tint, mat} record per triangle
             prim.add(nx);
             prim.add(ny);
@@ -413,7 +427,7 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(glintQuad ? glint.packedUv(0) : 0f);
             prim.add(glintQuad ? glint.packedUv(t + 1) : 0f);
             prim.add(glintQuad ? glint.packedUv(t + 2) : 0f);
-            alphaBuckets.add(currentAlphaBucket);
+            alphaBuckets.add(alphaBucket);
         }
     }
 

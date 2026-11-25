@@ -87,6 +87,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     private RtEntityCapture capture;
     private boolean viewModel;
+    private boolean vrCameraOwner;
     private boolean viewModelCompatible;
     private boolean profileDynamicEntity;
     private final RtEntityCapture parityCapture = new RtEntityCapture();
@@ -122,8 +123,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
      * call must NOT reset it — {@link RtEntities} reads {@link #outlineColor()} after that detach.
      */
     public void begin(RtEntityCapture capture, boolean profileDynamicEntity) {
+        begin(capture, profileDynamicEntity, false);
+    }
+
+    void begin(RtEntityCapture capture, boolean profileDynamicEntity, boolean vrCameraOwner) {
         this.capture = capture;
         viewModel = false;
+        this.vrCameraOwner = vrCameraOwner;
         this.profileDynamicEntity = capture != null && profileDynamicEntity;
         if (capture != null) {
             this.outlineColor = 0;
@@ -143,6 +149,21 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     public boolean isCapturingViewModel() {
         return viewModel;
+    }
+
+    public boolean isCapturingVrCameraOwner() {
+        return vrCameraOwner;
+    }
+
+    /** Mark all of the camera owner's held-item layer, including special model submissions. */
+    public void captureCameraOwnerHeldItems(Runnable submit) {
+        boolean previous = capture.cameraOwnerHeldItem;
+        capture.cameraOwnerHeldItem = true;
+        try {
+            submit.run();
+        } finally {
+            capture.cameraOwnerHeldItem = previous;
+        }
     }
 
     /** Preserve the held model's own UVs for the entity-glint texture transform. */

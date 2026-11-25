@@ -54,19 +54,26 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if (instanceKind != 0u) {
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[InstanceID() & IDX_MASK];
         pid += g.triBase[GeometryIndex()];
+        Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
+        if ((epr.materialId & ENTITY_PRIM_OWNER_HELD) != 0u) {
+            if ((payload.flags & PAYLOAD_SKIP_OWNER_HELD) != 0u) {
+                IgnoreHit();
+                return;
+            }
+            if ((epr.materialId & ENTITY_PRIM_OWNER_HELD_OPAQUE) != 0u) return;
+        }
         ConstPtr<uint> indices = ConstPtr<uint>(g.idxAddr);
         ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
         uint i0 = indices[3u * pid + 0u];
         uint i1 = indices[3u * pid + 1u];
         uint i2 = indices[3u * pid + 2u];
         float2 uv = bary.x * uvs[i0] + bary.y * uvs[i1] + bary.z * uvs[i2];
-        Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
         int texSlot = int(epr.tint.w + 0.5);
         float4 texel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(uv, 0.0);
         bool stochasticAlpha = false;
         MaterialHeader materialHeader = {};
         if (instanceKind == ENTITY_BIT) {
-            materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId & ~ENTITY_PRIM_GLINT];
+            materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[epr.materialId & ENTITY_PRIM_MATERIAL_MASK];
             stochasticAlpha = (materialHeader.features & MATERIAL_FEATURE_STOCHASTIC_ALPHA) != 0u;
         }
         if (stochasticAlpha) {

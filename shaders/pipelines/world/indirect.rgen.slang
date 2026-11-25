@@ -71,6 +71,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // would be a double-counted firefly. Reset true on every specular/water bounce, false on a diffuse one.
     bool showCelestial = seg.showCelestial;
     bool viewModelPath = seg.viewModelPath;
+    bool avatarReflection = seg.avatarReflection;
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -83,14 +84,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
-            uint mask = bounce == 0 ? cameraCullMask() : secondaryCullMask(viewModelPath);
+            uint mask = bounce == 0 ? cameraCullMask()
+                    : secondaryCullMask(viewModelPath) | (avatarReflection ? CULL_CAMERA_OWNER : 0u);
+            uint extraFlags = avatarReflection ? PAYLOAD_SKIP_OWNER_HELD : 0u;
 #ifdef CAUSTICA_ENABLE_EXT_SER
             // Keep roulette eligibility and the path cap in separate coherence groups.
             uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
             traceRadianceReordered(mask, ro, 0.0, rd, 10000.0,
-                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
+                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint, extraFlags);
 #else
-            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
+            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread, extraFlags);
 #endif
         }
 
@@ -122,7 +125,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
+        bool reflectAvatar = reflectsVrAvatar(payloadViewModel());
         viewModelPath = viewModelPath || payloadViewModel();
+        avatarReflection = false;
         uint shadowMask = secondaryCullMask(viewModelPath);
         int hitDepth = indirectDepth++;
 
@@ -184,6 +189,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
 
             bool chooseReflection = rndf(seed) < F;
             if (chooseReflection) {
+                avatarReflection = reflectAvatar;
                 rd = reflect(rd, n);
                 ro = offsetSurfaceOrigin(hitPos, geometricNormal, rd, SURF_BIAS);
             } else {
@@ -401,6 +407,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             ro = p;
             rd = l;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
+            avatarReflection = reflectAvatar;
         } else {
             throughput *= diffAlb / (1.0 - ps);
             ro = p;

@@ -100,8 +100,9 @@ The GPU rows report the trace sizes and whether lighting reuse is enabled.
 First-person arms and held models use the scene's LabPBR materials and light
 transport on desktop and in both Vivecraft eyes. Desktop hand geometry uses
 its own field of view and foreground visibility mask. VR hands follow their
-controller poses in the scene. Hand lighting and reflections exclude the
-hidden camera-owner model, which remains visible to reflections in the world.
+controller poses in the scene. Specular reflections from VR hands and held items
+can show the local avatar. The avatar's separate held-item geometry is filtered
+out of those reflections to avoid duplicate weapons.
 Enchantment glint adds Minecraft's animated texture to the traced item surface.
 Menu hands and unsupported custom draws use the native hand pass.
 

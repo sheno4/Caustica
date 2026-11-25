@@ -109,11 +109,14 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
 
     // Pass A stops radiance traversal at the first split, so reflection motion keeps one dedicated,
     // deterministic guide probe.
-    traceGuide(secondaryCullMask(surface.viewModel),
+    bool avatarReflection = reflectsVrAvatar(surface.viewModel);
+    uint reflectionMask = secondaryCullMask(surface.viewModel) | (avatarReflection ? CULL_CAMERA_OWNER : 0u);
+    traceGuide(reflectionMask,
             offsetSurfaceOrigin(surfacePos, surface.biasNormal, specDir, SURF_BIAS),
             RAY_TMIN, specDir, 10000.0,
             max(length(surface.camRel) * primaryConeSpread, RAY_CONE_MIN_WIDTH),
-            max(primaryConeSpread, RAY_CONE_MIN_SPREAD));
+            max(primaryConeSpread, RAY_CONE_MIN_SPREAD),
+            avatarReflection ? PAYLOAD_SKIP_OWNER_HELD : 0u);
     float3 reflectedHit;
     float3 reflectedMotionPrev;
     if (payload.hitT > 0.0) {

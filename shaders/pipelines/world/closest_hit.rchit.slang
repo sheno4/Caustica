@@ -293,7 +293,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
         float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
-        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId & ~ENTITY_PRIM_GLINT];
+        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId & ENTITY_PRIM_MATERIAL_MASK];
         uint material = header.model;
         float3 baseAlbedo709 = srgbToLinear(entityTexel.rgb) * srgbToLinear(pr.tint.rgb);
         float3 opticalColor709 = material == MATERIAL_DIELECTRIC

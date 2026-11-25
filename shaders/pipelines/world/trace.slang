@@ -59,8 +59,8 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
 // Ordinary radiance trace for latency-sensitive, coherent work such as Pass A. It invokes hit/miss
 // shaders directly and therefore requires no invocation-reorder capability.
 public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
-                    bool showCelestial, float rayConeWidth, float rayConeSpread) {
-    payload = makeRadiancePayload(showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u,
+                    bool showCelestial, float rayConeWidth, float rayConeSpread, uint extraFlags = 0u) {
+    payload = makeRadiancePayload(extraFlags | (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u),
             packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
             SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
@@ -72,8 +72,8 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
 // adds latency. The dedicated miss record also avoids the atmosphere march: guides need hit-vs-miss,
 // not sky radiance.
 public void traceGuide(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
-                float rayConeWidth, float rayConeSpread) {
-    payload = makeRadiancePayload(0u, packHalf2(float2(rayConeWidth, rayConeSpread)));
+                float rayConeWidth, float rayConeSpread, uint extraFlags = 0u) {
+    payload = makeRadiancePayload(extraFlags, packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask, SBT_RADIANCE, SBT_STRIDE_BUCKET,
             MISS_GUIDE, makeRay(ro, tmin, rd, tmax), payload);
 }
@@ -83,9 +83,13 @@ public uint cameraCullMask() {
     return CULL_PRIMARY | (worldPlaced ? CULL_VIEW_MODEL : 0u);
 }
 
-// A hand's lighting and reflections should not see the separate camera-owner model.
+// The separate camera-owner model must not shadow the tracked hands.
 public uint secondaryCullMask(bool viewModelPath) {
     return viewModelPath ? CULL_SECONDARY : CULL_SECONDARY | CULL_CAMERA_OWNER;
+}
+
+public bool reflectsVrAvatar(bool viewModelHit) {
+    return viewModelHit && (worldPush.flags & (VIEW_MODEL_PRESENT | VIEW_MODEL_FOREGROUND)) == VIEW_MODEL_PRESENT;
 }
 
 // Desktop viewmodels have their own depth layer. The short-circuit still returns the shared material
