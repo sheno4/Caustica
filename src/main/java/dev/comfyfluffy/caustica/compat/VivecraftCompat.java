@@ -56,22 +56,28 @@ public final class VivecraftCompat {
         static Vec3 camera;
     }
 
-    /** Position is in world blocks. Kind 1 is a torch, 2 is a soul torch and 3 is a redstone torch. */
+    /** Position is in world blocks. Kinds 1–4 are standard, soul, redstone and copper torches. */
     public record HeldTorch(Vec3 position, int kind) {}
 
-    /** Read-only view of torch submissions for the current eye, ordered main hand then offhand. */
+    /** Read-only view of tracked torches for the current eye, ordered main hand then offhand. */
     public static HeldTorch[] heldTorches() {
         return HandAccess.torches;
+    }
+
+    public static void clearHeldTorches() {
+        HandAccess.torches[0] = null;
+        HandAccess.torches[1] = null;
     }
 
     /** Records the flame location through the same pose as the submitted item geometry. */
     public static void captureHeldTorchTip(Matrix4fc pose) {
         int hand = HandAccess.torchHand;
-        if (hand < 0 || HandAccess.torchKind == 0 || HandAccess.torches[hand] != null) return;
+        if (hand < 0 || HandAccess.torchKind == 0) return;
         // In the stock item model the flame is just above the top of the centered torch stick.
         Vector3f tip = pose.transformPosition(0.5f, 11f / 16f, 0.5f, HandAccess.torchTip);
         Vec3 position = HandAccess.camera.add(tip.x, tip.y, tip.z);
         HandAccess.torches[hand] = new HeldTorch(position, HandAccess.torchKind);
+        HandAccess.torchKind = 0;
     }
 
     public static boolean hasEyeIntegration() {
@@ -151,22 +157,27 @@ public final class VivecraftCompat {
         }
     }
 
-    public static Consumer<SubmitNodeCollector> captureEyeHands(LevelRenderState levelState) {
-        HandAccess.torches[0] = null;
-        HandAccess.torches[1] = null;
+    public static Consumer<SubmitNodeCollector> captureEyeHands(LevelRenderState levelState, boolean captureGeometry) {
+        clearHeldTorches();
         HandHooks hands = HandAccess.hooks;
         Hooks hooks = Access.HOOKS;
         if (hands == null || hooks == null) return null;
         try {
             Object state = hooks.levelVrState.invoke(levelState);
             Object arms = hooks.armsState.get(state);
-            if (!hands.renderHands.getBoolean(arms) || hands.mainMenuHand.getBoolean(arms)
-                    || hands.offMenuHand.getBoolean(arms)) {
-                return null;
-            }
+            if (!hands.renderHands.getBoolean(arms)) return null;
+            boolean mainMenu = hands.mainMenuHand.getBoolean(arms);
+            boolean offMenu = hands.offMenuHand.getBoolean(arms);
+            int mainTorch = mainMenu || hands.skipMain.getBoolean(arms)
+                    ? 0 : torchKind((ItemStack) hands.mainItem.get(arms));
+            int offTorch = offMenu || hands.skipOff.getBoolean(arms)
+                    ? 0 : torchKind((ItemStack) hands.offItem.get(arms));
+            // Some item renderers do not submit a mesh. Track the light from the controller in that
+            // case and refine its position if the full item pose is submitted.
+            if (mainTorch != 0) HandAccess.torches[0] = new HeldTorch((Vec3) hands.mainPos.get(arms), mainTorch);
+            if (offTorch != 0) HandAccess.torches[1] = new HeldTorch((Vec3) hands.offPos.get(arms), offTorch);
+            if (!captureGeometry || mainMenu || offMenu) return null;
             Object teleport = hands.teleportState.get(state);
-            int mainTorch = hands.skipMain.getBoolean(arms) ? 0 : torchKind((ItemStack) hands.mainItem.get(arms));
-            int offTorch = hands.skipOff.getBoolean(arms) ? 0 : torchKind((ItemStack) hands.offItem.get(arms));
             return collector -> {
                 try {
                     boolean energy = hands.teleportEnergy.getBoolean(teleport);
@@ -191,6 +202,7 @@ public final class VivecraftCompat {
                 }
             };
         } catch (ReflectiveOperationException e) {
+            clearHeldTorches();
             HandAccess.hooks = null;
             CausticaMod.LOGGER.warn("Cannot read Vivecraft hand state. Using native hands.", e);
             return null;
@@ -201,6 +213,7 @@ public final class VivecraftCompat {
         if (stack.is(Items.TORCH)) return 1;
         if (stack.is(Items.SOUL_TORCH)) return 2;
         if (stack.is(Items.REDSTONE_TORCH)) return 3;
+        if (stack.is(Items.COPPER_TORCH)) return 4;
         return 0;
     }
 
@@ -215,6 +228,7 @@ public final class VivecraftCompat {
                     false, false, 0);
         } finally {
             HandAccess.torchHand = -1;
+            HandAccess.torchKind = 0;
             HandAccess.camera = null;
         }
     }
@@ -340,7 +354,8 @@ public final class VivecraftCompat {
             return new HandHooks(submit, arms.getField("renderHands"), arms.getField("menuHandMain"),
                     arms.getField("menuHandOff"), arms.getField("skipMainHandItemRendering"),
                     arms.getField("skipOffHandItemRendering"), arms.getField("mainHandRenderItem"),
-                    arms.getField("offHandRenderItem"), teleportState,
+                    arms.getField("offHandRenderItem"), arms.getField("mainHandWorldPos"),
+                    arms.getField("offHandWorldPos"), teleportState,
                     teleport.getField("tpEnergy"), teleport.getField("arcAiming"));
         } catch (ReflectiveOperationException | LinkageError e) {
             CausticaMod.LOGGER.warn("Vivecraft hand submission is unavailable. Using native hands.", e);
@@ -362,7 +377,8 @@ public final class VivecraftCompat {
     private record HeadPose(Method modelView, Object headPass) {}
 
     private record HandHooks(Method submit, Field renderHands, Field mainMenuHand, Field offMenuHand,
-                             Field skipMain, Field skipOff, Field mainItem, Field offItem, Field teleportState,
+                             Field skipMain, Field skipOff, Field mainItem, Field offItem, Field mainPos,
+                             Field offPos, Field teleportState,
                              Field teleportEnergy, Field teleportArc) {}
 
     private record HiddenHands(HandHooks hooks, Object arms, boolean skipMain, boolean skipOff) {}

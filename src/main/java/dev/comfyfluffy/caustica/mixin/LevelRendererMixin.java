@@ -51,10 +51,11 @@ public abstract class LevelRendererMixin {
 					&& VanillaRenderController.INSTANCE.canCompositeEye()
 					&& !renderer.gameRenderState().useShaderTransparency()) {
 				VivecraftCompat.deferEyeOverlays(this.levelRenderState);
-				if (RtComposite.INSTANCE.acceptsViewModel()) {
-					RtComposite.INSTANCE.captureViewModel(VivecraftCompat.captureEyeHands(this.levelRenderState));
-				}
+				RtComposite.INSTANCE.captureViewModel(VivecraftCompat.captureEyeHands(
+						this.levelRenderState, RtComposite.INSTANCE.acceptsViewModel()));
 				this.caustica$deferredEyeOverlays = true;
+			} else {
+				VivecraftCompat.clearHeldTorches();
 			}
 			return;
 		}

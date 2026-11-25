@@ -96,15 +96,19 @@ public float3 shadeHeldTorch(float4 torch, float3 hitPos, float3 n, float3 v, fl
     if (torch.w == 0.0) return float3(0.0);
     float3 toLight = torch.xyz - hitPos;
     float dist2 = dot(toLight, toLight);
-    if (dist2 < 1.0e-6 || dot(n, toLight) <= 0.0) return float3(0.0);
+    const float lightRange = 16.0;
+    if (dist2 < 1.0e-6 || dist2 >= lightRange * lightRange || dot(n, toLight) <= 0.0) return float3(0.0);
     float3 direction = toLight * rsqrt(dist2);
-    // A standard torch's emissive footprint produces roughly 40 lumens.
     float3 intensity = torch.w == 2.0 ? float3(0.15, 0.55, 1.0)
-                       : (torch.w == 3.0 ? float3(0.32, 0.025, 0.01) : float3(5.4, 2.7, 0.93));
-    const float flameRadius = 0.06;
+                       : torch.w == 3.0 ? float3(0.32, 0.025, 0.01)
+                       : torch.w == 4.0 ? float3(1.4, 3.9, 2.2) : float3(5.4, 2.7, 0.93);
+    // Spread the near-field peak while increasing useful illumination across the room.
+    const float flameRadius = 0.12;
+    const float intensityScale = 4.0;
+    float rangeFade = 1.0 - smoothstep(12.0, lightRange, sqrt(dist2));
     float weight;
-    float3 contribution = evalSampleContrib(torch.xyz, -direction, bt709ToAcesCg(intensity),
-            dist2 / (dist2 + flameRadius * flameRadius), hitPos, n, v, rd,
+    float3 contribution = evalSampleContrib(torch.xyz, -direction, bt709ToAcesCg(intensity) * intensityScale,
+            rangeFade * dist2 / (dist2 + flameRadius * flameRadius), hitPos, n, v, rd,
             diffAlb, f0, rough, false, 0.0, weight);
     if (weight <= 0.0) return float3(0.0);
     float3 origin = offsetSurfaceOrigin(hitPos, n, direction, SURF_BIAS);

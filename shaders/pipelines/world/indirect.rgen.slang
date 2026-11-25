@@ -278,12 +278,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 diffAlb = albedo * (1.0 - metal);
         float3 F0 = payload.f0;
 
-        // Only world-placed VR hand hits receive the tracked hand lights.
-        if (payloadViewModel() && (worldPush.flags & VIEW_MODEL_FOREGROUND) == 0u) {
+        // Tracked lights illuminate the hands and visible scene surfaces, including through glass.
+        // Keep this dynamic direct lighting off diffuse bounce rays and ignore the separate avatar.
+        if (showCelestial && (worldPush.mainHandTorch.w != 0.0 || worldPush.offHandTorch.w != 0.0)) {
             L += throughput * (shadeHeldTorch(worldPush.mainHandTorch, hitPos, n, v, rd,
-                        diffAlb, F0, rough, shadowMask)
+                        diffAlb, F0, rough, CULL_SECONDARY)
                     + shadeHeldTorch(worldPush.offHandTorch, hitPos, n, v, rd,
-                        diffAlb, F0, rough, shadowMask));
+                        diffAlb, F0, rough, CULL_SECONDARY));
         }
 
         // Emissive surfaces (lava, glowstone, torches, ...) add radiance directly, colored by albedo.

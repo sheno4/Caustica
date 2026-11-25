@@ -1216,7 +1216,7 @@ public final class RtComposite {
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
-            var torches = capturedView.isEye() && bounds != null ? VivecraftCompat.heldTorches() : null;
+            var torches = capturedView.isEye() ? VivecraftCompat.heldTorches() : null;
             TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
                     flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter,
                     bounds == null ? ZERO_FLOAT4 : new Float4(bounds.x, bounds.y, bounds.z, bounds.w),
