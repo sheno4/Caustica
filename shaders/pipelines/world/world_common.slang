@@ -93,6 +93,8 @@ public struct WorldPush {
     public float4   viewModelBounds;  // desktop foreground bounds in jitter-free NDC, xy min and zw max
     public uint     glintSlot;        // bindless vanilla glint texture, 0 when absent
     public float    glintStrength;
+    public float4   mainHandTorch;    // rebased flame position and torch kind, zero when absent
+    public float4   offHandTorch;
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the

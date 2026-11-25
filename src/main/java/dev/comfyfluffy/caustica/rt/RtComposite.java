@@ -117,7 +117,7 @@ public final class RtComposite {
     private static final int VIEW_MODEL_PRESENT = 1 << 6;
     private static final int VIEW_MODEL_FOREGROUND = 1 << 7;
     private static final Float2 ZERO_UV = new Float2(0f, 0f);
-    private static final Float4 EMPTY_VIEW_MODEL_BOUNDS = new Float4(0f, 0f, 0f, 0f);
+    private static final Float4 ZERO_FLOAT4 = new Float4(0f, 0f, 0f, 0f);
     private static int debugView() {
         return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
     }
@@ -1216,10 +1216,12 @@ public final class RtComposite {
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
+            var torches = capturedView.isEye() && bounds != null ? VivecraftCompat.heldTorches() : null;
             TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
                     flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter,
-                    bounds == null ? EMPTY_VIEW_MODEL_BOUNDS : new Float4(bounds.x, bounds.y, bounds.z, bounds.w),
-                    fe.glintSlot());
+                    bounds == null ? ZERO_FLOAT4 : new Float4(bounds.x, bounds.y, bounds.z, bounds.w),
+                    fe.glintSlot(), torchPush(torches == null ? null : torches[0], terrain),
+                    torchPush(torches == null ? null : torches[1], terrain));
             Float2 insetJitterUv = null;
             if (foveatedTargets != null) {
                 insetJitterUv = recordFoveatedInset(ctx, cmd, stack, active, scene, history, gpuSample);
@@ -1312,7 +1314,14 @@ public final class RtComposite {
     private record TraceScene(RtTerrain terrain, long entityTable, long tlas, int flags, SkyPush sky,
                               Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
                               RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter,
-                              Float4 viewModelBounds, int glintSlot) {}
+                              Float4 viewModelBounds, int glintSlot, Float4 mainHandTorch, Float4 offHandTorch) {}
+
+    private static Float4 torchPush(VivecraftCompat.HeldTorch torch, RtTerrain terrain) {
+        if (torch == null) return ZERO_FLOAT4;
+        var position = torch.position();
+        return new Float4((float) (position.x - terrain.blockX), (float) (position.y - terrain.blockY),
+                (float) (position.z - terrain.blockZ), torch.kind());
+    }
 
     private Float2 recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
                                       TraceScene scene, MotionHistory history, RtGpuFrameStats.Sample gpuSample) {
@@ -1410,7 +1419,9 @@ public final class RtComposite {
                 reuseInset ? insetJitterUv : ZERO_UV,
                 scene.viewModelBounds(),
                 scene.glintSlot(),
-                scene.glintSlot() == 0 ? 0f : Minecraft.getInstance().options.glintStrength().get().floatValue()
+                scene.glintSlot() == 0 ? 0f : Minecraft.getInstance().options.glintStrength().get().floatValue(),
+                scene.mainHandTorch(),
+                scene.offHandTorch()
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.

@@ -89,6 +89,31 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     return contrib;
 }
 
+// Approximate the flame as an omnidirectional emitter with a finite near field.
+// Intensity is expressed in candela, in the same linear transport basis as placed lights.
+public float3 shadeHeldTorch(float4 torch, float3 hitPos, float3 n, float3 v, float3 rd,
+                            float3 diffAlb, float3 f0, float rough, uint shadowMask) {
+    if (torch.w == 0.0) return float3(0.0);
+    float3 toLight = torch.xyz - hitPos;
+    float dist2 = dot(toLight, toLight);
+    if (dist2 < 1.0e-6 || dot(n, toLight) <= 0.0) return float3(0.0);
+    float3 direction = toLight * rsqrt(dist2);
+    // A standard torch's emissive footprint produces roughly 40 lumens.
+    float3 intensity = torch.w == 2.0 ? float3(0.15, 0.55, 1.0)
+                       : (torch.w == 3.0 ? float3(0.32, 0.025, 0.01) : float3(5.4, 2.7, 0.93));
+    const float flameRadius = 0.06;
+    float weight;
+    float3 contribution = evalSampleContrib(torch.xyz, -direction, bt709ToAcesCg(intensity),
+            dist2 / (dist2 + flameRadius * flameRadius), hitPos, n, v, rd,
+            diffAlb, f0, rough, false, 0.0, weight);
+    if (weight <= 0.0) return float3(0.0);
+    float3 origin = offsetSurfaceOrigin(hitPos, n, direction, SURF_BIAS);
+    float3 shadowVector = torch.xyz - origin;
+    float shadowDistance = length(shadowVector);
+    if (shadowDistance <= RAY_TMIN) return contribution;
+    return contribution * visibility(shadowMask, origin, shadowVector / shadowDistance, shadowDistance).transmittance;
+}
+
 // Select one light from the emitted-power distribution in O(1).
 public void selectGlobalLight(inout uint proposalSeed, out uint lightIndex) {
     float aliasSample = rndf(proposalSeed) * float(worldPush.lightCount);

@@ -6,6 +6,7 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
@@ -775,6 +776,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                            MeshView mesh, ItemStackRenderState.FoilType foilType) {
         if (capture == null) {
             return;
+        }
+        if (viewModel && (!quads.isEmpty() || (mesh != null && mesh.size() > 0))) {
+            VivecraftCompat.captureHeldTorchTip(poseStack.last().pose());
         }
         boolean glint = viewModel && foilType != ItemStackRenderState.FoilType.NONE;
         if (glint) {

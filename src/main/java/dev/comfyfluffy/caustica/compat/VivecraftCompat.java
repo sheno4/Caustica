@@ -10,7 +10,12 @@ import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.util.LightCoordsUtil;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
+import org.joml.Vector3f;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -44,6 +49,29 @@ public final class VivecraftCompat {
     private static final class HandAccess {
         static HandHooks hooks = hasEyeIntegration() ? resolveHandHooks() : null;
         static HiddenHands hidden;
+        static final HeldTorch[] torches = new HeldTorch[2];
+        static final Vector3f torchTip = new Vector3f();
+        static int torchHand = -1;
+        static int torchKind;
+        static Vec3 camera;
+    }
+
+    /** Position is in world blocks. Kind 1 is a torch, 2 is a soul torch and 3 is a redstone torch. */
+    public record HeldTorch(Vec3 position, int kind) {}
+
+    /** Read-only view of torch submissions for the current eye, ordered main hand then offhand. */
+    public static HeldTorch[] heldTorches() {
+        return HandAccess.torches;
+    }
+
+    /** Records the flame location through the same pose as the submitted item geometry. */
+    public static void captureHeldTorchTip(Matrix4fc pose) {
+        int hand = HandAccess.torchHand;
+        if (hand < 0 || HandAccess.torchKind == 0 || HandAccess.torches[hand] != null) return;
+        // In the stock item model the flame is just above the top of the centered torch stick.
+        Vector3f tip = pose.transformPosition(0.5f, 11f / 16f, 0.5f, HandAccess.torchTip);
+        Vec3 position = HandAccess.camera.add(tip.x, tip.y, tip.z);
+        HandAccess.torches[hand] = new HeldTorch(position, HandAccess.torchKind);
     }
 
     public static boolean hasEyeIntegration() {
@@ -124,6 +152,8 @@ public final class VivecraftCompat {
     }
 
     public static Consumer<SubmitNodeCollector> captureEyeHands(LevelRenderState levelState) {
+        HandAccess.torches[0] = null;
+        HandAccess.torches[1] = null;
         HandHooks hands = HandAccess.hooks;
         Hooks hooks = Access.HOOKS;
         if (hands == null || hooks == null) return null;
@@ -135,6 +165,8 @@ public final class VivecraftCompat {
                 return null;
             }
             Object teleport = hands.teleportState.get(state);
+            int mainTorch = hands.skipMain.getBoolean(arms) ? 0 : torchKind((ItemStack) hands.mainItem.get(arms));
+            int offTorch = hands.skipOff.getBoolean(arms) ? 0 : torchKind((ItemStack) hands.offItem.get(arms));
             return collector -> {
                 try {
                     boolean energy = hands.teleportEnergy.getBoolean(teleport);
@@ -143,8 +175,13 @@ public final class VivecraftCompat {
                         // These draws belong to the native overlay pass, which also owns their blend state.
                         hands.teleportEnergy.setBoolean(teleport, false);
                         hands.teleportArc.setBoolean(teleport, false);
-                        hands.submit.invoke(null, collector, state, levelState.cameraRenderState,
-                                new PoseStack(), true, true, false, false, 0);
+                        if (mainTorch == 0 && offTorch == 0) {
+                            hands.submit.invoke(null, collector, state, levelState.cameraRenderState,
+                                    new PoseStack(), true, true, false, false, 0);
+                        } else {
+                            submitTorchHand(hands, collector, state, levelState.cameraRenderState, 0, mainTorch);
+                            submitTorchHand(hands, collector, state, levelState.cameraRenderState, 1, offTorch);
+                        }
                     } finally {
                         hands.teleportEnergy.setBoolean(teleport, energy);
                         hands.teleportArc.setBoolean(teleport, arc);
@@ -157,6 +194,28 @@ public final class VivecraftCompat {
             HandAccess.hooks = null;
             CausticaMod.LOGGER.warn("Cannot read Vivecraft hand state. Using native hands.", e);
             return null;
+        }
+    }
+
+    private static int torchKind(ItemStack stack) {
+        if (stack.is(Items.TORCH)) return 1;
+        if (stack.is(Items.SOUL_TORCH)) return 2;
+        if (stack.is(Items.REDSTONE_TORCH)) return 3;
+        return 0;
+    }
+
+    private static void submitTorchHand(HandHooks hooks, SubmitNodeCollector collector, Object state,
+                                        CameraRenderState camera, int hand, int kind)
+            throws ReflectiveOperationException {
+        HandAccess.torchHand = hand;
+        HandAccess.torchKind = kind;
+        HandAccess.camera = camera.pos;
+        try {
+            hooks.submit.invoke(null, collector, state, camera, new PoseStack(), hand == 0, hand == 1,
+                    false, false, 0);
+        } finally {
+            HandAccess.torchHand = -1;
+            HandAccess.camera = null;
         }
     }
 
@@ -280,7 +339,8 @@ public final class VivecraftCompat {
             Class<?> teleport = teleportState.getType();
             return new HandHooks(submit, arms.getField("renderHands"), arms.getField("menuHandMain"),
                     arms.getField("menuHandOff"), arms.getField("skipMainHandItemRendering"),
-                    arms.getField("skipOffHandItemRendering"), teleportState,
+                    arms.getField("skipOffHandItemRendering"), arms.getField("mainHandRenderItem"),
+                    arms.getField("offHandRenderItem"), teleportState,
                     teleport.getField("tpEnergy"), teleport.getField("arcAiming"));
         } catch (ReflectiveOperationException | LinkageError e) {
             CausticaMod.LOGGER.warn("Vivecraft hand submission is unavailable. Using native hands.", e);
@@ -302,8 +362,8 @@ public final class VivecraftCompat {
     private record HeadPose(Method modelView, Object headPass) {}
 
     private record HandHooks(Method submit, Field renderHands, Field mainMenuHand, Field offMenuHand,
-                             Field skipMain, Field skipOff, Field teleportState, Field teleportEnergy,
-                             Field teleportArc) {}
+                             Field skipMain, Field skipOff, Field mainItem, Field offItem, Field teleportState,
+                             Field teleportEnergy, Field teleportArc) {}
 
     private record HiddenHands(HandHooks hooks, Object arms, boolean skipMain, boolean skipOff) {}
 }
