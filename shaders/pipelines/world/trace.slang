@@ -11,6 +11,7 @@ public static const uint CULL_VIEW_MODEL = 0x04u;
 public static const uint CULL_CAMERA_OWNER = 0x08u;
 public static const uint VIEW_MODEL_PRESENT = 64u;
 public static const uint VIEW_MODEL_FOREGROUND = 128u;
+public static const uint VR_AVATAR_PRESENT = 256u;
 public static const uint TERRAIN_BUCKETS = 4u;
 public static const uint SBT_RADIANCE = 0u;
 public static const uint SBT_SHADOW = TERRAIN_BUCKETS;
@@ -86,8 +87,14 @@ public uint trackedGeometryMask() {
 }
 
 public uint trackedGeometryFlags(uint mask) {
+    if ((mask & CULL_VIEW_MODEL) == 0u) return 0u;
     // The avatar attachment duplicates the physically tracked item when both are in the scene.
-    return (mask & CULL_VIEW_MODEL) != 0u ? PAYLOAD_SKIP_OWNER_HELD : 0u;
+    uint flags = PAYLOAD_SKIP_OWNER_HELD;
+    // Rays that can see the avatar use its attached arms with the tracked items.
+    if ((mask & CULL_CAMERA_OWNER) != 0u && (worldPush.flags & VR_AVATAR_PRESENT) != 0u) {
+        flags |= PAYLOAD_SKIP_TRACKED_ARM;
+    }
+    return flags;
 }
 
 public uint cameraCullMask() {

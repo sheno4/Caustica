@@ -533,13 +533,13 @@ public final class CausticaConfig {
     public static final class Rt {
         public static final BooleanSetting ENABLED = bool("caustica.rt", "enabled", true);
         public static final IntSetting WORKER_THREADS =
-                intAtLeast("caustica.rt.workerThreads", "worker-threads", defaultWorkerThreads(), 1);
+                intAtLeast("caustica.rt.workerThreads", "worker-threads", 4, 1);
 
         private Rt() {
         }
 
         public static final class Composite {
-            private static final float DEFAULT_WIDE_PERCENT = 62.5f;
+            private static final float DEFAULT_WIDE_PERCENT = 25.0f;
             public static final BooleanSetting FIXED_FOVEATION =
                     bool("caustica.rt.fixedFoveation", "composite.fixed-foveation", false);
             public static final FloatSetting FOVEATION_WIDE_PERCENT =
@@ -692,7 +692,7 @@ public final class CausticaConfig {
             // zeroed render size for it) and is deliberately excluded here.
             public static final List<Integer> QUALITY_STEPS = List.of(3, 0, 1, 2, 5);
             public static final IntSetting QUALITY =
-                    intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 0, QUALITY_STEPS);
+                    intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 3, QUALITY_STEPS);
 
             private DlssRr() {
             }
@@ -992,9 +992,5 @@ public final class CausticaConfig {
 
     private static FloatSetting radians(String key, String tomlPath, float fallbackDegrees) {
         return new FloatSetting(key, tomlPath, fallbackDegrees, Math::toRadians, Math::toDegrees, v -> Double.isFinite(v) ? v : 0.0);
-    }
-
-    private static int defaultWorkerThreads() {
-        return Math.clamp(Runtime.getRuntime().availableProcessors() / 2, 1, 4);
     }
 }

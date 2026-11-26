@@ -55,6 +55,11 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[InstanceID() & IDX_MASK];
         pid += g.triBase[GeometryIndex()];
         Prim epr = ConstPtr<Prim>(g.primAddr)[pid];
+        if ((epr.materialId & ENTITY_PRIM_TRACKED_ARM) != 0u
+                && (payload.flags & PAYLOAD_SKIP_TRACKED_ARM) != 0u) {
+            IgnoreHit();
+            return;
+        }
         if ((epr.materialId & ENTITY_PRIM_OWNER_HELD) != 0u) {
             if ((payload.flags & PAYLOAD_SKIP_OWNER_HELD) != 0u) {
                 IgnoreHit();

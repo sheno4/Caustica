@@ -364,7 +364,8 @@ public final class RtEntities {
     public record FrameEntities(List<RtAccel.Instance> baseInstances, List<RtAccel.Instance> dynamicInstances,
                                 List<RtAccel.PreparedBlas> blas, long geomTableAddr, FrameUse use,
                                 Vector4f viewModelBounds, int glintSlot, long viewModelLightGeom,
-                                long viewModelLightPositions, long viewModelLightIndices, int viewModelLightTriangles) {
+                                long viewModelLightPositions, long viewModelLightIndices, int viewModelLightTriangles,
+                                boolean vrAvatarPresent) {
     }
 
     private record FrameUse(FrameLists lists, TableSlot table) {
@@ -602,6 +603,7 @@ public final class RtEntities {
         long viewModelLightPositions;
         long viewModelLightIndices;
         int viewModelLightTriangles;
+        boolean vrAvatarPresent;
 
         final GraphicsUseWaiter graphicsUseWaiter;
 
@@ -628,12 +630,12 @@ public final class RtEntities {
         boolean captureWorldEntities = enabled();
         if (!captureWorldEntities && viewModel == null) {
             previousViewModels[view.ordinal()] = null;
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0, false);
         }
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0, false);
         }
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
@@ -666,7 +668,7 @@ public final class RtEntities {
         RtFrameStats.FRAME.count("entityRetainedGeometryBytes", retainedGeometryBytes);
 
         if (build.instances == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0, false);
         }
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.uploadFlush")) {
             build.motion.flushWrites();
@@ -677,7 +679,8 @@ public final class RtEntities {
         }
         return new FrameEntities(base, build.instances, build.blas, build.geomTableAddr,
                 new FrameUse(build.lists, build.table), viewModelBounds, build.glintSlot, build.viewModelLightGeom,
-                build.viewModelLightPositions, build.viewModelLightIndices, build.viewModelLightTriangles);
+                build.viewModelLightPositions, build.viewModelLightIndices, build.viewModelLightTriangles,
+                build.vrAvatarPresent);
     }
 
     private Vector4f appendViewModel(RtContext ctx, FrameBuild build, View view, Consumer<SubmitNodeCollector> submit,
@@ -687,7 +690,7 @@ public final class RtEntities {
         previousViewModels[view.ordinal()] = null;
         if (submit == null || build.full()) return null;
         capture.reset(previous == null ? 0 : previous.size / 3);
-        collector.beginViewModel(capture);
+        collector.beginViewModel(capture, view.isEye());
         try {
             submit.accept(collector);
             if (!collector.viewModelCompatible() || capture.isEmpty()) return null;
@@ -858,6 +861,7 @@ public final class RtEntities {
                 appendCapture(ctx, build, motion, id, ENTITY_BIT, mask,
                         translationTransform(ix - rbx, iy - rby, iz - rbz));
             }
+            build.vrAvatarPresent |= view.isEye() && firstPersonSelf && entity == mc.player;
             build.logicalCount++;
             RtFrameStats.FRAME.count("entitiesCaptured", 1);
             capturedThisFrame++;

@@ -26,6 +26,7 @@ import net.minecraft.client.model.Model;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
 import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.color.block.BlockTintSource;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
 import net.minecraft.client.renderer.block.MovingBlockRenderState;
@@ -87,6 +88,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     private RtEntityCapture capture;
     private boolean viewModel;
+    private boolean vrViewModel;
     private boolean vrCameraOwner;
     private boolean viewModelCompatible;
     private boolean profileDynamicEntity;
@@ -129,6 +131,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     void begin(RtEntityCapture capture, boolean profileDynamicEntity, boolean vrCameraOwner) {
         this.capture = capture;
         viewModel = false;
+        vrViewModel = false;
         this.vrCameraOwner = vrCameraOwner;
         this.profileDynamicEntity = capture != null && profileDynamicEntity;
         if (capture != null) {
@@ -137,9 +140,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
     }
 
-    void beginViewModel(RtEntityCapture capture) {
+    void beginViewModel(RtEntityCapture capture, boolean vrEye) {
         begin(capture, false);
         viewModel = true;
+        vrViewModel = vrEye;
         viewModelCompatible = true;
     }
 
@@ -304,6 +308,17 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 RtFrameStats.FRAME.endStage("entity.capture.submit.parity", parityStart);
             }
         }
+        // Vivecraft submits the controller arms and sleeves with its translucent hand render type.
+        if (vrViewModel && stochasticAlpha && isVivecraftArmRenderType(renderType)) {
+            capture.markTrackedArmPrimitives(primStart);
+        }
+    }
+
+    private static boolean isVivecraftArmRenderType(RenderType renderType) {
+        RenderTypeAccessor type = (RenderTypeAccessor) renderType;
+        return "entity_translucent_vr".equals(type.caustica$name())
+                && ((RenderSetupAccessor) (Object) type.caustica$state()).caustica$pipeline()
+                == RenderPipelines.ENTITY_TRANSLUCENT;
     }
 
     private static int countVisibleCuboids(ModelPart part) {

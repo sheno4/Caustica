@@ -164,16 +164,19 @@ public void setTransmissionGuide(float3 hitCamRel, float3 motionPrev, float3 nor
 // radiance reflection/transmission continuations are queued at the first split and traced by Pass B.
 public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
                               float3 surfaceBiasNormal, MediumStack medium, float rayBias,
-                              float rayConeWidth, float rayConeSpread, float3 guideFilter) {
+                              float rayConeWidth, float rayConeSpread, float3 guideFilter,
+                              bool viewModelPath) {
     if (dot(transmittedDir, transmittedDir) <= 0.0) return;
 
     float3 direction = normalize(transmittedDir);
     float3 ro = offsetSurfaceOrigin(surfacePos, surfaceBiasNormal, direction, rayBias);
+    bool vrAvatar = (worldPush.flags & VR_AVATAR_PRESENT) != 0u;
 
     // The camera interface consumed bounce 0; the remaining configured bounce budget is the natural
     // cap for deterministic guide crossings too.
     for (uint crossing = 0u; crossing < worldPush.maxBounces; ++crossing) {
-        traceGuide(cameraCullMask(), ro, RAY_TMIN, direction, 10000.0,
+        traceGuide(vrAvatar ? secondaryCullMask(viewModelPath) : cameraCullMask(),
+                ro, RAY_TMIN, direction, 10000.0,
                 rayConeWidth, rayConeSpread);
         if (payload.hitT <= 0.0) {
             setTransmissionGuide((ro + direction * 1.0e6) - worldPush.camOffset,
@@ -197,6 +200,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
             return;
         }
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) return;
+        viewModelPath = viewModelPath || payloadViewModel();
 
         bool isWater = material == MATERIAL_WATER;
         bool entering = payloadDielectricEntering();

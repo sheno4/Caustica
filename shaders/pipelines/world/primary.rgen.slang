@@ -167,7 +167,7 @@ public PathSegment tracePrimary(PathSegment seg,
                 resolveTransmissionGuide(hitPos, transmittedDir, geometricNormal,
                         guideMedium, transmitBias, rayConeWidth, rayConeSpread,
                         !isWater && entering
-                                ? payloadAlbedo() : float3(1.0, 1.0, 1.0));
+                                ? payloadAlbedo() : float3(1.0, 1.0, 1.0), viewModelPath);
             }
         }
 

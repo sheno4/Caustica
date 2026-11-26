@@ -26,7 +26,8 @@ public final class RtEntityCapture implements VertexConsumer {
     private static final int OWNER_HELD = 0x40000000;
     private static final int OWNER_HELD_OPAQUE = 0x20000000;
     private static final int SAMPLED_EMISSION = 0x10000000;
-    private static final int MATERIAL_ID_MASK = 0x0fffffff;
+    private static final int TRACKED_ARM = 0x08000000;
+    private static final int MATERIAL_ID_MASK = 0x07ffffff;
     // Same magnitude as RtTerrain.QuadCapture.OFFSET (2e-4 blocks) — proven large enough to break a BVH
     // depth tie without a visible gap at terrain/entity scale.
     private static final float ORDER_OFFSET = 2.0e-4f;
@@ -239,6 +240,13 @@ public final class RtEntityCapture implements VertexConsumer {
      */
     PackedGeometry packGeometry() {
         return packGeometry(false);
+    }
+
+    void markTrackedArmPrimitives(int firstPrimitiveLane) {
+        for (int lane = firstPrimitiveLane + 8; lane < prim.size(); lane += 12) {
+            int material = Float.floatToRawIntBits(prim.getFloat(lane));
+            prim.set(lane, Float.intBitsToFloat(material | TRACKED_ARM));
+        }
     }
 
     PackedGeometry packGeometry(boolean sampleEmission) {

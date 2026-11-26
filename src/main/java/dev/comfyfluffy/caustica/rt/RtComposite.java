@@ -116,6 +116,7 @@ public final class RtComposite {
     private static final int REUSE_INSET_LIGHTING = 1 << 5;
     private static final int VIEW_MODEL_PRESENT = 1 << 6;
     private static final int VIEW_MODEL_FOREGROUND = 1 << 7;
+    private static final int VR_AVATAR_PRESENT = 1 << 8;
     private static final Float2 ZERO_UV = new Float2(0f, 0f);
     private static final Float4 ZERO_FLOAT4 = new Float4(0f, 0f, 0f, 0f);
     private static int debugView() {
@@ -1186,6 +1187,7 @@ public final class RtComposite {
                 flags |= VIEW_MODEL_PRESENT;
                 if (capturedView == View.DESKTOP) flags |= VIEW_MODEL_FOREGROUND;
             }
+            if (fe.vrAvatarPresent()) flags |= VR_AVATAR_PRESENT;
             // Block-breaking overlay: resolves each destroy-stage RenderType's texture into the
             // SAME bindless entity-texture array (destroy_stage_N.png is a standalone Sampler0 texture,
             // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
