@@ -244,6 +244,23 @@ public final class RtTerrain {
         return RtLightCollector.measurePower(verts, prim, cornerUv, sprites, materials);
     }
 
+    /** Append world-format emission footprints from held quads and return their integrated luminance. */
+    public static float heldEmissionFootprints(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
+                                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
+                                               RtMaterialRegistry.Snapshot materials) {
+        int first = out.size();
+        RtLightCollector.collectBucket(out, verts, prim, cornerUv, sprites, materials, 0.0f);
+        double power = 0.0;
+        for (int record = first; record < out.size(); record += RtLightCollector.FLOATS_PER_LIGHT) {
+            // These are the scene-linear ACEScg radiance lanes of the world light record.
+            double luminance = 0.27222872 * out.getFloat(record + 16)
+                    + 0.67408177 * out.getFloat(record + 17)
+                    + 0.05368952 * out.getFloat(record + 18);
+            power += luminance * out.getFloat(record + 3);
+        }
+        return Double.isFinite(power) && power <= Float.MAX_VALUE ? (float) power : 0.0f;
+    }
+
     public static boolean isSectionReady(BlockPos blockPos) {
         int scx = SectionPos.blockToSectionCoord(blockPos.getX());
         int scy = SectionPos.blockToSectionCoord(blockPos.getY());

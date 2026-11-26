@@ -39,11 +39,11 @@ float3 viewModelEmission(MaterialHeader header, Prim primitive, float2 atlasUv,
 
 // One uniform candidate and one uniform triangle-area sample. The inverse
 // combined PDF is triangle area times the number of eligible packed primitives.
-public float3 shadeViewModelLights(float3 hitPos, float3 n, float3 biasNormal, float3 v,
-                                   float3 diffAlb, bool twoSided, float sss,
-                                   uint shadowMask, inout uint seed) {
+float3 shadeViewModelTriangles(float3 hitPos, float3 n, float3 biasNormal, float3 v,
+                              float3 diffAlb, bool twoSided, float sss,
+                              uint shadowMask, inout uint seed) {
     uint count = worldPush.viewModelLightTriangles;
-    if (count == 0u || luminance(diffAlb) <= 0.0) return float3(0.0);
+    if (count == 0u) return float3(0.0);
 
     uint candidate = min(uint(rndf(seed) * float(count)), count - 1u);
     uint2 sampleInfo = ConstPtr<uint2>(worldPush.viewModelLightSamples)[candidate];
@@ -100,4 +100,60 @@ public float3 shadeViewModelLights(float3 hitPos, float3 n, float3 biasNormal, f
     if (distance <= 2.0 * RAY_TMIN) return contribution;
     return contribution * visibility(shadowMask, origin, shadowVector / distance,
             distance - RAY_TMIN).transmittance;
+}
+
+float3 shadeViewModelFootprints(float3 hitPos, float3 n, float3 biasNormal, float3 v,
+                               float3 diffAlb, bool twoSided, float sss,
+                               uint shadowMask, inout uint seed) {
+    uint count = worldPush.viewModelLightFootprintCount;
+    if (count == 0u) return float3(0.0);
+
+    // Small lists get one proposal per emitting quad. Larger lists use a bounded
+    // uniform proposal budget, regardless of how many quads the item model has.
+    uint proposals = min(count, 4u);
+    Reservoir r = resEmpty();
+    r.M = float(proposals);
+    ConstPtr<float4> footprints = ConstPtr<float4>(worldPush.viewModelLightFootprints);
+    for (uint i = 0u; i < proposals; ++i) {
+        uint candidate = proposals == count ? i : min(uint(rndf(seed) * float(count)), count - 1u);
+        uint offset = candidate * 5u;
+        float4 centerArea = footprints[offset];
+        float3 emitterNormal = footprints[offset + 1u].xyz;
+        float3 halfU = footprints[offset + 2u].xyz;
+        float3 halfV = footprints[offset + 3u].xyz;
+        float3 emission = footprints[offset + 4u].xyz;
+        float s = rndf(seed) * 2.0 - 1.0;
+        float t = rndf(seed) * 2.0 - 1.0;
+        float3 samplePosition = centerArea.xyz + worldPush.camOffset + s * halfU + t * halfV;
+        float3 direction = samplePosition - hitPos;
+        if (!twoSided && dot(n, direction) > 0.0 && dot(biasNormal, direction) <= 0.0) continue;
+
+        float phat;
+        evalSampleContrib(samplePosition, emitterNormal, emission, centerArea.w, hitPos, n, v, -v,
+                          diffAlb, float3(0.0), 0.0, twoSided, sss, phat);
+        if (phat <= 0.0) continue;
+        r.wSum += phat;
+        if (rndf(seed) * r.wSum < phat) {
+            r.pos = samplePosition;
+            r.lnrm = emitterNormal;
+            r.le = emission;
+            r.area = centerArea.w;
+            r.phat = phat;
+        }
+    }
+    // Each sampled quad has inverse discrete PDF count. For an exhaustive pass
+    // count equals M, leaving the sum of all sampled quad contributions.
+    r.W = r.phat > 0.0 ? (float(count) / r.M) * (r.wSum / r.phat) : 0.0;
+    return shadeReservoir(r, hitPos, n, v, -v, diffAlb, float3(0.0), 0.0,
+                          twoSided, sss, shadowMask, biasNormal);
+}
+
+public float3 shadeViewModelLights(float3 hitPos, float3 n, float3 biasNormal, float3 v,
+                                  float3 diffAlb, bool twoSided, float sss,
+                                  uint shadowMask, inout uint seed) {
+    if (luminance(diffAlb) <= 0.0) return float3(0.0);
+    float3 footprintLighting = shadeViewModelFootprints(hitPos, n, biasNormal, v, diffAlb,
+                                                       twoSided, sss, shadowMask, seed);
+    return footprintLighting + shadeViewModelTriangles(hitPos, n, biasNormal, v, diffAlb,
+                                                      twoSided, sss, shadowMask, seed);
 }

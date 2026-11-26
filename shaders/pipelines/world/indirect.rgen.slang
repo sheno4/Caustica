@@ -73,7 +73,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     bool showCelestial = seg.showCelestial;
     bool viewModelPath = seg.viewModelPath;
     bool sampledViewModelLights = false;
-    bool hasViewModelLights = worldPush.viewModelLightTriangles > 0u;
+    bool hasViewModelLights = worldPush.viewModelLightTriangles > 0u || worldPush.viewModelLightFootprintCount > 0u;
     uint viewModelLightSeed = seed ^ 0x913e27a9u;
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either

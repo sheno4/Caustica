@@ -13,15 +13,18 @@ final class RtHeldEmission {
     private final FloatArrayList positions = new FloatArrayList();
     private final FloatArrayList primitives = new FloatArrayList();
     private final FloatArrayList cornerUvs = new FloatArrayList();
+    private final FloatArrayList footprints = new FloatArrayList();
     private final ObjectArrayList<TextureAtlasSprite> sprites = ObjectArrayList.wrap(new TextureAtlasSprite[16], 0);
     private BlockState block;
     private int firstTriangle;
     private boolean complete;
+    private boolean affine;
 
     void begin(RtEntityCapture capture, BlockState block) {
         this.block = block;
         firstTriangle = capture.idx.size() / 3;
         complete = true;
+        affine = true;
         positions.clear();
         primitives.clear();
         cornerUvs.clear();
@@ -42,18 +45,31 @@ final class RtHeldEmission {
 
         // The immutable block record shares the same emission as a stochastic-alpha specialization.
         int material = registry.requireSnapshot().resolve(sprite, block, false);
-        positions.addElements(positions.size(), capture.verts.elements(), capture.verts.size() - 12, 12);
+        float[] xyz = capture.verts.elements();
+        int xyzStart = capture.verts.size() - 12;
+        float[] uv = capture.uvList.elements();
+        int uvStart = capture.uvList.size() - 8;
+        affine &= isAffine(xyz, xyzStart, 3, 1.0e-5f) && isAffine(uv, uvStart, 2, 1.0e-6f);
+        positions.addElements(positions.size(), xyz, xyzStart, 12);
         int output = primitives.size();
         primitives.addElements(output, prim, primStart, 24);
         primitives.set(output + 8, Float.intBitsToFloat(material));
         primitives.set(output + 20, Float.intBitsToFloat(material));
-        float[] uv = capture.uvList.elements();
-        int uvStart = capture.uvList.size() - 8;
         cornerUvs.addElements(cornerUvs.size(), uv, uvStart, 6);
         cornerUvs.addElements(cornerUvs.size(), uv, uvStart, 2);
         cornerUvs.addElements(cornerUvs.size(), uv, uvStart + 4, 4);
         sprites.add(sprite);
         sprites.add(sprite);
+    }
+
+    private static boolean isAffine(float[] vertices, int start, int stride, float tolerance) {
+        for (int i = 0; i < stride; i++) {
+            int a = start + i;
+            float error = (vertices[a + 2 * stride] - vertices[a + stride])
+                    - (vertices[a + 3 * stride] - vertices[a]);
+            if (!(Math.abs(error) <= tolerance)) return false;
+        }
+        return true;
     }
 
     void finish(RtEntityCapture capture, boolean submitted) {
@@ -62,8 +78,18 @@ final class RtHeldEmission {
         if (!submitted || state == null || !complete || sprites.isEmpty()) return;
         float placed = RtTerrain.placedEmissionPower(state);
         if (!(placed > 0.0f)) return;
-        float held = RtTerrain.meshEmissionPower(positions, primitives, cornerUvs, sprites.elements(),
-                RtMaterialRegistry.INSTANCE.requireSnapshot());
+        RtMaterialRegistry.Snapshot materials = RtMaterialRegistry.INSTANCE.requireSnapshot();
+        if (affine) {
+            footprints.clear();
+            float emitted = RtTerrain.heldEmissionFootprints(footprints, positions, primitives, cornerUvs,
+                    sprites.elements(), materials);
+            float scale = placed / emitted;
+            if (scale > 0.0f && Float.isFinite(scale)) {
+                capture.addEmissionFootprints(firstTriangle, footprints, scale);
+                return;
+            }
+        }
+        float held = RtTerrain.meshEmissionPower(positions, primitives, cornerUvs, sprites.elements(), materials);
         float scale = placed / held;
         if (scale > 0.0f && Float.isFinite(scale)) {
             capture.scaleEmittedPower(firstTriangle, scale);

@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
+import java.util.BitSet;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -47,6 +48,9 @@ public final class RtEntityCapture implements VertexConsumer {
     private final FloatArrayList packedPrim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY));
     private final IntArrayList packedEmissiveSamples = new IntArrayList();
     private final FloatArrayList emittedPowerScales = new FloatArrayList();
+    private final BitSet trianglesWithFootprints = new BitSet();
+    final FloatArrayList emissionFootprints = new FloatArrayList();
+    static final int EMISSION_FOOTPRINT_FLOATS = 20;
     private final int[] packedBucketTris = new int[RtAccel.ENTITY_BUCKETS];
 
     // Bindless texture slot for the geometry currently being submitted (set by the collector per
@@ -91,6 +95,8 @@ public final class RtEntityCapture implements VertexConsumer {
         packedIdx.clear();
         packedPrim.clear();
         emittedPowerScales.clear();
+        trianglesWithFootprints.clear();
+        emissionFootprints.clear();
         ensureVertexCapacity(expectedVertices);
         n = 0;
         currentTexSlot = 0;
@@ -257,6 +263,18 @@ public final class RtEntityCapture implements VertexConsumer {
         java.util.Arrays.fill(emittedPowerScales.elements(), firstTriangle, triangles, scale);
     }
 
+    void addEmissionFootprints(int firstTriangle, FloatArrayList footprints, float scale) {
+        trianglesWithFootprints.set(firstTriangle, idx.size() / 3);
+        int start = emissionFootprints.size();
+        emissionFootprints.addElements(start, footprints.elements(), 0, footprints.size());
+        float[] data = emissionFootprints.elements();
+        for (int i = start; i < emissionFootprints.size(); i += EMISSION_FOOTPRINT_FLOATS) {
+            data[i + 16] *= scale;
+            data[i + 17] *= scale;
+            data[i + 18] *= scale;
+        }
+    }
+
     PackedGeometry packGeometry(boolean sampleEmission) {
         int triangleCount = idx.size() / 3;
         if (alphaBuckets.size() != triangleCount || prim.size() != triangleCount * 12) {
@@ -290,9 +308,11 @@ public final class RtEntityCapture implements VertexConsumer {
                     if ((material & TRACKED_ARM) == 0
                             && RtMaterialRegistry.INSTANCE.canSampleEmission(material & MATERIAL_ID_MASK,
                             primitives[primBase + 3])) {
-                        float scale = tri < emittedPowerScales.size() ? emittedPowerScales.getFloat(tri) : 0.0f;
-                        packedEmissiveSamples.add(packedIdx.size() / 3 - 1);
-                        packedEmissiveSamples.add(Float.floatToRawIntBits(scale > 0.0f ? scale : 1.0f));
+                        if (!trianglesWithFootprints.get(tri)) {
+                            float scale = tri < emittedPowerScales.size() ? emittedPowerScales.getFloat(tri) : 0.0f;
+                            packedEmissiveSamples.add(packedIdx.size() / 3 - 1);
+                            packedEmissiveSamples.add(Float.floatToRawIntBits(scale > 0.0f ? scale : 1.0f));
+                        }
                         packedPrim.set(packedPrimBase + 8, Float.intBitsToFloat(material | SAMPLED_EMISSION));
                     }
                 }

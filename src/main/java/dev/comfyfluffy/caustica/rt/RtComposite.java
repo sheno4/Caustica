@@ -1221,7 +1221,8 @@ public final class RtComposite {
                     flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter,
                     bounds == null ? ZERO_FLOAT4 : new Float4(bounds.x, bounds.y, bounds.z, bounds.w),
                     fe.glintSlot(), fe.viewModelLightGeom(), fe.viewModelLightPositions(),
-                    fe.viewModelLightSamples(), fe.viewModelLightTriangles());
+                    fe.viewModelLightSamples(), fe.viewModelLightTriangles(), fe.viewModelLightFootprints(),
+                    fe.viewModelLightFootprintCount());
             Float2 insetJitterUv = null;
             if (foveatedTargets != null) {
                 insetJitterUv = recordFoveatedInset(ctx, cmd, stack, active, scene, history, gpuSample);
@@ -1315,7 +1316,8 @@ public final class RtComposite {
                               Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
                               RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter,
                               Float4 viewModelBounds, int glintSlot, long viewModelLightGeom,
-                              long viewModelLightPositions, long viewModelLightSamples, int viewModelLightTriangles) {}
+                              long viewModelLightPositions, long viewModelLightSamples, int viewModelLightTriangles,
+                              long viewModelLightFootprints, int viewModelLightFootprintCount) {}
 
     private Float2 recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
                                       TraceScene scene, MotionHistory history, RtGpuFrameStats.Sample gpuSample) {
@@ -1417,7 +1419,9 @@ public final class RtComposite {
                 scene.viewModelLightGeom(),
                 scene.viewModelLightPositions(),
                 scene.viewModelLightSamples(),
-                scene.viewModelLightTriangles()
+                scene.viewModelLightTriangles(),
+                scene.viewModelLightFootprints(),
+                scene.viewModelLightFootprintCount()
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.

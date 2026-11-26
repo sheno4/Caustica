@@ -97,6 +97,8 @@ public struct WorldPush {
     public uint64_t viewModelLightPositions;
     public uint64_t viewModelLightSamples; // uint2 {triangle index, emitted-power scale as float bits}
     public uint     viewModelLightTriangles;
+    public uint64_t viewModelLightFootprints; // five float4 lanes per emitting quad footprint
+    public uint     viewModelLightFootprintCount;
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the
