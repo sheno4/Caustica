@@ -8,6 +8,7 @@ import world_core;
 import bindings;
 import math;
 import trace;
+import held_flames;
 
 public struct Reservoir {
     public float3 pos;  // light sample point (rebased world space)
@@ -89,30 +90,28 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     return contrib;
 }
 
-// Approximate the flame as an omnidirectional emitter with a finite near field.
-// Intensity is expressed in candela, in the same linear transport basis as placed lights.
-public float3 shadeHeldTorch(float4 torch, float3 hitPos, float3 n, float3 v, float3 rd,
-                            float3 diffAlb, float3 f0, float rough, uint shadowMask) {
-    if (torch.w == 0.0) return float3(0.0);
-    float3 toLight = torch.xyz - hitPos;
-    float dist2 = dot(toLight, toLight);
-    const float lightRange = 16.0;
-    if (dist2 < 1.0e-6 || dist2 >= lightRange * lightRange || dot(n, toLight) <= 0.0) return float3(0.0);
-    float3 direction = toLight * rsqrt(dist2);
-    float3 intensity = torch.w == 2.0 ? float3(0.15, 0.55, 1.0)
-                       : torch.w == 3.0 ? float3(0.32, 0.025, 0.01)
-                       : torch.w == 4.0 ? float3(1.4, 3.9, 2.2) : float3(5.4, 2.7, 0.93);
-    // Spread the near-field peak while increasing useful illumination across the room.
-    const float flameRadius = 0.12;
-    const float intensityScale = 4.0;
-    float rangeFade = 1.0 - smoothstep(12.0, lightRange, sqrt(dist2));
-    float weight;
-    float3 contribution = evalSampleContrib(torch.xyz, -direction, bt709ToAcesCg(intensity) * intensityScale,
-            rangeFade * dist2 / (dist2 + flameRadius * flameRadius), hitPos, n, v, rd,
-            diffAlb, f0, rough, false, 0.0, weight);
-    if (weight <= 0.0) return float3(0.0);
-    float3 origin = offsetSurfaceOrigin(hitPos, n, direction, SURF_BIAS);
-    float3 shadowVector = torch.xyz - origin;
+// Diffuse and glossy lobes sample the finite emitter by solid angle. Delta lobes
+// receive its radiance only through the explicit reflection/transmission ray.
+public float3 shadeHeldTorch(float4 torch, float3 hitPos, float3 n, float3 biasNormal, float3 v,
+                            float3 diffAlb, float3 f0, float rough, bool exactSpecular, uint shadowMask,
+                            inout uint seed) {
+    HeldFlameSample flame = sampleHeldFlame(torch, hitPos, seed);
+    if (flame.distance < 0.0) return float3(0.0);
+    float3 wi = flame.direction;
+    float ndl = dot(n, wi);
+    if (ndl <= 0.0 || dot(biasNormal, wi) <= 0.0) return float3(0.0);
+    float3 brdf = diffAlb * INV_PI;
+    if (!exactSpecular) {
+        float3 h = normalize(wi + v);
+        float ndv = max(1.0e-4, dot(n, v));
+        float D = ggxD(max(0.0, dot(n, h)), rough);
+        float G = ggxG1(ndv, rough) * ggxG1(ndl, rough);
+        brdf += D * G * fresnelSchlick(max(0.0, dot(v, h)), f0) / (4.0 * ndv * ndl);
+    }
+    float3 contribution = flame.weightedRadiance * brdf * ndl;
+    if (luminance(contribution) <= 0.0) return float3(0.0);
+    float3 origin = offsetSurfaceOrigin(hitPos, biasNormal, wi, SURF_BIAS);
+    float3 shadowVector = hitPos + wi * flame.distance - origin;
     float shadowDistance = length(shadowVector);
     if (shadowDistance <= RAY_TMIN) return contribution;
     return contribution * visibility(shadowMask, origin, shadowVector / shadowDistance, shadowDistance).transmittance;
@@ -325,7 +324,7 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
 // the survivor (front BRDF, twoSided billboard, or SSS backscatter) — the origin is biased toward the
 // sample's side of the surface.
 public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
-                      float3 F0, float rough, bool twoSided, float sss, uint shadowMask) {
+                      float3 F0, float rough, bool twoSided, float sss, uint shadowMask, float3 biasNormal) {
     if (s.W <= 0.0 || s.phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
@@ -339,8 +338,7 @@ public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, flo
     // that origin — measuring dist from hitPos while tracing from the biased origin shifts the ray tip
     // up to SURF_BIAS*ndl toward the emitter plane, beating the 0.001*dist stop-short margin for lights
     // closer than ~SURF_BIAS/0.001 blocks -> shadow ray hits the emitter's own face -> per-texel black.
-    float side = dot(n, s.pos - hitPos) >= 0.0 ? 1.0 : -1.0;
-    float3 origin = hitPos + side * n * SURF_BIAS;
+    float3 origin = offsetSurfaceOrigin(hitPos, biasNormal, s.pos - hitPos, SURF_BIAS);
     float3 toL = s.pos - origin;
     float dist = length(toL);
     // Stop just short of the sample point so the ray doesn't self-occlude on the emitter's own face.

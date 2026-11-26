@@ -29,6 +29,7 @@ import trace;
 import trace_ser;
 #endif
 import lighting;
+import held_flames;
 import sky;
 import bindings;
 import foveation;
@@ -72,6 +73,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     bool showCelestial = seg.showCelestial;
     bool viewModelPath = seg.viewModelPath;
     bool avatarReflection = seg.avatarReflection;
+    bool traceFlame = seg.bounce > 0;
+    bool hasFlame = worldPush.mainHandTorch.w != 0.0 || worldPush.offHandTorch.w != 0.0;
+    uint flameSeed = seed ^ 0x913e27a9u;
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -86,16 +90,24 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
             uint mask = bounce == 0 ? cameraCullMask()
                     : secondaryCullMask(viewModelPath) | (avatarReflection ? CULL_CAMERA_OWNER : 0u);
-            uint extraFlags = avatarReflection ? PAYLOAD_SKIP_OWNER_HELD : 0u;
 #ifdef CAUSTICA_ENABLE_EXT_SER
             // Keep roulette eligibility and the path cap in separate coherence groups.
             uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
             traceRadianceReordered(mask, ro, 0.0, rd, 10000.0,
-                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint, extraFlags);
+                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
 #else
-            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread, extraFlags);
+            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
 #endif
         }
+
+        if (hasFlame && traceFlame) {
+            HeldFlameHit flame = traceHeldFlames(ro, rd, payload.hitT < 0.0 ? 10000.0 : payload.hitT);
+            if (flame.distance >= 0.0) {
+                L += throughput * exp(-medium.current.extinction * flame.distance) * flame.radiance;
+                break;
+            }
+        }
+        traceFlame = false;
 
         if (payload.hitT < 0.0) {
             // A ray still in water should leave through a water interface. A miss instead means the
@@ -133,7 +145,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
 
         // Minecraft's glint blend adds the squared source color at the visible item surface.
         // Convert that artistic overlay to scene radiance without participating in light sampling.
-        if (payloadGlint()) {
+        if (showCelestial && payloadGlint()) {
             uint packed = payload.rayCone;
             float3 glint = float3(packed & 255u, (packed >> 8u) & 255u, (packed >> 16u) & 255u)
                     * (worldPush.glintStrength / 255.0);
@@ -205,6 +217,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 }
             }
             showCelestial = true; // specular interface: the continuation ray may see the sun/moon disc
+            traceFlame = true;
             if (bounce >= rrStart) {
                 float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
                 if (rndf(seed) > q) {
@@ -247,7 +260,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
                                          true, 0.0, seed, proposalSeed);
                 L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                                                 true, 0.0, shadowMask);
+                                                 true, 0.0, shadowMask, n);
             }
 
             if (bounce >= maxBounces) {
@@ -263,7 +276,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
 
         float3 albedo = payloadAlbedo();
         float sss = payloadSss(); // LabPBR SSS strength (0 when absent)
-        float3 p = hitPos + n * SURF_BIAS;
+        float3 biasNormal = reflectAvatar ? unpackGeometricNormal(payload.iorTransmission) : n;
+        float3 p = hitPos + biasNormal * SURF_BIAS;
         float3 v = -rd; // view direction (toward the camera / incoming ray)
 
         // Material split. Metals tint F0 by albedo and have no diffuse lobe; dielectrics use a fixed
@@ -278,13 +292,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 diffAlb = albedo * (1.0 - metal);
         float3 F0 = payload.f0;
 
-        // Tracked lights illuminate the hands and visible scene surfaces, including through glass.
-        // Keep this dynamic direct lighting off diffuse bounce rays and ignore the separate avatar.
-        if (showCelestial && (worldPush.mainHandTorch.w != 0.0 || worldPush.offHandTorch.w != 0.0)) {
-            L += throughput * (shadeHeldTorch(worldPush.mainHandTorch, hitPos, n, v, rd,
-                        diffAlb, F0, rough, CULL_SECONDARY)
-                    + shadeHeldTorch(worldPush.offHandTorch, hitPos, n, v, rd,
-                        diffAlb, F0, rough, CULL_SECONDARY));
+        // Dynamic direct lighting at each surface also contributes after diffuse bounces.
+        if (hasFlame) {
+            uint torchShadowMask = secondaryCullMask(true);
+            L += throughput * shadeHeldTorch(worldPush.mainHandTorch, hitPos, n, biasNormal, v,
+                    diffAlb, F0, rough, exactSpecular, torchShadowMask, flameSeed);
+            L += throughput * shadeHeldTorch(worldPush.offHandTorch, hitPos, n, biasNormal, v,
+                    diffAlb, F0, rough, exactSpecular, torchShadowMask, flameSeed);
         }
 
         // Emissive surfaces (lava, glowstone, torches, ...) add radiance directly, colored by albedo.
@@ -349,7 +363,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
                                      seed, proposalSeed);
             L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
-                                             activeSss, shadowMask);
+                                             activeSss, shadowMask, biasNormal);
         }
 
         // Thin-surface SSS transmission. Light entering from the back face scatters through toward the
@@ -360,7 +374,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         if (sss > 0.0 && hitDepth <= MAX_SSS_INDIRECT_DEPTH) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
-                VisibilityResult shadowBack = visibility(shadowMask, hitPos - n * SURF_BIAS, lightDir, 10000.0);
+                VisibilityResult shadowBack = visibility(shadowMask, hitPos - biasNormal * SURF_BIAS, lightDir, 10000.0);
                 float3 visB = shadowBack.transmittance;
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should
                 // flicker with the same light bands as the floor around it.
@@ -405,14 +419,17 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 throughput *= F * ggxG1(ndl2, rough) / ps;
                 rayConeSpread = max(rayConeSpread, rough * RAY_CONE_GLOSSY_SPREAD_SCALE);
             }
+            if (reflectAvatar && dot(biasNormal, l) <= 0.0) break;
             ro = p;
             rd = l;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
             avatarReflection = reflectAvatar;
+            traceFlame = exactSpecular;
         } else {
             throughput *= diffAlb / (1.0 - ps);
             ro = p;
             rd = cosineDir(n, seed);
+            if (reflectAvatar && dot(biasNormal, rd) <= 0.0) break;
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
         }

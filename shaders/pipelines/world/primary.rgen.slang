@@ -97,6 +97,9 @@ public PathSegment tracePrimary(PathSegment seg,
                     gv_spec = makeSpecSurface(gv_hitCamRel, n, float3(payload.motionPrev), rough,
                                               rrSpecularAlbedo(payload.f0, rough, dot(n, v)));
                     gv_spec.viewModel = viewModelHit;
+                    if (reflectsVrAvatar(viewModelHit)) {
+                        gv_spec.biasNormal = unpackGeometricNormal(payload.iorTransmission);
+                    }
                 }
             }
 

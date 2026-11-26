@@ -12,6 +12,7 @@ import math;
 import medium;
 import water;
 import trace;
+import held_flames;
 
 public static float3 gv_normal = float3(0.0, 0.0, 0.0);
 public static float3 gv_albedo = float3(0.0, 0.0, 0.0);
@@ -111,15 +112,18 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
     // deterministic guide probe.
     bool avatarReflection = reflectsVrAvatar(surface.viewModel);
     uint reflectionMask = secondaryCullMask(surface.viewModel) | (avatarReflection ? CULL_CAMERA_OWNER : 0u);
-    traceGuide(reflectionMask,
-            offsetSurfaceOrigin(surfacePos, surface.biasNormal, specDir, SURF_BIAS),
+    float3 specOrigin = offsetSurfaceOrigin(surfacePos, surface.biasNormal, specDir, SURF_BIAS);
+    traceGuide(reflectionMask, specOrigin,
             RAY_TMIN, specDir, 10000.0,
             max(length(surface.camRel) * primaryConeSpread, RAY_CONE_MIN_WIDTH),
-            max(primaryConeSpread, RAY_CONE_MIN_SPREAD),
-            avatarReflection ? PAYLOAD_SKIP_OWNER_HELD : 0u);
+            max(primaryConeSpread, RAY_CONE_MIN_SPREAD));
     float3 reflectedHit;
     float3 reflectedMotionPrev;
-    if (payload.hitT > 0.0) {
+    HeldFlameHit flame = traceHeldFlames(specOrigin, specDir, payload.hitT < 0.0 ? 10000.0 : payload.hitT);
+    if (flame.distance >= 0.0) {
+        reflectedHit = specOrigin + specDir * flame.distance;
+        reflectedMotionPrev = flame.motionPrev;
+    } else if (payload.hitT > 0.0) {
         reflectedHit = surfacePos + specDir * payload.hitT;
         uint reflectedMaterial = payloadMaterial();
         // Closest-hit writes motionPrev for every material. Terrain/water are zero; dynamic opaque and
@@ -174,7 +178,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
     // The camera interface consumed bounce 0; the remaining configured bounce budget is the natural
     // cap for deterministic guide crossings too.
     for (uint crossing = 0u; crossing < worldPush.maxBounces; ++crossing) {
-        traceGuide(CULL_PRIMARY, ro, RAY_TMIN, direction, 10000.0,
+        traceGuide(cameraCullMask(), ro, RAY_TMIN, direction, 10000.0,
                 rayConeWidth, rayConeSpread);
         if (payload.hitT <= 0.0) {
             setTransmissionGuide((ro + direction * 1.0e6) - worldPush.camOffset,

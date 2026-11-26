@@ -103,6 +103,9 @@ its own field of view and foreground visibility mask. VR hands follow their
 controller poses in the scene. Specular reflections from VR hands and held items
 can show the local avatar. The avatar's separate held-item geometry is filtered
 out of those reflections to avoid duplicate weapons.
+Tracked hands and held items participate in secondary visibility and shadows.
+Held torches use finite emitters for direct lighting, bounced light and
+specular reflections.
 Enchantment glint adds Minecraft's animated texture to the traced item surface.
 Menu hands and unsupported custom draws use the native hand pass.
 

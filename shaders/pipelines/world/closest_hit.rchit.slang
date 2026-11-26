@@ -277,6 +277,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         if (dot(n, vdir) < 0.0) {
             n = -n;
         }
+        float3 geometricNormal = n;
         // Interpolate the captured entity-texture UV (same scheme as terrain) and sample the bindless
         // per-type texture; tint.rgb is the model colour multiplier (white for most, tinted for sheep/…).
         ConstPtr<uint> eidxBuf = ConstPtr<uint>(g.idxAddr);
@@ -325,6 +326,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         payloadSetDielectric(payload, material, entering);
         if (g.viewModel != 0u) {
             payload.flags |= PAYLOAD_VIEW_MODEL;
+            if (material == MATERIAL_OPAQUE) payload.iorTransmission = packGeometricNormal(geometricNormal);
         }
         if ((pr.materialId & ENTITY_PRIM_GLINT) != 0u) {
             ConstPtr<WorldPush> frame = ConstPtr<WorldPush>(pc.worldPushAddr);

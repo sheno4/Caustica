@@ -19,8 +19,9 @@ import trace;
 // leaves only these two words spanning the reorder.
 public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                             bool showCelestial, float rayConeWidth, float rayConeSpread,
-                            uint pathPhaseHint, uint extraFlags) {
-    uint flags = extraFlags | (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u);
+                            uint pathPhaseHint) {
+    uint flags = trackedGeometryFlags(cullMask)
+            | (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u);
     uint rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
     Payload tracePayload = makeRadiancePayload(flags, rayCone);
     HitObject hObj = HitObject::TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,

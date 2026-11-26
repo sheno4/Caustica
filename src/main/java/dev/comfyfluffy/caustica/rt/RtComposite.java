@@ -281,6 +281,8 @@ public final class RtComposite {
         boolean insetValid;
         float waveTime;
         boolean waveValid;
+        VivecraftCompat.HeldTorch mainTorch;
+        VivecraftCompat.HeldTorch offTorch;
     }
 
     private MotionHistory motionHistory() {
@@ -297,6 +299,8 @@ public final class RtComposite {
             history.valid = false;
             history.insetValid = false;
             history.waveValid = false;
+            history.mainTorch = null;
+            history.offTorch = null;
         }
         CausticaJitter.resetAll();
         RtDlssRr.resetHistories();
@@ -1115,6 +1119,9 @@ public final class RtComposite {
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         RtTerrain terrain = RtTerrain.currentOrNull();
+        MotionHistory history = motionHistory();
+        VivecraftCompat.HeldTorch mainTorch;
+        VivecraftCompat.HeldTorch offTorch;
         boolean reuseInset = foveatedTargets != null && CausticaConfig.Rt.Composite.FOVEATION_REUSE_INSET.value();
         RtGpuFrameStats.Sample gpuSample = RtGpuFrameStats.Sample.DISABLED;
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
@@ -1155,13 +1162,11 @@ public final class RtComposite {
                 wtb = (wc & 0xFF) / 255f;
             }
             float waterWaveTime = (float) (System.nanoTime() / 1.0e9 % 3600.0);
-            MotionHistory history = motionHistory();
             float waterWaveDelta = waterWaveTime - history.waveTime;
             // A first frame, long pause, or one-hour phase wrap has no adjacent wave frame to reproject.
             // Use the current phase so the reflection MV is neutral instead of manufacturing a huge jump.
-            float priorWaterWaveTime = history.waveValid
-                    && waterWaveDelta >= 0f && waterWaveDelta <= 0.25f
-                    ? history.waveTime : waterWaveTime;
+            boolean adjacentHistory = history.waveValid && waterWaveDelta >= 0f && waterWaveDelta <= 0.25f;
+            float priorWaterWaveTime = adjacentHistory ? history.waveTime : waterWaveTime;
             history.waveTime = waterWaveTime;
             history.waveValid = true;
             Float4 waterParams = linearAcesCgFromSrgb(wtr, wtg, wtb, waterWaveTime);
@@ -1217,11 +1222,14 @@ public final class RtComposite {
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
             var torches = capturedView.isEye() ? VivecraftCompat.heldTorches() : null;
+            mainTorch = torches == null ? null : torches[0];
+            offTorch = torches == null ? null : torches[1];
             TraceScene scene = new TraceScene(terrain, fe.geomTableAddr(), frameTlas.accel.handle,
                     flags, sky, waterParams, waterAnchor, breaking, graphicsUse, graphicsUseWaiter,
                     bounds == null ? ZERO_FLOAT4 : new Float4(bounds.x, bounds.y, bounds.z, bounds.w),
-                    fe.glintSlot(), torchPush(torches == null ? null : torches[0], terrain),
-                    torchPush(torches == null ? null : torches[1], terrain));
+                    fe.glintSlot(), torchPush(mainTorch, terrain), torchPush(offTorch, terrain),
+                    adjacentHistory ? previousTorchPush(mainTorch, history.mainTorch, terrain) : ZERO_FLOAT4,
+                    adjacentHistory ? previousTorchPush(offTorch, history.offTorch, terrain) : ZERO_FLOAT4);
             Float2 insetJitterUv = null;
             if (foveatedTargets != null) {
                 insetJitterUv = recordFoveatedInset(ctx, cmd, stack, active, scene, history, gpuSample);
@@ -1303,6 +1311,8 @@ public final class RtComposite {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
         encoder.execute(cmd); // deferred into the frame's submission — correct for per-frame work
+        history.mainTorch = mainTorch;
+        history.offTorch = offTorch;
         viewModelRendered = frameEntities != null && frameEntities.viewModelBounds() != null;
         gpuSample.submitted(graphicsUse);
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
@@ -1314,13 +1324,20 @@ public final class RtComposite {
     private record TraceScene(RtTerrain terrain, long entityTable, long tlas, int flags, SkyPush sky,
                               Float4 waterParams, Float4 waterAnchor, BreakEntry[] breaking,
                               RtGpuExecutor.GraphicsUse graphicsUse, RtGpuExecutor.GraphicsUseWaiter waiter,
-                              Float4 viewModelBounds, int glintSlot, Float4 mainHandTorch, Float4 offHandTorch) {}
+                              Float4 viewModelBounds, int glintSlot, Float4 mainHandTorch, Float4 offHandTorch,
+                              Float4 prevMainHandTorch, Float4 prevOffHandTorch) {}
 
     private static Float4 torchPush(VivecraftCompat.HeldTorch torch, RtTerrain terrain) {
         if (torch == null) return ZERO_FLOAT4;
         var position = torch.position();
         return new Float4((float) (position.x - terrain.blockX), (float) (position.y - terrain.blockY),
                 (float) (position.z - terrain.blockZ), torch.kind());
+    }
+
+    private static Float4 previousTorchPush(VivecraftCompat.HeldTorch torch, VivecraftCompat.HeldTorch previous,
+                                           RtTerrain terrain) {
+        if (torch == null || previous == null || torch.kind() != previous.kind()) return ZERO_FLOAT4;
+        return torchPush(previous, terrain);
     }
 
     private Float2 recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
@@ -1379,6 +1396,7 @@ public final class RtComposite {
         active.bindTraceTargets(scene.tlas(), targets.views, insetRadianceView, bloomPipeline.sampler(),
                 scene.graphicsUse(), scene.waiter());
         boolean rrDone = false;
+        boolean useTorchHistory = !inset || motionHistory().insetValid;
         new WorldPushData(
                 frameInvViewProj,
                 new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
@@ -1421,7 +1439,9 @@ public final class RtComposite {
                 scene.glintSlot(),
                 scene.glintSlot() == 0 ? 0f : Minecraft.getInstance().options.glintStrength().get().floatValue(),
                 scene.mainHandTorch(),
-                scene.offHandTorch()
+                scene.offHandTorch(),
+                useTorchHistory ? scene.prevMainHandTorch() : ZERO_FLOAT4,
+                useTorchHistory ? scene.prevOffHandTorch() : ZERO_FLOAT4
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.

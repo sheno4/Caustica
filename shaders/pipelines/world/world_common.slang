@@ -95,6 +95,8 @@ public struct WorldPush {
     public float    glintStrength;
     public float4   mainHandTorch;    // rebased flame position and torch kind, zero when absent
     public float4   offHandTorch;
+    public float4   prevMainHandTorch; // previous flame positions in the current rebase
+    public float4   prevOffHandTorch;
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the
@@ -306,6 +308,17 @@ public uint packHalf2(float2 v) {
 
 public float2 unpackHalf2(uint p) {
     return float2(f16tof32(p & 0xFFFFu), f16tof32(p >> 16));
+}
+
+// Opaque viewmodels use the otherwise unused IOR word for their geometric normal.
+public uint packGeometricNormal(float3 normal) {
+    uint3 q = uint3(round(saturate(normal * 0.5 + 0.5) * 1023.0));
+    return q.x | (q.y << 10u) | (q.z << 20u);
+}
+
+public float3 unpackGeometricNormal(uint word) {
+    uint3 q = uint3(word, word >> 10u, word >> 20u) & 1023u;
+    return normalize(float3(q) * (2.0 / 1023.0) - 1.0);
 }
 
 // ---- Payload.surface0..2 accessors. Two views of the same twelve bytes; see the struct for why.
