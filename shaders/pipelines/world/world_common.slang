@@ -93,10 +93,10 @@ public struct WorldPush {
     public float4   viewModelBounds;  // desktop foreground bounds in jitter-free NDC, xy min and zw max
     public uint     glintSlot;        // bindless vanilla glint texture, 0 when absent
     public float    glintStrength;
-    public float4   mainHandTorch;    // rebased flame position and torch kind, zero when absent
-    public float4   offHandTorch;
-    public float4   prevMainHandTorch; // previous flame positions in the current rebase
-    public float4   prevOffHandTorch;
+    public uint64_t viewModelLightGeom;
+    public uint64_t viewModelLightPositions;
+    public uint64_t viewModelLightIndices;
+    public uint     viewModelLightTriangles;
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the
@@ -191,6 +191,7 @@ public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
 public static const uint PAYLOAD_VIEW_MODEL = 256u;
 public static const uint PAYLOAD_GLINT = 512u;
 public static const uint PAYLOAD_SKIP_OWNER_HELD = 1024u;
+public static const uint PAYLOAD_VIEW_MODEL_LIGHT = 2048u;
 // Set by world.rchit on any dielectric hit (water or glass/ice): true when the incoming ray travels
 // against the prim's outward face normal (entering the volume), false when it exits. Derived from face
 // orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
@@ -220,7 +221,8 @@ public static const uint MATERIAL_DIELECTRIC = 3u;
 public static const uint ENTITY_PRIM_GLINT = 0x80000000u;
 public static const uint ENTITY_PRIM_OWNER_HELD = 0x40000000u;
 public static const uint ENTITY_PRIM_OWNER_HELD_OPAQUE = 0x20000000u;
-public static const uint ENTITY_PRIM_MATERIAL_MASK = 0x1fffffffu;
+public static const uint ENTITY_PRIM_VIEW_MODEL_LIGHT = 0x10000000u;
+public static const uint ENTITY_PRIM_MATERIAL_MASK = 0x0fffffffu;
 public struct Prim {
     public float4 normal; // xyz = geometric normal, w = per-primitive emission strength
     public float4 tint;

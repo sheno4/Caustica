@@ -29,7 +29,7 @@ import trace;
 import trace_ser;
 #endif
 import lighting;
-import held_flames;
+import viewmodel_lights;
 import sky;
 import bindings;
 import foveation;
@@ -73,9 +73,9 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     bool showCelestial = seg.showCelestial;
     bool viewModelPath = seg.viewModelPath;
     bool avatarReflection = seg.avatarReflection;
-    bool traceFlame = seg.bounce > 0;
-    bool hasFlame = worldPush.mainHandTorch.w != 0.0 || worldPush.offHandTorch.w != 0.0;
-    uint flameSeed = seed ^ 0x913e27a9u;
+    bool sampledViewModelLights = false;
+    bool hasViewModelLights = worldPush.viewModelLightTriangles > 0u;
+    uint viewModelLightSeed = seed ^ 0x913e27a9u;
     // Pass B treats every hit it sees as one indirect-depth step, regardless of material or selected
     // continuation lobe. Deliberately start at zero instead of seg.bounce: the first hit of either
     // queued split branch is still the primary-terminal shading point. Hits 0 and 1 retain SSS; RIS
@@ -99,15 +99,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
 #endif
         }
-
-        if (hasFlame && traceFlame) {
-            HeldFlameHit flame = traceHeldFlames(ro, rd, payload.hitT < 0.0 ? 10000.0 : payload.hitT);
-            if (flame.distance >= 0.0) {
-                L += throughput * exp(-medium.current.extinction * flame.distance) * flame.radiance;
-                break;
-            }
-        }
-        traceFlame = false;
 
         if (payload.hitT < 0.0) {
             // A ray still in water should leave through a water interface. A miss instead means the
@@ -138,6 +129,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
         bool reflectAvatar = reflectsVrAvatar(payloadViewModel());
+        bool sampledEmitterHit = sampledViewModelLights && (payload.flags & PAYLOAD_VIEW_MODEL_LIGHT) != 0u;
+        sampledViewModelLights = false;
         viewModelPath = viewModelPath || payloadViewModel();
         avatarReflection = false;
         uint shadowMask = secondaryCullMask(viewModelPath);
@@ -217,7 +210,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 }
             }
             showCelestial = true; // specular interface: the continuation ray may see the sun/moon disc
-            traceFlame = true;
             if (bounce >= rrStart) {
                 float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
                 if (rndf(seed) > q) {
@@ -233,6 +225,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // path continuation into the scene, but never appear in shadows/reflections/GI or emit radiance.
         if (material == MATERIAL_PARTICLE) {
             float3 albedo = payloadAlbedo();
+            if (hasViewModelLights) {
+                L += throughput * shadeViewModelLights(hitPos, n, n, -rd, albedo,
+                        true, 0.0, shadowMask, viewModelLightSeed);
+            }
 
             float3 lightDir = celestialLight.dir;
             float lightHalfAngle = celestialLight.halfAngle;
@@ -271,11 +267,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             rd = cosineDir(n, seed);
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse receiver: direct sun/moon was handled by NEE above
+            sampledViewModelLights = hasViewModelLights;
             continue;
         }
 
         float3 albedo = payloadAlbedo();
         float sss = payloadSss(); // LabPBR SSS strength (0 when absent)
+        float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
         float3 biasNormal = reflectAvatar ? unpackGeometricNormal(payload.iorTransmission) : n;
         float3 p = hitPos + biasNormal * SURF_BIAS;
         float3 v = -rd; // view direction (toward the camera / incoming ray)
@@ -292,13 +290,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 diffAlb = albedo * (1.0 - metal);
         float3 F0 = payload.f0;
 
-        // Dynamic direct lighting at each surface also contributes after diffuse bounces.
-        if (hasFlame) {
-            uint torchShadowMask = secondaryCullMask(true);
-            L += throughput * shadeHeldTorch(worldPush.mainHandTorch, hitPos, n, biasNormal, v,
-                    diffAlb, F0, rough, exactSpecular, torchShadowMask, flameSeed);
-            L += throughput * shadeHeldTorch(worldPush.offHandTorch, hitPos, n, biasNormal, v,
-                    diffAlb, F0, rough, exactSpecular, torchShadowMask, flameSeed);
+        // Sample diffuse light from the tracked mesh. Glossy and mirror paths gather its emission
+        // at the actual intersection, which also preserves the authored specular lobe.
+        if (hasViewModelLights) {
+            L += throughput * shadeViewModelLights(hitPos, n, biasNormal, v, diffAlb,
+                    false, activeSss, shadowMask, viewModelLightSeed);
         }
 
         // Emissive surfaces (lava, glowstone, torches, ...) add radiance directly, colored by albedo.
@@ -315,7 +311,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // agree: gateEmitter exists only because RIS already accounted for this emitter, so a bounce where
         // RIS is skipped must also gather emission directly or that light is lost outright.
         bool gateEmitter = risOn && payloadEmitterInList();
-        if (emission > 0.0 && (!gateEmitter || showCelestial)) {
+        if (emission > 0.0 && !sampledEmitterHit && (!gateEmitter || showCelestial)) {
             L += throughput * albedo * emission;
         }
 
@@ -359,7 +355,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // exact, not an approximation. The SSS term is gated off past MAX_SSS_INDIRECT_DEPTH by passing
         // sss=0 there (falls back to plain front-only RIS).
         if (risOn) {
-            float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
                                      seed, proposalSeed);
             L += throughput * shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
@@ -424,7 +419,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             rd = l;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
             avatarReflection = reflectAvatar;
-            traceFlame = exactSpecular;
         } else {
             throughput *= diffAlb / (1.0 - ps);
             ro = p;
@@ -432,6 +426,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (reflectAvatar && dot(biasNormal, rd) <= 0.0) break;
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
+            sampledViewModelLights = hasViewModelLights;
         }
 
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.

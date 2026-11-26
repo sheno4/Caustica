@@ -363,7 +363,8 @@ public final class RtEntities {
     /** This frame's terrain and dynamic instance segments, entity BLAS builds, and geometry-table address. */
     public record FrameEntities(List<RtAccel.Instance> baseInstances, List<RtAccel.Instance> dynamicInstances,
                                 List<RtAccel.PreparedBlas> blas, long geomTableAddr, FrameUse use,
-                                Vector4f viewModelBounds, int glintSlot) {
+                                Vector4f viewModelBounds, int glintSlot, long viewModelLightGeom,
+                                long viewModelLightPositions, long viewModelLightIndices, int viewModelLightTriangles) {
     }
 
     private record FrameUse(FrameLists lists, TableSlot table) {
@@ -597,6 +598,10 @@ public final class RtEntities {
         int count;        // geometry-table entries / TLAS instances
         int logicalCount; // ordinary entities + block entities + individual particles
         int glintSlot;
+        long viewModelLightGeom;
+        long viewModelLightPositions;
+        long viewModelLightIndices;
+        int viewModelLightTriangles;
 
         final GraphicsUseWaiter graphicsUseWaiter;
 
@@ -623,12 +628,12 @@ public final class RtEntities {
         boolean captureWorldEntities = enabled();
         if (!captureWorldEntities && viewModel == null) {
             previousViewModels[view.ordinal()] = null;
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0);
         }
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0);
         }
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
@@ -661,7 +666,7 @@ public final class RtEntities {
         RtFrameStats.FRAME.count("entityRetainedGeometryBytes", retainedGeometryBytes);
 
         if (build.instances == null) {
-            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0);
+            return new FrameEntities(base, List.of(), List.of(), 0L, null, null, 0, 0L, 0L, 0L, 0);
         }
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.uploadFlush")) {
             build.motion.flushWrites();
@@ -671,7 +676,8 @@ public final class RtEntities {
             }
         }
         return new FrameEntities(base, build.instances, build.blas, build.geomTableAddr,
-                new FrameUse(build.lists, build.table), viewModelBounds, build.glintSlot);
+                new FrameUse(build.lists, build.table), viewModelBounds, build.glintSlot, build.viewModelLightGeom,
+                build.viewModelLightPositions, build.viewModelLightIndices, build.viewModelLightTriangles);
     }
 
     private Vector4f appendViewModel(RtContext ctx, FrameBuild build, View view, Consumer<SubmitNodeCollector> submit,
@@ -699,7 +705,8 @@ public final class RtEntities {
                 ? projectViewModelBounds(new Matrix4f(projection).mul(viewRotation)) : new Vector4f(-1f, -1f, 1f, 1f);
         Motion motion = uploadVertexMotion(ctx, build, capture.verts, previous, camX, camY, camZ);
         appendCapture(ctx, build, motion, -1, ENTITY_BIT, MASK_VIEW_MODEL,
-                translationTransform((float) (camX - rbx), (float) (camY - rby), (float) (camZ - rbz)));
+                translationTransform((float) (camX - rbx), (float) (camY - rby), (float) (camZ - rbz)),
+                view.isEye());
         if (capture.hasGlint) build.glintSlot = RtEntityTextures.INSTANCE.glintSlot();
         previousViewModels[view.ordinal()] = storeEntityPrev(previous, capture.verts, camX, camY, camZ);
         build.logicalCount++;
@@ -1603,6 +1610,11 @@ public final class RtEntities {
 
     private void appendCapture(RtContext ctx, FrameBuild build, Motion motion, int entityId, int instanceBit, int mask,
                                float[] instanceTransform) {
+        appendCapture(ctx, build, motion, entityId, instanceBit, mask, instanceTransform, false);
+    }
+
+    private void appendCapture(RtContext ctx, FrameBuild build, Motion motion, int entityId, int instanceBit, int mask,
+                               float[] instanceTransform, boolean sampleEmission) {
         beginBuildIfNeeded(ctx, build);
         if (entityId >= 0) {
             appendPackedEntity(ctx, build, motion, entityId, instanceBit, mask, instanceTransform);
@@ -1611,7 +1623,7 @@ public final class RtEntities {
         int asInput = org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         int vertCount = capture.verts.size() / 3;
-        RtEntityCapture.PackedGeometry packed = capture.packGeometry();
+        RtEntityCapture.PackedGeometry packed = capture.packGeometry(sampleEmission);
         int idxCount = packed.indices().size();
         EntityGeometryLayout layout = EntityGeometryLayout.create(capture.verts.size(), idxCount,
                 capture.uvList.size(), packed.primitives().size());
@@ -1641,6 +1653,16 @@ public final class RtEntities {
         writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
                 motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris(), mask == MASK_VIEW_MODEL);
 
+        IntArrayList emissiveTriangles = packed.emissiveTriangles();
+        if (!emissiveTriangles.isEmpty()) {
+            int count = emissiveTriangles.size();
+            MotionSlice slice = build.motion.allocate(ctx, (long) count * Integer.BYTES);
+            MemoryUtil.memIntBuffer(slice.mapped, count).put(emissiveTriangles.elements(), 0, count);
+            build.viewModelLightGeom = build.geomTableAddr + (long) build.count * TABLE_ENTRY_BYTES;
+            build.viewModelLightPositions = positionAddr;
+            build.viewModelLightIndices = slice.deviceAddress;
+            build.viewModelLightTriangles = count;
+        }
         build.instances.add(new RtAccel.Instance(instanceTransform, blas.accel.deviceAddress,
                 instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
         build.buffers.add(geometry);

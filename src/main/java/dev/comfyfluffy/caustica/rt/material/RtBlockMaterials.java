@@ -78,6 +78,7 @@ public final class RtBlockMaterials {
         int page;
         int x;
         int y;
+        boolean nonzeroEmissionMask;
         RtMaterialDesc.EmissionSummary emissionSummary = RtMaterialDesc.EmissionSummary.NONE;
         RtEmissionGrid emissionGrid;
 
@@ -241,6 +242,7 @@ public final class RtBlockMaterials {
         authored.parallelStream().forEach(candidate -> {
             try {
                 Decoded decoded = decode(candidate);
+                candidate.nonzeroEmissionMask = decoded.nonzeroEmissionMask();
                 candidate.emissionSummary = decoded.emissionSummary();
                 candidate.emissionGrid = decoded.emissionGrid();
                 pagePixels[candidate.page].write(candidate, decoded.levels());
@@ -271,7 +273,9 @@ public final class RtBlockMaterials {
         for (Candidate candidate : authored) {
             if (candidate.page < 0) continue;
             int maxLod = maxLodFor(candidate.width, candidate.height);
-            Entry entry = new Entry(candidate.features, candidate.page, maxLod,
+            int features = candidate.features;
+            if (candidate.nonzeroEmissionMask) features |= RtMaterialRegistry.FEATURE_NONZERO_EMISSION_MASK;
+            Entry entry = new Entry(features, candidate.page, maxLod,
                     candidate.x / (float) pageSize, candidate.y / (float) pageSize,
                     candidate.width / (float) pageSize, candidate.height / (float) pageSize,
                     candidate.blockSprite() ? candidate.sprite.getU0() : 0.0f,
@@ -326,7 +330,8 @@ public final class RtBlockMaterials {
     }
 
     private record Decoded(List<RtMaterialTextureData.Level> levels,
-                           RtMaterialDesc.EmissionSummary emissionSummary, RtEmissionGrid emissionGrid) {
+                           RtMaterialDesc.EmissionSummary emissionSummary, RtEmissionGrid emissionGrid,
+                           boolean nonzeroEmissionMask) {
     }
 
     /** Reduce a per-texel emission mask to the light collector's summary grid (premultiplied by albedo). */
@@ -358,6 +363,7 @@ public final class RtBlockMaterials {
             float[] surface1 = new float[surface0.length];
             float[] linearAlbedo = new float[surface0.length];
             float[] authoredEmission = spec != null ? new float[width * height] : null;
+            boolean nonzeroEmissionMask = false;
             NativeImage albedo = candidate.blockSprite()
                     ? ((SpriteContentsAccessor) candidate.sprite.contents()).caustica$originalImage()
                     : resourceAlbedo;
@@ -381,6 +387,7 @@ public final class RtBlockMaterials {
                         surface0[i] = decoded.roughness();
                         surface0[i + 1] = decoded.metalness();
                         surface0[i + 2] = decoded.emission();
+                        nonzeroEmissionMask |= RtMaterialTextureData.unorm8(decoded.emission()) != 0;
                         authoredEmission[y * width + x] = decoded.emission() * aa;
                         surface0[i + 3] = decoded.sss();
                         surface1[i] = decoded.f0r();
@@ -422,13 +429,14 @@ public final class RtBlockMaterials {
                 float[] mask = emission.mask();
                 for (int pixel = 0; pixel < mask.length; pixel++) {
                     surface0[pixel * 4 + 2] = mask[pixel];
+                    nonzeroEmissionMask |= RtMaterialTextureData.unorm8(mask[pixel]) != 0;
                 }
                 emissionSummary = emission.summary();
                 grid = emissionGrid(linearAlbedo, mask, width, height);
             }
             int maxLod = maxLodFor(width, height);
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
-                    surface0, normalAo, surface1), maxLod), emissionSummary, grid);
+                    surface0, normalAo, surface1), maxLod), emissionSummary, grid, nonzeroEmissionMask);
         } finally {
             if (spec != null) spec.close();
             if (normal != null) normal.close();

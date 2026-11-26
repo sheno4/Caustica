@@ -328,12 +328,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     }
 
     /** Capture a list of baked quads (items / block models), each textured from its sprite's atlas. */
-    private void addQuads(Matrix4f pose, List<BakedQuad> quads, int[] tintLayers) {
+    private void addQuads(Matrix4f pose, List<BakedQuad> quads, int[] tintLayers, BlockState state) {
         int idxStart = capture.idx.size();
         long started = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         try {
             for (BakedQuad q : quads) {
-                addQuad(pose, q, tintLayers);
+                addQuad(pose, q, tintLayers, state);
             }
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.bakedQuads", started);
@@ -351,21 +351,26 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     }
 
     /** Capture one baked quad, resolving its atlas (block vs item) to a bindless slot stamped per-prim. */
-    private void addQuad(Matrix4f pose, BakedQuad q, int[] tintLayers) {
+    private void addQuad(Matrix4f pose, BakedQuad q, int[] tintLayers, BlockState state) {
         TextureAtlasSprite sprite = q.materialInfo().sprite();
         capture.currentTexSlot = sprite != null
                 ? RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation())
                 : 0;
         // Baked item quads retain the block model's material layer. Mirror terrain's classification so
         // dropped and held translucent block items (glass, ice, etc.) use the thin-dielectric variant
-        // instead of the opaque DEFAULT variant. No BlockState reaches submitItem, so the layer is the
-        // authoritative semantic available here; glass-model roughness/IOR are profile-independent.
+        // instead of the opaque DEFAULT variant. Held block state supplies the world material profile
+        // and emission strength, while the submitted layer defines coverage.
         boolean transmissive = q.materialInfo().layer() == ChunkSectionLayer.TRANSLUCENT;
         capture.currentAlphaBucket = alphaBucket(q.materialInfo().layer(), false);
-        setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
-                transmissive, false);
+        if (state != null) {
+            setBlockSpriteMaterial(sprite, state, transmissive, false);
+        } else {
+            setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
+                    transmissive, false);
+        }
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
-        capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers));
+        float emission = state != null ? state.getLightEmission() / 15f : 0f;
+        capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers), emission);
     }
 
     /** Resolve block-atlas geometry through the same immutable material snapshot as terrain. */
@@ -760,9 +765,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
         Matrix4f pose = poseStack.last().pose();
         for (BlockStateModelPart part : parts) {
-            addQuads(pose, part.getQuads(null), tintLayers);
+            addQuads(pose, part.getQuads(null), tintLayers, null);
             for (Direction d : DIRECTIONS) {
-                addQuads(pose, part.getQuads(d), tintLayers);
+                addQuads(pose, part.getQuads(d), tintLayers, null);
             }
         }
     }
@@ -786,7 +791,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             submitBlockModel(poseStack, renderTypeByLayer.apply(ChunkSectionLayer.SOLID), parts, tintLayers,
                     lightCoords, overlayCoords, outlineColor);
         }
-        addMeshQuads(poseStack, mesh, tintLayers, false);
+        addMeshQuads(poseStack, mesh, tintLayers, false, null);
     }
 
     /** Fabric item models can carry a mesh besides (or instead of) vanilla baked quads; the injected
@@ -798,24 +803,22 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (capture == null) {
             return;
         }
-        if (viewModel && (!quads.isEmpty() || (mesh != null && mesh.size() > 0))) {
-            VivecraftCompat.captureHeldTorchTip(poseStack.last().pose());
-        }
+        BlockState state = viewModel ? VivecraftCompat.heldBlockState() : null;
         boolean glint = viewModel && foilType != ItemStackRenderState.FoilType.NONE;
         if (glint) {
             PoseStack.Pose decalPose = foilType == ItemStackRenderState.FoilType.SPECIAL ? poseStack.last() : null;
             capture.glint.begin(TextureTransform.GLINT_TEXTURING, decalPose, displayContext);
         }
         try {
-            addQuads(poseStack.last().pose(), quads, tintLayers);
-            addMeshQuads(poseStack, mesh, tintLayers, true);
+            addQuads(poseStack.last().pose(), quads, tintLayers, state);
+            addMeshQuads(poseStack, mesh, tintLayers, true, state);
         } finally {
             if (glint) capture.glint.end();
         }
     }
 
     /** Capture a Fabric Renderer API mesh; each quad already carries final atlas UVs. */
-    private void addMeshQuads(PoseStack poseStack, MeshView mesh, int[] tintLayers, boolean itemMesh) {
+    private void addMeshQuads(PoseStack poseStack, MeshView mesh, int[] tintLayers, boolean itemMesh, BlockState state) {
         if (mesh == null || mesh.size() == 0) {
             return;
         }
@@ -825,7 +828,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         try {
             capture.clearUvRemap();
             mesh.forEach(quad -> addMeshQuad(pose, quad, tintLayers, itemMesh,
-                    null, null, null, 0f, 0f, 0f));
+                    null, null, state, 0f, 0f, 0f));
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.bakedQuads", started);
             countBakedOutput(idxStart);

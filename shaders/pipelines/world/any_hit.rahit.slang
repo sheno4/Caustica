@@ -14,9 +14,9 @@
 import world_common;
 import math;
 import bindings;
+import material_emission;
 
 static const float ALPHA_CUTOFF = 0.5;        // terrain (matches the cutout block models)
-static const float ENTITY_ALPHA_CUTOFF = 0.1; // entities: only discard near-fully-transparent texels
 // Faint baseline extinction added to every translucent hit regardless of its color, so perfectly clear
 // glass/ice still dims a shadow ray a little instead of being fully invisible to it (real glass isn't a
 // perfect transmitter either). Additive with the color-derived extinction below, not a floor/clamp — a

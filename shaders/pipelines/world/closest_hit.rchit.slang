@@ -9,6 +9,7 @@
 import world_common;
 import math;
 import bindings;
+import material_emission;
 
 void payloadSetPacked(inout Payload payload, uint material, float roughness, float metalness,
         float emission, float sss, float ior, float transmission, uint emissionSource) {
@@ -31,10 +32,6 @@ uint materialEmissionSource(MaterialHeader header, float emission) {
     if ((header.features & MATERIAL_FEATURE_HEURISTIC_EMISSION) != 0u) return EMISSION_SOURCE_HEURISTIC;
     return EMISSION_SOURCE_UNIFORM;
 }
-
-// Strength of the LabPBR _n ambient-occlusion (blue) applied to albedo. Kept mild because the path
-// tracer already computes its own AO from sky-visibility rays (avoid double-darkening).
-static const float NORMAL_AO_STRENGTH = 0.5;
 
 static const float RAY_CONE_MIN_WIDTH = 1.0e-5;
 static const float RAY_CONE_MIN_TEXEL_FOOTPRINT = 1.0e-4;
@@ -97,7 +94,7 @@ float3 perturbNormal(float3 n, float3 p0, float3 p1, float3 p2, float2 t0, float
     if (NoV < 0.02) {
         nm = normalize(nm + vdir * (0.02 - NoV));        // keep above the horizon (no flip)
     }
-    ao = lerp(1.0, ntex.b, NORMAL_AO_STRENGTH);
+    ao = materialNormalAo(ntex.b);
     return nm;
 }
 
@@ -112,14 +109,8 @@ struct Surface {
 };
 
 // Canonical material pages use a compact page index shared by their three dedicated arrays.
-float4 samplePageSurface0(uint page, float2 uv, float lod) {
-    return materialSurface0Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
-}
 float4 samplePageSurface1(uint page, float2 uv, float lod) {
     return materialSurface1Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
-}
-float4 samplePageNormalAo(uint page, float2 uv, float lod) {
-    return materialNormalAoTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
 }
 
 // The sole terrain/entity material evaluation path. LabPBR categorical bytes have already been
@@ -133,42 +124,29 @@ Surface evaluateMaterial(MaterialHeader header, float2 atlasUv, float lod, float
     surface.roughness = fallbackRoughness;
     surface.metalness = fallbackMetalness;
     surface.f0 = lerp(float3(0.04, 0.04, 0.04), albedo, fallbackMetalness);
-    surface.emission = fallbackEmission;
     surface.sss = 0.0;
     surface.ao = 1.0;
 
-    float2 localUv = clamp((atlasUv - header.albedoUv.xy) * header.albedoUv.zw,
-            float2(0.0, 0.0), float2(1.0, 1.0));
-    float2 pageUv = header.materialUv.xy + localUv * header.materialUv.zw;
-    float maxMaterialLod = float((header.features >> MATERIAL_MAX_LOD_SHIFT) & MATERIAL_MAX_LOD_MASK);
-    float materialLod = min(lod, maxMaterialLod);
+    float2 pageUv = materialPageUv(header, atlasUv);
+    float materialLod = materialPageLod(header, lod);
     uint page = header.texturePage;
+    float textureEmission = 0.0;
     if ((header.features & (MATERIAL_FEATURE_SPEC | MATERIAL_FEATURE_HEURISTIC_EMISSION)) != 0u) {
-        float4 surface0 = samplePageSurface0(page, pageUv, materialLod);
+        float4 surface0 = sampleMaterialSurface0(page, pageUv, materialLod);
+        textureEmission = surface0.b;
         if ((header.features & MATERIAL_FEATURE_SPEC) != 0u) {
             float4 surface1 = samplePageSurface1(page, pageUv, materialLod); // LabPBR F0
             surface.roughness = surface0.r;
             surface.metalness = surface0.g;
-            surface.emission = surface0.b;
             surface.sss = allowSss ? surface0.a : 0.0;
             // Canonical LabPBR F0 is authored in the asset's BT.709 RGB basis. Fresnel is evaluated in
             // the transport basis, so coloured metal/custom F0 crosses the same boundary as albedo.
             surface.f0 = clamp(bt709ToAcesCg(surface1.rgb), float3(0.0), float3(1.0));
-        } else {
-            // Eligibility is compiled from block-state semantics; the primitive's exact light level
-            // supplies strength, while the page supplies only the normalized spatial mask.
-            surface.emission = surface0.b * fallbackEmission;
         }
     }
-    // Final HDR emitting-surface luminance (look-package baseline or absolute JSON cd/m² override), baked in Java at
-    // material-compile time and packed unconditionally — see MATERIAL_EMISSION_STRENGTH_SHIFT. 0 for
-    // non-emissive materials, so this multiply is always safe (and a no-op) when nothing above ran.
-    float strength = float((header.features >> MATERIAL_EMISSION_STRENGTH_SHIFT)
-            & MATERIAL_EMISSION_STRENGTH_MASK)
-            * (MATERIAL_MAX_EMISSION_STRENGTH / float(MATERIAL_EMISSION_STRENGTH_MASK));
-    surface.emission *= strength;
+    surface.emission = materialEmission(header, textureEmission, fallbackEmission);
     if ((header.features & MATERIAL_FEATURE_NORMAL) != 0u) {
-        float4 normalAo = samplePageNormalAo(page, pageUv, materialLod);
+        float4 normalAo = sampleMaterialNormalAo(page, pageUv, materialLod);
         surface.normal = perturbNormal(geometricNormal, p0, p1, p2, uv0, uv1, uv2,
                 vdir, normalAo, surface.ao);
     }
@@ -328,6 +306,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             payload.flags |= PAYLOAD_VIEW_MODEL;
             if (material == MATERIAL_OPAQUE) payload.iorTransmission = packGeometricNormal(geometricNormal);
         }
+        if ((pr.materialId & ENTITY_PRIM_VIEW_MODEL_LIGHT) != 0u) payload.flags |= PAYLOAD_VIEW_MODEL_LIGHT;
         if ((pr.materialId & ENTITY_PRIM_GLINT) != 0u) {
             ConstPtr<WorldPush> frame = ConstPtr<WorldPush>(pc.worldPushAddr);
             uint slot = frame[0].glintSlot;

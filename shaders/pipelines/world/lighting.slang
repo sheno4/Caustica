@@ -8,7 +8,6 @@ import world_core;
 import bindings;
 import math;
 import trace;
-import held_flames;
 
 public struct Reservoir {
     public float3 pos;  // light sample point (rebased world space)
@@ -88,33 +87,6 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     }
     phat = luminance(contrib);
     return contrib;
-}
-
-// Diffuse and glossy lobes sample the finite emitter by solid angle. Delta lobes
-// receive its radiance only through the explicit reflection/transmission ray.
-public float3 shadeHeldTorch(float4 torch, float3 hitPos, float3 n, float3 biasNormal, float3 v,
-                            float3 diffAlb, float3 f0, float rough, bool exactSpecular, uint shadowMask,
-                            inout uint seed) {
-    HeldFlameSample flame = sampleHeldFlame(torch, hitPos, seed);
-    if (flame.distance < 0.0) return float3(0.0);
-    float3 wi = flame.direction;
-    float ndl = dot(n, wi);
-    if (ndl <= 0.0 || dot(biasNormal, wi) <= 0.0) return float3(0.0);
-    float3 brdf = diffAlb * INV_PI;
-    if (!exactSpecular) {
-        float3 h = normalize(wi + v);
-        float ndv = max(1.0e-4, dot(n, v));
-        float D = ggxD(max(0.0, dot(n, h)), rough);
-        float G = ggxG1(ndv, rough) * ggxG1(ndl, rough);
-        brdf += D * G * fresnelSchlick(max(0.0, dot(v, h)), f0) / (4.0 * ndv * ndl);
-    }
-    float3 contribution = flame.weightedRadiance * brdf * ndl;
-    if (luminance(contribution) <= 0.0) return float3(0.0);
-    float3 origin = offsetSurfaceOrigin(hitPos, biasNormal, wi, SURF_BIAS);
-    float3 shadowVector = hitPos + wi * flame.distance - origin;
-    float shadowDistance = length(shadowVector);
-    if (shadowDistance <= RAY_TMIN) return contribution;
-    return contribution * visibility(shadowMask, origin, shadowVector / shadowDistance, shadowDistance).transmittance;
 }
 
 // Select one light from the emitted-power distribution in O(1).

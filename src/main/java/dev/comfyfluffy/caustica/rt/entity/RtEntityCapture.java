@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.entity;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
@@ -16,7 +17,7 @@ import org.joml.Vector3fc;
  * {@code model.renderToBuffer(pose, this, …)}.
  *
  * <p>Accumulators use the same layout as terrain's {@code SectionMesh} (positions, indices, atlas UV,
- * per-prim {@code {normal.xyz, reserved}, {tint.rgb, albedoSlot}, {materialId, flags, aux0, aux1}}) so entities
+ * per-prim {@code {normal.xyz, emission}, {tint.rgb, albedoSlot}, {materialId, flags, aux0, aux1}}) so entities
  * share the terrain upload + BLAS path verbatim.
  */
 public final class RtEntityCapture implements VertexConsumer {
@@ -24,6 +25,8 @@ public final class RtEntityCapture implements VertexConsumer {
     // Material ID metadata shared with world_common.slang.
     private static final int OWNER_HELD = 0x40000000;
     private static final int OWNER_HELD_OPAQUE = 0x20000000;
+    private static final int SAMPLED_EMISSION = 0x10000000;
+    private static final int MATERIAL_ID_MASK = 0x0fffffff;
     // Same magnitude as RtTerrain.QuadCapture.OFFSET (2e-4 blocks) — proven large enough to break a BVH
     // depth tie without a visible gap at terrain/entity scale.
     private static final float ORDER_OFFSET = 2.0e-4f;
@@ -41,6 +44,7 @@ public final class RtEntityCapture implements VertexConsumer {
     final IntArrayList alphaBuckets = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY) / 3);
     private final IntArrayList packedIdx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY));
     private final FloatArrayList packedPrim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY));
+    private final IntArrayList packedEmissiveTriangles = new IntArrayList();
     private final int[] packedBucketTris = new int[RtAccel.ENTITY_BUCKETS];
 
     // Bindless texture slot for the geometry currently being submitted (set by the collector per
@@ -234,6 +238,10 @@ public final class RtEntityCapture implements VertexConsumer {
      * each Vulkan geometry, so the returned counts also define the triangle bases written to EntityGeom.
      */
     PackedGeometry packGeometry() {
+        return packGeometry(false);
+    }
+
+    PackedGeometry packGeometry(boolean sampleEmission) {
         int triangleCount = idx.size() / 3;
         if (alphaBuckets.size() != triangleCount || prim.size() != triangleCount * 12) {
             throw new IllegalStateException("Malformed entity capture: triangles=" + triangleCount
@@ -241,6 +249,7 @@ public final class RtEntityCapture implements VertexConsumer {
         }
         packedIdx.clear();
         packedPrim.clear();
+        packedEmissiveTriangles.clear();
         java.util.Arrays.fill(packedBucketTris, 0);
         packedIdx.ensureCapacity(idx.size());
         packedPrim.ensureCapacity(prim.size());
@@ -256,8 +265,17 @@ public final class RtEntityCapture implements VertexConsumer {
                 packedIdx.add(indices[indexBase + 1]);
                 packedIdx.add(indices[indexBase + 2]);
                 int primBase = tri * 12;
+                int packedPrimBase = packedPrim.size();
                 for (int lane = 0; lane < 12; lane++) {
                     packedPrim.add(primitives[primBase + lane]);
+                }
+                if (sampleEmission) {
+                    int material = Float.floatToRawIntBits(primitives[primBase + 8]);
+                    if (RtMaterialRegistry.INSTANCE.canSampleEmission(material & MATERIAL_ID_MASK,
+                            primitives[primBase + 3])) {
+                        packedEmissiveTriangles.add(packedIdx.size() / 3 - 1);
+                        packedPrim.set(packedPrimBase + 8, Float.intBitsToFloat(material | SAMPLED_EMISSION));
+                    }
                 }
                 packedBucketTris[bucket]++;
             }
@@ -265,10 +283,11 @@ public final class RtEntityCapture implements VertexConsumer {
         if (packedIdx.size() != idx.size() || packedPrim.size() != prim.size()) {
             throw new IllegalStateException("Entity capture contains an invalid alpha bucket");
         }
-        return new PackedGeometry(packedIdx, packedPrim, packedBucketTris);
+        return new PackedGeometry(packedIdx, packedPrim, packedBucketTris, packedEmissiveTriangles);
     }
 
-    record PackedGeometry(IntArrayList indices, FloatArrayList primitives, int[] bucketTris) {
+    record PackedGeometry(IntArrayList indices, FloatArrayList primitives, int[] bucketTris,
+                          IntArrayList emissiveTriangles) {
         int[] copyBucketTris() {
             return bucketTris.clone();
         }
@@ -286,7 +305,7 @@ public final class RtEntityCapture implements VertexConsumer {
         qnx[n] = nx; qny[n] = ny; qnz[n] = nz;
         qcol[n] = color;
         if (++n == 4) {
-            emitQuad();
+            emitQuad(0f);
             n = 0;
         }
     }
@@ -295,9 +314,9 @@ public final class RtEntityCapture implements VertexConsumer {
      * Capture a {@link BakedQuad} (held/dropped items via {@code submitItem}, falling blocks via {@code
      * submitBlockModel}) — its 4 positions transformed by {@code pose}, atlas UV from {@code packedUV},
      * a flat {@code color} tint. These quads carry no authored normal, so emitQuad computes a geometric
-     * one. They sample the block atlas (the capture's {@code currentTexSlot} = 0, the bindless fallback).
+     * one. The collector selects their atlas slot and the world material for the available block state.
      */
-    public void addBakedQuad(Matrix4f pose, BakedQuad quad, int color) {
+    public void addBakedQuad(Matrix4f pose, BakedQuad quad, int color, float emission) {
         for (int i = 0; i < 4; i++) {
             Vector3fc p = quad.position(i);
             pose.transformPosition(p.x(), p.y(), p.z(), scratch);
@@ -308,14 +327,14 @@ public final class RtEntityCapture implements VertexConsumer {
             qnx[n] = 0f; qny[n] = 0f; qnz[n] = 0f; // no authored normal → emitQuad falls back to geometric
             qcol[n] = color;
             if (++n == 4) {
-                emitQuad();
+                emitQuad(emission);
                 n = 0;
             }
         }
     }
 
-    private void emitQuad() {
-        appendQuad(qx, qy, qz, null, qu, qv, qnx[0], qny[0], qnz[0], qcol[0], false, 0f);
+    private void emitQuad(float emission) {
+        appendQuad(qx, qy, qz, null, qu, qv, qnx[0], qny[0], qnz[0], qcol[0], false, emission);
     }
 
     /**

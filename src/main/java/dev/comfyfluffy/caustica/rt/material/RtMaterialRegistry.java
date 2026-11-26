@@ -45,6 +45,7 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_SPEC = 1;
     public static final int FEATURE_NORMAL = 2;
     public static final int FEATURE_HEURISTIC_EMISSION = 4;
+    static final int FEATURE_NONZERO_EMISSION_MASK = 8; // CPU candidate filtering
     public static final int FEATURE_STOCHASTIC_ALPHA = 16;
     // HDR radiance of a full (level-15-equivalent) emitter, modulated by albedo. Baked into every
     // emissive RtMaterialDesc.emissionStrength at compile time (compileDesc/compileEntityDesc), times
@@ -343,6 +344,20 @@ public final class RtMaterialRegistry {
         return current.deviceAddress;
     }
 
+    /** Select opaque materials with current emission for dynamic light sampling. */
+    public boolean canSampleEmission(int materialId, float stateEmission) {
+        RtBuffer current = table;
+        if (current == null || materialId < 0 || materialId >= nextDynamicId) return false;
+        long header = current.mapped + (long) materialId * MaterialHeaderData.BYTE_SIZE;
+        if (MemoryUtil.memGetInt(header) != MODEL_OPAQUE) return false;
+        int features = MemoryUtil.memGetInt(header + Integer.BYTES);
+        if (((features >>> EMISSION_STRENGTH_SHIFT) & EMISSION_STRENGTH_MASK) == 0) return false;
+        if ((features & FEATURE_SPEC) == 0 && !(stateEmission > 0.0f)) return false;
+
+        return (features & (FEATURE_SPEC | FEATURE_HEURISTIC_EMISSION)) == 0
+                || (features & FEATURE_NONZERO_EMISSION_MASK) != 0;
+    }
+
     /** Neutral canonical material used by runtime-only textures (player skins, generated glyph atlases, etc.). */
     public int entityFallbackId() {
         return entityFallbackId;
@@ -537,7 +552,8 @@ public final class RtMaterialRegistry {
     private static MaterialHeaderData header(RtMaterialDesc desc, float[] average,
                                              RtBlockMaterials.Entry entry, float albedoU, float albedoV,
                                              float albedoInvDu, float albedoInvDv) {
-        int packedFeatures = desc.features() | (entry.maxLod() << MAX_LOD_SHIFT);
+        int packedFeatures = desc.features() | (entry.features() & FEATURE_NONZERO_EMISSION_MASK)
+                | (entry.maxLod() << MAX_LOD_SHIFT);
         // Packed unconditionally (0 for non-emissive materials): the shader multiplies surface.emission
         // by this every time, regardless of source, so the package baseline needs no shader copy.
         int strength = Math.round(Math.min(MAX_EMISSION_STRENGTH, desc.emissionStrength())

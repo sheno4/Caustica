@@ -12,7 +12,6 @@ import math;
 import medium;
 import water;
 import trace;
-import held_flames;
 
 public static float3 gv_normal = float3(0.0, 0.0, 0.0);
 public static float3 gv_albedo = float3(0.0, 0.0, 0.0);
@@ -119,11 +118,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
             max(primaryConeSpread, RAY_CONE_MIN_SPREAD));
     float3 reflectedHit;
     float3 reflectedMotionPrev;
-    HeldFlameHit flame = traceHeldFlames(specOrigin, specDir, payload.hitT < 0.0 ? 10000.0 : payload.hitT);
-    if (flame.distance >= 0.0) {
-        reflectedHit = specOrigin + specDir * flame.distance;
-        reflectedMotionPrev = flame.motionPrev;
-    } else if (payload.hitT > 0.0) {
+    if (payload.hitT > 0.0) {
         reflectedHit = surfacePos + specDir * payload.hitT;
         uint reflectedMaterial = payloadMaterial();
         // Closest-hit writes motionPrev for every material. Terrain/water are zero; dynamic opaque and
