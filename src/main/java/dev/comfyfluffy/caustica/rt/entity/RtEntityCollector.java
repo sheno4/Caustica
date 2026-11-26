@@ -54,6 +54,7 @@ import net.minecraft.util.ARGB;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.util.RandomSource;
@@ -90,6 +91,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private boolean viewModel;
     private boolean vrViewModel;
     private boolean vrCameraOwner;
+    private BlockState cameraOwnerHeldBlock;
     private boolean viewModelCompatible;
     private boolean profileDynamicEntity;
     private final RtEntityCapture parityCapture = new RtEntityCapture();
@@ -151,8 +153,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         return viewModelCompatible;
     }
 
-    public boolean isCapturingViewModel() {
-        return viewModel;
+    public boolean isCapturingHeldItem() {
+        return viewModel || (capture != null && capture.cameraOwnerHeldItem);
     }
 
     public boolean isCapturingVrCameraOwner() {
@@ -167,6 +169,17 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             submit.run();
         } finally {
             capture.cameraOwnerHeldItem = previous;
+        }
+    }
+
+    /** Apply the actual held block's material to the third-person item submission. */
+    public void captureCameraOwnerHeldItem(ItemStack item, Runnable submit) {
+        BlockState previous = cameraOwnerHeldBlock;
+        cameraOwnerHeldBlock = VivecraftCompat.heldBlock(item);
+        try {
+            captureCameraOwnerHeldItems(submit);
+        } finally {
+            cameraOwnerHeldBlock = previous;
         }
     }
 
@@ -818,8 +831,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (capture == null) {
             return;
         }
-        BlockState state = viewModel ? VivecraftCompat.heldBlockState() : null;
-        boolean glint = viewModel && foilType != ItemStackRenderState.FoilType.NONE;
+        BlockState state = viewModel ? VivecraftCompat.heldBlockState() : cameraOwnerHeldBlock;
+        boolean glint = isCapturingHeldItem() && foilType != ItemStackRenderState.FoilType.NONE;
         if (glint) {
             PoseStack.Pose decalPose = foilType == ItemStackRenderState.FoilType.SPECIAL ? poseStack.last() : null;
             capture.glint.begin(TextureTransform.GLINT_TEXTURING, decalPose, displayContext);

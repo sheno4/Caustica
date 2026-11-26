@@ -88,7 +88,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
             bool directView = bounce == 0;
-            uint mask = directView ? cameraCullMask() : secondaryRadianceCullMask(viewModelPath);
+            uint mask = directView ? cameraCullMask() : secondaryRadianceCullMask(viewModelPath, showCelestial);
 #ifdef CAUSTICA_ENABLE_EXT_SER
             // Keep roulette eligibility and the path cap in separate coherence groups.
             uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);

@@ -175,7 +175,7 @@ public final class VivecraftCompat {
         }
     }
 
-    private static BlockState heldBlock(ItemStack stack) {
+    public static BlockState heldBlock(ItemStack stack) {
         if (!(stack.getItem() instanceof BlockItem blockItem)) return null;
         BlockState state = blockItem.getBlock().defaultBlockState();
         var properties = stack.get(DataComponents.BLOCK_STATE);

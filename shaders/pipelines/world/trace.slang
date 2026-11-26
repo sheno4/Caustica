@@ -102,10 +102,12 @@ public uint shadowCullMask(bool viewModelPath) {
     return CULL_SECONDARY | trackedGeometryMask() | (viewModelPath ? 0u : CULL_CAMERA_OWNER);
 }
 
-public uint secondaryRadianceCullMask(bool viewModelPath) {
-    // Indirect sightlines include the complete VR avatar even when the path started on a held item.
+public uint secondaryRadianceCullMask(bool viewModelPath, bool specularView) {
     bool vrAvatar = (worldPush.flags & VR_AVATAR_PRESENT) != 0u;
-    return CULL_SECONDARY | trackedGeometryMask() | (!viewModelPath || vrAvatar ? CULL_CAMERA_OWNER : 0u);
+    // Reflection and transmission see the avatar's own held items and their model transforms.
+    // Diffuse transport uses the tracked geometry sampled by the dynamic mesh light estimator.
+    uint tracked = vrAvatar && specularView ? 0u : trackedGeometryMask();
+    return CULL_SECONDARY | tracked | (!viewModelPath || vrAvatar ? CULL_CAMERA_OWNER : 0u);
 }
 
 public bool isTrackedViewModel(bool viewModelHit) {

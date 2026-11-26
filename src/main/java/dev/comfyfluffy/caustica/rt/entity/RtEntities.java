@@ -862,6 +862,7 @@ public final class RtEntities {
                         translationTransform(ix - rbx, iy - rby, iz - rbz));
             }
             build.vrAvatarPresent |= view.isEye() && firstPersonSelf && entity == mc.player;
+            if (capture.hasGlint) build.glintSlot = RtEntityTextures.INSTANCE.glintSlot();
             build.logicalCount++;
             RtFrameStats.FRAME.count("entitiesCaptured", 1);
             capturedThisFrame++;

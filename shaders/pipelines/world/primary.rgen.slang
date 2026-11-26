@@ -46,7 +46,7 @@ public PathSegment tracePrimary(PathSegment seg,
                                                showCelestial, seg.viewModelPath);
         bool directView = bounce == 0;
         if (!directView || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
-            uint mask = directView ? cameraCullMask() : secondaryRadianceCullMask(seg.viewModelPath);
+            uint mask = directView ? cameraCullMask() : secondaryRadianceCullMask(seg.viewModelPath, showCelestial);
             traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread, directView);
         }
 

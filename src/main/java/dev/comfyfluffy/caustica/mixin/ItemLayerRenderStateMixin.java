@@ -19,7 +19,7 @@ public class ItemLayerRenderStateMixin {
     private void caustica$captureSpecialModelGlint(SpecialModelRenderer<?> renderer, Object argument, PoseStack pose,
             SubmitNodeCollector collector, int light, int overlay, boolean foil, int outline, Operation<Void> original) {
         // These vanilla models submit a second copy of their mesh for the depth-equal glint pass.
-        if (foil && collector instanceof RtEntityCollector rt && rt.isCapturingViewModel()
+        if (foil && collector instanceof RtEntityCollector rt && rt.isCapturingHeldItem()
                 && (renderer instanceof ShieldSpecialRenderer || renderer instanceof TridentSpecialRenderer)) {
             rt.captureModelGlint(() -> original.call(renderer, argument, pose, collector, light, overlay, false, outline));
             return;
