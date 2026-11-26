@@ -92,6 +92,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private boolean vrViewModel;
     private boolean vrCameraOwner;
     private BlockState cameraOwnerHeldBlock;
+    private final RtHeldEmission heldEmission = new RtHeldEmission();
     private boolean viewModelCompatible;
     private boolean profileDynamicEntity;
     private final RtEntityCapture parityCapture = new RtEntityCapture();
@@ -159,6 +160,14 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     public boolean isCapturingVrCameraOwner() {
         return vrCameraOwner;
+    }
+
+    public void beginHeldEmission(BlockState block) {
+        heldEmission.begin(capture, block);
+    }
+
+    public void finishHeldEmission(boolean submitted) {
+        heldEmission.finish(capture, submitted);
     }
 
     /** Mark all of the camera owner's held-item layer, including special model submissions. */
@@ -399,6 +408,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         float emission = state != null ? state.getLightEmission() / 15f : 0f;
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers), emission);
+        heldEmission.includeQuad(capture, sprite);
     }
 
     /** Resolve block-atlas geometry through the same immutable material snapshot as terrain. */
@@ -901,6 +911,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         int color = ARGB.multiply(averageQuadColor(quad), tint);
         float emission = quad.emissive() ? 1f : state != null ? state.getLightEmission() / 15f : 0f;
         capture.addDirectQuad(meshX, meshY, meshZ, meshU, meshV, 0f, 0f, 0f, color, emission);
+        heldEmission.includeQuad(capture, sprite);
     }
 
     /** Collapse Fabric's per-vertex colour into the flat per-primitive tint stored by the RT layout. */

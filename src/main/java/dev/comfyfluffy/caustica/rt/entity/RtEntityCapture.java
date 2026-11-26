@@ -27,7 +27,7 @@ public final class RtEntityCapture implements VertexConsumer {
     private static final int OWNER_HELD_OPAQUE = 0x20000000;
     private static final int SAMPLED_EMISSION = 0x10000000;
     private static final int TRACKED_ARM = 0x08000000;
-    private static final int MATERIAL_ID_MASK = 0x07ffffff;
+    static final int MATERIAL_ID_MASK = 0x07ffffff;
     // Same magnitude as RtTerrain.QuadCapture.OFFSET (2e-4 blocks) — proven large enough to break a BVH
     // depth tie without a visible gap at terrain/entity scale.
     private static final float ORDER_OFFSET = 2.0e-4f;
@@ -45,7 +45,8 @@ public final class RtEntityCapture implements VertexConsumer {
     final IntArrayList alphaBuckets = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY) / 3);
     private final IntArrayList packedIdx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY));
     private final FloatArrayList packedPrim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY));
-    private final IntArrayList packedEmissiveTriangles = new IntArrayList();
+    private final IntArrayList packedEmissiveSamples = new IntArrayList();
+    private final FloatArrayList emittedPowerScales = new FloatArrayList();
     private final int[] packedBucketTris = new int[RtAccel.ENTITY_BUCKETS];
 
     // Bindless texture slot for the geometry currently being submitted (set by the collector per
@@ -89,6 +90,7 @@ public final class RtEntityCapture implements VertexConsumer {
         alphaBuckets.clear();
         packedIdx.clear();
         packedPrim.clear();
+        emittedPowerScales.clear();
         ensureVertexCapacity(expectedVertices);
         n = 0;
         currentTexSlot = 0;
@@ -249,6 +251,12 @@ public final class RtEntityCapture implements VertexConsumer {
         }
     }
 
+    void scaleEmittedPower(int firstTriangle, float scale) {
+        int triangles = idx.size() / 3;
+        emittedPowerScales.size(triangles);
+        java.util.Arrays.fill(emittedPowerScales.elements(), firstTriangle, triangles, scale);
+    }
+
     PackedGeometry packGeometry(boolean sampleEmission) {
         int triangleCount = idx.size() / 3;
         if (alphaBuckets.size() != triangleCount || prim.size() != triangleCount * 12) {
@@ -257,7 +265,7 @@ public final class RtEntityCapture implements VertexConsumer {
         }
         packedIdx.clear();
         packedPrim.clear();
-        packedEmissiveTriangles.clear();
+        packedEmissiveSamples.clear();
         java.util.Arrays.fill(packedBucketTris, 0);
         packedIdx.ensureCapacity(idx.size());
         packedPrim.ensureCapacity(prim.size());
@@ -282,7 +290,9 @@ public final class RtEntityCapture implements VertexConsumer {
                     if ((material & TRACKED_ARM) == 0
                             && RtMaterialRegistry.INSTANCE.canSampleEmission(material & MATERIAL_ID_MASK,
                             primitives[primBase + 3])) {
-                        packedEmissiveTriangles.add(packedIdx.size() / 3 - 1);
+                        float scale = tri < emittedPowerScales.size() ? emittedPowerScales.getFloat(tri) : 0.0f;
+                        packedEmissiveSamples.add(packedIdx.size() / 3 - 1);
+                        packedEmissiveSamples.add(Float.floatToRawIntBits(scale > 0.0f ? scale : 1.0f));
                         packedPrim.set(packedPrimBase + 8, Float.intBitsToFloat(material | SAMPLED_EMISSION));
                     }
                 }
@@ -292,11 +302,11 @@ public final class RtEntityCapture implements VertexConsumer {
         if (packedIdx.size() != idx.size() || packedPrim.size() != prim.size()) {
             throw new IllegalStateException("Entity capture contains an invalid alpha bucket");
         }
-        return new PackedGeometry(packedIdx, packedPrim, packedBucketTris, packedEmissiveTriangles);
+        return new PackedGeometry(packedIdx, packedPrim, packedBucketTris, packedEmissiveSamples);
     }
 
     record PackedGeometry(IntArrayList indices, FloatArrayList primitives, int[] bucketTris,
-                          IntArrayList emissiveTriangles) {
+                          IntArrayList emissiveSamples) {
         int[] copyBucketTris() {
             return bucketTris.clone();
         }

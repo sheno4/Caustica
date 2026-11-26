@@ -79,14 +79,32 @@ final class RtLightCollector {
     static void collectBucket(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
                               RtMaterialRegistry.Snapshot materials, float minFillRatio) {
+        integrateBucket(out, verts, prim, cornerUv, sprites, materials, minFillRatio);
+    }
+
+    static float measurePower(FloatArrayList verts, FloatArrayList prim, FloatArrayList cornerUv,
+                              TextureAtlasSprite[] sprites, RtMaterialRegistry.Snapshot materials) {
+        return integrateBucket(null, verts, prim, cornerUv, sprites, materials, 0.0f);
+    }
+
+    private static float integrateBucket(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
+                                         FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
+                                         RtMaterialRegistry.Snapshot materials, float minFillRatio) {
         int quads = prim.size() / (2 * PRIM_FLOATS);
         float[] v = verts.elements();
         float[] p = prim.elements();
         float[] uv = cornerUv.elements();
+        double power = 0.0;
         for (int k = 0; k < quads; k++) {
             int pb = k * 2 * PRIM_FLOATS;
             int materialId = Float.floatToRawIntBits(p[pb + 8]);
+            if (out == null && (materialId < 0 || materialId >= materials.materialCount())) {
+                continue;
+            }
             RtMaterialDesc desc = materials.material(materialId);
+            if (out == null && desc.model() != RtMaterialRegistry.MODEL_OPAQUE) {
+                continue;
+            }
             RtMaterialDesc.EmissionSource source = desc.emissionSource();
             if (source == RtMaterialDesc.EmissionSource.NONE) {
                 continue;
@@ -191,6 +209,12 @@ final class RtLightCollector {
                     }
                 }
             }
+            if (out == null) {
+                // Integrate the whole emitting surface without applying the NEE membership gates.
+                float luminance = tintedLuminance(sumR, sumG, sumB, p[pb + 4], p[pb + 5], p[pb + 6]);
+                power += (double) quadArea * luminance * factor * desc.emissionStrength() / (SCAN * SCAN);
+                continue;
+            }
             if (emissive == 0) {
                 continue;
             }
@@ -267,6 +291,13 @@ final class RtLightCollector {
             p[pb + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_BUFFER);
             p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_BUFFER);
         }
+        return Double.isFinite(power) && power <= Float.MAX_VALUE ? (float) power : 0.0f;
+    }
+
+    private static float tintedLuminance(float r, float g, float b, float tintR, float tintG, float tintB) {
+        return 0.2126f * r * srgbToLinear(tintR)
+                + 0.7152f * g * srgbToLinear(tintG)
+                + 0.0722f * b * srgbToLinear(tintB);
     }
 
     /** Bilinear corner interpolation localized into the sprite rect (shared by U and V lanes). */

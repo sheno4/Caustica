@@ -95,7 +95,7 @@ public struct WorldPush {
     public float    glintStrength;
     public uint64_t viewModelLightGeom;
     public uint64_t viewModelLightPositions;
-    public uint64_t viewModelLightIndices;
+    public uint64_t viewModelLightSamples; // uint2 {triangle index, emitted-power scale as float bits}
     public uint     viewModelLightTriangles;
 };
 

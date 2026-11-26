@@ -130,6 +130,10 @@ public final class RtTerrain {
 
     private static final RtTerrain INSTANCE = new RtTerrain();
 
+    // A reference block's model and emission data belong to the active material epoch.
+    private final IdentityHashMap<BlockState, Float> placedEmissionPowers = new IdentityHashMap<>();
+    private long placedEmissionEpoch;
+
     private final Long2ObjectOpenHashMap<SectionGeom> resident = new Long2ObjectOpenHashMap<>();
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
@@ -211,6 +215,33 @@ public final class RtTerrain {
      */
     public static RtTerrain currentOrNull() {
         return INSTANCE.ready ? INSTANCE : null;
+    }
+
+    /** Integrated luminance of the actual placed block model in a loaded reference world. */
+    public static float placedEmissionPower(BlockState state) {
+        if (state == null || state.getRenderShape() != RenderShape.MODEL) return 0.0f;
+        Minecraft mc = Minecraft.getInstance();
+        ClientLevel level = mc.level;
+        if (level == null || mc.player == null || !RtMaterialRegistry.INSTANCE.isReady()) return 0.0f;
+        RtMaterialRegistry.Snapshot materials = RtMaterialRegistry.INSTANCE.requireSnapshot();
+        RtTerrain terrain = INSTANCE;
+        if (terrain.placedEmissionEpoch != materials.epoch()) {
+            terrain.placedEmissionPowers.clear();
+            terrain.placedEmissionEpoch = materials.epoch();
+        }
+        return terrain.placedEmissionPowers.computeIfAbsent(state, block -> {
+            BlockStateModel model = mc.getModelManager().getBlockStateModelSet().get(block);
+            if (model == null) return 0.0f;
+            return RtTerrainMesher.placedEmissionPower(block, model, level, mc.player.blockPosition(),
+                    mc.getBlockColors(), mc.getAtlasManager().getAtlasOrThrow(AtlasIds.BLOCKS).spriteFinder(),
+                    materials);
+        });
+    }
+
+    /** Integrated luminance of an emitted quad mesh in the terrain collector's layout. */
+    public static float meshEmissionPower(FloatArrayList verts, FloatArrayList prim, FloatArrayList cornerUv,
+                                          TextureAtlasSprite[] sprites, RtMaterialRegistry.Snapshot materials) {
+        return RtLightCollector.measurePower(verts, prim, cornerUv, sprites, materials);
     }
 
     public static boolean isSectionReady(BlockPos blockPos) {
@@ -1685,6 +1716,7 @@ public final class RtTerrain {
 
     /** Full teardown (world exit / shutdown): drain the GPU, then free everything incl. an in-flight build. */
     private void clear(RtContext ctx, boolean shutdown) {
+        placedEmissionPowers.clear();
         if (!shutdown) {
             clearAsync(ctx);
             return;

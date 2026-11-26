@@ -364,7 +364,7 @@ public final class RtEntities {
     public record FrameEntities(List<RtAccel.Instance> baseInstances, List<RtAccel.Instance> dynamicInstances,
                                 List<RtAccel.PreparedBlas> blas, long geomTableAddr, FrameUse use,
                                 Vector4f viewModelBounds, int glintSlot, long viewModelLightGeom,
-                                long viewModelLightPositions, long viewModelLightIndices, int viewModelLightTriangles,
+                                long viewModelLightPositions, long viewModelLightSamples, int viewModelLightTriangles,
                                 boolean vrAvatarPresent) {
     }
 
@@ -601,7 +601,7 @@ public final class RtEntities {
         int glintSlot;
         long viewModelLightGeom;
         long viewModelLightPositions;
-        long viewModelLightIndices;
+        long viewModelLightSamples;
         int viewModelLightTriangles;
         boolean vrAvatarPresent;
 
@@ -679,7 +679,7 @@ public final class RtEntities {
         }
         return new FrameEntities(base, build.instances, build.blas, build.geomTableAddr,
                 new FrameUse(build.lists, build.table), viewModelBounds, build.glintSlot, build.viewModelLightGeom,
-                build.viewModelLightPositions, build.viewModelLightIndices, build.viewModelLightTriangles,
+                build.viewModelLightPositions, build.viewModelLightSamples, build.viewModelLightTriangles,
                 build.vrAvatarPresent);
     }
 
@@ -1658,15 +1658,15 @@ public final class RtEntities {
         writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
                 motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris(), mask == MASK_VIEW_MODEL);
 
-        IntArrayList emissiveTriangles = packed.emissiveTriangles();
-        if (!emissiveTriangles.isEmpty()) {
-            int count = emissiveTriangles.size();
-            MotionSlice slice = build.motion.allocate(ctx, (long) count * Integer.BYTES);
-            MemoryUtil.memIntBuffer(slice.mapped, count).put(emissiveTriangles.elements(), 0, count);
+        IntArrayList emissiveSamples = packed.emissiveSamples();
+        if (!emissiveSamples.isEmpty()) {
+            int words = emissiveSamples.size();
+            MotionSlice slice = build.motion.allocate(ctx, (long) words * Integer.BYTES);
+            MemoryUtil.memIntBuffer(slice.mapped, words).put(emissiveSamples.elements(), 0, words);
             build.viewModelLightGeom = build.geomTableAddr + (long) build.count * TABLE_ENTRY_BYTES;
             build.viewModelLightPositions = positionAddr;
-            build.viewModelLightIndices = slice.deviceAddress;
-            build.viewModelLightTriangles = count;
+            build.viewModelLightSamples = slice.deviceAddress;
+            build.viewModelLightTriangles = words / 2;
         }
         build.instances.add(new RtAccel.Instance(instanceTransform, blas.accel.deviceAddress,
                 instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));

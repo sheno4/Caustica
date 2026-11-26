@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.compat;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
+import dev.comfyfluffy.caustica.rt.entity.RtEntityCollector;
 import dev.comfyfluffy.caustica.CausticaMod;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -187,11 +188,16 @@ public final class VivecraftCompat {
             throws ReflectiveOperationException {
         BlockState prior = HandAccess.heldBlockState;
         HandAccess.heldBlockState = heldBlock;
+        RtEntityCollector rt = heldBlock != null && collector instanceof RtEntityCollector capture ? capture : null;
+        boolean submitted = false;
         try {
+            if (rt != null) rt.beginHeldEmission(heldBlock);
             hooks.submit.invoke(null, collector, state, camera, new PoseStack(), mainHand, !mainHand,
                     false, false, 0);
+            submitted = true;
         } finally {
             HandAccess.heldBlockState = prior;
+            if (rt != null) rt.finishHeldEmission(submitted);
         }
     }
 

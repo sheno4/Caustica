@@ -46,7 +46,8 @@ public float3 shadeViewModelLights(float3 hitPos, float3 n, float3 biasNormal, f
     if (count == 0u || luminance(diffAlb) <= 0.0) return float3(0.0);
 
     uint candidate = min(uint(rndf(seed) * float(count)), count - 1u);
-    uint pid = ConstPtr<uint>(worldPush.viewModelLightIndices)[candidate];
+    uint2 sampleInfo = ConstPtr<uint2>(worldPush.viewModelLightSamples)[candidate];
+    uint pid = sampleInfo.x;
     EntityGeom geom = ConstPtr<EntityGeom>(worldPush.viewModelLightGeom)[0];
     Prim primitive = ConstPtr<Prim>(geom.primAddr)[pid];
     MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)
@@ -87,7 +88,8 @@ public float3 shadeViewModelLights(float3 hitPos, float3 n, float3 biasNormal, f
     float phat;
     // Specular continuations intersect the mesh directly. Zero alpha makes this
     // direct estimator's finite GGX term vanish, leaving the world diffuse/SSS terms.
-    float3 contribution = evalSampleContrib(samplePosition, emitterNormal, emission,
+    // Block items preserve their placed model's integrated power without changing surface luminance.
+    float3 contribution = evalSampleContrib(samplePosition, emitterNormal, emission * asfloat(sampleInfo.y),
             (0.5 * twiceArea) * float(count), hitPos, n, v, -v, diffAlb, float3(0.0), 0.0, twoSided, sss, phat);
     if (phat <= 0.0) return float3(0.0);
     float3 origin = offsetSurfaceOrigin(hitPos, biasNormal, direction, SURF_BIAS);

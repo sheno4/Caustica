@@ -82,6 +82,30 @@ final class RtTerrainMesher {
 
     static final ThreadLocal<WorkerTessState> WORKER_TESS = ThreadLocal.withInitial(WorkerTessState::new);
 
+    /** Measures the authored block model's emission without submitting any geometry to the scene. */
+    static float placedEmissionPower(BlockState state, BlockStateModel model, BlockAndTintGetter view,
+                                     BlockPos pos, BlockColors colors, SpriteFinder sprites,
+                                     RtMaterialRegistry.Snapshot materials) {
+        QuadCapture capture = new QuadCapture();
+        SectionMesh mesh = new SectionMesh();
+        capture.cur = mesh;
+        capture.state = state;
+        capture.pos = pos;
+        capture.view = view;
+        capture.blockColors = colors;
+        capture.spriteFinder = sprites;
+        capture.materials = materials;
+        QuadEmitter emitter = Renderer.get().quadEmitter(capture::putFabric);
+        model.emitQuads(emitter, view, pos, state, RandomSource.create(state.getSeed(pos)), direction -> false);
+        capture.flushBlock();
+        return measureEmissionPower(mesh.opaque, materials) + measureEmissionPower(mesh.cutout, materials);
+    }
+
+    private static float measureEmissionPower(Geom geom, RtMaterialRegistry.Snapshot materials) {
+        return geom == null ? 0.0f : RtLightCollector.measurePower(geom.verts, geom.prim, geom.cornerUv,
+                geom.ommSprites.elements(), materials);
+    }
+
     /**
      * Tessellate one section to a section-local CPU mesh and precompute pure-CPU sidecar data such as
      * the terrain opacity micromap. <b>Pure CPU + snapshot reads only</b> — no Vulkan, no shared mutable
