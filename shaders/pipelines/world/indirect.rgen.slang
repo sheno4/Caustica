@@ -72,7 +72,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // would be a double-counted firefly. Reset true on every specular/water bounce, false on a diffuse one.
     bool showCelestial = seg.showCelestial;
     bool viewModelPath = seg.viewModelPath;
-    bool avatarReflection = seg.avatarReflection;
     bool sampledViewModelLights = false;
     bool hasViewModelLights = worldPush.viewModelLightTriangles > 0u;
     uint viewModelLightSeed = seed ^ 0x913e27a9u;
@@ -88,15 +87,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // Radiance SBT records run any-hit only for true alpha cutout. Translucent/water go straight to
         // closest-hit for dielectric handling. Geometry is double-sided; the chit flips the normal.
         if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
-            uint mask = bounce == 0 ? cameraCullMask()
-                    : secondaryCullMask(viewModelPath) | (avatarReflection ? CULL_CAMERA_OWNER : 0u);
+            bool directView = bounce == 0;
+            uint mask = directView ? cameraCullMask() : secondaryRadianceCullMask(viewModelPath);
 #ifdef CAUSTICA_ENABLE_EXT_SER
             // Keep roulette eligibility and the path cap in separate coherence groups.
             uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
             traceRadianceReordered(mask, ro, 0.0, rd, 10000.0,
-                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
+                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint, directView);
 #else
-            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
+            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread, directView);
 #endif
         }
 
@@ -128,12 +127,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
-        bool reflectAvatar = reflectsVrAvatar(payloadViewModel());
+        bool trackedHit = isTrackedViewModel(payloadViewModel());
         bool sampledEmitterHit = sampledViewModelLights && (payload.flags & PAYLOAD_VIEW_MODEL_LIGHT) != 0u;
         sampledViewModelLights = false;
         viewModelPath = viewModelPath || payloadViewModel();
-        avatarReflection = false;
-        uint shadowMask = secondaryCullMask(viewModelPath);
+        uint shadowMask = shadowCullMask(viewModelPath);
         int hitDepth = indirectDepth++;
 
         // Minecraft's glint blend adds the squared source color at the visible item surface.
@@ -194,7 +192,6 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
 
             bool chooseReflection = rndf(seed) < F;
             if (chooseReflection) {
-                avatarReflection = reflectAvatar;
                 rd = reflect(rd, n);
                 ro = offsetSurfaceOrigin(hitPos, geometricNormal, rd, SURF_BIAS);
             } else {
@@ -274,7 +271,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 albedo = payloadAlbedo();
         float sss = payloadSss(); // LabPBR SSS strength (0 when absent)
         float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? sss : 0.0;
-        float3 biasNormal = reflectAvatar ? unpackGeometricNormal(payload.iorTransmission) : n;
+        float3 biasNormal = trackedHit ? unpackGeometricNormal(payload.iorTransmission) : n;
         float3 p = hitPos + biasNormal * SURF_BIAS;
         float3 v = -rd; // view direction (toward the camera / incoming ray)
 
@@ -414,16 +411,15 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
                 throughput *= F * ggxG1(ndl2, rough) / ps;
                 rayConeSpread = max(rayConeSpread, rough * RAY_CONE_GLOSSY_SPREAD_SCALE);
             }
-            if (reflectAvatar && dot(biasNormal, l) <= 0.0) break;
+            if (trackedHit && dot(biasNormal, l) <= 0.0) break;
             ro = p;
             rd = l;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
-            avatarReflection = reflectAvatar;
         } else {
             throughput *= diffAlb / (1.0 - ps);
             ro = p;
             rd = cosineDir(n, seed);
-            if (reflectAvatar && dot(biasNormal, rd) <= 0.0) break;
+            if (trackedHit && dot(biasNormal, rd) <= 0.0) break;
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
             sampledViewModelLights = hasViewModelLights;

@@ -101,8 +101,9 @@ First-person arms and held models use the scene's LabPBR materials and light
 transport on desktop and in both Vivecraft eyes. Desktop hand geometry uses
 its own field of view and foreground visibility mask. VR hands follow their
 controller poses in the scene. Specular reflections from VR hands and held items
-can show the local avatar. Rays that see the avatar use its attached arms and
-the controller-tracked held items. First-person rays see the tracked arms.
+can show the local avatar. The controller-tracked arms appear only on direct
+first-person camera rays. Reflections and refractions use the avatar's attached
+arms and the controller-tracked held items.
 Emissive VR held items use their captured, textured model triangles for direct
 lighting, bounced light and reflections.
 Enchantment glint adds Minecraft's animated texture to the traced item surface.

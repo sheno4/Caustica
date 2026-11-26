@@ -109,8 +109,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
 
     // Pass A stops radiance traversal at the first split, so reflection motion keeps one dedicated,
     // deterministic guide probe.
-    bool avatarReflection = reflectsVrAvatar(surface.viewModel);
-    uint reflectionMask = secondaryCullMask(surface.viewModel) | (avatarReflection ? CULL_CAMERA_OWNER : 0u);
+    uint reflectionMask = secondaryRadianceCullMask(surface.viewModel);
     float3 specOrigin = offsetSurfaceOrigin(surfacePos, surface.biasNormal, specDir, SURF_BIAS);
     traceGuide(reflectionMask, specOrigin,
             RAY_TMIN, specDir, 10000.0,
@@ -170,12 +169,12 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
 
     float3 direction = normalize(transmittedDir);
     float3 ro = offsetSurfaceOrigin(surfacePos, surfaceBiasNormal, direction, rayBias);
-    bool vrAvatar = (worldPush.flags & VR_AVATAR_PRESENT) != 0u;
+    bool vrScene = trackedGeometryMask() != 0u || (worldPush.flags & VR_AVATAR_PRESENT) != 0u;
 
     // The camera interface consumed bounce 0; the remaining configured bounce budget is the natural
     // cap for deterministic guide crossings too.
     for (uint crossing = 0u; crossing < worldPush.maxBounces; ++crossing) {
-        traceGuide(vrAvatar ? secondaryCullMask(viewModelPath) : cameraCullMask(),
+        traceGuide(vrScene ? secondaryRadianceCullMask(viewModelPath) : cameraCullMask(),
                 ro, RAY_TMIN, direction, 10000.0,
                 rayConeWidth, rayConeSpread);
         if (payload.hitT <= 0.0) {

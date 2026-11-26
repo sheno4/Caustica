@@ -43,10 +43,11 @@ public PathSegment tracePrimary(PathSegment seg,
         int bounce = seg.bounce;
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
-                                               showCelestial, seg.viewModelPath, seg.avatarReflection);
-        if (bounce != 0 || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
-            traceRadiance(bounce == 0 ? cameraCullMask() : CULL_PRIMARY,
-                          ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread);
+                                               showCelestial, seg.viewModelPath);
+        bool directView = bounce == 0;
+        if (!directView || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
+            uint mask = directView ? cameraCullMask() : secondaryRadianceCullMask(seg.viewModelPath);
+            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread, directView);
         }
 
         if (payload.hitT < 0.0) {
@@ -97,7 +98,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     gv_spec = makeSpecSurface(gv_hitCamRel, n, float3(payload.motionPrev), rough,
                                               rrSpecularAlbedo(payload.f0, rough, dot(n, v)));
                     gv_spec.viewModel = viewModelHit;
-                    if (reflectsVrAvatar(viewModelHit)) {
+                    if (isTrackedViewModel(viewModelHit)) {
                         gv_spec.biasNormal = unpackGeometricNormal(payload.iorTransmission);
                     }
                 }
@@ -198,7 +199,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed ^ 0xa511e9b3u, bounce + 1,
-                    true, viewModelPath, reflectsVrAvatar(viewModelHit));
+                    true, viewModelPath);
             return reflected;
         }
 
@@ -210,7 +211,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
-                    true, viewModelPath, reflectsVrAvatar(viewModelHit));
+                    true, viewModelPath);
         } else {
             float3 deferredDir = normalize(transmittedDir);
             if (entering) {

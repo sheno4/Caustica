@@ -279,7 +279,8 @@ public final class RtEntityCapture implements VertexConsumer {
                 }
                 if (sampleEmission) {
                     int material = Float.floatToRawIntBits(primitives[primBase + 8]);
-                    if (RtMaterialRegistry.INSTANCE.canSampleEmission(material & MATERIAL_ID_MASK,
+                    if ((material & TRACKED_ARM) == 0
+                            && RtMaterialRegistry.INSTANCE.canSampleEmission(material & MATERIAL_ID_MASK,
                             primitives[primBase + 3])) {
                         packedEmissiveTriangles.add(packedIdx.size() / 3 - 1);
                         packedPrim.set(packedPrimBase + 8, Float.intBitsToFloat(material | SAMPLED_EMISSION));

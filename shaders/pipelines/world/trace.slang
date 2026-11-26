@@ -60,8 +60,8 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
 // Ordinary radiance trace for latency-sensitive, coherent work such as Pass A. It invokes hit/miss
 // shaders directly and therefore requires no invocation-reorder capability.
 public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
-                    bool showCelestial, float rayConeWidth, float rayConeSpread) {
-    payload = makeRadiancePayload(trackedGeometryFlags(cullMask)
+                    bool showCelestial, float rayConeWidth, float rayConeSpread, bool directView) {
+    payload = makeRadiancePayload(trackedGeometryFlags(cullMask, directView)
             | (showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u),
             packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
@@ -74,8 +74,8 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
 // adds latency. The dedicated miss record also avoids the atmosphere march: guides need hit-vs-miss,
 // not sky radiance.
 public void traceGuide(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
-                float rayConeWidth, float rayConeSpread) {
-    payload = makeRadiancePayload(trackedGeometryFlags(cullMask),
+                float rayConeWidth, float rayConeSpread, bool directView = false) {
+    payload = makeRadiancePayload(trackedGeometryFlags(cullMask, directView),
             packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask, SBT_RADIANCE, SBT_STRIDE_BUCKET,
             MISS_GUIDE, makeRay(ro, tmin, rd, tmax), payload);
@@ -86,27 +86,29 @@ public uint trackedGeometryMask() {
             ? CULL_VIEW_MODEL : 0u;
 }
 
-public uint trackedGeometryFlags(uint mask) {
+public uint trackedGeometryFlags(uint mask, bool directView) {
     if ((mask & CULL_VIEW_MODEL) == 0u) return 0u;
     // The avatar attachment duplicates the physically tracked item when both are in the scene.
-    uint flags = PAYLOAD_SKIP_OWNER_HELD;
-    // Rays that can see the avatar use its attached arms with the tracked items.
-    if ((mask & CULL_CAMERA_OWNER) != 0u && (worldPush.flags & VR_AVATAR_PRESENT) != 0u) {
-        flags |= PAYLOAD_SKIP_TRACKED_ARM;
-    }
-    return flags;
+    // Controller-rendered arms are only present on the direct camera ray.
+    return PAYLOAD_SKIP_OWNER_HELD | (directView ? 0u : PAYLOAD_SKIP_TRACKED_ARM);
 }
 
 public uint cameraCullMask() {
     return CULL_PRIMARY | trackedGeometryMask();
 }
 
-// The separate camera-owner model must not shadow the tracked hands.
-public uint secondaryCullMask(bool viewModelPath) {
+// The avatar must not shadow the first-person models when shading them.
+public uint shadowCullMask(bool viewModelPath) {
     return CULL_SECONDARY | trackedGeometryMask() | (viewModelPath ? 0u : CULL_CAMERA_OWNER);
 }
 
-public bool reflectsVrAvatar(bool viewModelHit) {
+public uint secondaryRadianceCullMask(bool viewModelPath) {
+    // Indirect sightlines include the complete VR avatar even when the path started on a held item.
+    bool vrAvatar = (worldPush.flags & VR_AVATAR_PRESENT) != 0u;
+    return CULL_SECONDARY | trackedGeometryMask() | (!viewModelPath || vrAvatar ? CULL_CAMERA_OWNER : 0u);
+}
+
+public bool isTrackedViewModel(bool viewModelHit) {
     return viewModelHit && trackedGeometryMask() != 0u;
 }
 
@@ -117,7 +119,7 @@ public bool traceForegroundViewModel(float3 ro, float3 rd, float2 ndc, float con
             || any(ndc < worldPush.viewModelBounds.xy) || any(ndc > worldPush.viewModelBounds.zw)) {
         return false;
     }
-    traceGuide(CULL_VIEW_MODEL, ro, 0.0, rd, 10000.0, coneWidth, coneSpread);
+    traceGuide(CULL_VIEW_MODEL, ro, 0.0, rd, 10000.0, coneWidth, coneSpread, true);
     return payload.hitT >= 0.0;
 }
 
@@ -145,7 +147,7 @@ public VisibilityResult visibility(uint cullMask, float3 origin, float3 dir, flo
     // Vulkan requires an identical payload structure for every stage reachable by this trace. The shadow
     // path uses only the albedo view as accumulated transmittance and hitT as the nearest-water crossing.
     Payload shadowPayload = makeShadowPayload();
-    shadowPayload.flags |= trackedGeometryFlags(cullMask);
+    shadowPayload.flags |= trackedGeometryFlags(cullMask, false);
     // Shadow SBT records run any-hit only for cutout/translucent/water. Cutout alpha-tests; translucent
     // and water tint that transmittance and pass through. Solid blocks terminate traversal. There is no
     // closest shader worth executing. The lightweight guide miss clears the flags sentinel so this path
