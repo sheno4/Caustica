@@ -77,18 +77,21 @@ active. Auxiliary views, including the scope and third-person camera, and the
 Fabulous transparency path use Vivecraft's native rendering. The desktop
 Video Settings screen exposes Caustica's renderer settings.
 
-Toggle **Fixed Foveated Rendering** in the VR Rendering section of Video Settings
-to render each eye with a lower-resolution full view and a higher-resolution
-center. Each layer has its own DLSS Ray Reconstruction history. Caustica blends
-the layers before exposure and bloom and sends the full-size result to
-Vivecraft. Both insets use the headset's angular center and each eye's own
-position. **Wide Resolution Scale** sets both axes of the wide layer from 25%
-to 100% of the eye target. **Inset Resolution Limit** caps the center layer's
-square side at 256 to 4096 pixels, up to the eye target's shorter edge.
-**Center Coverage Angle** sets the inset's coverage from 5° to 120°.
-**Show Center Region** outlines or colors the inset.
-**VR Overlay Quality** controls Vivecraft's high-resolution GUI option. Fixed
-foveated rendering starts disabled and is suspended in ray-tracing guide debug views.
+Set **Foveated Rendering** in the VR Rendering section of Video Settings to `Fixed`
+or `Paper Tracker` to render each eye with a lower-resolution full view and a
+higher-resolution inset. Each layer has its own DLSS Ray Reconstruction history.
+Caustica blends the layers before exposure and bloom and sends the full-size result
+to Vivecraft. In `Fixed` mode, both insets center on the headset's forward axis
+using each eye's own position. In `Paper Tracker` mode, Caustica subscribes to
+Paper Tracker's OSC/UDP gaze export on `127.0.0.1:9945` (`[papertracker]` in
+`config/caustica.toml`), smooths fixation jitter, snaps on saccades, and drifts
+back to head-forward if eye tracking is unavailable or lost. **Wide Resolution Scale**
+sets both axes of the wide layer from 25% to 100% of the eye target. **Inset Resolution
+Limit** caps the center layer's square side at 256 to 4096 pixels, up to the eye
+target's shorter edge. **Center Coverage Angle** sets the inset's coverage from 5° to
+120°. **Show Center Region** outlines or colors the inset. **VR Overlay Quality**
+controls Vivecraft's high-resolution GUI option. Foveated rendering starts disabled
+(`Off`) and is suspended in ray-tracing guide debug views.
 
 Wide reuses the inset's scene-linear lighting in the fully covered core while
 tracing its own DLSS guides and blend margin. Set `foveation-reuse-inset = false`

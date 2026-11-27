@@ -72,7 +72,7 @@ public abstract class VideoSettingsScreenMixin {
         list.addSmall(RtVideoOptions.runtimeOptions());
         if (VivecraftCompat.hasEyeIntegration()) {
             list.addHeader(Component.translatable("caustica.options.rt.vrHeader"));
-            list.addSmall(RtVideoOptions.fixedFoveation(), RtVideoOptions.foveationPreview());
+            list.addSmall(RtVideoOptions.foveationMode(), RtVideoOptions.foveationPreview());
             list.addBig(RtVideoOptions.foveationWidePercent());
             list.addBig(RtVideoOptions.foveationInsetMaxResolution());
             list.addBig(RtVideoOptions.foveationCoverageDegrees());

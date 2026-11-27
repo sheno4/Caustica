@@ -14,6 +14,8 @@ import dev.comfyfluffy.caustica.compat.VivecraftCompat;
 import dev.comfyfluffy.caustica.compat.VivecraftCompat.View;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.RtGpuFrameStats.Stage;
+import dev.comfyfluffy.caustica.rt.gaze.GazeStabilizer;
+import dev.comfyfluffy.caustica.rt.gaze.PaperTrackerGazeClient;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.BreakEntry;
@@ -38,6 +40,7 @@ import net.minecraft.world.level.MoonPhase;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
+import org.joml.Vector3f;
 import org.joml.Vector4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -310,6 +313,11 @@ public final class RtComposite {
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
     private Matrix4f frameHeadView;
+    private final PaperTrackerGazeClient paperTrackerGaze = new PaperTrackerGazeClient();
+    private VrFoveation.Mode activeFoveationMode = VrFoveation.Mode.OFF;
+    private final Vector3f frameLeftEyeOffsetMeters = new Vector3f();
+    private final Vector3f frameRightEyeOffsetMeters = new Vector3f();
+    private GazeStabilizer.FrameOutput frameGazeOutput;
     private Consumer<SubmitNodeCollector> frameViewModel;
     private boolean viewModelRendered;
     private double camX;
@@ -509,8 +517,24 @@ public final class RtComposite {
         capturedView = VivecraftCompat.view();
         frameViewModel = null;
         viewModelRendered = false;
-        frameHeadView = capturedView.isEye() && CausticaConfig.Rt.Composite.FIXED_FOVEATION.value()
+        VrFoveation.Mode foveationMode = CausticaConfig.Rt.Composite.foveationMode();
+        frameHeadView = capturedView.isEye() && foveationMode.isEnabled()
                 ? VivecraftCompat.headViewRotation() : null;
+        if (!capturedView.isEye() || foveationMode != VrFoveation.Mode.PAPER_TRACKER || frameHeadView == null) {
+            paperTrackerGaze.deactivate();
+            frameGazeOutput = null;
+        } else {
+            if (capturedView == View.LEFT || frameGazeOutput == null) {
+                frameLeftEyeOffsetMeters.set(VivecraftCompat.eyeOffsetInHeadMeters(View.LEFT, frameHeadView));
+                frameRightEyeOffsetMeters.set(VivecraftCompat.eyeOffsetInHeadMeters(View.RIGHT, frameHeadView));
+            }
+            frameGazeOutput = paperTrackerGaze.resolveForEye(
+                    capturedView,
+                    frameLeftEyeOffsetMeters,
+                    frameRightEyeOffsetMeters,
+                    CausticaConfig.Rt.PaperTracker.PORT.value(),
+                    CausticaConfig.Rt.PaperTracker.stabilizerConfig());
+        }
         frameProjection.set(projection);
         frameViewRotation.set(viewRotation);
         camX = cameraX;
@@ -1122,10 +1146,15 @@ public final class RtComposite {
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             if (RtFrameStats.enabled()) {
                 RtImage inset = foveatedTargets == null ? null : foveatedTargets.inset.color;
+                String gazeState = inset == null ? "OFF"
+                        : activeFoveationMode == VrFoveation.Mode.PAPER_TRACKER && frameGazeOutput != null
+                                ? frameGazeOutput.state().name()
+                                : CausticaConfig.Rt.Composite.foveationMode().name();
                 gpuSample = gpuFrameStats.begin(ctx, cmd, stack, graphicsUseWaiter,
                         new RtGpuFrameStats.FrameInfo(frameCounter, capturedView, displayW, displayH, renderW, renderH,
                                 inset == null ? 0 : inset.width, inset == null ? 0 : inset.height,
-                                inset == null ? 0 : CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value(), reuseInset));
+                                inset == null ? 0 : CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value(),
+                                reuseInset, gazeState));
             }
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
             // submerged, fixing the air→water first-segment orientation) and animated water normals.
@@ -1321,6 +1350,13 @@ public final class RtComposite {
 
     private Float2 recordFoveatedInset(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack, RtPipeline active,
                                       TraceScene scene, MotionHistory history, RtGpuFrameStats.Sample gpuSample) {
+        VrFoveation.Mode mode = CausticaConfig.Rt.Composite.foveationMode();
+        if (activeFoveationMode != mode) {
+            leftMotion.insetValid = false;
+            rightMotion.insetValid = false;
+            RtDlssRr.resetInsetHistories();
+            activeFoveationMode = mode;
+        }
         int coverageDegrees = CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value();
         if (foveatedTargets.coverageDegrees != coverageDegrees) {
             leftMotion.insetValid = false;
@@ -1330,11 +1366,25 @@ public final class RtComposite {
             CausticaMod.LOGGER.info("VR foveation inset: {} degrees, {} pixels/degree at center",
                     coverageDegrees, VrFoveation.pixelsPerDegree(foveatedTargets.insetColor.width, coverageDegrees));
         }
+
+        Vector3f gazeDirHead = new Vector3f(0f, 0f, -1f);
+        if (mode == VrFoveation.Mode.PAPER_TRACKER && frameGazeOutput != null) {
+            GazeStabilizer.EyeOutput eyeGaze = capturedView == View.LEFT
+                    ? frameGazeOutput.left() : frameGazeOutput.right();
+            VrFoveation.clampGazeToEyeFrustum(frameProjection, frameViewRotation, frameHeadView,
+                    eyeGaze.headDirection(), 0.85f, gazeDirHead);
+            if (eyeGaze.jumpDegrees() > coverageDegrees * 0.75f) {
+                history.insetValid = false;
+                RtDlssRr.forInset(capturedView).requestHistoryReset();
+            }
+        }
+
+        Matrix4f insetViewRotation = VrFoveation.insetViewRotation(frameHeadView, gazeDirHead, new Matrix4f());
         Matrix4f insetProjection = VrFoveation.insetProjection(frameProjection, coverageDegrees);
-        Matrix4f insetViewProjection = insetProjection.mul(frameHeadView, new Matrix4f());
-        // The two eyes retain their own origins. Only the angular window uses the headset's rotation.
+        Matrix4f insetViewProjection = insetProjection.mul(insetViewRotation, new Matrix4f());
+        // The two eyes retain their own origins. The inset window points along the resolved gaze axis.
         Float2 jitterUv = recordTraceLayer(ctx, cmd, stack, active, scene, foveatedTargets.inset, foveatedTargets.insetColor,
-                insetProjection, frameHeadView, insetViewProjection,
+                insetProjection, insetViewRotation, insetViewProjection,
                 history.insetValid ? history.insetProjection : insetViewProjection, true, null, gpuSample);
         history.insetProjection.set(insetViewProjection);
         history.insetValid = true;
@@ -1649,6 +1699,9 @@ public final class RtComposite {
     }
 
     public void destroy() {
+        paperTrackerGaze.close();
+        frameGazeOutput = null;
+        activeFoveationMode = VrFoveation.Mode.OFF;
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();

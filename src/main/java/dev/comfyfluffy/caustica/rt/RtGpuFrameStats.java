@@ -29,7 +29,7 @@ final class RtGpuFrameStats {
     }
 
     record FrameInfo(long frame, View view, int outputWidth, int outputHeight, int wideWidth, int wideHeight,
-                     int insetWidth, int insetHeight, int coverageDegrees, boolean reusedInset) {}
+                     int insetWidth, int insetHeight, int coverageDegrees, boolean reusedInset, String gazeState) {}
 
     private static final Stage[] STAGES = Stage.values();
     private static final int QUERIES_PER_SAMPLE = STAGES.length * 2;
@@ -105,7 +105,7 @@ final class RtGpuFrameStats {
             samples[i] = new Sample(pool, i * QUERIES_PER_SAMPLE);
         }
         StringBuilder header = new StringBuilder("frame,view,outputWidth,outputHeight,wideTraceWidth,wideTraceHeight,"
-                + "insetTraceWidth,insetTraceHeight,coverageDegrees,reusedInset");
+                + "insetTraceWidth,insetTraceHeight,coverageDegrees,reusedInset,gazeState");
         for (Stage stage : STAGES) {
             header.append(',').append(stage.column).append("Ms");
         }
@@ -133,7 +133,8 @@ final class RtGpuFrameStats {
                 .append(',').append(info.outputWidth()).append(',').append(info.outputHeight())
                 .append(',').append(info.wideWidth()).append(',').append(info.wideHeight())
                 .append(',').append(info.insetWidth()).append(',').append(info.insetHeight())
-                .append(',').append(info.coverageDegrees()).append(',').append(info.reusedInset() ? 1 : 0);
+                .append(',').append(info.coverageDegrees()).append(',').append(info.reusedInset() ? 1 : 0)
+                .append(',').append(info.gazeState());
         for (int index : stageStarts) {
             row.append(',');
             if (index >= 0) {

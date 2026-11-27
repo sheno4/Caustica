@@ -58,6 +58,10 @@ public final class RtDlssRr {
         RIGHT_INSET.resetHistory = true;
     }
 
+    public void requestHistoryReset() {
+        this.resetHistory = true;
+    }
+
     public static void destroyAll() {
         INSTANCE.destroy();
         LEFT.destroy();
