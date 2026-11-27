@@ -61,7 +61,9 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
             return;
         }
         if ((epr.materialId & ENTITY_PRIM_OWNER_HELD) != 0u) {
-            if ((payload.flags & PAYLOAD_SKIP_OWNER_HELD) != 0u) {
+            uint excludedSlot = payloadHeldSlotFromFlags(payload.flags);
+            if ((payload.flags & PAYLOAD_SKIP_OWNER_HELD) != 0u
+                    || (excludedSlot != 0u && excludedSlot == entityPrimHeldSlot(epr.materialId))) {
                 IgnoreHit();
                 return;
             }

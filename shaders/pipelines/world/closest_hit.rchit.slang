@@ -303,7 +303,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
                 materialEmissionSource(header, emission));
         payloadSetDielectric(payload, material, entering);
         if (g.viewModel != 0u) {
-            payload.flags |= PAYLOAD_VIEW_MODEL;
+            payload.flags |= PAYLOAD_VIEW_MODEL | payloadHeldSlotFlags(entityPrimHeldSlot(pr.materialId));
             if (material == MATERIAL_OPAQUE) payload.iorTransmission = packGeometricNormal(geometricNormal);
         }
         if ((pr.materialId & ENTITY_PRIM_VIEW_MODEL_LIGHT) != 0u) payload.flags |= PAYLOAD_VIEW_MODEL_LIGHT;

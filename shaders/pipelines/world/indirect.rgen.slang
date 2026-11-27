@@ -72,6 +72,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // would be a double-counted firefly. Reset true on every specular/water bounce, false on a diffuse one.
     bool showCelestial = seg.showCelestial;
     bool viewModelPath = seg.viewModelPath;
+    uint excludedOwnerHeldSlot = seg.excludedOwnerHeldSlot;
     bool sampledViewModelLights = false;
     bool hasViewModelLights = worldPush.viewModelLightTriangles > 0u || worldPush.viewModelLightFootprintCount > 0u;
     uint viewModelLightSeed = seed ^ 0x913e27a9u;
@@ -93,11 +94,14 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             // Keep roulette eligibility and the path cap in separate coherence groups.
             uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
             traceRadianceReordered(mask, ro, 0.0, rd, 10000.0,
-                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint, directView);
+                                   showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint,
+                                   directView, excludedOwnerHeldSlot);
 #else
-            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread, directView);
+            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread,
+                          directView, excludedOwnerHeldSlot);
 #endif
         }
+        excludedOwnerHeldSlot = 0u;
 
         if (payload.hitT < 0.0) {
             // A ray still in water should leave through a water interface. A miss instead means the
@@ -127,6 +131,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
+        uint heldSlot = payloadHeldSlot();
         bool trackedHit = isTrackedViewModel(payloadViewModel());
         bool sampledEmitterHit = sampledViewModelLights && (payload.flags & PAYLOAD_VIEW_MODEL_LIGHT) != 0u;
         sampledViewModelLights = false;
@@ -194,6 +199,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (chooseReflection) {
                 rd = reflect(rd, n);
                 ro = offsetSurfaceOrigin(hitPos, geometricNormal, rd, SURF_BIAS);
+                excludedOwnerHeldSlot = heldSlot;
             } else {
                 if (dot(transmittedDir, transmittedDir) <= 0.0) break; // TIR with F < 1 cannot happen
                 rd = normalize(transmittedDir);
@@ -414,6 +420,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             if (trackedHit && dot(biasNormal, l) <= 0.0) break;
             ro = p;
             rd = l;
+            excludedOwnerHeldSlot = heldSlot;
             showCelestial = true; // specular lobe: this ray is a (glossy) mirror — show the disc
         } else {
             throughput *= diffAlb / (1.0 - ps);

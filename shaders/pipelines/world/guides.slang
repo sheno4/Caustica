@@ -37,6 +37,7 @@ public struct SpecSurface {
     public float roughness;
     public float3 albedo;         // specular albedo fed to DLSS-RR for demodulation (0 = pure diffuse)
     public bool viewModel;
+    public uint excludedOwnerHeldSlot;
 };
 public static SpecSurface gv_spec = {};
 
@@ -53,6 +54,7 @@ public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float3 previous
     s.roughness = roughness;
     s.albedo = albedo;
     s.viewModel = false;
+    s.excludedOwnerHeldSlot = 0u;
     return s;
 }
 
@@ -114,7 +116,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
     traceGuide(reflectionMask, specOrigin,
             RAY_TMIN, specDir, 10000.0,
             max(length(surface.camRel) * primaryConeSpread, RAY_CONE_MIN_WIDTH),
-            max(primaryConeSpread, RAY_CONE_MIN_SPREAD));
+            max(primaryConeSpread, RAY_CONE_MIN_SPREAD), false, surface.excludedOwnerHeldSlot);
     float3 reflectedHit;
     float3 reflectedMotionPrev;
     if (payload.hitT > 0.0) {

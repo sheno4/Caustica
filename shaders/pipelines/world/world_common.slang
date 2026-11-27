@@ -195,6 +195,17 @@ public static const uint PAYLOAD_GLINT = 512u;
 public static const uint PAYLOAD_SKIP_OWNER_HELD = 1024u;
 public static const uint PAYLOAD_VIEW_MODEL_LIGHT = 2048u;
 public static const uint PAYLOAD_SKIP_TRACKED_ARM = 4096u;
+// Input: avatar-held slot to skip on a reflected ray. Output: slot of the tracked item hit.
+public static const uint PAYLOAD_HELD_SLOT_SHIFT = 13u;
+public static const uint HELD_SLOT_MASK = 3u;
+
+public uint payloadHeldSlotFlags(uint heldSlot) {
+    return (heldSlot & HELD_SLOT_MASK) << PAYLOAD_HELD_SLOT_SHIFT;
+}
+
+public uint payloadHeldSlotFromFlags(uint flags) {
+    return (flags >> PAYLOAD_HELD_SLOT_SHIFT) & HELD_SLOT_MASK;
+}
 // Set by world.rchit on any dielectric hit (water or glass/ice): true when the incoming ray travels
 // against the prim's outward face normal (entering the volume), false when it exits. Derived from face
 // orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
@@ -226,7 +237,13 @@ public static const uint ENTITY_PRIM_OWNER_HELD = 0x40000000u;
 public static const uint ENTITY_PRIM_OWNER_HELD_OPAQUE = 0x20000000u;
 public static const uint ENTITY_PRIM_VIEW_MODEL_LIGHT = 0x10000000u;
 public static const uint ENTITY_PRIM_TRACKED_ARM = 0x08000000u;
-public static const uint ENTITY_PRIM_MATERIAL_MASK = 0x07ffffffu;
+public static const uint ENTITY_PRIM_HELD_SLOT_SHIFT = 25u;
+public static const uint ENTITY_PRIM_MATERIAL_MASK = 0x01ffffffu;
+
+public uint entityPrimHeldSlot(uint materialId) {
+    return (materialId >> ENTITY_PRIM_HELD_SLOT_SHIFT) & HELD_SLOT_MASK;
+}
+
 public struct Prim {
     public float4 normal; // xyz = geometric normal, w = per-primitive emission strength
     public float4 tint;

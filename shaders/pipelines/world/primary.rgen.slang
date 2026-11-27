@@ -43,11 +43,12 @@ public PathSegment tracePrimary(PathSegment seg,
         int bounce = seg.bounce;
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
-                                               showCelestial, seg.viewModelPath);
+                                               showCelestial, seg.viewModelPath, seg.excludedOwnerHeldSlot);
         bool directView = bounce == 0;
         if (!directView || !traceForegroundViewModel(ro, rd, ndc, rayConeWidth, rayConeSpread)) {
             uint mask = directView ? cameraCullMask() : secondaryRadianceCullMask(seg.viewModelPath, showCelestial);
-            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread, directView);
+            traceRadiance(mask, ro, 0.0, rd, 10000.0, showCelestial, rayConeWidth, rayConeSpread,
+                          directView, seg.excludedOwnerHeldSlot);
         }
 
         if (payload.hitT < 0.0) {
@@ -68,6 +69,7 @@ public PathSegment tracePrimary(PathSegment seg,
         float3 hitPos = ro + rd * payload.hitT;
         uint material = payloadMaterial();
         bool viewModelHit = payloadViewModel();
+        uint heldSlot = payloadHeldSlot();
         bool viewModelPath = seg.viewModelPath || viewModelHit;
         bool hasGlint = payloadGlint();
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) {
@@ -98,6 +100,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     gv_spec = makeSpecSurface(gv_hitCamRel, n, float3(payload.motionPrev), rough,
                                               rrSpecularAlbedo(payload.f0, rough, dot(n, v)));
                     gv_spec.viewModel = viewModelHit;
+                    gv_spec.excludedOwnerHeldSlot = heldSlot;
                     if (isTrackedViewModel(viewModelHit)) {
                         gv_spec.biasNormal = unpackGeometricNormal(payload.iorTransmission);
                     }
@@ -158,6 +161,7 @@ public PathSegment tracePrimary(PathSegment seg,
                                       isWater ? float3(0.0, 0.0, 0.0) : float3(payload.motionPrev),
                                       gv_rough, float3(F, F, F));
             gv_spec.viewModel = viewModelHit;
+            gv_spec.excludedOwnerHeldSlot = heldSlot;
             if (dot(transmittedDir, transmittedDir) > 0.0) {
                 MediumStack guideMedium = medium;
                 if (entering) {
@@ -199,7 +203,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed ^ 0xa511e9b3u, bounce + 1,
-                    true, viewModelPath);
+                    true, viewModelPath, heldSlot);
             return reflected;
         }
 
@@ -211,7 +215,7 @@ public PathSegment tracePrimary(PathSegment seg,
                     offsetSurfaceOrigin(hitPos, geometricNormal, reflectedDir, SURF_BIAS),
                     reflectedDir, throughput * F, medium,
                     rayConeWidth, rayConeSpread, seed, bounce + 1,
-                    true, viewModelPath);
+                    true, viewModelPath, heldSlot);
         } else {
             float3 deferredDir = normalize(transmittedDir);
             if (entering) {

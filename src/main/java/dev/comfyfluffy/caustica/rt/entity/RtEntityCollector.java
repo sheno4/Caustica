@@ -79,6 +79,8 @@ import java.util.function.Predicate;
  * EntityRenderDispatcher.submit} fans out into {@code submitModel} here. Reused across entities.
  */
 public final class RtEntityCollector implements SubmitNodeCollector {
+    public static final int MAIN_HAND_ITEM_SLOT = 1;
+    public static final int OFF_HAND_ITEM_SLOT = 2;
     private static final Direction[] DIRECTIONS = Direction.values();
     private static final Predicate<Direction> NEVER_CULL = direction -> false;
     // Vanilla leash constants (LeashFeatureRenderer.LEASH_RENDER_STEPS / LEASH_WIDTH).
@@ -181,15 +183,23 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
     }
 
-    /** Apply the actual held block's material to the third-person item submission. */
-    public void captureCameraOwnerHeldItem(ItemStack item, Runnable submit) {
+    /** Apply the inventory slot and actual held-block material to the avatar's item submission. */
+    public void captureCameraOwnerHeldItem(ItemStack item, int slot, Runnable submit) {
         BlockState previous = cameraOwnerHeldBlock;
         cameraOwnerHeldBlock = VivecraftCompat.heldBlock(item);
+        int previousSlot = setHeldItemSlot(slot);
         try {
             captureCameraOwnerHeldItems(submit);
         } finally {
             cameraOwnerHeldBlock = previous;
+            setHeldItemSlot(previousSlot);
         }
+    }
+
+    public int setHeldItemSlot(int slot) {
+        int previous = capture.heldItemSlot;
+        capture.heldItemSlot = slot;
+        return previous;
     }
 
     /** Preserve the held model's own UVs for the entity-glint texture transform. */

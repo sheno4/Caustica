@@ -34,6 +34,7 @@ public uint payloadMaterial() { return payload.flags & PAYLOAD_MATERIAL_MASK; }
 public bool payloadDielectricEntering() { return (payload.flags & PAYLOAD_DIELECTRIC_ENTERING) != 0u; }
 public bool payloadEmitterInList() { return (payload.flags & PAYLOAD_EMITTER_IN_LIST) != 0u; }
 public bool payloadViewModel() { return (payload.flags & PAYLOAD_VIEW_MODEL) != 0u; }
+public uint payloadHeldSlot() { return payloadHeldSlotFromFlags(payload.flags); }
 public bool payloadGlint() { return (payload.flags & PAYLOAD_GLINT) != 0u; }
 // LINEAR roughness, i.e. GGX alpha directly — NOT perceptual roughness. This is the one convention used
 // end to end: LabPBR defines roughness = (1 - perceptualSmoothness)^2 and RtLabPbr.decode stores exactly

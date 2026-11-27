@@ -5,6 +5,8 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityCollector;
 import dev.comfyfluffy.caustica.CausticaMod;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
@@ -143,8 +145,17 @@ public final class VivecraftCompat {
             Object arms = hooks.armsState.get(state);
             if (!hands.renderHands.getBoolean(arms) || hands.mainMenuHand.getBoolean(arms)
                     || hands.offMenuHand.getBoolean(arms)) return null;
-            BlockState mainBlock = heldBlock((ItemStack) hands.mainItem.get(arms));
-            BlockState offBlock = heldBlock((ItemStack) hands.offItem.get(arms));
+            ItemStack mainItem = (ItemStack) hands.mainItem.get(arms);
+            ItemStack offItem = (ItemStack) hands.offItem.get(arms);
+            BlockState mainBlock = heldBlock(mainItem);
+            BlockState offBlock = heldBlock(offItem);
+            LocalPlayer player = Minecraft.getInstance().player;
+            ItemStack mainInventory = player == null ? ItemStack.EMPTY : player.getMainHandItem();
+            ItemStack offInventory = player == null ? ItemStack.EMPTY : player.getOffhandItem();
+            int mainSlot = renderedItemSlot(mainItem, mainInventory, offInventory,
+                    RtEntityCollector.MAIN_HAND_ITEM_SLOT, RtEntityCollector.OFF_HAND_ITEM_SLOT);
+            int offSlot = renderedItemSlot(offItem, offInventory, mainInventory,
+                    RtEntityCollector.OFF_HAND_ITEM_SLOT, RtEntityCollector.MAIN_HAND_ITEM_SLOT);
             Object teleport = hands.teleportState.get(state);
             return collector -> {
                 try {
@@ -154,13 +165,8 @@ public final class VivecraftCompat {
                         // These draws belong to the native overlay pass, which also owns their blend state.
                         hands.teleportEnergy.setBoolean(teleport, false);
                         hands.teleportArc.setBoolean(teleport, false);
-                        if (mainBlock == null && offBlock == null) {
-                            hands.submit.invoke(null, collector, state, levelState.cameraRenderState,
-                                    new PoseStack(), true, true, false, false, 0);
-                        } else {
-                            submitHand(hands, collector, state, levelState.cameraRenderState, true, mainBlock);
-                            submitHand(hands, collector, state, levelState.cameraRenderState, false, offBlock);
-                        }
+                        submitHand(hands, collector, state, levelState.cameraRenderState, true, mainBlock, mainSlot);
+                        submitHand(hands, collector, state, levelState.cameraRenderState, false, offBlock, offSlot);
                     } finally {
                         hands.teleportEnergy.setBoolean(teleport, energy);
                         hands.teleportArc.setBoolean(teleport, arc);
@@ -183,21 +189,34 @@ public final class VivecraftCompat {
         return properties == null ? state : properties.apply(state);
     }
 
+    private static int renderedItemSlot(ItemStack rendered, ItemStack expected, ItemStack other,
+                                        int expectedSlot, int otherSlot) {
+        if (rendered.isEmpty()) return 0;
+        // Vivecraft can borrow the other hand's item for bow and climbing poses.
+        if (rendered == expected) return expectedSlot;
+        if (rendered == other) return otherSlot;
+        if (ItemStack.isSameItemSameComponents(rendered, expected)) return expectedSlot;
+        return ItemStack.isSameItemSameComponents(rendered, other) ? otherSlot : 0;
+    }
+
     private static void submitHand(HandHooks hooks, SubmitNodeCollector collector, Object state,
-                                   CameraRenderState camera, boolean mainHand, BlockState heldBlock)
+                                   CameraRenderState camera, boolean mainHand, BlockState heldBlock, int itemSlot)
             throws ReflectiveOperationException {
         BlockState prior = HandAccess.heldBlockState;
         HandAccess.heldBlockState = heldBlock;
-        RtEntityCollector rt = heldBlock != null && collector instanceof RtEntityCollector capture ? capture : null;
+        RtEntityCollector rt = collector instanceof RtEntityCollector capture ? capture : null;
+        int previousSlot = rt == null ? 0 : rt.setHeldItemSlot(itemSlot);
+        boolean measureEmission = rt != null && heldBlock != null;
         boolean submitted = false;
         try {
-            if (rt != null) rt.beginHeldEmission(heldBlock);
+            if (measureEmission) rt.beginHeldEmission(heldBlock);
             hooks.submit.invoke(null, collector, state, camera, new PoseStack(), mainHand, !mainHand,
                     false, false, 0);
             submitted = true;
         } finally {
             HandAccess.heldBlockState = prior;
-            if (rt != null) rt.finishHeldEmission(submitted);
+            if (rt != null) rt.setHeldItemSlot(previousSlot);
+            if (measureEmission) rt.finishHeldEmission(submitted);
         }
     }
 

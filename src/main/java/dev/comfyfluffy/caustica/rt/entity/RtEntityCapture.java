@@ -28,7 +28,9 @@ public final class RtEntityCapture implements VertexConsumer {
     private static final int OWNER_HELD_OPAQUE = 0x20000000;
     private static final int SAMPLED_EMISSION = 0x10000000;
     private static final int TRACKED_ARM = 0x08000000;
-    static final int MATERIAL_ID_MASK = 0x07ffffff;
+    private static final int HELD_ITEM_SLOT_SHIFT = 25;
+    private static final int HELD_ITEM_SLOT_MASK = 3 << HELD_ITEM_SLOT_SHIFT;
+    static final int MATERIAL_ID_MASK = 0x01ffffff;
     // Same magnitude as RtTerrain.QuadCapture.OFFSET (2e-4 blocks) — proven large enough to break a BVH
     // depth tie without a visible gap at terrain/entity scale.
     private static final float ORDER_OFFSET = 2.0e-4f;
@@ -40,6 +42,7 @@ public final class RtEntityCapture implements VertexConsumer {
     final RtGlint glint = new RtGlint();
     boolean hasGlint;
     boolean cameraOwnerHeldItem;
+    int heldItemSlot;
     // One classification per triangle in capture order. The upload path repacks indices + primitive
     // records into fixed {opaque, any-hit} BLAS geometries while positions/UVs stay shared. Keeping
     // capture order here preserves glow meshes, parity checks and motion topology.
@@ -107,6 +110,7 @@ public final class RtEntityCapture implements VertexConsumer {
         glint.end();
         hasGlint = false;
         cameraOwnerHeldItem = false;
+        heldItemSlot = 0;
     }
 
     private void ensureVertexCapacity(int vertexCount) {
@@ -159,6 +163,7 @@ public final class RtEntityCapture implements VertexConsumer {
         target.currentMaterialId = currentMaterialId;
         target.currentAlphaBucket = currentAlphaBucket;
         target.cameraOwnerHeldItem = cameraOwnerHeldItem;
+        target.heldItemSlot = heldItemSlot;
         target.currentOrder = currentOrder;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
@@ -253,7 +258,7 @@ public final class RtEntityCapture implements VertexConsumer {
     void markTrackedArmPrimitives(int firstPrimitiveLane) {
         for (int lane = firstPrimitiveLane + 8; lane < prim.size(); lane += 12) {
             int material = Float.floatToRawIntBits(prim.getFloat(lane));
-            prim.set(lane, Float.intBitsToFloat(material | TRACKED_ARM));
+            prim.set(lane, Float.intBitsToFloat((material & ~HELD_ITEM_SLOT_MASK) | TRACKED_ARM));
         }
     }
 
@@ -464,6 +469,7 @@ public final class RtEntityCapture implements VertexConsumer {
             hasGlint = true;
         }
         int material = glintQuad ? currentMaterialId | RtGlint.PRIMITIVE_BIT : currentMaterialId;
+        material |= heldItemSlot << HELD_ITEM_SLOT_SHIFT;
         int alphaBucket = currentAlphaBucket;
         if (cameraOwnerHeldItem) {
             // The any-hit shader filters this geometry from hand reflections while retaining the
