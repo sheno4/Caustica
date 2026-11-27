@@ -62,8 +62,13 @@ public final class RtVideoOptions {
         return options.toArray(OptionInstance<?>[]::new);
     }
 
-    public static OptionInstance<Boolean> fixedFoveation() {
-        return bool("caustica.options.rt.fixedFoveation", CausticaConfig.Rt.Composite.FIXED_FOVEATION);
+    public static OptionInstance<String> foveationMode() {
+        String key = "caustica.options.rt.foveationMode";
+        StringSetting setting = CausticaConfig.Rt.Composite.FOVEATION_MODE;
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, value) -> Component.translatable(key + "." + value),
+                new OptionInstance.Enum<>(List.of("off", "fixed", "papertracker"), Codec.STRING),
+                setting.get(), setting::set);
     }
 
     public static OptionInstance<Integer> foveationWidePercent() {

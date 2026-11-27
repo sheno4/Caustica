@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.joml.Vector4f;
 import org.junit.jupiter.api.Test;
 
@@ -61,5 +62,59 @@ final class VrFoveationTest {
                 }
             }
         }
+    }
+
+    @Test
+    void gazeRotationIsRollFreeAndCentersTheGazeRayInInset() {
+        Matrix4f headView = new Matrix4f().rotationY(0.52f).rotateX(-0.18f).rotateZ(0.09f);
+        Matrix4f inverseHeadView = new Matrix4f(headView).invert();
+        Matrix4f projection = new Matrix4f().zero()
+                .m00(0.90f).m11(-1.05f)
+                .m20(0.18f).m21(0.08f)
+                .m23(-1f).m32(0.05f);
+        Matrix4f eyeView = new Matrix4f().rotationY(0.07f).mul(headView);
+        Matrix4f eyeViewProjection = projection.mul(eyeView, new Matrix4f());
+
+        Vector3f gazeDirHead = VrFoveation.gazeHeadDirection(
+                28f, -18f, false, false, 0f, 0f, new Vector3f(-0.032f, 0f, 0f), new Vector3f());
+        Vector3f clampedHead = VrFoveation.clampGazeToEyeFrustum(
+                projection, eyeView, headView, gazeDirHead, 0.85f, new Vector3f());
+
+        Matrix4f insetView = VrFoveation.insetViewRotation(headView, clampedHead, new Matrix4f());
+        // Inset view transforms the gaze ray in world space to (0, 0, -1).
+        Vector3f gazeWorld = inverseHeadView.transformDirection(clampedHead, new Vector3f());
+        Vector3f gazeInInset = insetView.transformDirection(gazeWorld, new Vector3f());
+        assertEquals(0f, gazeInInset.x, EPSILON);
+        assertEquals(0f, gazeInInset.y, EPSILON);
+        assertEquals(-1f, gazeInInset.z, EPSILON);
+
+        // Roll-free check: inset +X axis stays horizontal in head space (y == 0).
+        Matrix4f gazeRot = new Matrix4f(insetView).mul(inverseHeadView);
+        assertEquals(0f, gazeRot.m10(), EPSILON);
+        assertEquals(1f, gazeRot.determinant(), EPSILON);
+
+        // eyeToInset maps the gaze ray onto inset clip center (0, 0).
+        Matrix4f insetViewProjection = VrFoveation.insetProjection(projection, 45).mul(insetView);
+        Matrix4f eyeToInset = new Matrix4f();
+        VrFoveation.eyeToInset(eyeViewProjection, insetViewProjection, eyeToInset);
+        Vector4f eyeClip = eyeViewProjection.transform(new Vector4f(gazeWorld.x, gazeWorld.y, gazeWorld.z, 0f));
+        Vector4f insetClip = eyeToInset.transform(new Vector4f(eyeClip.x / eyeClip.w, eyeClip.y / eyeClip.w, 0f, 1f));
+        assertTrue(insetClip.w > 0f);
+        assertEquals(0f, insetClip.x / insetClip.w, EPSILON);
+        assertEquals(0f, insetClip.y / insetClip.w, EPSILON);
+    }
+
+    @Test
+    void clampsExtremeGazeInsideEyeFrustum() {
+        Matrix4f headView = new Matrix4f().identity();
+        Matrix4f projection = new Matrix4f().zero()
+                .m00(1.0f).m11(-1.0f).m23(-1f).m32(0.05f);
+        Vector3f extreme = new Vector3f(4f, 4f, -1f).normalize();
+        Vector3f clamped = VrFoveation.clampGazeToEyeFrustum(
+                projection, headView, headView, extreme, 0.85f, new Vector3f());
+        Vector4f clip = projection.transform(new Vector4f(clamped.x, clamped.y, clamped.z, 0f));
+        assertTrue(clip.w > 0f);
+        assertEquals(0.85f, Math.abs(clip.x / clip.w), EPSILON);
+        assertEquals(0.85f, Math.abs(clip.y / clip.w), EPSILON);
     }
 }

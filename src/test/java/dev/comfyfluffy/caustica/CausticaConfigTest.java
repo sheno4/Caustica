@@ -19,6 +19,25 @@ final class CausticaConfigTest {
     }
 
     @Test
+    void migratesLegacyFixedFoveationToggleToMode() {
+        CommentedConfig legacyTrue = CommentedConfig.inMemory();
+        legacyTrue.set("composite.fixed-foveation", true);
+        CausticaConfig.migrateFoveationMode(legacyTrue);
+        assertEquals("fixed", legacyTrue.<String>get("composite.foveation-mode"));
+
+        CommentedConfig legacyFalse = CommentedConfig.inMemory();
+        legacyFalse.set("composite.fixed-foveation", false);
+        CausticaConfig.migrateFoveationMode(legacyFalse);
+        assertEquals("off", legacyFalse.<String>get("composite.foveation-mode"));
+
+        CommentedConfig explicit = CommentedConfig.inMemory();
+        explicit.set("composite.fixed-foveation", true);
+        explicit.set("composite.foveation-mode", "papertracker");
+        CausticaConfig.migrateFoveationMode(explicit);
+        assertEquals("papertracker", explicit.<String>get("composite.foveation-mode"));
+    }
+
+    @Test
     void invalidPeakNitsFallsBackToDefault() {
         CausticaConfig.IntSetting setting = CausticaConfig.Rt.Hdr.PEAK_NITS;
         int previous = setting.value();

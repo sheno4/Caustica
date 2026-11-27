@@ -15,7 +15,10 @@ import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
+import org.joml.Vector3f;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -44,6 +47,8 @@ public final class VivecraftCompat {
 
     private static final class HeadAccess {
         static HeadPose pose = hasEyeIntegration() ? resolveHeadPose() : null;
+        static EyeOffsetAccess eyeOffsets = hasEyeIntegration() ? resolveEyeOffsetAccess() : null;
+        static boolean loggedEyeOffsetFailure;
     }
 
     private static final class HandAccess {
@@ -70,6 +75,60 @@ public final class VivecraftCompat {
             HeadAccess.pose = null;
             CausticaMod.LOGGER.warn("Cannot read Vivecraft head pose; using the normal eye renderer", e);
             return null;
+        }
+    }
+
+    /**
+     * Returns the eye's translation relative to the head origin in meters in head space
+     * (+X right, +Y up, -Z forward), or zero if Vivecraft does not expose eye positions.
+     */
+    public static Vector3f eyeOffsetInHeadMeters(View eye, Matrix4fc headViewRotation) {
+        EyeOffsetAccess access = HeadAccess.eyeOffsets;
+        if (access == null || headViewRotation == null || !eye.isEye()) {
+            return new Vector3f();
+        }
+        try {
+            Object holder = Access.HOOKS.holder.invoke(null);
+            Object vrPlayer = access.vrPlayer.get(holder);
+            if (vrPlayer == null) {
+                return new Vector3f();
+            }
+            Object vrData = access.vrDataWorldRender.get(vrPlayer);
+            if (vrData == null) {
+                return new Vector3f();
+            }
+            float worldScale = access.worldScale.getFloat(vrData);
+            if (!Float.isFinite(worldScale) || worldScale <= 1.0e-4f) {
+                return new Vector3f();
+            }
+            Object eyePass = eye == View.LEFT ? access.leftPass : access.rightPass;
+            Object eyePose = access.getEye.invoke(vrData, eyePass);
+            Object headPose = access.getEye.invoke(vrData, access.headPass);
+            if (eyePose == null || headPose == null) {
+                return new Vector3f();
+            }
+            Vec3 eyePos = (Vec3) access.getPosition.invoke(eyePose);
+            Vec3 headPos = (Vec3) access.getPosition.invoke(headPose);
+            if (eyePos == null || headPos == null) {
+                return new Vector3f();
+            }
+            Vector3f delta = new Vector3f(
+                    (float) ((eyePos.x - headPos.x) / worldScale),
+                    (float) ((eyePos.y - headPos.y) / worldScale),
+                    (float) ((eyePos.z - headPos.z) / worldScale));
+            headViewRotation.transformDirection(delta);
+            float lenSq = delta.lengthSquared();
+            if (!Float.isFinite(lenSq) || lenSq > 0.25f * 0.25f) {
+                return new Vector3f();
+            }
+            return delta;
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+            HeadAccess.eyeOffsets = null;
+            if (!HeadAccess.loggedEyeOffsetFailure) {
+                HeadAccess.loggedEyeOffsetFailure = true;
+                CausticaMod.LOGGER.warn("Cannot read Vivecraft eye offsets; falling back to head-center parallax", e);
+            }
+            return new Vector3f();
         }
     }
 
@@ -310,6 +369,32 @@ public final class VivecraftCompat {
         }
     }
 
+    private static EyeOffsetAccess resolveEyeOffsetAccess() {
+        try {
+            Class<?> holder = Access.HOOKS.holder.getReturnType();
+            Field vrPlayer = holder.getField("vrPlayer");
+            Class<?> playerClass = vrPlayer.getType();
+            Field vrDataWorldRender = playerClass.getField("vrdata_world_render");
+            Class<?> vrDataClass = vrDataWorldRender.getType();
+            Field worldScale = vrDataClass.getField("worldScale");
+            Class<?> pass = load("api.client.data.RenderPass");
+            Method getEye = vrDataClass.getMethod("getEye", pass);
+            Method getPosition = getEye.getReturnType().getMethod("getPosition");
+            return new EyeOffsetAccess(
+                    vrPlayer,
+                    vrDataWorldRender,
+                    worldScale,
+                    getEye,
+                    getPosition,
+                    pass.getField("LEFT").get(null),
+                    pass.getField("RIGHT").get(null),
+                    pass.getField("VANILLA").get(null));
+        } catch (ReflectiveOperationException | LinkageError e) {
+            CausticaMod.LOGGER.warn("Vivecraft eye offset reflection unavailable; using head-center parallax", e);
+            return null;
+        }
+    }
+
     private static HandHooks resolveHandHooks() {
         try {
             Class<?> state = load("client_vr.render.renderstates.VRRenderState");
@@ -342,6 +427,9 @@ public final class VivecraftCompat {
                                   Object doubleResolutionOption) {}
 
     private record HeadPose(Method modelView, Object headPass) {}
+
+    private record EyeOffsetAccess(Field vrPlayer, Field vrDataWorldRender, Field worldScale, Method getEye,
+                                   Method getPosition, Object leftPass, Object rightPass, Object headPass) {}
 
     private record HandHooks(Method submit, Field renderHands, Field mainMenuHand, Field offMenuHand,
                              Field skipMain, Field skipOff, Field mainItem, Field offItem, Field teleportState,

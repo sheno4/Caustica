@@ -5,6 +5,8 @@ import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.core.file.FileNotFoundAction;
 import com.electronwill.nightconfig.toml.TomlFormat;
 import dev.comfyfluffy.caustica.rt.VrFoveation;
+import dev.comfyfluffy.caustica.rt.gaze.GazeStabilizer;
+import dev.comfyfluffy.caustica.rt.gaze.PaperTrackerPacket;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -28,6 +30,7 @@ import org.slf4j.LoggerFactory;
 public final class CausticaConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger("Caustica");
     private static final List<RuntimeSetting<?>> SETTINGS = new CopyOnWriteArrayList<>();
+    private static final String FOVEATION_MODE_PATH = "composite.foveation-mode";
     private static final String FOVEATION_COVERAGE_PATH = "composite.foveation-coverage-degrees";
 
     private static final Path CONFIG_PATH = resolveConfigPath();
@@ -58,7 +61,8 @@ public final class CausticaConfig {
     public static void ensureRegistered() {
         @SuppressWarnings("unused")
         Object[] touch = {
-            Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
+            Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.PaperTracker.PORT,
+            Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Reflex.ENABLED, Rt.Exposure.MODE, Rt.Tonemap.GAMMA, Rt.FrameStats.ENABLED,
             Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
@@ -108,6 +112,9 @@ public final class CausticaConfig {
                         + " ui-nits controls UI brightness; peak-nits must be 500, 1000, 2000, or 4000.");
         FILE.setComment("screenshots",
                 " exr-enabled saves an ACEScg EXR beside the normal F2 PNG while ray tracing is active.");
+        FILE.setComment("papertracker",
+                " PaperTracker OSC/UDP gaze export settings used when composite.foveation-mode is \"papertracker\".\n"
+                        + " port = 0 disables UDP polling.");
     }
 
     private static Path resolveConfigPath() {
@@ -126,11 +133,19 @@ public final class CausticaConfig {
                 .build();
         try {
             config.load();
+            migrateFoveationMode(config);
             migrateFoveationCoverage(config);
         } catch (Exception e) {
             LOGGER.warn("Failed to read Caustica config {}: {}", path, e.toString());
         }
         return config;
+    }
+
+    static void migrateFoveationMode(CommentedConfig config) {
+        if (!config.contains(FOVEATION_MODE_PATH)
+                && config.get("composite.fixed-foveation") instanceof Boolean legacyFixed) {
+            config.set(FOVEATION_MODE_PATH, legacyFixed ? "fixed" : "off");
+        }
     }
 
     static void migrateFoveationCoverage(CommentedConfig config) {
@@ -540,8 +555,8 @@ public final class CausticaConfig {
 
         public static final class Composite {
             private static final float DEFAULT_WIDE_PERCENT = 25.0f;
-            public static final BooleanSetting FIXED_FOVEATION =
-                    bool("caustica.rt.fixedFoveation", "composite.fixed-foveation", false);
+            public static final StringSetting FOVEATION_MODE =
+                    string("caustica.rt.foveationMode", FOVEATION_MODE_PATH, "off", Composite::sanitizeFoveationMode);
             public static final FloatSetting FOVEATION_WIDE_PERCENT =
                     new FloatSetting("caustica.rt.foveationWidePercent", "composite.foveation-wide-percent",
                             DEFAULT_WIDE_PERCENT, v -> v, v -> v, v -> Double.isFinite(v)
@@ -575,6 +590,67 @@ public final class CausticaConfig {
                     finiteFloat("caustica.rt.jitterSignY", "composite.jitter-sign-y", -1.0f);
 
             private Composite() {
+            }
+
+            public static VrFoveation.Mode foveationMode() {
+                VrFoveation.Mode mode = VrFoveation.Mode.fromConfig(FOVEATION_MODE.get());
+                if (mode == VrFoveation.Mode.OFF && System.getProperty("caustica.rt.foveationMode") == null
+                        && Boolean.getBoolean("caustica.rt.fixedFoveation")) {
+                    return VrFoveation.Mode.FIXED;
+                }
+                return mode;
+            }
+
+            private static String sanitizeFoveationMode(String value) {
+                return VrFoveation.Mode.fromConfig(value).configValue();
+            }
+        }
+
+        public static final class PaperTracker {
+            public static final IntSetting PORT =
+                    clampedInt("caustica.rt.papertracker.port", "papertracker.port",
+                            PaperTrackerPacket.DEFAULT_PORT, 0, 65535);
+            public static final BooleanSetting COMBINE_GAZE =
+                    bool("caustica.rt.papertracker.combineGaze", "papertracker.combine-gaze", true);
+            public static final BooleanSetting FLIP_X =
+                    bool("caustica.rt.papertracker.flipX", "papertracker.flip-x", false);
+            public static final BooleanSetting FLIP_Y =
+                    bool("caustica.rt.papertracker.flipY", "papertracker.flip-y", false);
+            public static final FloatSetting FORWARD_YAW_DEGREES =
+                    clampedFloat("caustica.rt.papertracker.forwardYawDegrees", "papertracker.forward-yaw-degrees",
+                            0.0f, -45.0f, 45.0f);
+            public static final FloatSetting FORWARD_PITCH_DEGREES =
+                    clampedFloat("caustica.rt.papertracker.forwardPitchDegrees", "papertracker.forward-pitch-degrees",
+                            0.0f, -45.0f, 45.0f);
+            public static final IntSetting STALE_MS =
+                    intAtLeast("caustica.rt.papertracker.staleMs", "papertracker.stale-ms", 300, 0);
+            public static final IntSetting LOST_MS =
+                    intAtLeast("caustica.rt.papertracker.lostMs", "papertracker.lost-ms", 1000, 0);
+            public static final FloatSetting SMOOTHING_HZ =
+                    clampedFloat("caustica.rt.papertracker.smoothingHz", "papertracker.smoothing-hz",
+                            8.0f, 0.0f, 60.0f);
+            public static final FloatSetting DEADBAND_DEGREES =
+                    clampedFloat("caustica.rt.papertracker.deadbandDegrees", "papertracker.deadband-degrees",
+                            0.8f, 0.0f, 10.0f);
+            public static final FloatSetting SACCADE_DEGREES_PER_SECOND =
+                    clampedFloat("caustica.rt.papertracker.saccadeDegreesPerSecond",
+                            "papertracker.saccade-degrees-per-second", 120.0f, 0.0f, 1000.0f);
+
+            private PaperTracker() {
+            }
+
+            public static GazeStabilizer.Config stabilizerConfig() {
+                return new GazeStabilizer.Config(
+                        COMBINE_GAZE.value(),
+                        FLIP_X.value(),
+                        FLIP_Y.value(),
+                        FORWARD_YAW_DEGREES.value(),
+                        FORWARD_PITCH_DEGREES.value(),
+                        STALE_MS.value(),
+                        LOST_MS.value(),
+                        SMOOTHING_HZ.value(),
+                        DEADBAND_DEGREES.value(),
+                        SACCADE_DEGREES_PER_SECOND.value());
             }
         }
 
