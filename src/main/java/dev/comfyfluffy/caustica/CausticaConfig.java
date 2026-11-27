@@ -541,7 +541,7 @@ public final class CausticaConfig {
         public static final class Composite {
             private static final float DEFAULT_WIDE_PERCENT = 25.0f;
             public static final BooleanSetting FIXED_FOVEATION =
-                    bool("caustica.rt.fixedFoveation", "composite.fixed-foveation", false);
+                    bool("caustica.rt.fixedFoveation", "composite.fixed-foveation", true);
             public static final FloatSetting FOVEATION_WIDE_PERCENT =
                     new FloatSetting("caustica.rt.foveationWidePercent", "composite.foveation-wide-percent",
                             DEFAULT_WIDE_PERCENT, v -> v, v -> v, v -> Double.isFinite(v)

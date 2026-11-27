@@ -88,7 +88,7 @@ square side at 256 to 4096 pixels, up to the eye target's shorter edge.
 **Center Coverage Angle** sets the inset's coverage from 5° to 120°.
 **Show Center Region** outlines or colors the inset.
 **VR Overlay Quality** controls Vivecraft's high-resolution GUI option. Fixed
-foveated rendering starts disabled and is suspended in ray-tracing guide debug views.
+foveated rendering is enabled by default and is suspended in ray-tracing guide debug views.
 
 Wide reuses the inset's scene-linear lighting in the fully covered core while
 tracing its own DLSS guides and blend margin. Set `foveation-reuse-inset = false`
