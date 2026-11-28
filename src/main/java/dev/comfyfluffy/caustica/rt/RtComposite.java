@@ -1431,7 +1431,8 @@ public final class RtComposite {
                 scene.viewModelLightSamples(),
                 scene.viewModelLightTriangles(),
                 scene.viewModelLightFootprints(),
-                scene.viewModelLightFootprintCount()
+                scene.viewModelLightFootprintCount(),
+                CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT_SAMPLES.value()
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.

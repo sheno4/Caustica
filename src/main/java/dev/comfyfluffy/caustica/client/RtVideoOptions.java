@@ -70,6 +70,14 @@ public final class RtVideoOptions {
         return bool("caustica.options.rt.viewModelAmbient", CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT);
     }
 
+    public static OptionInstance<Integer> viewModelAmbientSamples() {
+        String key = "caustica.options.rt.viewModelAmbientSamples";
+        IntSetting setting = CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT_SAMPLES;
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, value) -> Options.genericValueLabel(caption, value),
+                new OptionInstance.IntRange(1, 8), Math.clamp(setting.value(), 1, 8), setting::set);
+    }
+
     public static OptionInstance<Integer> foveationWidePercent() {
         String key = "caustica.options.rt.foveationWidePercent";
         FloatSetting setting = CausticaConfig.Rt.Composite.FOVEATION_WIDE_PERCENT;

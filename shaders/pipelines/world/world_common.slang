@@ -99,6 +99,9 @@ public struct WorldPush {
     public uint     viewModelLightTriangles;
     public uint64_t viewModelLightFootprints; // five float4 lanes per emitting quad footprint
     public uint     viewModelLightFootprintCount;
+    // Cosine-weighted sky directions each tracked-view-model diffuse hit integrates for its sky
+    // ambient. 1 keeps the cost at one visibility ray, 8 gives the denoiser the least occlusion noise.
+    public uint     viewModelAmbientSamples;
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the

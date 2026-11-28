@@ -111,10 +111,13 @@ Menu hands and unsupported custom draws use the native hand pass.
 
 VR hands and held items also receive a sky diffuse ambient. It integrates the
 atmosphere LUT over the hemisphere with the player's own avatar excluded from
-visibility (the same rule that keeps the avatar out of their sun shadow), and it
-replaces the diffuse path's sky sample instead of adding a second sky term.
-Toggle it with **Hand Sky Ambient** in the VR Rendering section of Video Settings,
-or `composite.view-model-ambient` in `config/caustica.toml`.
+visibility (the same rule that keeps the avatar out of their sun shadow and their
+diffuse GI), rejects directions below the geometric hemisphere, and replaces the
+diffuse path's sky sample instead of adding a second sky term.
+**Hand Ambient Samples** sets how many sky directions each hand sample traces
+(one visibility ray each); it is exposed in Video Settings and as
+`composite.view-model-ambient-samples`, and **Hand Sky Ambient**
+(`composite.view-model-ambient`) toggles the feature.
 
 ## Status
 

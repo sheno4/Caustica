@@ -36,34 +36,51 @@ import foveation;
 
 static const float GLINT_RADIANCE_SCALE = 300.0; // cd/m² at full texture intensity
 
-// Directions the tracked-view-model sky ambient integrates. Four cosine-weighted samples plus one
-// visibility ray each are enough for the denoiser to stabilise; the estimate is smooth because the sky
-// LUT is, so the remaining variance is the occlusion mask, exactly like any other soft shadow.
-static const uint VIEW_MODEL_SKY_AMBIENT_SAMPLES = 4u;
+// Retries per ambient direction when the shading normal points outside the geometric hemisphere.
+// Recalling a direction keeps the sample count intact instead of biasing the estimate downward.
+static const uint VIEW_MODEL_AMBIENT_DIRECTION_ATTEMPTS = 4u;
 
 /**
- * Sky diffuse irradiance at a tracked view model, with the owner avatar excluded from visibility.
+ * Sky diffuse irradiance at a tracked view model, occluded by world geometry only.
  *
- * <p>These surfaces are the player's own hands and held items. Their diffuse GI rays are enclosed by
- * the player's body, so a single path sample reads the body rather than the sky and the hands render
- * dark even in daylight. The owner is already excluded from their sun shadow ({@code shadowCullMask}),
- * and this applies the same policy to the sky: the ambient is the sky above the body, occluded by the
- * world, not by the body wrapped around it. Returns irradiance in ACEScg (cd/m²·sr).
+ * <p>These surfaces are the player's own hands and held items. Their diffuse GI is enclosed by the
+ * player's body, so one path sample reads the body instead of the sky and the hands render dark in
+ * daylight. The owner is already excluded from their sun shadow and from their diffuse GI
+ * ({@code secondaryRadianceCullMask}), and this applies the same policy to the sky: the ambient is the
+ * sky above the body, occluded by the world. Directions below the geometric hemisphere are rejected so
+ * a normal-mapped shading normal cannot leak sky light through the surface, and the visibility rays use
+ * {@code CULL_SECONDARY}, which keeps the view model's own geometry out of its fill light. Returns
+ * irradiance in ACEScg (cd/m²·sr).
  */
-public float3 viewModelSkyAmbient(float3 origin, float3 normal, inout uint seed) {
+public float3 viewModelSkyAmbient(float3 origin, float3 geometricNormal, float3 normal, uint sampleCount,
+                                  inout uint seed) {
     // A degenerate normal would make every cosine direction NaN; tracing that is undefined on the
     // GPU, so report no ambient rather than an invalid ray.
-    if (!(dot(normal, normal) >= 1.0e-8)) return float3(0.0, 0.0, 0.0);
+    if (!(dot(normal, normal) >= 1.0e-8) || !(dot(geometricNormal, geometricNormal) >= 1.0e-8)) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float3 geoN = normalize(geometricNormal);
     SkyState sky = skyState(worldPush);
     float3 irradiance = float3(0.0, 0.0, 0.0);
-    for (uint i = 0u; i < VIEW_MODEL_SKY_AMBIENT_SAMPLES; ++i) {
-        float3 dir = cosineDir(normal, seed);
+    for (uint i = 0u; i < sampleCount; ++i) {
+        float3 dir = float3(0.0, 0.0, 0.0);
+        bool inGeometricHemisphere = false;
+        for (uint attempt = 0u; attempt < VIEW_MODEL_AMBIENT_DIRECTION_ATTEMPTS; ++attempt) {
+            dir = cosineDir(normal, seed);
+            if (dot(geoN, dir) > 0.0) {
+                inGeometricHemisphere = true;
+                break;
+            }
+        }
+        if (!inGeometricHemisphere) {
+            continue; // below the surface on every attempt: occluded, counts as zero
+        }
         // The LUT holds the atmosphere only; the airglow floor is isotropic and belongs in the
         // ambient, while the discs are the NEE light and must not be counted again here.
         float3 radiance = skyDomeRadiance(sky, dir, skyViewLut) + sky.airglowLuminance;
         irradiance += radiance * visibility(CULL_SECONDARY, origin, dir, 10000.0).transmittance;
     }
-    return bt709ToAcesCg(irradiance) * (PI / float(VIEW_MODEL_SKY_AMBIENT_SAMPLES));
+    return bt709ToAcesCg(irradiance) * (PI / float(sampleCount));
 }
 
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
@@ -427,12 +444,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         }
 
         // Sky ambient for tracked view models. These are the player's own hands and held items, and the
-        // owner avatar is already excluded from their sun shadow; the same policy applies to the sky,
-        // because the body wrapped around them would otherwise absorb every diffuse GI sample and leave
-        // the hands dark even in daylight. The ambient replaces the next diffuse sample's sky rather
-        // than adding a second sky term (see ambientCoversSky).
-        if (trackedHit && (worldPush.flags & VIEW_MODEL_AMBIENT) != 0u) {
-            L += throughput * diffAlb * INV_PI * viewModelSkyAmbient(p, n, seed);
+        // owner avatar is already excluded from their sun shadow and their diffuse GI; the same policy
+        // applies to the sky, because the body wrapped around them would otherwise absorb every diffuse
+        // GI sample and leave the hands dark even in daylight. The ambient replaces the next diffuse
+        // sample's sky rather than adding a second sky term (see ambientCoversSky). An invalid shading or
+        // geometric normal contributes nothing and must not suppress that sky sample either.
+        bool ambientNormalValid = dot(n, n) >= 1.0e-8 && dot(biasNormal, biasNormal) >= 1.0e-8;
+        if (trackedHit && ambientNormalValid && (worldPush.flags & VIEW_MODEL_AMBIENT) != 0u) {
+            uint ambientSamples = max(1u, min(worldPush.viewModelAmbientSamples, 8u));
+            L += throughput * diffAlb * INV_PI
+                    * viewModelSkyAmbient(p, biasNormal, n, ambientSamples, seed);
             ambientPending = true;
         }
 

@@ -115,7 +115,11 @@ public uint secondaryRadianceCullMask(bool viewModelPath, bool specularView) {
     // Reflection and transmission see the avatar's own held items and their model transforms.
     // Diffuse transport uses the tracked geometry sampled by the dynamic mesh light estimator.
     uint tracked = vrAvatar && specularView ? 0u : trackedGeometryMask();
-    return CULL_SECONDARY | tracked | (!viewModelPath || vrAvatar ? CULL_CAMERA_OWNER : 0u);
+    // The owner's body must not shade its own first-person view model in diffuse transport: the sun
+    // shadow and the view-model sky ambient already exclude it, and letting diffuse GI hit the body
+    // would contradict that occlusion policy. Reflection and transmission keep it.
+    uint owner = vrAvatar && (!viewModelPath || specularView) ? CULL_CAMERA_OWNER : 0u;
+    return CULL_SECONDARY | tracked | owner;
 }
 
 public bool isTrackedViewModel(bool viewModelHit) {

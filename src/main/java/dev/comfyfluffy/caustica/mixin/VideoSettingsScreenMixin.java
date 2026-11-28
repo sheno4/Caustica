@@ -81,6 +81,7 @@ public abstract class VideoSettingsScreenMixin {
                 list.addBig(overlayQuality);
             }
             list.addBig(RtVideoOptions.viewModelAmbient());
+            list.addBig(RtVideoOptions.viewModelAmbientSamples());
         }
     }
 
