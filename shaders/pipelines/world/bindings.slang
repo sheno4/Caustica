@@ -20,6 +20,8 @@ import world_common;
 [[vk::binding(10, 0)]] public Sampler2D skyViewLut;
 [[vk::binding(11, 0)]] public Sampler2D transmittanceLut;
 [[vk::binding(12, 0)]] public Sampler2D insetRadiance;
+// Tracked-view-model lighting diagnostics: x = sky visibility, y = direct (sun/moon) visibility.
+[[vk::binding(13, 0)]] [format("rgba16f")] public RWTexture2D<float4> gHandDebug;
 
 [[vk::binding(0, 1)]] public Sampler2D entityAlbedoTex[];
 [[vk::binding(1, 1)]] public Sampler2D materialSurface0Tex[];

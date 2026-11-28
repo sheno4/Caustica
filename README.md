@@ -118,6 +118,9 @@ diffuse path's sky sample instead of adding a second sky term.
 (one visibility ray each); it is exposed in Video Settings and as
 `composite.view-model-ambient-samples`, and **Hand Sky Ambient**
 (`composite.view-model-ambient`) toggles the feature.
+**Debug View** 10 and 11 show the tracked hands' sky visibility and direct
+sun/moon visibility, so an ambient or shadow problem can be told apart from the
+normal lighting path.
 
 ## Status
 

@@ -700,7 +700,7 @@ public final class RtComposite {
             bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
             debugPresentPipeline.setImages(displayImage.view, traceTargets.gNormal.view, traceTargets.gAlbedo.view, traceTargets.gDepth.view,
                     traceTargets.gMotion.view, traceTargets.gSpecAlbedo.view, traceTargets.gSpecMotion.view, rrOutput.view, exposure.image().view,
-                    exposure.stateBuffer());
+                    exposure.stateBuffer(), traceTargets.gHandDebug.view);
             // Cheap idempotent check every frame (not just on resize): if the exposure mode is switched
             // manual -> auto at runtime (video settings), the auto-mode histogram/state/pipeline must be
             // allocated before recordFrame's exposure.record() below needs them, or it throws.
@@ -890,6 +890,8 @@ public final class RtComposite {
         private RtImage gMotion;
         private RtImage gSpecAlbedo;
         private RtImage gSpecMotion;
+        // Tracked-view-model lighting diagnostics: x = sky visibility, y = direct light visibility.
+        private RtImage gHandDebug;
         private long[] views;
 
         static TraceTargets create(RtContext ctx, int width, int height) {
@@ -904,6 +906,7 @@ public final class RtComposite {
                 targets.gMotion = ctx.createStorageImage(width, height, rg16, "guide motion");
                 targets.gSpecAlbedo = ctx.createStorageImage(width, height, rgba16, "guide specular albedo");
                 targets.gSpecMotion = ctx.createStorageImage(width, height, rg16, "guide specular motion");
+                targets.gHandDebug = ctx.createStorageImage(width, height, rgba16, "guide hand visibility");
                 targets.views = new long[]{targets.color.view, targets.gNormal.view, targets.gAlbedo.view,
                         targets.gDepth.view, targets.gMotion.view, targets.gSpecAlbedo.view, targets.gSpecMotion.view};
                 return targets;
@@ -914,7 +917,7 @@ public final class RtComposite {
         }
 
         void destroy() {
-            for (RtImage image : new RtImage[]{color, gNormal, gAlbedo, gDepth, gMotion, gSpecAlbedo, gSpecMotion}) {
+            for (RtImage image : new RtImage[]{color, gNormal, gAlbedo, gDepth, gMotion, gSpecAlbedo, gSpecMotion, gHandDebug}) {
                 if (image != null) {
                     image.destroy();
                 }
@@ -1068,7 +1071,7 @@ public final class RtComposite {
         bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
         debugPresentPipeline.setImages(displayImage.view, traceTargets.gNormal.view, traceTargets.gAlbedo.view, traceTargets.gDepth.view,
                 traceTargets.gMotion.view, traceTargets.gSpecAlbedo.view, traceTargets.gSpecMotion.view, rrOutput.view, exposure.image().view,
-                exposure.stateBuffer());
+                exposure.stateBuffer(), traceTargets.gHandDebug.view);
     }
 
     private void destroyBloomLevels() {
@@ -1383,7 +1386,7 @@ public final class RtComposite {
         boolean reuseInset = insetJitterUv != null;
         long insetRadianceView = reuseInset ? foveatedTargets.inset.color.view : skyLut.skyViewView();
         active.bindTraceTargets(scene.tlas(), targets.views, insetRadianceView, bloomPipeline.sampler(),
-                scene.graphicsUse(), scene.waiter());
+                targets.gHandDebug.view, scene.graphicsUse(), scene.waiter());
         boolean rrDone = false;
         new WorldPushData(
                 frameInvViewProj,

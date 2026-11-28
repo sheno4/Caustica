@@ -36,10 +36,6 @@ import foveation;
 
 static const float GLINT_RADIANCE_SCALE = 300.0; // cd/m² at full texture intensity
 
-// Retries per ambient direction when the shading normal points outside the geometric hemisphere.
-// Recalling a direction keeps the sample count intact instead of biasing the estimate downward.
-static const uint VIEW_MODEL_AMBIENT_DIRECTION_ATTEMPTS = 4u;
-
 /**
  * Sky diffuse irradiance at a tracked view model, occluded by world geometry only.
  *
@@ -47,13 +43,15 @@ static const uint VIEW_MODEL_AMBIENT_DIRECTION_ATTEMPTS = 4u;
  * player's body, so one path sample reads the body instead of the sky and the hands render dark in
  * daylight. The owner is already excluded from their sun shadow and from their diffuse GI
  * ({@code secondaryRadianceCullMask}), and this applies the same policy to the sky: the ambient is the
- * sky above the body, occluded by the world. Directions below the geometric hemisphere are rejected so
- * a normal-mapped shading normal cannot leak sky light through the surface, and the visibility rays use
+ * sky above the body, occluded by the world. A direction below the geometric hemisphere is an occluded
+ * sample rather than a redraw, so the cosine distribution and the π/N weight stay untouched while a
+ * normal-mapped shading normal cannot leak sky light through the surface. The visibility rays use
  * {@code CULL_SECONDARY}, which keeps the view model's own geometry out of its fill light. Returns
- * irradiance in ACEScg (cd/m²·sr).
+ * irradiance in ACEScg (cd/m²·sr) and reports the mean sky visibility in {@code skyVisibility}.
  */
 public float3 viewModelSkyAmbient(float3 origin, float3 geometricNormal, float3 normal, uint sampleCount,
-                                  inout uint seed) {
+                                  inout uint seed, out float skyVisibility) {
+    skyVisibility = 0.0;
     // A degenerate normal would make every cosine direction NaN; tracing that is undefined on the
     // GPU, so report no ambient rather than an invalid ray.
     if (!(dot(normal, normal) >= 1.0e-8) || !(dot(geometricNormal, geometricNormal) >= 1.0e-8)) {
@@ -62,24 +60,20 @@ public float3 viewModelSkyAmbient(float3 origin, float3 geometricNormal, float3 
     float3 geoN = normalize(geometricNormal);
     SkyState sky = skyState(worldPush);
     float3 irradiance = float3(0.0, 0.0, 0.0);
+    float visible = 0.0;
     for (uint i = 0u; i < sampleCount; ++i) {
-        float3 dir = float3(0.0, 0.0, 0.0);
-        bool inGeometricHemisphere = false;
-        for (uint attempt = 0u; attempt < VIEW_MODEL_AMBIENT_DIRECTION_ATTEMPTS; ++attempt) {
-            dir = cosineDir(normal, seed);
-            if (dot(geoN, dir) > 0.0) {
-                inGeometricHemisphere = true;
-                break;
-            }
-        }
-        if (!inGeometricHemisphere) {
-            continue; // below the surface on every attempt: occluded, counts as zero
+        float3 dir = cosineDir(normal, seed);
+        if (dot(geoN, dir) <= 0.0) {
+            continue; // below the surface: the surface itself occludes this direction
         }
         // The LUT holds the atmosphere only; the airglow floor is isotropic and belongs in the
         // ambient, while the discs are the NEE light and must not be counted again here.
         float3 radiance = skyDomeRadiance(sky, dir, skyViewLut) + sky.airglowLuminance;
-        irradiance += radiance * visibility(CULL_SECONDARY, origin, dir, 10000.0).transmittance;
+        float3 transmittance = visibility(CULL_SECONDARY, origin, dir, 10000.0).transmittance;
+        irradiance += radiance * transmittance;
+        visible += luminance(transmittance);
     }
+    skyVisibility = sampleCount > 0u ? visible / float(sampleCount) : 0.0;
     return bt709ToAcesCg(irradiance) * (PI / float(sampleCount));
 }
 
@@ -134,6 +128,8 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // otherwise add the sky again keeps the total energy unchanged.
     bool ambientCoversSky = false;
     bool ambientPending = false;
+    // Debug-only: tracked-view-model direct and sky visibility, written to gHandDebug.
+    float sunVisibility = 0.0;
     float2 size = float2(DispatchRaysDimensions().xy);
     float2 ndc = ((float2(pix) + 0.5) / size + worldPush.jitter / size) * 2.0 - 1.0;
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
@@ -388,6 +384,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(shadowMask, p, lightDir, 10000.0);
             float3 vis = shadow.transmittance;
+            if (trackedHit) sunVisibility = luminance(vis);
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
             // the wave-refraction caustic at the exit point. Focusing scales the incident irradiance,
             // so it applies to the whole NEE term (diffuse + specular).
@@ -450,11 +447,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
         // sample's sky rather than adding a second sky term (see ambientCoversSky). An invalid shading or
         // geometric normal contributes nothing and must not suppress that sky sample either.
         bool ambientNormalValid = dot(n, n) >= 1.0e-8 && dot(biasNormal, biasNormal) >= 1.0e-8;
+        float skyVisibility = 0.0;
         if (trackedHit && ambientNormalValid && (worldPush.flags & VIEW_MODEL_AMBIENT) != 0u) {
             uint ambientSamples = max(1u, min(worldPush.viewModelAmbientSamples, 8u));
             L += throughput * diffAlb * INV_PI
-                    * viewModelSkyAmbient(p, biasNormal, n, ambientSamples, seed);
+                    * viewModelSkyAmbient(p, biasNormal, n, ambientSamples, seed, skyVisibility);
             ambientPending = true;
+        }
+        if (trackedHit) {
+            // 0..1 debug channels for the "hand sky visibility" and "hand sun visibility" debug views.
+            gHandDebug[pix] = float4(skyVisibility, sunVisibility, 0.0, 1.0);
         }
 
         // Preserve all local lighting at the terminal hit, but do not sample a continuation that the
@@ -521,6 +523,8 @@ void main() {
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;
     int2 pix = int2(dispatchIndex);
+    // Hand lighting diagnostics are per-pixel; clear before any path writes so non-hand pixels read 0.
+    gHandDebug[dispatchIndex] = float4(0.0, 0.0, 0.0, 0.0);
 
     if ((worldPush.flags & 32u) != 0u) {
         float2 size = float2(dimensions);

@@ -32,7 +32,7 @@ abstract class GenerateRtBindings extends DefaultTask {
                     G_NORMAL: "gNormal", G_ALBEDO: "gAlbedo", G_DEPTH: "gDepth", G_MOTION: "gMotion",
                     G_SPEC_ALBEDO: "gSpecAlbedo", G_SPEC_MOTION: "gSpecMotion",
                     CELESTIALS: "celestialsAtlas", SKY_VIEW: "skyViewLut", TRANSMITTANCE: "transmittanceLut",
-                    INSET_RADIANCE: "insetRadiance",
+                    INSET_RADIANCE: "insetRadiance", HAND_DEBUG: "gHandDebug",
                     ENTITY_ALBEDO: "entityAlbedoTex", MATERIAL_SURFACE0: "materialSurface0Tex",
                     MATERIAL_NORMAL_AO: "materialNormalAoTex", MATERIAL_SURFACE1: "materialSurface1Tex"]],
             [prefix: "DISPLAY", source: "pipelines/display/main.comp.slang", resources: [
@@ -41,7 +41,8 @@ abstract class GenerateRtBindings extends DefaultTask {
             [prefix: "DEBUG_PRESENT", source: "pipelines/debug_present/main.comp.slang", resources: [
                     OUTPUT: "outputImage", G_NORMAL: "gNormal", G_ALBEDO: "gAlbedo", G_DEPTH: "gDepth",
                     G_MOTION: "gMotion", G_SPEC_ALBEDO: "gSpecAlbedo", G_SPEC_MOTION: "gSpecMotion",
-                    SCENE: "sceneImage", EXPOSURE: "exposureImage", EXPOSURE_STATE: "exposureState"]],
+                    SCENE: "sceneImage", EXPOSURE: "exposureImage", EXPOSURE_STATE: "exposureState",
+                    HAND_DEBUG: "gHandDebug"]],
             [prefix: "EXPOSURE_HIST", source: "pipelines/exposure_hist/main.comp.slang", resources: [
                     COLOR: "colorImage", BINS: "histBins", DEPTH: "depthImage", ALBEDO: "albedoImage"]],
             [prefix: "EXPOSURE_RESOLVE", source: "pipelines/exposure_resolve/main.comp.slang", resources: [
@@ -121,7 +122,11 @@ abstract class GenerateRtBindings extends DefaultTask {
                 constants.WORLD_SET = ordinary.values().first().set
                 ordinary.each { suffix, location -> constants["WORLD_${suffix}"] = location.index }
                 def guides = ordinary.findAll { suffix, ignored -> (suffix as String).startsWith("G_") }
-                def storageImages = guides + ordinary.findAll { suffix, ignored -> suffix == "OUTPUT" }
+                // HAND_DEBUG is a storage image outside the contiguous guide range (the raygen writes it
+                // and the debug present pass reads it), so the pool must count it here explicitly.
+                def storageImages = guides + ordinary.findAll { suffix, ignored ->
+                    suffix == "OUTPUT" || suffix == "HAND_DEBUG"
+                }
                 def samplers = ordinary.findAll { suffix, ignored -> suffix != "TLAS" && !storageImages.containsKey(suffix) }
                 constants.WORLD_GUIDE_COUNT = guides.size()
                 constants.WORLD_SET_BINDING_COUNT = ordinary.values()*.index.max() + 1
