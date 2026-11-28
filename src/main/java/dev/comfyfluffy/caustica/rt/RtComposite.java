@@ -117,6 +117,8 @@ public final class RtComposite {
     private static final int VIEW_MODEL_PRESENT = 1 << 6;
     private static final int VIEW_MODEL_FOREGROUND = 1 << 7;
     private static final int VR_AVATAR_PRESENT = 1 << 8;
+    // Bit 9: derived from the config every frame, so the ambient can be toggled live.
+    private static final int VIEW_MODEL_AMBIENT = 1 << 9;
     private static final Float2 ZERO_UV = new Float2(0f, 0f);
     private static final Float4 ZERO_FLOAT4 = new Float4(0f, 0f, 0f, 0f);
     private static int debugView() {
@@ -133,6 +135,10 @@ public final class RtComposite {
 
     private static boolean waterWaves() {
         return CausticaConfig.Rt.Composite.WATER_WAVES.value();
+    }
+
+    private static boolean viewModelAmbient() {
+        return CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT.value();
     }
 
     private static final int WATER_ANCHOR_MASK = 4095;
@@ -1128,8 +1134,9 @@ public final class RtComposite {
                                 inset == null ? 0 : CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value(), reuseInset));
             }
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
-            // submerged, fixing the air→water first-segment orientation) and animated water normals.
-            // Bit 1 remains unused to avoid conflicting with stale external readers.
+            // submerged, fixing the air→water first-segment orientation), animated water normals, and
+            // the tracked-view-model sky ambient. Bit 1 remains unused to avoid conflicting with stale
+            // external readers.
             int flags = 0;
             var level = Minecraft.getInstance().level;
             if (level != null) {
@@ -1145,6 +1152,9 @@ public final class RtComposite {
             }
             if (waterWaves()) {
                 flags |= 0b10000; // animated water wave normals
+            }
+            if (viewModelAmbient()) {
+                flags |= VIEW_MODEL_AMBIENT;
             }
 
             // Water parameters: camera-biome tint plus wrapped animation time. Per-water-body tint

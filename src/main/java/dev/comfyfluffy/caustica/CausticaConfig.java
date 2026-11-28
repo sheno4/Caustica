@@ -565,6 +565,13 @@ public final class CausticaConfig {
                     clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8);
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
+            /**
+             * Sky diffuse ambient for tracked view models (Vivecraft hands and held items). The player's
+             * own avatar is excluded from their lighting, so this integrates the sky the hands can see and
+             * replaces the diffuse path's sky sample with that estimate.
+             */
+            public static final BooleanSetting VIEW_MODEL_AMBIENT =
+                    bool("caustica.rt.viewModelAmbient", "composite.view-model-ambient", true);
             // Sun/moon angular radii and the noon south tilt moved into the versioned look package
             // (look.json "sky"): they shape the sky alongside the exposure curve, the LMT and the
             // photometric anchors that were already authored there, and splitting them across two

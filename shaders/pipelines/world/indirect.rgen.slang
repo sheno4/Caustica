@@ -36,6 +36,36 @@ import foveation;
 
 static const float GLINT_RADIANCE_SCALE = 300.0; // cd/m² at full texture intensity
 
+// Directions the tracked-view-model sky ambient integrates. Four cosine-weighted samples plus one
+// visibility ray each are enough for the denoiser to stabilise; the estimate is smooth because the sky
+// LUT is, so the remaining variance is the occlusion mask, exactly like any other soft shadow.
+static const uint VIEW_MODEL_SKY_AMBIENT_SAMPLES = 4u;
+
+/**
+ * Sky diffuse irradiance at a tracked view model, with the owner avatar excluded from visibility.
+ *
+ * <p>These surfaces are the player's own hands and held items. Their diffuse GI rays are enclosed by
+ * the player's body, so a single path sample reads the body rather than the sky and the hands render
+ * dark even in daylight. The owner is already excluded from their sun shadow ({@code shadowCullMask}),
+ * and this applies the same policy to the sky: the ambient is the sky above the body, occluded by the
+ * world, not by the body wrapped around it. Returns irradiance in ACEScg (cd/m²·sr).
+ */
+public float3 viewModelSkyAmbient(float3 origin, float3 normal, inout uint seed) {
+    // A degenerate normal would make every cosine direction NaN; tracing that is undefined on the
+    // GPU, so report no ambient rather than an invalid ray.
+    if (!(dot(normal, normal) >= 1.0e-8)) return float3(0.0, 0.0, 0.0);
+    SkyState sky = skyState(worldPush);
+    float3 irradiance = float3(0.0, 0.0, 0.0);
+    for (uint i = 0u; i < VIEW_MODEL_SKY_AMBIENT_SAMPLES; ++i) {
+        float3 dir = cosineDir(normal, seed);
+        // The LUT holds the atmosphere only; the airglow floor is isotropic and belongs in the
+        // ambient, while the discs are the NEE light and must not be counted again here.
+        float3 radiance = skyDomeRadiance(sky, dir, skyViewLut) + sky.airglowLuminance;
+        irradiance += radiance * visibility(CULL_SECONDARY, origin, dir, 10000.0).transmittance;
+    }
+    return bt709ToAcesCg(irradiance) * (PI / float(VIEW_MODEL_SKY_AMBIENT_SAMPLES));
+}
+
 // Atmospheric transmittance LUT (RtSkyLut), also bound to world.rmiss at the same binding: raygen reads it
 // to colour the NEE sun/moonlight, the miss shader reads it to tint the visible discs and stars.
 public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
@@ -82,6 +112,11 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
     // remains active with its full configured candidate count at every hit. Pass A's primary/interface
     // prefix is outside this SSS quality budget.
     int indirectDepth = 0;
+    // Tracked view-model sky ambient, and whether it already covers the next diffuse sample's sky.
+    // The ambient integrates the sky over the hemisphere; skipping the single GI sample that would
+    // otherwise add the sky again keeps the total energy unchanged.
+    bool ambientCoversSky = false;
+    bool ambientPending = false;
     float2 size = float2(DispatchRaysDimensions().xy);
     float2 ndc = ((float2(pix) + 0.5) / size + worldPush.jitter / size) * 2.0 - 1.0;
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
@@ -115,9 +150,13 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             // surface words as a full float3, so this is absolute scene units with nothing to undo. The
             // packed show-celestial flag decides whether this path segment may see the bright disc.
             float3 sky = payloadSky();
-            L += throughput * sky; // escaped to sky
+            if (!ambientCoversSky) {
+                L += throughput * sky; // escaped to sky
+            }
             break;
         }
+        ambientCoversSky = false;
+        ambientPending = false;
 
         // Beer–Lambert: attenuate along the segment just travelled by the medium it lay inside. Applies
         // to every hit reached while inside a volume dielectric (its own exit face, or whatever content
@@ -387,6 +426,16 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             }
         }
 
+        // Sky ambient for tracked view models. These are the player's own hands and held items, and the
+        // owner avatar is already excluded from their sun shadow; the same policy applies to the sky,
+        // because the body wrapped around them would otherwise absorb every diffuse GI sample and leave
+        // the hands dark even in daylight. The ambient replaces the next diffuse sample's sky rather
+        // than adding a second sky term (see ambientCoversSky).
+        if (trackedHit && (worldPush.flags & VIEW_MODEL_AMBIENT) != 0u) {
+            L += throughput * diffAlb * INV_PI * viewModelSkyAmbient(p, n, seed);
+            ambientPending = true;
+        }
+
         // Preserve all local lighting at the terminal hit, but do not sample a continuation that the
         // bounce loop cannot trace.
         if (bounce >= maxBounces) {
@@ -430,6 +479,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex) {
             rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
             showCelestial = false; // diffuse lobe: disc covered by NEE, hide it (anti-firefly)
             sampledViewModelLights = hasViewModelLights;
+            ambientCoversSky = ambientPending;
         }
 
         // Russian roulette on deeper bounces: survive with prob = max channel, rescale survivors.

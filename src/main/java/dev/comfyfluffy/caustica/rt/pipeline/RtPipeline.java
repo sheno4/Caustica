@@ -165,7 +165,11 @@ public final class RtPipeline {
                     .descriptorCount(1).stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR);
             binds.get(WORLD_SKY_VIEW).binding(WORLD_SKY_VIEW)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR);
+                    .descriptorCount(1)
+                    // The miss shader reads the dome, and the raygen reads it for the tracked-view-model
+                    // sky ambient. A stage that samples a binding without listing itself here reads an
+                    // undefined descriptor, which on this driver surfaces as NaN radiance and a hung GPU.
+                    .stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR);
             binds.get(WORLD_TRANSMITTANCE).binding(WORLD_TRANSMITTANCE)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1)

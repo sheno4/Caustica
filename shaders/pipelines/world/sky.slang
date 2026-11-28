@@ -529,6 +529,19 @@ public struct CelestialLight {
 };
 
 /**
+ * Atmosphere in-scatter for a world direction: both bodies' slices of this frame's sky-view LUT.
+ * The celestial discs, the starfield and the airglow floor are not part of the LUT; callers add the
+ * terms their path needs. Radiance is linear BT.709, the space the LUT is baked in.
+ */
+public float3 skyDomeRadiance(SkyState state, float3 dir, Sampler2D lut) {
+    float2 sunUv = skyViewLutUv(state.viewerRadiusKm, dir.y,
+            lightViewCosine(dir, state.sunDir), SKY_VIEW_BODY_SUN);
+    float2 moonUv = skyViewLutUv(state.viewerRadiusKm, dir.y,
+            lightViewCosine(dir, state.moonDir), SKY_VIEW_BODY_MOON);
+    return lut.SampleLevel(sunUv, 0.0).rgb + lut.SampleLevel(moonUv, 0.0).rgb;
+}
+
+/**
  * The single directional light NEE samples: whichever of the two bodies actually delivers more light
  * after atmospheric extinction.
  *

@@ -80,6 +80,7 @@ public abstract class VideoSettingsScreenMixin {
             if (overlayQuality != null) {
                 list.addBig(overlayQuality);
             }
+            list.addBig(RtVideoOptions.viewModelAmbient());
         }
     }
 

@@ -66,6 +66,10 @@ public final class RtVideoOptions {
         return bool("caustica.options.rt.fixedFoveation", CausticaConfig.Rt.Composite.FIXED_FOVEATION);
     }
 
+    public static OptionInstance<Boolean> viewModelAmbient() {
+        return bool("caustica.options.rt.viewModelAmbient", CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT);
+    }
+
     public static OptionInstance<Integer> foveationWidePercent() {
         String key = "caustica.options.rt.foveationWidePercent";
         FloatSetting setting = CausticaConfig.Rt.Composite.FOVEATION_WIDE_PERCENT;

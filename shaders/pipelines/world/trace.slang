@@ -12,6 +12,10 @@ public static const uint CULL_CAMERA_OWNER = 0x08u;
 public static const uint VIEW_MODEL_PRESENT = 64u;
 public static const uint VIEW_MODEL_FOREGROUND = 128u;
 public static const uint VR_AVATAR_PRESENT = 256u;
+// Bit 9: tracked view models (Vivecraft hands and held items) receive the sky diffuse ambient in
+// indirect.rgen. Their diffuse GI is enclosed by the owner avatar, so the ambient integrates the sky
+// with the owner excluded and replaces the diffuse path's next sky sample.
+public static const uint VIEW_MODEL_AMBIENT = 512u;
 public static const uint TERRAIN_BUCKETS = 4u;
 public static const uint SBT_RADIANCE = 0u;
 public static const uint SBT_SHADOW = TERRAIN_BUCKETS;
