@@ -48,6 +48,10 @@
 	"caustica.options.rt.vrOverlayQuality.tooltip": "High doubles Vivecraft's GUI rendering resolution so menus and overlays look clearer at a higher GPU cost.",
 	"caustica.options.rt.vrOverlayQuality.standard": "Standard",
 	"caustica.options.rt.vrOverlayQuality.high": "High",
+	"caustica.options.rt.viewModelAmbient": "Hand Sky Ambient",
+	"caustica.options.rt.viewModelAmbient.tooltip": "Light Vivecraft hands and held items with the sky they can see, instead of the sky blocked by your own avatar body. Adds sky-visibility rays per hand sample; disable to compare against pure path-traced lighting.",
+	"caustica.options.rt.viewModelAmbientSamples": "Hand Ambient Samples",
+	"caustica.options.rt.viewModelAmbientSamples.tooltip": "Sky directions traced for the hand ambient. Higher is smoother but costs one visibility ray per direction; lower trades noise for GPU time.",
 
 	"caustica.options.rt.hdr": "HDR Output",
 	"caustica.options.rt.hdr.tooltip": "Recreate the swapchain for HDR (ST.2084/PQ) or native SDR output. Applied at the next frame boundary.",
@@ -77,5 +81,7 @@
 	"caustica.options.rt.debugView.6": "Specular",
 	"caustica.options.rt.debugView.7": "Specular Motion",
 	"caustica.options.rt.debugView.8": "Exposure False Color",
-	"caustica.options.rt.debugView.9": "Metering Weight"
+	"caustica.options.rt.debugView.9": "Metering Weight",
+	"caustica.options.rt.debugView.10": "Hand Sky Visibility",
+	"caustica.options.rt.debugView.11": "Hand Sun Visibility"
 }

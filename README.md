@@ -109,6 +109,19 @@ lighting, bounced light and reflections.
 Enchantment glint adds Minecraft's animated texture to the traced item surface.
 Menu hands and unsupported custom draws use the native hand pass.
 
+VR hands and held items also receive a sky diffuse ambient. It integrates the
+atmosphere LUT over the hemisphere with the player's own avatar excluded from
+visibility (the same rule that keeps the avatar out of their sun shadow and their
+diffuse GI), rejects directions below the geometric hemisphere, and replaces the
+diffuse path's sky sample instead of adding a second sky term.
+**Hand Ambient Samples** sets how many sky directions each hand sample traces
+(one visibility ray each); it is exposed in Video Settings and as
+`composite.view-model-ambient-samples`, and **Hand Sky Ambient**
+(`composite.view-model-ambient`) toggles the feature.
+**Debug View** 10 and 11 show the tracked hands' sky visibility and direct
+sun/moon visibility, so an ambient or shadow problem can be told apart from the
+normal lighting path.
+
 ## Status
 
 Caustica is not a finished renderer yet. Current work focuses on visual

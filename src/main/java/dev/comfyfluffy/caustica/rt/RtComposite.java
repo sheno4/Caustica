@@ -117,6 +117,8 @@ public final class RtComposite {
     private static final int VIEW_MODEL_PRESENT = 1 << 6;
     private static final int VIEW_MODEL_FOREGROUND = 1 << 7;
     private static final int VR_AVATAR_PRESENT = 1 << 8;
+    // Bit 9: derived from the config every frame, so the ambient can be toggled live.
+    private static final int VIEW_MODEL_AMBIENT = 1 << 9;
     private static final Float2 ZERO_UV = new Float2(0f, 0f);
     private static final Float4 ZERO_FLOAT4 = new Float4(0f, 0f, 0f, 0f);
     private static int debugView() {
@@ -133,6 +135,10 @@ public final class RtComposite {
 
     private static boolean waterWaves() {
         return CausticaConfig.Rt.Composite.WATER_WAVES.value();
+    }
+
+    private static boolean viewModelAmbient() {
+        return CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT.value();
     }
 
     private static final int WATER_ANCHOR_MASK = 4095;
@@ -694,7 +700,7 @@ public final class RtComposite {
             bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
             debugPresentPipeline.setImages(displayImage.view, traceTargets.gNormal.view, traceTargets.gAlbedo.view, traceTargets.gDepth.view,
                     traceTargets.gMotion.view, traceTargets.gSpecAlbedo.view, traceTargets.gSpecMotion.view, rrOutput.view, exposure.image().view,
-                    exposure.stateBuffer());
+                    exposure.stateBuffer(), traceTargets.gHandDebug.view);
             // Cheap idempotent check every frame (not just on resize): if the exposure mode is switched
             // manual -> auto at runtime (video settings), the auto-mode histogram/state/pipeline must be
             // allocated before recordFrame's exposure.record() below needs them, or it throws.
@@ -884,6 +890,8 @@ public final class RtComposite {
         private RtImage gMotion;
         private RtImage gSpecAlbedo;
         private RtImage gSpecMotion;
+        // Tracked-view-model lighting diagnostics: x = sky visibility, y = direct light visibility.
+        private RtImage gHandDebug;
         private long[] views;
 
         static TraceTargets create(RtContext ctx, int width, int height) {
@@ -898,6 +906,7 @@ public final class RtComposite {
                 targets.gMotion = ctx.createStorageImage(width, height, rg16, "guide motion");
                 targets.gSpecAlbedo = ctx.createStorageImage(width, height, rgba16, "guide specular albedo");
                 targets.gSpecMotion = ctx.createStorageImage(width, height, rg16, "guide specular motion");
+                targets.gHandDebug = ctx.createStorageImage(width, height, rgba16, "guide hand visibility");
                 targets.views = new long[]{targets.color.view, targets.gNormal.view, targets.gAlbedo.view,
                         targets.gDepth.view, targets.gMotion.view, targets.gSpecAlbedo.view, targets.gSpecMotion.view};
                 return targets;
@@ -908,7 +917,7 @@ public final class RtComposite {
         }
 
         void destroy() {
-            for (RtImage image : new RtImage[]{color, gNormal, gAlbedo, gDepth, gMotion, gSpecAlbedo, gSpecMotion}) {
+            for (RtImage image : new RtImage[]{color, gNormal, gAlbedo, gDepth, gMotion, gSpecAlbedo, gSpecMotion, gHandDebug}) {
                 if (image != null) {
                     image.destroy();
                 }
@@ -1062,7 +1071,7 @@ public final class RtComposite {
         bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
         debugPresentPipeline.setImages(displayImage.view, traceTargets.gNormal.view, traceTargets.gAlbedo.view, traceTargets.gDepth.view,
                 traceTargets.gMotion.view, traceTargets.gSpecAlbedo.view, traceTargets.gSpecMotion.view, rrOutput.view, exposure.image().view,
-                exposure.stateBuffer());
+                exposure.stateBuffer(), traceTargets.gHandDebug.view);
     }
 
     private void destroyBloomLevels() {
@@ -1128,8 +1137,9 @@ public final class RtComposite {
                                 inset == null ? 0 : CausticaConfig.Rt.Composite.FOVEATION_COVERAGE_DEGREES.value(), reuseInset));
             }
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
-            // submerged, fixing the air→water first-segment orientation) and animated water normals.
-            // Bit 1 remains unused to avoid conflicting with stale external readers.
+            // submerged, fixing the air→water first-segment orientation), animated water normals, and
+            // the tracked-view-model sky ambient. Bit 1 remains unused to avoid conflicting with stale
+            // external readers.
             int flags = 0;
             var level = Minecraft.getInstance().level;
             if (level != null) {
@@ -1145,6 +1155,9 @@ public final class RtComposite {
             }
             if (waterWaves()) {
                 flags |= 0b10000; // animated water wave normals
+            }
+            if (viewModelAmbient()) {
+                flags |= VIEW_MODEL_AMBIENT;
             }
 
             // Water parameters: camera-biome tint plus wrapped animation time. Per-water-body tint
@@ -1373,7 +1386,7 @@ public final class RtComposite {
         boolean reuseInset = insetJitterUv != null;
         long insetRadianceView = reuseInset ? foveatedTargets.inset.color.view : skyLut.skyViewView();
         active.bindTraceTargets(scene.tlas(), targets.views, insetRadianceView, bloomPipeline.sampler(),
-                scene.graphicsUse(), scene.waiter());
+                targets.gHandDebug.view, scene.graphicsUse(), scene.waiter());
         boolean rrDone = false;
         new WorldPushData(
                 frameInvViewProj,
@@ -1421,7 +1434,8 @@ public final class RtComposite {
                 scene.viewModelLightSamples(),
                 scene.viewModelLightTriangles(),
                 scene.viewModelLightFootprints(),
-                scene.viewModelLightFootprintCount()
+                scene.viewModelLightFootprintCount(),
+                CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT_SAMPLES.value()
         ).write(push);
         pushBuf.flush(0L, WORLD_PUSH_SIZE);
         // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.

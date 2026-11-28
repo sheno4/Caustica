@@ -53,7 +53,7 @@ public struct WorldPush {
     public float3   camDelta;
     public uint     spp;
     public float2   jitter;
-    public uint     flags;            // bit0 submerged, bit4 waves, bit5 reuse inset, bits6/7 viewmodel
+    public uint     flags;            // bit0 submerged, bit4 waves, bit5 reuse inset, bits6/7 viewmodel, bit9 hand ambient
     public uint     maxBounces;
     // ---- Sky state. Only what the CPU alone can know: Minecraft's four eased celestial angles (the
     // 26.2 timeline drives them through a cubic-bezier ease and a datapack may replace the track, so
@@ -99,6 +99,9 @@ public struct WorldPush {
     public uint     viewModelLightTriangles;
     public uint64_t viewModelLightFootprints; // five float4 lanes per emitting quad footprint
     public uint     viewModelLightFootprintCount;
+    // Cosine-weighted sky directions each tracked-view-model diffuse hit integrates for its sky
+    // ambient. 1 keeps the cost at one visibility ray, 8 gives the denoiser the least occlusion noise.
+    public uint     viewModelAmbientSamples;
 };
 
 // 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the

@@ -66,6 +66,18 @@ public final class RtVideoOptions {
         return bool("caustica.options.rt.fixedFoveation", CausticaConfig.Rt.Composite.FIXED_FOVEATION);
     }
 
+    public static OptionInstance<Boolean> viewModelAmbient() {
+        return bool("caustica.options.rt.viewModelAmbient", CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT);
+    }
+
+    public static OptionInstance<Integer> viewModelAmbientSamples() {
+        String key = "caustica.options.rt.viewModelAmbientSamples";
+        IntSetting setting = CausticaConfig.Rt.Composite.VIEW_MODEL_AMBIENT_SAMPLES;
+        return new OptionInstance<>(key, OptionInstance.cachedConstantTooltip(Component.translatable(key + ".tooltip")),
+                (caption, value) -> Options.genericValueLabel(caption, value),
+                new OptionInstance.IntRange(1, 8), Math.clamp(setting.value(), 1, 8), setting::set);
+    }
+
     public static OptionInstance<Integer> foveationWidePercent() {
         String key = "caustica.options.rt.foveationWidePercent";
         FloatSetting setting = CausticaConfig.Rt.Composite.FOVEATION_WIDE_PERCENT;
@@ -252,8 +264,8 @@ public final class RtVideoOptions {
             // CycleButton (used for Enum values) already prepends "caption: " itself (DisplayState.
             // NAME_AND_VALUE), so this must return only the value's text, not caption + value again.
             (caption, value) -> Component.translatable("caustica.options.rt.debugView." + value),
-            new OptionInstance.Enum<>(List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9), Codec.INT),
-            Math.clamp(setting.value(), 0, 9),
+            new OptionInstance.Enum<>(List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11), Codec.INT),
+            Math.clamp(setting.value(), 0, 11),
             setting::set);
     }
 

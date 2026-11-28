@@ -88,7 +88,15 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
     float4 normalRough = gNormal[guidePix];
     float3 dbg;
-    if (pc.debugView == 8u) {
+    if (pc.debugView == 10u) {
+        // Tracked-view-model sky visibility: white = the hand sees sky, black = fully occluded.
+        float visibility = gHandDebug[guidePix].x;
+        dbg = float3(visibility, visibility, visibility);
+    } else if (pc.debugView == 11u) {
+        // Tracked-view-model direct sun/moon visibility: white = unshadowed, black = shadowed.
+        float visibility = gHandDebug[guidePix].y;
+        dbg = float3(visibility, visibility, visibility);
+    } else if (pc.debugView == 8u) {
         float luminance = dot(max(sceneImage[pix].rgb, float3(0.0)), ACESCG_LUMA);
         float exposedLuminance = luminance * max(exposureImage[int2(0, 0)], 0.0);
         float evFromMidGrey = log2(max(exposedLuminance, 1.0e-6) / 0.18);

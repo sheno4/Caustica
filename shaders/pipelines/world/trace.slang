@@ -12,6 +12,10 @@ public static const uint CULL_CAMERA_OWNER = 0x08u;
 public static const uint VIEW_MODEL_PRESENT = 64u;
 public static const uint VIEW_MODEL_FOREGROUND = 128u;
 public static const uint VR_AVATAR_PRESENT = 256u;
+// Bit 9: tracked view models (Vivecraft hands and held items) receive the sky diffuse ambient in
+// indirect.rgen. Their diffuse GI is enclosed by the owner avatar, so the ambient integrates the sky
+// with the owner excluded and replaces the diffuse path's next sky sample.
+public static const uint VIEW_MODEL_AMBIENT = 512u;
 public static const uint TERRAIN_BUCKETS = 4u;
 public static const uint SBT_RADIANCE = 0u;
 public static const uint SBT_SHADOW = TERRAIN_BUCKETS;
@@ -111,7 +115,11 @@ public uint secondaryRadianceCullMask(bool viewModelPath, bool specularView) {
     // Reflection and transmission see the avatar's own held items and their model transforms.
     // Diffuse transport uses the tracked geometry sampled by the dynamic mesh light estimator.
     uint tracked = vrAvatar && specularView ? 0u : trackedGeometryMask();
-    return CULL_SECONDARY | tracked | (!viewModelPath || vrAvatar ? CULL_CAMERA_OWNER : 0u);
+    // The owner's body must not shade its own first-person view model in diffuse transport: the sun
+    // shadow and the view-model sky ambient already exclude it, and letting diffuse GI hit the body
+    // would contradict that occlusion policy. Reflection and transmission keep it.
+    uint owner = vrAvatar && (!viewModelPath || specularView) ? CULL_CAMERA_OWNER : 0u;
+    return CULL_SECONDARY | tracked | owner;
 }
 
 public bool isTrackedViewModel(bool viewModelHit) {
